@@ -85,11 +85,35 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 		}
 	}
 	// Console helpers run for real, so commands reach the fake game consoles
-	// on 127.0.0.1.
+	// on 127.0.0.1. A game with a stdin console reads its commands.
+	var stdinGames sync.Map
 	engine.Attach = func(c *fakedocker.Container, stdin *bufio.Reader, stdout func([]byte)) {
 		if c.CreateRequest.Labels["ludock.internal"] == "console-helper" {
 			helper.RunNetworkConsole(stdin, writer(stdout))
 		}
+		if game, ok := stdinGames.Load(c.ID); ok {
+			for {
+				line, err := stdin.ReadString('\n')
+				if line = strings.TrimRight(line, "\r\n"); line != "" {
+					game.(func(string))(line)
+				}
+				if err != nil {
+					return
+				}
+			}
+		}
+	}
+	engine.AddGame = func(game, name string) bool {
+		switch game {
+		case "terraria":
+			id, command := terrariaGame(engine, dir, name)
+			stdinGames.Store(id, command)
+		case "factorio":
+			factorioGame(engine, dir, name)
+		default:
+			return false
+		}
+		return true
 	}
 	engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
 		if len(cmd) > 2 && cmd[0] == helper.Binary {
@@ -260,6 +284,94 @@ func palworldRCON(password string) string {
 			}
 		}
 		return "Failed: no player with that ID", true
+	})
+}
+
+// gameData makes a fake game's data folder under dir.
+func gameData(dir, name string, files map[string]string) string {
+	path := filepath.Join(dir, "data", name)
+	for file, content := range files {
+		os.MkdirAll(filepath.Dir(filepath.Join(path, file)), 0o755)
+		os.WriteFile(filepath.Join(path, file), []byte(content), 0o644)
+	}
+	return path
+}
+
+// terrariaGame adds a running Terraria server like hexlo/terraria-server-docker's,
+// and returns its ID and its console, which writes the real server's replies
+// to its log. Like the real image, it never gets Docker's stop signal and
+// quits only on exit.
+func terrariaGame(engine *fakedocker.Engine, dir, name string) (string, func(string)) {
+	data := gameData(dir, name, map[string]string{"world.wld": "terraria world"})
+	id := engine.AddContainer(fakedocker.GameOptions{Name: name, Image: "hexlo/terraria-server-docker:latest", Running: true,
+		OpenStdin: true, Mounts: []docker.MountPoint{{Type: "bind", Source: data, Destination: data, RW: true}},
+		Ports: map[string][]docker.PortBinding{"7777/tcp": {{HostIP: "0.0.0.0", HostPort: "7777"}}}})
+	engine.Update(id, func(c *fakedocker.Container) {
+		c.IgnoresStop = true
+		c.Logs = []string{"Terraria Server v1.4.5.8", "", "Listening on port 7777", "Type 'help' for a list of commands.", "", ": Server started"}
+	})
+	return id, func(line string) {
+		reply := map[string][]string{"playing": {"No players connected."},
+			"save":    {"Saving world data: 100%", "Validating world save: 100%", ": Backing up world file"},
+			"exit":    {"Saving before exit...", "Saving world data: 100%", "Validating world save: 100%", "Backing up world file"},
+			"version": {"Terraria Server v1.4.5.8"}}[line]
+		if message, ok := strings.CutPrefix(line, "say "); ok {
+			reply = []string{"<Server> " + message}
+		}
+		engine.Update(id, func(c *fakedocker.Container) { c.Logs = append(c.Logs, append([]string{line}, reply...)...) })
+		if line == "exit" {
+			engine.Exit(id, 0)
+		}
+	}
+}
+
+// factorioGame adds a running Factorio server like factoriotools/factorio's,
+// whose RCON password is only in the file the image generates. Its console
+// answers with Factorio 2's replies, and text that isn't a command is chat,
+// which fake-said lists.
+func factorioGame(engine *fakedocker.Engine, dir, name string) {
+	data := gameData(dir, name, map[string]string{"saves/_autosave1.zip": "factorio save", "config/rconpw": "dev-factorio-secret\n"})
+	game := &fakeGame{}
+	member := func(list []string, name string) bool {
+		return slices.ContainsFunc(list, func(listed string) bool { return strings.EqualFold(listed, name) })
+	}
+	rcon := game.rcon("dev-factorio-secret", "/players", func(online []string) string {
+		return fmt.Sprintf("Players (%d):\n", len(online))
+	}, func(verb, argument string) (string, bool) {
+		name, _, _ := strings.Cut(argument, " ")
+		switch {
+		case verb == "/players" && argument == "online":
+			list := fmt.Sprintf("Online players (%d):\n", len(game.online))
+			for _, player := range game.online {
+				list += "  " + player + " (online)\n"
+			}
+			return list, true
+		case verb == "/server-save":
+			return "Saving the map\n", true
+		case verb == "/kick" && !member(game.online, name):
+			return "Player " + name + " doesn't exist.\n", true
+		case verb == "/kick":
+			game.online = slices.DeleteFunc(game.online, func(listed string) bool { return listed == name })
+			return "", true
+		case verb == "/ban" && member(game.banned, name):
+			return name + " is already banned.\n", true
+		case verb == "/ban":
+			game.banned = append(game.banned, name)
+			game.online = slices.DeleteFunc(game.online, func(listed string) bool { return listed == name })
+			return "Added " + name + " to the banlist.\n", true
+		case !strings.HasPrefix(verb, "/") && !strings.HasPrefix(verb, "fake-"):
+			game.said = append(game.said, strings.TrimSpace(verb+" "+argument))
+			return "", true
+		}
+		return "", false
+	})
+	id := engine.AddContainer(fakedocker.GameOptions{Name: name, Image: "factoriotools/factorio:stable", Running: true,
+		Env:    []string{"PORT=34197", "RCON_PORT=" + rcon, "CONFIG=/factorio/config"},
+		Mounts: []docker.MountPoint{{Type: "bind", Source: data, Destination: data, RW: true}},
+		Ports: map[string][]docker.PortBinding{"27015/tcp": {{HostIP: "0.0.0.0", HostPort: "27015"}},
+			"34197/udp": {{HostIP: "0.0.0.0", HostPort: "34197"}}}})
+	engine.Update(id, func(c *fakedocker.Container) {
+		c.Files = map[string]string{"/factorio/config/rconpw": "dev-factorio-secret\n"}
 	})
 }
 

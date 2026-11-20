@@ -212,6 +212,20 @@ func minecraftOutcome(action PlayerAction, reply string) Outcome {
 var factorioModeration = &Moderation{
 	target:   regexp.MustCompile(`^[A-Za-z0-9._-]{1,60}$`),
 	commands: map[PlayerAction][2]string{Kick: {"/kick ", " Kicked by an admin"}, Ban: {"/ban ", " Banned by an admin"}},
+	outcome:  factorioOutcome,
+}
+
+// factorioOutcome reads Factorio 2's English replies.
+func factorioOutcome(action PlayerAction, reply string) Outcome {
+	switch {
+	case action == Kick && strings.HasPrefix(reply, "Player ") && strings.HasSuffix(reply, " doesn't exist."):
+		return NoPlayer
+	case action == Ban && strings.HasPrefix(reply, "Added ") && strings.HasSuffix(reply, " to the banlist."):
+		return Done
+	case action == Ban && strings.HasSuffix(reply, " is already banned."):
+		return Unchanged
+	}
+	return OutcomeUnknown
 }
 
 // Palworld takes the Steam ID its ShowPlayers gives.

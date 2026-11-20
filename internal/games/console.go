@@ -40,9 +40,10 @@ type Adapter struct {
 	Commands              []QuickCommand
 	DefaultPort           int
 	PasswordEnvCandidates []string
-	// PasswordFile is a file in the container holding "password=<value>",
-	// read when no candidate variable is set.
-	PasswordFile string
+	// PasswordFile is a file in the container holding the password, read
+	// when no candidate variable is set: on its PasswordKey line, such as
+	// "password=<value>", or without a key on its first line.
+	PasswordFile, PasswordKey string
 	// TrimSlash drops a leading "/" from commands, which the game's console
 	// doesn't take.
 	TrimSlash bool
@@ -58,8 +59,9 @@ var adapters = map[AdapterID]Adapter{
 	MinecraftRCON: {ID: MinecraftRCON, Name: "Minecraft RCON", Transport: TransportSourceRCON, DefaultPort: 25575,
 		CommandPlaceholder:    "difficulty hard, whitelist add PlayerName, say Hello",
 		Commands:              []QuickCommand{{"List players", "list"}, {"Save world", "save-all"}, {"Message players", "say "}},
-		PasswordEnvCandidates: []string{"RCON_PASSWORD"}, PasswordFile: "/data/.rcon-cli.env", TrimSlash: true,
-		Players: &PlayerQuery{Command: "list", Parse: ParseMinecraftList}},
+		PasswordEnvCandidates: []string{"RCON_PASSWORD"}, PasswordFile: "/data/.rcon-cli.env", PasswordKey: "password=",
+		TrimSlash: true,
+		Players:   &PlayerQuery{Command: "list", Parse: ParseMinecraftList}},
 	SourceRCON: {ID: SourceRCON, Name: "RCON", Transport: TransportSourceRCON, CommandPlaceholder: "status, save, broadcast Hello",
 		Commands:              []QuickCommand{},
 		PasswordEnvCandidates: []string{"RCON_PASSWORD", "ADMIN_PASSWORD", "SERVER_ADMIN_PASSWORD", "ARK_ADMIN_PASSWORD", "SRCDS_RCONPW"}},
@@ -125,6 +127,9 @@ func ResolveAdapter(gameType string, labels map[string]string) *Adapter {
 	if preset.PasswordEnvCandidates != nil {
 		adapter.PasswordEnvCandidates = preset.PasswordEnvCandidates
 	}
+	if preset.PasswordFile != "" {
+		adapter.PasswordFile, adapter.PasswordKey = preset.PasswordFile, ""
+	}
 	return &adapter
 }
 
@@ -138,4 +143,16 @@ func BroadcastTemplate(gameType string, labels map[string]string) string {
 		return ""
 	}
 	return integration.Console.BroadcastTemplate
+}
+
+// StopCommand returns the game's shutdown command for its stdin console, or
+// "" when it has none or a label names another console.
+func StopCommand(gameType string, labels map[string]string) string {
+	integration := Lookup(gameType)
+	adapter := ResolveAdapter(gameType, labels)
+	if integration == nil || integration.Console == nil || adapter == nil || adapter.Transport != TransportContainerStdin ||
+		adapter.ID != integration.Console.Adapter {
+		return ""
+	}
+	return integration.Console.StopCommand
 }

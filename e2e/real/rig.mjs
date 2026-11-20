@@ -1,28 +1,28 @@
-// A manual rig: Ludock from the local image beside a real Minecraft server,
-// with a headless player. It runs only against a disposable Docker daemon and
-// never in CI. See docs/DEVELOPMENT.md.
+// A manual rig: Ludock from the local image beside one real game server, as
+// an owner would run them, with a headless Minecraft player. It runs only
+// against a disposable Docker daemon and never in CI. See docs/DEVELOPMENT.md.
 //
-//   node real/rig.mjs up        start Ludock and Minecraft Java
-//   node real/rig.mjs bot NAME  join the Java server as NAME and log what the player sees
-//   node real/rig.mjs down      remove every container, volume, and network the rig made
+//   node real/rig.mjs up [GAME]    start Ludock and a game from real/games.mjs (minecraft)
+//   node real/rig.mjs remove GAME  remove that game's containers, volumes, network, and data
+//   node real/rig.mjs bot NAME     join the Minecraft server as NAME and log what the player sees
+//   node real/rig.mjs down         remove every container, volume, and network the rig made
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { admin } from "../journeys/fixtures.mjs";
+import { games } from "./games.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
 const dir = resolve(process.env.LUDOCK_RIG_DIR || join(tmpdir(), "ludock-real-rig"));
 const image = process.env.LUDOCK_TEST_IMAGE || "ludock:test";
-const javaImage = process.env.LUDOCK_RIG_JAVA_IMAGE || "itzg/minecraft-server:java21";
-// Mineflayer supports this release; the bot can't join a newer one.
-const version = process.env.LUDOCK_RIG_MINECRAFT_VERSION || "1.21.11";
 const setupCode = "real-rig-setup-code-0123456789abcdef0123";
 const marker = ".ludock-real-rig";
-const projects = {
-  ludock: ["compose", "--project-name", "ludocktest-ludock", "-f", join(root, "compose.yaml"), "-f", join(dir, "ludock.override.yaml")],
-  java: ["compose", "--project-name", "ludocktest-minecraft", "--project-directory", join(dir, "java"), "-f", join(dir, "java", "compose.yaml")],
-};
+const ludock = ["compose", "--project-name", "ludocktest-ludock", "-f", join(root, "compose.yaml"), "-f", join(dir, "ludock.override.yaml")];
+const project = (game) => ["compose", "--project-name", `ludocktest-${game}`, "--project-directory", join(dir, game),
+  "-f", join(dir, game, "compose.yaml")];
+// The games up started, which down and remove take apart.
+const started = () => Object.keys(games).filter((game) => existsSync(join(dir, game, "compose.yaml")));
 
 const docker = (...args) => execFileSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
 
@@ -40,15 +40,25 @@ function confirmDaemon() {
   }
 }
 
+function gameNamed(name) {
+  const game = games[name];
+  if (!game) throw new Error(`unknown game ${name}; real/games.mjs has ${Object.keys(games).join(", ")}`);
+  return game;
+}
+
 async function up() {
   confirmDaemon();
-  if (process.env.MINECRAFT_EULA !== "TRUE") {
-    throw new Error("Set MINECRAFT_EULA=TRUE to accept the Minecraft EULA (https://aka.ms/MinecraftEULA) for the test servers.");
+  const name = process.argv[3] || "minecraft";
+  const game = gameNamed(name);
+  if (game.licence && process.env[game.licence.env] !== "TRUE") {
+    throw new Error(`Set ${game.licence.env}=TRUE to accept ${game.licence.terms} for the test servers.`);
   }
   if (existsSync(dir) && !existsSync(join(dir, marker)) && readdirSync(dir).length) {
     throw new Error(`${dir} isn't empty; set LUDOCK_RIG_DIR to a new folder.`);
   }
-  for (const folder of ["java/data", "backups-copy"]) mkdirSync(join(dir, folder), { recursive: true });
+  const others = started().filter((other) => other !== name);
+  if (others.length) throw new Error(`${others.join(", ")} is up; run node real/rig.mjs remove ${others[0]} first.`);
+  for (const folder of [`${name}/data`, "backups-copy"]) mkdirSync(join(dir, folder), { recursive: true });
   // down removes only a folder that up made.
   writeFileSync(join(dir, marker), "");
   // Every port is published on loopback only.
@@ -63,26 +73,17 @@ async function up() {
     volumes:
       - ${join(dir, "backups-copy")}:/backups-copy
 `);
-  writeFileSync(join(dir, "java", "compose.yaml"), `services:
-  minecraft:
-    image: ${javaImage}
-    environment:
-      EULA: "TRUE"
-      VERSION: "${version}"
-      MEMORY: 1G
-      VIEW_DISTANCE: "4"
-      SIMULATION_DISTANCE: "4"
-      ONLINE_MODE: "FALSE"
-      MOTD: Ludock real rig
-    mem_limit: 2g
-    ports:
-      - "127.0.0.1:25565:25565"
-    volumes:
-      - ./data:/data
-    restart: unless-stopped
-`);
-  docker(...projects.java, "up", "-d");
-  docker(...projects.ludock, "up", "-d");
+  const service = { restart: "unless-stopped", ...game.service,
+    ports: game.service.ports.map((port) => `127.0.0.1:${port}`),
+    volumes: [`./data:${game.data}`, ...(game.service.volumes || [])] };
+  // Named volumes, such as a game's own install, live on Docker's disk; the
+  // scratch folder may be kept in memory.
+  const named = service.volumes.map((volume) => volume.split(":")[0]).filter((source) => !/^[./]/.test(source));
+  // Compose reads JSON as YAML.
+  writeFileSync(join(dir, name, "compose.yaml"), JSON.stringify({ services: { [name]: service },
+    volumes: Object.fromEntries(named.map((volume) => [volume, {}])) }, null, 2));
+  docker(...project(name), "up", "-d");
+  docker(...ludock, "up", "-d");
 
   await waitFor(async () => (await fetch("http://127.0.0.1:3000/api/v1/health")).ok, "Ludock", 90_000);
   const response = await fetch("http://127.0.0.1:3000/setup", {
@@ -91,11 +92,32 @@ async function up() {
     body: new URLSearchParams({ bootstrapCode: setupCode, username: admin.username, password: admin.password, confirmation: admin.password }),
   });
   if (response.status !== 303) console.log("Setup was already done, or failed with", response.status);
-  const container = docker(...projects.java, "ps", "--quiet", "minecraft");
-  await waitFor(async () => docker("inspect", "--format", "{{.State.Health.Status}}", container) === "healthy", "Minecraft to start", 600_000);
+  const container = docker(...project(name), "ps", "--quiet", name);
+  const ready = game.ready === "healthy"
+    ? async () => docker("inspect", "--format", "{{.State.Health.Status}}", container) === "healthy"
+    : async () => game.ready.test(docker("logs", "--tail", "20", container));
+  await waitFor(ready, `${name} to start`, game.timeout || 900_000);
   console.log(`Ludock: http://127.0.0.1:3000 (${admin.username} / ${admin.password})
-Minecraft Java: 127.0.0.1:25565, version ${version}, offline mode
-Rig folder: ${dir}`);
+${name}: ${service.ports.join(", ")}, container ${container.slice(0, 12)}, data in ${join(dir, name, "data")}`);
+}
+
+// remove takes one game apart, so another can start beside the same Ludock.
+function remove() {
+  confirmDaemon();
+  const name = process.argv[3];
+  gameNamed(name);
+  if (!existsSync(join(dir, marker)) || !started().includes(name)) throw new Error(`${name} isn't up in ${dir}.`);
+  // A failed teardown stops here, before any game data is removed.
+  docker(...project(name), "down", "--volumes", "--remove-orphans", "--timeout", "60");
+  clear([name]);
+}
+
+// clear removes folders the rig made. Game data written by the containers
+// belongs to their users, so a container removes it.
+function clear(names) {
+  const made = names.filter((name) => existsSync(join(dir, name)));
+  if (made.length) docker("run", "--rm", "--network", "none", "--volume", `${dir}:/rig`, "alpine:3", "rm", "-rf",
+    ...made.map((name) => `/rig/${name}`));
 }
 
 async function bot() {
@@ -105,7 +127,7 @@ async function bot() {
     mkdirSync(modules, { recursive: true });
     execFileSync("npm", ["install", "--prefix", modules, "--no-save", "--silent", "mineflayer@4.39.0"], { stdio: "inherit" });
   }
-  const child = spawn(process.execPath, [join(import.meta.dirname, "bot.mjs"), name, version],
+  const child = spawn(process.execPath, [join(import.meta.dirname, "bot.mjs"), name, games.minecraft.service.environment.VERSION],
     { stdio: "inherit", env: { ...process.env, NODE_PATH: join(modules, "node_modules") } });
   child.on("exit", (code) => process.exit(code ?? 1));
 }
@@ -114,11 +136,9 @@ function down() {
   confirmDaemon();
   if (!existsSync(join(dir, marker))) throw new Error(`${dir} wasn't made by real/rig.mjs up; leaving it alone.`);
   // A failed teardown stops here, before any game data is removed.
-  for (const project of Object.values(projects)) docker(...project, "down", "--volumes", "--remove-orphans", "--timeout", "30");
-  // Game data written by the containers belongs to their users, so a
-  // container removes what the rig made, and nothing else in its folder.
-  const made = ["java", "backups-copy", "bot", "ludock.override.yaml"].filter((name) => existsSync(join(dir, name)));
-  if (made.length) docker("run", "--rm", "--volume", `${dir}:/rig`, "alpine:3", "rm", "-rf", ...made.map((name) => `/rig/${name}`));
+  for (const name of started()) docker(...project(name), "down", "--volumes", "--remove-orphans", "--timeout", "60");
+  docker(...ludock, "down", "--volumes", "--remove-orphans", "--timeout", "30");
+  clear([...Object.keys(games), "backups-copy", "bot", "ludock.override.yaml"]);
   rmSync(join(dir, marker));
   try {
     rmdirSync(dir);
@@ -128,10 +148,10 @@ function down() {
   console.log("Removed the rig. Images stay; remove them with docker image rm if you pulled them for it.");
 }
 
-const commands = { up, bot, down };
+const commands = { up, remove, bot, down };
 const command = commands[process.argv[2]];
 if (!command) {
-  console.error("usage: node real/rig.mjs up | bot [NAME] | down");
+  console.error("usage: node real/rig.mjs up [GAME] | remove GAME | bot [NAME] | down");
   process.exit(2);
 }
 await command();

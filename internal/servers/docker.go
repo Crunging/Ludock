@@ -752,7 +752,7 @@ func (o *Observer) ChangeStateExact(ctx context.Context, id string, action Actio
 	case Start:
 		err = o.Docker.Start(ctx, id)
 	case Stop:
-		err = o.Docker.Stop(ctx, id, &timeout)
+		err = o.stop(ctx, id, info, games.StopCommand(observed.Container.GameType, observed.Container.Labels), timeout)
 	case Restart:
 		return o.Docker.Restart(ctx, id, &timeout)
 	default:
@@ -762,6 +762,38 @@ func (o *Observer) ChangeStateExact(ctx context.Context, id string, action Actio
 		return ErrUnchanged
 	}
 	return err
+}
+
+// stopCommandDelay lets Docker take the stop first: once it has sent the
+// stop signal it no longer applies the restart policy, so a game that exits
+// on its own command stays stopped.
+var stopCommandDelay = 2 * time.Second
+
+// stop asks Docker to stop the container and, for a game that never gets the
+// stop signal, also types its shutdown command, so it exits saved instead of
+// being killed when the grace period ends.
+func (o *Observer) stop(ctx context.Context, id string, info *docker.ContainerInspect, command string, timeout int) error {
+	if command == "" || !info.Config.OpenStdin || info.Config.StdinOnce {
+		return o.Docker.Stop(ctx, id, &timeout)
+	}
+	done := make(chan error, 1)
+	go func() { done <- o.Docker.Stop(ctx, id, &timeout) }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(stopCommandDelay):
+	}
+	// Best effort: without it, Docker still kills the game when the grace
+	// period ends.
+	attach, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if conn, err := o.Docker.Attach(attach, id, docker.AttachOptions{Stream: true, Stdin: true}); err == nil {
+		stop := context.AfterFunc(attach, func() { conn.Close() })
+		conn.Write([]byte(command + "\n"))
+		stop()
+		conn.Close()
+	}
+	return <-done
 }
 
 // StopTimeoutSeconds is the game's shutdown allowance, or the container's
