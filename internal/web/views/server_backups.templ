@@ -39,6 +39,9 @@ type BackupsView struct {
 	Keep *backups.Backup
 	// Browse, when set, replaces the tab with one folder of a backup.
 	Browse *BackupBrowser
+	// Warn offers to warn players before a backup or restore (WarnOn,
+	// WarnOff, or "").
+	Warn string
 }
 
 func (b BackupsView) archives() bool { return b.Admin && b.CanRead }
@@ -89,7 +92,7 @@ templ backupsTabBody(b BackupsView) {
 	<div class="section-heading">
 		<h2>Backups</h2>
 		if b.CanCreate && !b.NoData {
-			@CreateBackupButton(b.ServerID, b.ServerName, false)
+			@CreateBackupButton(b.ServerID, b.ServerName, false, b.Warn)
 		}
 	</div>
 	if b.NoData {
@@ -149,7 +152,7 @@ templ noDataFolders(admin bool) {
 }
 
 // CreateBackupButton is replaced once readiness is known.
-templ CreateBackupButton(serverID, serverName string, ready bool) {
+templ CreateBackupButton(serverID, serverName string, ready bool, warn string) {
 	<button
 		id="create-backup"
 		class="primary-btn"
@@ -158,8 +161,15 @@ templ CreateBackupButton(serverID, serverName string, ready bool) {
 		hx-post={ "/servers/" + serverID + "/backups" }
 		hx-target="#detail-status"
 		hx-confirm={ "Back up " + serverName + "?" }
-		data-confirm-detail="The server stops for the whole copy, then returns to how it was."
+		if warn != "" {
+			data-confirm-detail="The server stops for the whole copy, then returns to how it was. Connected players will be disconnected."
+		} else {
+			data-confirm-detail="The server stops for the whole copy, then returns to how it was."
+		}
 		data-confirm-action="Create backup"
+		if warn != "" {
+			data-confirm-options={ confirmOptions([]ConfirmOption{WarnOption("backup", warn)}) }
+		}
 		data-busy-label="Working…"
 	>Create backup</button>
 }
@@ -169,6 +179,7 @@ type ReadinessView struct {
 	Admin                bool
 	Preflight            *backups.Preflight
 	Error                string
+	Warn                 string
 }
 
 // BackupReadiness shows only what stops a backup; a ready server shows
@@ -202,7 +213,7 @@ templ BackupReadiness(r ReadinessView) {
 		</section>
 	}
 	@Partial("#create-backup", "outerHTML") {
-		@CreateBackupButton(r.ServerID, r.ServerName, ready)
+		@CreateBackupButton(r.ServerID, r.ServerName, ready, r.Warn)
 	}
 }
 
@@ -404,6 +415,14 @@ templ RestoreForm(b BackupsView) {
 			<p>Ludock checks the backup before replacing anything. The server returns to its previous running state only after the data is safe. Restoring game data doesn’t undo an update or change the server’s settings.</p>
 		</details>
 		<input type="hidden" name="backupId" value={ b.Restore.ID }/>
+		if b.Warn != "" {
+			{{ option := WarnOption("restore", b.Warn) }}
+			<label class="check-label">
+				<input type="checkbox" name={ option.Name } value="true" checked?={ option.Checked }/>
+				{ option.Label }
+			</label>
+			<p class="muted check-help">{ option.Help }</p>
+		}
 		<label>
 			<span>Type <strong>{ b.ServerName }</strong> to confirm</span>
 			<input name="confirmation" autocomplete="off" required data-confirm-value={ b.ServerName }/>
@@ -432,6 +451,7 @@ type BackupBrowser struct {
 	// BindingRevision.
 	Fit             backups.Fit
 	BindingRevision int64
+	Warn            string
 }
 
 // rootList names data folders in a sentence.
@@ -647,6 +667,15 @@ func (b BackupBrowser) restoreItemDetail(item backups.ArchiveEntry) string {
 	return detail + " The server stops while the copies swap, then goes back to how it was. If anything fails, the current copy is put back."
 }
 
+func (b BackupBrowser) restoreItemOptions() []ConfirmOption {
+	options := []ConfirmOption{{Name: "createBackup", Label: "Back up first", Checked: true,
+		Help: "Saves the server’s data as it is now, so this restore can be undone."}}
+	if b.Warn != "" {
+		options = append([]ConfirmOption{WarnOption("restore", b.Warn)}, options...)
+	}
+	return options
+}
+
 // restoreItem restores one file or folder after the confirmation dialog,
 // which offers a backup of the current data first.
 templ restoreItem(b BackupBrowser, item backups.ArchiveEntry) {
@@ -658,8 +687,7 @@ templ restoreItem(b BackupBrowser, item backups.ArchiveEntry) {
 		data-confirm-detail={ b.restoreItemDetail(item) }
 		data-confirm-action={ "Restore " + kind }
 		data-confirm-danger
-		data-confirm-options={ confirmOptions([]ConfirmOption{{Name: "createBackup", Label: "Back up first", Checked: true,
-			Help: "Saves the server’s data as it is now, so this restore can be undone."}}) }
+		data-confirm-options={ confirmOptions(b.restoreItemOptions()) }
 	>
 		<input type="hidden" name="backupId" value={ b.Backup.ID }/>
 		<input type="hidden" name="root" value={ b.Root.ID }/>

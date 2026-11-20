@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"path"
 	"regexp"
 	"strconv"
@@ -116,19 +117,22 @@ func MountProof(ctx context.Context, client *docker.Client, images *Images, moun
 		if operationID != "" {
 			client.RemoveOperationHelper(id)
 		} else {
-			client.RemoveHelper(context.WithoutCancel(ctx), id)
+			Step(context.WithoutCancel(ctx), "removing a mount validator", func(ctx context.Context) error { return client.RemoveHelper(ctx, id) })
 		}
 	}
 	identities, err := readProof(ctx, client, id, sources)
 	if err != nil {
 		cleanup()
+		if errors.Is(err, ErrDockerTimeout) {
+			return nil, err
+		}
 		return nil, ErrUnverifiedMount
 	}
 	return &Proof{Identities: identities, Cleanup: cleanup}, nil
 }
 
 func readProof(ctx context.Context, client *docker.Client, id string, sources []helper.MountSource) (map[string]helper.MountIdentity, error) {
-	if err := client.Start(ctx, id); err != nil {
+	if err := Step(ctx, "starting a mount validator", func(ctx context.Context) error { return client.Start(ctx, id) }); err != nil {
 		return nil, err
 	}
 	deadline, cancel := context.WithTimeout(ctx, 10*time.Second)

@@ -147,11 +147,19 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 			}
 		}
 		// Limit recent work before filtering issues; read summary fields only.
+		// Work that failed is settled once the same kind of work succeeds
+		// later, unless it may have left something only a person can sort
+		// out: an interrupted restore, a force-stop, or an error asking for
+		// an administrator.
 		rows, err := s.DB.QueryContext(ctx, `SELECT id,kind,status,updated_at,
       CASE WHEN json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1 THEN 1 ELSE 0 END
-      FROM (SELECT id,kind,status,updated_at,result_json FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100)
-      WHERE status IN ('failed','interrupted') OR (status='succeeded' AND kind IN ('stop','restart') AND
-        CASE WHEN json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1 THEN 1 ELSE 0 END)`, server.ID)
+      FROM (SELECT id,kind,status,updated_at,result_json,created_at,error FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100) o
+      WHERE (status IN ('failed','interrupted') AND ((kind='restore' AND status='interrupted') OR instr(COALESCE(error,''),'administrator') > 0 OR
+        (json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1) OR
+        NOT EXISTS (SELECT 1 FROM operations later WHERE later.server_id=? AND later.kind=o.kind AND later.status='succeeded' AND
+          (later.created_at > o.created_at OR (later.created_at = o.created_at AND later.id > o.id)))))
+        OR (status='succeeded' AND kind IN ('stop','restart') AND
+        CASE WHEN json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1 THEN 1 ELSE 0 END)`, server.ID, server.ID)
 		if err != nil {
 			return nil, err
 		}

@@ -443,9 +443,19 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 		action = "recreation"
 	}
 	j.notifyDone(job, "operation:"+job.Job.ID, server.Container.DisplayName+": "+action+" completed.")
-	return withSave(job, map[string]any{"imageChanged": imageChanged, "recreated": true, "forced": request.ForceRecreate,
-		"running": initiallyRunning, "verification": verification}), nil
+	result := map[string]any{"imageChanged": imageChanged, "recreated": true, "forced": request.ForceRecreate,
+		"running": initiallyRunning, "verification": verification}
+	if stopped.NamesUnnamedVolumes() {
+		result["guidance"] = unnamedVolumeGuidance
+	}
+	return withSave(job, result), nil
 }
+
+// Docker's rm -v, which compose down -v relies on, keeps any volume a
+// container mounts by name, and the Engine API can mount an existing volume
+// only by name.
+const unnamedVolumeGuidance = "The server kept its unnamed volume, but Docker now treats it as named, so docker compose down -v " +
+	"no longer removes it. To name it in the Compose file instead, copy its data into the named volume first."
 
 // swap replaces the stopped original with a container created from body, which
 // must run the pulled image, and returns how the replacement was checked.

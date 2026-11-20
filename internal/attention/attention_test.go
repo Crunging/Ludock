@@ -2,6 +2,7 @@ package attention
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/authz"
@@ -84,5 +85,59 @@ func TestAttentionListsAResultWithoutForceStopped(t *testing.T) {
 	}
 	if len(result.Items) != 1 || result.Items[0].Kind != "operation" || result.Items[0].ForceStopped {
 		t.Fatalf("%+v", result.Items)
+	}
+}
+
+// A failure leaves Needs attention once the same kind of work succeeds on
+// the server later; an interrupted restore, a force-stop, and an error that
+// asks for an administrator stay, and so does a failure after the success.
+func TestAttentionSettlesFailuresByALaterSuccess(t *testing.T) {
+	d := dbtest.Open(t)
+	admin := &db.SessionUser{ID: "11111111-1111-4111-8111-111111111111", Username: "owner", Role: db.RoleAdmin}
+	if err := d.CreateUser(ctx, db.UserRecord{User: db.User{ID: admin.ID, Username: admin.Username, Role: admin.Role, CreatedAt: 1},
+		PasswordHash: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	store := &identity.Store{DB: d}
+	list, err := store.Reconcile(ctx, []identity.Observation{{ContainerID: "mc", Name: "mc", DisplayName: "Minecraft", GameType: "minecraft"}}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := []struct {
+		id, kind, status, error, result string
+	}{
+		{"01", "update", "failed", "The new server stopped right after starting.", "{}"},
+		{"02", "backup", "failed", "The backup folder is full.", "{}"},
+		{"03", "restore", "interrupted", "Ludock restarted while this ran. Check the server before trying again.", "{}"},
+		{"04", "stop", "interrupted", "Recovery requires administrator attention. The server has been left stopped where possible.", "{}"},
+		{"05", "restart", "succeeded", "", `{"forceStopped":true}`},
+		{"13", "restart", "failed", "The server didn't start again.", `{"forceStopped":true}`},
+		{"06", "start", "interrupted", "Ludock restarted while this ran. Check the server before trying again.", "{}"},
+		{"07", "update", "succeeded", "", "{}"},
+		{"08", "restart", "succeeded", "", "{}"},
+		{"09", "restore", "succeeded", "", "{}"},
+		{"10", "stop", "succeeded", "", "{}"},
+		{"11", "start", "succeeded", "", "{}"},
+		{"12", "restart", "failed", "The game didn't stop.", "{}"},
+	}
+	for index, operation := range operations {
+		if _, err := d.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,result_json,error,binding_revision,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,'{}','{}',?,NULLIF(?,''),1,?,?)`, "00000000-0000-4000-8000-0000000000"+operation.id, list[0].ID, admin.ID,
+			operation.kind, operation.status, operation.status, operation.result, operation.error, index+1, index+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	authorization := &authz.Service{DB: d, Servers: store}
+	s := &Service{DB: d, Authz: authorization, Identity: store, Monitor: &monitor.Service{DB: d, Store: store}}
+	result, err := s.List(ctx, admin, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed []string
+	for _, item := range result.Items {
+		listed = append(listed, item.OperationID[len(item.OperationID)-2:])
+	}
+	if want := []string{"12", "13", "05", "04", "03", "02"}; !slices.Equal(listed, want) {
+		t.Fatalf("listed %v, want %v", listed, want)
 	}
 }

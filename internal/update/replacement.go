@@ -294,6 +294,13 @@ func (p *Plan) Platform() string {
 // RestartPolicy is the container's restart policy as Docker reports it.
 func (p *Plan) RestartPolicy() json.RawMessage { return p.Spec.HostConfig["RestartPolicy"] }
 
+// NamesUnnamedVolumes reports whether the replacement mounts an anonymous
+// volume of the original by name.
+func (p *Plan) NamesUnnamedVolumes() bool {
+	binds, mounts, err := p.mounts()
+	return err == nil && (binds != nil || mounts != nil)
+}
+
 // mounts returns HostConfig.Binds and Mounts with every anonymous volume
 // mounted by name at its destination, or nil if nothing changes. A volume is
 // anonymous when no bind or mount names its source.

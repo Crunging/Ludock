@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -295,6 +297,54 @@ func TestHelpersKeepNoLogs(t *testing.T) {
 	}
 	if logging := f.engine.HelperLogging(); logging["file-helper"] != "none" || logging["mount-validator"] != "" {
 		t.Fatal(logging)
+	}
+}
+
+// A daemon that never answers starting a helper, creating its command, or
+// removing it fails a preview with a plain message in time instead of
+// holding the request. A removal that ran out of time counts as failed.
+func TestDockerCallsThatNeverAnswerFailInTime(t *testing.T) {
+	f := setup(t)
+	previous := launch.StepLimit
+	launch.StepLimit = 200 * time.Millisecond
+	t.Cleanup(func() { launch.StepLimit = previous })
+	stall := func(match func(request string) bool) {
+		var once atomic.Bool
+		f.engine.Hang = func(request string) bool { return match(request) && once.CompareAndSwap(false, true) }
+	}
+	isStart := func(request string) bool {
+		return strings.HasSuffix(request, "/start") && strings.Contains(request, "/containers/")
+	}
+	isExecCreate := func(request string) bool {
+		return strings.HasPrefix(request, "POST ") && strings.HasSuffix(request, "/exec")
+	}
+	// The first start is the mount validator's, and the first command checks
+	// the helper's mounts.
+	var calls atomic.Int32
+	for name, match := range map[string]func(string) bool{
+		"validator start": isStart,
+		"helper start":    func(request string) bool { return isStart(request) && calls.Add(1) == 2 },
+		"exec create":     func(request string) bool { return isExecCreate(request) && calls.Add(1) == 2 },
+	} {
+		calls.Store(0)
+		stall(match)
+		began := time.Now()
+		if _, err := f.service.Preview(ctx, f.target, f.root, "server.properties", nil); !errors.Is(err, launch.ErrDockerTimeout) {
+			t.Fatal(name, err)
+		}
+		if time.Since(began) > 10*time.Second {
+			t.Fatal(name, "waited too long")
+		}
+		f.engine.Hang = nil
+		f.helpersLeft(t)
+	}
+	access, err := f.service.Acquire(ctx, f.target, f.target.Roots[0], true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.engine.Hang = func(request string) bool { return strings.HasPrefix(request, "DELETE ") }
+	if err := access.Cleanup(false); err == nil {
+		t.Fatal("a removal Docker never answered succeeded")
 	}
 }
 

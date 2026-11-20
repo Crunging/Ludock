@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -244,6 +245,35 @@ func TestJSONLines(t *testing.T) {
 	long := "\"" + strings.Repeat("x", 200) + "\"\n"
 	if err := docker.DecodeJSONLines(strings.NewReader(long), 100, true, func(json.RawMessage) error { return nil }); !errors.Is(err, docker.ErrJSONLineTooLong) {
 		t.Fatal(err)
+	}
+}
+
+// A helper that may still be writing is removed even when Docker never
+// answers one attempt: the attempt runs out of time and is retried.
+func TestRemoveOperationHelperRetriesAStalledAttempt(t *testing.T) {
+	e, client := engine(t)
+	defer docker.SetRemoveAttemptLimit(100 * time.Millisecond)()
+	e.AddImage("ghcr.io/crunging/ludock@sha256:" + strings.Repeat("a", 64))
+	id, err := client.CreateHelper(ctx, docker.ContainerCreate{Image: "ghcr.io/crunging/ludock@sha256:" + strings.Repeat("a", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stalled atomic.Bool
+	e.Hang = func(request string) bool {
+		return strings.HasPrefix(request, "DELETE ") && stalled.CompareAndSwap(false, true)
+	}
+	done := make(chan struct{})
+	go func() {
+		client.RemoveOperationHelper(id)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("removal waited on the stalled attempt")
+	}
+	if !stalled.Load() || e.Container(id) != nil {
+		t.Fatal("helper left behind")
 	}
 }
 

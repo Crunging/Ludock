@@ -30,7 +30,8 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		CanRead: can(view, authz.BackupsRead), CanCreate: can(view, authz.BackupsCreate),
 		CanRestore: can(view, authz.BackupsRestore), CanDelete: can(view, authz.BackupsDelete),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
-		LatestBackup: view.LatestBackup, NoData: view.NoDataFolders, BindingRevision: view.BindingRevision}
+		LatestBackup: view.LatestBackup, NoData: view.NoDataFolders, BindingRevision: view.BindingRevision,
+		Warn: s.warnOffer(view.ID, view.Container)}
 	// The tab follows any running work, so readiness and paused controls come
 	// back when it ends.
 	b.Operation = views.ActivityView{ServerID: view.ID, Admin: d.Admin, Tab: "backups", SelectedID: r.URL.Query().Get("operation"),
@@ -45,6 +46,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		if id := r.URL.Query().Get("browse"); id != "" {
 			b.Browse = s.backupBrowser(r, view.ID, id, s.archiveAccess(r.Context(), request, view.ID))
 			b.Browse.ServerName, b.Browse.CanRestore = view.DisplayName, restoreOffered(view, d.DiscoveryUnavailable)
+			b.Browse.Warn = b.Warn
 			s.fitBrowser(r.Context(), view, b.Browse)
 			return b
 		}
@@ -146,7 +148,7 @@ func (s *Server) backupPreflight(w http.ResponseWriter, r *http.Request, request
 	resolved, user, err := s.resolveFresh(r, request, id, authz.BackupsCreate)
 	view := views.ReadinessView{ServerID: id, Admin: request.User().Role == db.RoleAdmin}
 	if err == nil {
-		view.ServerName = resolved.Container.DisplayName
+		view.ServerName, view.Warn = resolved.Container.DisplayName, s.warnOffer(resolved.Logical.ID, resolved.Container)
 		preflight := s.App.Backups.Preflight(r.Context(), resolved)
 		if _, err = s.App.Authz.Assert(r.Context(), user, id, authz.BackupsCreate); err == nil {
 			view.Preflight = &preflight
@@ -214,7 +216,11 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request, request *R
 		s.fail(w, r, request, err)
 		return
 	}
-	s.enqueue(w, r, request, resolved, user, "backup", nil)
+	var input map[string]any
+	if r.PostFormValue(jobs.WarnInput) == "true" && s.warnPlayers(resolved) {
+		input = map[string]any{jobs.WarnInput: true}
+	}
+	s.enqueue(w, r, request, resolved, user, "backup", input)
 }
 
 func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *Request) {
@@ -260,6 +266,9 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 		input["createBackup"] = true
 	}
 	input["backupId"] = backupID
+	if r.PostFormValue(jobs.WarnInput) == "true" && s.warnPlayers(resolved) {
+		input[jobs.WarnInput] = true
+	}
 	if fit.Moved {
 		input[jobs.MovedInput] = true
 	}

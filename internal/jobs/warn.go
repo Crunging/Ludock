@@ -16,8 +16,8 @@ import (
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
-// WarningMinutes is how long a restart, stop, or update asked for with a
-// warning waits after telling players.
+// WarningMinutes is how long an operation asked for with a warning waits
+// after telling players.
 const WarningMinutes = 1
 
 // WarnInput is the operation input that asks for a warning first.
@@ -38,7 +38,28 @@ func (j *Jobs) warningLead() time.Duration {
 	return WarningMinutes * time.Minute
 }
 
-var verbs = map[string]string{"restart": "restart", "stop": "shut down", "update": "restart for an update"}
+var verbs = map[string]string{"restart": "restart", "stop": "shut down", "update": "restart for an update",
+	"backup": "restart for a backup", "restore": "restart to restore a backup"}
+
+type runFunc = func(ctx context.Context, job *ops.Context) (map[string]any, error)
+
+// warnedFirst runs an operation after warnFirst.
+func (j *Jobs) warnedFirst(capability authz.Capability, run runFunc) runFunc {
+	return func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+		if err := j.warnFirst(ctx, job, capability, false); err != nil {
+			return nil, calledOff(job, err)
+		}
+		// Past the wait, an interruption is recovered like any other, which
+		// removes helpers the checks before the stop may leave.
+		if warnRequested(job) {
+			if err := job.Progress("validating", nil, nil); err != nil {
+				return nil, calledOff(job, err)
+			}
+		}
+		result, err := run(ctx, job)
+		return result, calledOff(job, err)
+	}
+}
 
 // warnFirst, for an operation that asked for it, tells players the server
 // is going down and waits until the time it gave. The time is saved before

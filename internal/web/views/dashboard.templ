@@ -67,7 +67,8 @@ func confirmOptions(options []ConfirmOption) string {
 
 // WarnOption offers to warn players before an action takes the server down.
 func WarnOption(action, warn string) ConfirmOption {
-	what := map[string]string{"stop": "shuts down", "update": "restarts for an update"}[action]
+	what := map[string]string{"stop": "shuts down", "update": "restarts for an update", "backup": "restarts for a backup",
+		"restore": "restarts to restore a backup"}[action]
 	if what == "" {
 		what = "restarts"
 	}
