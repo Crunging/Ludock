@@ -9,11 +9,12 @@ scripts/dev.sh
 ```
 
 Open <http://127.0.0.1:3000> and use the setup code printed in the output.
-The script builds Ludock and `cmd/fakedocker`, an in-memory Docker Engine API
-with a running Minecraft server and stopped Valheim, Palworld, and Enshrouded
-servers, and keeps their data in `data/dev/`. Rerun it after changes, and set `LUDOCK_LISTEN`
-for another address. `fakedocker -demo` seeds the servers shown in the README
-screenshots.
+The script builds Ludock and `cmd/fakedocker`, an in-memory Docker Engine API,
+and keeps their data in `data/dev/`. The fake daemon starts a running Minecraft
+server, stopped Valheim, Palworld, and Enshrouded servers, and containers
+Ludock doesn't add by itself (an unrecognized game, one labeled out, and
+Portainer). Rerun the script after changes, and set `LUDOCK_LISTEN` for another
+address.
 
 - **Templates:** pages are [templ](https://templ.guide) components in
   `internal/web/views`. After editing a `.templ` file, run
@@ -50,10 +51,29 @@ can set `test.describe.configure({ mode: "parallel" })`. `--workers=1` runs
 every file on one server. CI retries a failed journey once to show whether it's
 flaky, but a flaky journey still fails the run.
 
+[`e2e/journeys/fixtures.mjs`](../e2e/journeys/fixtures.mjs) holds the shared
+helpers: `asAdmin()` signs a file's journeys in as the setup administrator,
+`session()` opens another browser profile, `dockerAction()` changes a container
+behind Ludock's back, and `fake()` calls the fake daemon's controls, such as
+`/fake/disk`. Every page fails its journey on a script error or a browser
+dialog. A journey that needs a fresh install, such as the first-run checklist,
+starts its own stack with `freshStack()` from `setup.mjs`.
+
 Locally, point the journeys at an installed Chromium with
 `LUDOCK_E2E_CHROMIUM=/path/to/chrome`, or run `npx playwright install chromium`
 once. `LUDOCK_E2E_LOGS=1` prints the servers' output and `LUDOCK_E2E_KEEP=1`
 keeps their temporary data.
+
+### Screenshots
+
+The README screenshots come from `fakedocker -demo`.
+[`e2e/screenshots.mjs`](../e2e/screenshots.mjs) builds both binaries, sets up a
+demo install, and saves the pages to `docs/screenshots`. Rerun it after a
+change to those pages:
+
+```sh
+cd e2e && node screenshots.mjs
+```
 
 ### Container journeys
 
