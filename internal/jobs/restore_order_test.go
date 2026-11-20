@@ -274,7 +274,8 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 				after = scenario.after(t, f)
 			}
 			trace := f.traceRestore(after)
-			// The server starts again only once the journal is final.
+			// The server starts again only once the journal is final, and one
+			// started elsewhere is never stopped and started again.
 			var startedWith []string
 			start := f.engine.OnStart
 			f.engine.OnStart = func(c *fakedocker.Container) {
@@ -287,7 +288,11 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 			}
 			job := f.run(t, "restore", input)
 			f.mu.Lock()
-			if want := []string{scenario.journal}; !scenario.left && !slices.Equal(startedWith, want) {
+			want := []string{scenario.journal}
+			if scenario.left {
+				want = nil
+			}
+			if !slices.Equal(startedWith, want) {
 				t.Errorf("started the server with journals %q, want %q", startedWith, want)
 			}
 			f.mu.Unlock()
