@@ -79,4 +79,15 @@ func TestActivitySearchMatchesShownNames(t *testing.T) {
 	if body := p.do("GET", "/activity?show=everything&action=signed+out", p.admin, nil, nil).Body.String(); strings.Contains(body, "Turned on automatic restart") {
 		t.Fatal(body)
 	}
+	// "Signed in" is not also "Sign-in failed", though one is recorded as
+	// the other with a suffix.
+	for _, action := range []string{"auth.login", "auth.login.failed"} {
+		if err := p.app.DB.WriteAudit(context.Background(), nil, db.AuditEntry{UserID: p.admin.User.ID, Action: action}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if body := p.do("GET", "/activity?show=everything&action=signed+in", p.admin, nil, nil).Body.String(); !strings.Contains(body, "Signed in") ||
+		strings.Contains(body, "Sign-in failed") {
+		t.Fatal(body)
+	}
 }

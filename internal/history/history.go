@@ -285,8 +285,13 @@ func (s *Service) Audit(ctx context.Context, q Query) ([]AuditEntry, string, err
 		match := "instr(lower(a.action), lower(?)) > 0"
 		values = append(values, q.Action)
 		for _, key := range q.ActionKeys {
-			match += " OR a.action = ? OR a.action LIKE ? ESCAPE '\\'"
-			values = append(values, key, strings.NewReplacer("%", "\\%", "_", "\\_").Replace(key)+".%")
+			match += " OR a.action = ?"
+			values = append(values, key)
+			// Only server work is recorded with its result as a suffix.
+			if strings.HasPrefix(key, "server.") {
+				match += " OR a.action LIKE ? ESCAPE '\\'"
+				values = append(values, strings.NewReplacer("%", "\\%", "_", "\\_").Replace(key)+".%")
+			}
 		}
 		conditions = append(conditions, "("+match+")")
 	}
