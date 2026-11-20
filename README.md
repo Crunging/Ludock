@@ -54,6 +54,10 @@ some game images support fewer platforms.
    appear automatically. For any other container, open **Missing a server?**
    under the server list and choose **Add**.
 
+4. Follow the short **Finish setting up** list on the first page. It shows only
+   what's left, such as alerts and nightly backups, and does most of it in one
+   click.
+
 Ludock keeps its own data and your backups in separate volumes; your game
 containers and their data stay where they are. Backup storage in the example's
 `backups` volume turns on automatically, and each server keeps a spread of

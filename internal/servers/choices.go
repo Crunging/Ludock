@@ -200,6 +200,8 @@ type Unmanaged struct {
 	Game string
 	// External is the identity a choice is saved under; never shown.
 	External string
+	// Chosen: an administrator already decided about it, such as removing it.
+	Chosen bool
 }
 
 // Unmanaged lists the containers an administrator can add, likely games
@@ -320,9 +322,11 @@ func (o *Observer) addable(ctx context.Context, id string, choices map[string]id
 		slices.SortFunc(entry.Ports, func(a, b Port) int { return cmp.Or(cmp.Compare(a.Public, b.Public), cmp.Compare(a.Type, b.Type)) })
 	}
 	entry.Game = games.Suggest(container.Image, container.Name, gamePorts(entry.Ports))
-	if game := choices[entry.External].Game; game != "" {
-		entry.Game = game
+	choice, chosen := choices[entry.External]
+	if choice.Game != "" {
+		entry.Game = choice.Game
 	}
+	entry.Chosen = chosen
 	return entry, nil
 }
 
