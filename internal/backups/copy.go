@@ -323,8 +323,20 @@ func (w digestWriter) Write(p []byte) (int, error) {
 	if err := w.ctx.Err(); err != nil {
 		return 0, err
 	}
+	if testHook != nil {
+		testHook("verifying")
+	}
+	// Reading a large copy back can take longer than copyStall; only a
+	// read that stops making progress is a stall.
+	if progress, ok := w.ctx.Value(progressKey{}).(func()); ok {
+		progress()
+	}
 	return w.digest.Write(p)
 }
+
+// progressKey carries isolate's progress callback to I/O that has no other
+// way to report it.
+type progressKey struct{}
 
 // assertCopyFolder checks a second copy's folder the way the backup folder
 // is checked, and that it is separate from main and from game data.
@@ -465,9 +477,11 @@ func (s *Service) isolate(ctx context.Context, folder string, fn func(ctx contex
 	var last atomic.Int64
 	last.Store(time.Now().UnixNano())
 	done := make(chan error, 1)
+	progress := func() { last.Store(time.Now().UnixNano()) }
+	work = context.WithValue(work, progressKey{}, progress)
 	go func() {
 		defer s.copies.leave(folder)
-		done <- fn(work, func() { last.Store(time.Now().UnixNano()) })
+		done <- fn(work, progress)
 	}()
 	ticker := time.NewTicker(copyStall / 4)
 	defer ticker.Stop()

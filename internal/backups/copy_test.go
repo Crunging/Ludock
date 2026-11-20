@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -603,5 +604,27 @@ func TestStuckFolderIsMeasuredOnce(t *testing.T) {
 	}
 	if started.Load() != 1 {
 		t.Fatal("readings piled up on a stuck folder", started.Load())
+	}
+}
+
+// Reading a large copy back to verify it takes longer than the stall limit
+// while never stopping: it is progress, so the copy finishes instead of
+// being abandoned and retried forever.
+func TestSlowVerificationIsNotAStall(t *testing.T) {
+	f := newCopyFixture(t)
+	backup := f.add(t, strings.Repeat("world data ", 20_000), 1)
+	previous := copyStall
+	copyStall = 100 * time.Millisecond
+	testHook = func(point string) {
+		if point == "verifying" {
+			time.Sleep(40 * time.Millisecond)
+		}
+	}
+	t.Cleanup(func() { testHook = nil; copyStall = previous })
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if state, _, _, problem := f.row(t, backup.ID); state != "complete" {
+		t.Fatal(state, problem)
 	}
 }
