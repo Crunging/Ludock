@@ -6,6 +6,17 @@ import { test, expect, asAdmin, serverRow, signIn, createUser, fake, shareServer
 
 asAdmin();
 
+async function setUploadLimit(page, limit, notice) {
+  await page.goto("/settings");
+  if ((await page.locator("#advanced-settings").getAttribute("open")) === null) {
+    await page.getByText("Upload size limit, verbose logging, and reverse proxy").click();
+  }
+  const form = page.locator("#upload-limit-form");
+  await form.getByLabel("Largest file").fill(limit);
+  await form.getByRole("button", { name: "Save upload limit" }).click();
+  await expect(form.locator(".alert--success")).toHaveText(notice);
+}
+
 test("browsing, previewing, uploading, and changing server files", async ({ page }) => {
   await page.goto("/");
   await serverRow(page, "Survival").getByRole("button", { name: /More actions/ }).click();
@@ -29,9 +40,15 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   await expect(dialog).toContainText("Files over 512 KiB aren’t shown here.");
   await dialog.getByRole("button", { name: "Close" }).click();
 
-  // A file over the upload limit is refused.
+  // Uploads have no size limit until an administrator sets one under
+  // Settings → Advanced; a file over it is then refused.
+  const files = page.url();
+  await setUploadLimit(page, "5 MiB", "Upload limit saved.");
+  await page.goto(files);
   await page.locator("[data-upload-input]").setInputFiles([{ name: "huge.bin", mimeType: "application/octet-stream", buffer: Buffer.alloc(6 * 1024 * 1024) }]);
   await expect(page.locator("#file-feedback")).toContainText("Could not upload “huge.bin”: File exceeds the upload size limit of 5 MiB");
+  await setUploadLimit(page, "", "Upload limit removed.");
+  await page.goto(files);
 
   const [download] = await Promise.all([page.waitForEvent("download"), (async () => {
     await page.locator(".file-row", { hasText: "notes.txt" }).getByRole("button", { name: "Actions for notes.txt", exact: true }).click();

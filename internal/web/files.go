@@ -95,8 +95,10 @@ func boolInt(value bool) int {
 // the browser with an error.
 func (s *Server) filesView(r *http.Request, request *Request) views.FilesView {
 	query := r.URL.Query()
-	f := views.FilesView{ServerID: r.PathValue("id"), Filter: query.Get("q"), Sort: query.Get("sort"), Path: query.Get("path"),
-		MaxUploadRaw: s.App.Config.MaxUploadBytes, MaxUpload: datasize.Format(s.App.Config.MaxUploadBytes)}
+	f := views.FilesView{ServerID: r.PathValue("id"), Filter: query.Get("q"), Sort: query.Get("sort"), Path: query.Get("path")}
+	if limit, _ := s.App.Advanced.UploadLimit(r.Context()); limit > 0 {
+		f.MaxUploadRaw, f.MaxUpload = limit, datasize.Format(limit)
+	}
 	if !slices.Contains([]string{"name-asc", "name-desc", "size-desc", "size-asc", "modified-desc", "modified-asc"}, f.Sort) {
 		f.Sort = "name-asc"
 	}
@@ -551,7 +553,7 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 		s.fail(w, r, request, apperr.New("INVALID_REQUEST", 400, "Invalid upload request"))
 		return
 	}
-	if limit := s.App.Config.MaxUploadBytes; size > limit {
+	if limit, _ := s.App.Advanced.UploadLimit(r.Context()); limit > 0 && size > limit {
 		s.fail(w, r, request, apperr.New("UPLOAD_TOO_LARGE", 413, "File exceeds the upload size limit of "+datasize.Format(limit)))
 		return
 	}

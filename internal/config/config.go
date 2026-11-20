@@ -1,6 +1,7 @@
 // Package config reads and validates Ludock's environment once at startup.
 // Every setting is a LUDOCK_* variable; other packages receive values, never
-// read the environment themselves.
+// read the environment themselves. Settings that Settings → Advanced also
+// offers are empty here unless the environment sets them, and then win.
 package config
 
 import (
@@ -10,9 +11,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/datasize"
 )
 
@@ -25,14 +28,16 @@ type Config struct {
 	// LogLevel is error, warn, info, or debug (LUDOCK_LOG_LEVEL).
 	LogLevel string
 	// TrustedProxies may supply X-Forwarded-For (LUDOCK_TRUSTED_PROXIES,
-	// comma-separated addresses or CIDRs).
-	TrustedProxies string
+	// comma-separated addresses or CIDRs). TrustedProxiesSet is true when the
+	// variable is present, even empty, which trusts none.
+	TrustedProxies    string
+	TrustedProxiesSet bool
 	// SetupCode is the first-administrator code; generated when empty.
 	SetupCode string
 	// DockerSocket is the Engine socket inside Ludock (LUDOCK_DOCKER_SOCKET).
 	DockerSocket string
 	// SelfContainer identifies Ludock's own container (LUDOCK_SELF_CONTAINER,
-	// default HOSTNAME).
+	// else detected from its mounts, else HOSTNAME).
 	SelfContainer string
 	// BackupRoots are approved backup destinations (LUDOCK_BACKUP_ROOTS,
 	// ':'-separated, default /backups; set it empty to turn backups off).
@@ -45,16 +50,14 @@ type Config struct {
 	// HelperImage overrides the file and backup helper image
 	// (LUDOCK_HELPER_IMAGE, pinned by digest).
 	HelperImage string
-	// MaxUploadBytes limits each uploaded file (LUDOCK_MAX_UPLOAD_SIZE,
-	// default 2 GiB).
+	// MaxUploadBytes limits each uploaded file (LUDOCK_MAX_UPLOAD_SIZE).
 	MaxUploadBytes int64
 }
 
 const (
-	DefaultListen        = ":3000"
-	DefaultDockerSocket  = "/var/run/docker.sock"
-	DefaultBackupRoot    = "/backups"
-	DefaultMaxUploadSize = 2 << 30
+	DefaultListen       = ":3000"
+	DefaultDockerSocket = "/var/run/docker.sock"
+	DefaultBackupRoot   = "/backups"
 )
 
 func (c Config) DBPath() string { return filepath.Join(c.DataDir, "ludock.db") }
@@ -103,6 +106,26 @@ func contains(values []string, value string) bool {
 	return false
 }
 
+// hostnameMount finds the file Docker and Podman mount at /etc/hostname, which
+// sits in a folder named for the container's full ID.
+var mountinfoPath = "/proc/self/mountinfo"
+
+var hostnameMount = regexp.MustCompile(`/([0-9a-f]{64})(?:/userdata)?/hostname$`)
+
+// containerID reads the container's own ID from /proc/self/mountinfo, which
+// stays right when a custom hostname or host networking changes HOSTNAME.
+func containerID(mountinfo string) string {
+	for _, line := range strings.Split(mountinfo, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 4 && fields[4] == "/etc/hostname" {
+			if match := hostnameMount.FindStringSubmatch(fields[3]); match != nil {
+				return match[1]
+			}
+		}
+	}
+	return ""
+}
+
 var levels = []string{"error", "warn", "info", "debug"}
 
 // Load reads and validates the environment. Errors name the variable, never
@@ -111,14 +134,21 @@ func Load() (Config, error) {
 	c := Config{
 		Listen:         value("LUDOCK_LISTEN", DefaultListen),
 		DataDir:        value("LUDOCK_DATA_DIR", "data"),
-		LogLevel:       strings.ToLower(value("LUDOCK_LOG_LEVEL", "info")),
+		LogLevel:       strings.ToLower(value("LUDOCK_LOG_LEVEL", "")),
 		TrustedProxies: value("LUDOCK_TRUSTED_PROXIES", ""),
 		SetupCode:      value("LUDOCK_SETUP_CODE", ""),
 		DockerSocket:   value("LUDOCK_DOCKER_SOCKET", DefaultDockerSocket),
-		SelfContainer:  value("LUDOCK_SELF_CONTAINER", value("HOSTNAME", "")),
+		SelfContainer:  value("LUDOCK_SELF_CONTAINER", ""),
 		DockerConfig:   value("LUDOCK_DOCKER_CONFIG", ""),
 		HelperImage:    value("LUDOCK_HELPER_IMAGE", ""),
-		MaxUploadBytes: DefaultMaxUploadSize,
+	}
+	if c.SelfContainer == "" {
+		c.SelfContainer = value("HOSTNAME", "")
+		if mountinfo, err := os.ReadFile(mountinfoPath); err == nil {
+			if id := containerID(string(mountinfo)); id != "" {
+				c.SelfContainer = id
+			}
+		}
 	}
 	var problems []error
 	if host, port, err := net.SplitHostPort(c.Listen); err != nil || port == "" {
@@ -126,7 +156,7 @@ func Load() (Config, error) {
 	} else if number, err := strconv.Atoi(port); err != nil || number < 0 || number > 65535 || strings.ContainsAny(host, " /") {
 		problems = append(problems, errors.New("LUDOCK_LISTEN must be host:port, for example :3000"))
 	}
-	if !contains(levels, c.LogLevel) {
+	if c.LogLevel != "" && !contains(levels, c.LogLevel) {
 		problems = append(problems, errors.New("LUDOCK_LOG_LEVEL must be error, warn, info, or debug"))
 	}
 	if !strings.HasPrefix(c.DockerSocket, "/") {
@@ -145,6 +175,10 @@ func Load() (Config, error) {
 	}
 	if c.DockerConfig != "" && !strings.HasPrefix(c.DockerConfig, "/") {
 		problems = append(problems, errors.New("LUDOCK_DOCKER_CONFIG must be an absolute path"))
+	}
+	_, c.TrustedProxiesSet = os.LookupEnv("LUDOCK_TRUSTED_PROXIES")
+	if _, err := auth.ParseTrustedProxies(c.TrustedProxies); err != nil {
+		problems = append(problems, err)
 	}
 	if raw := value("LUDOCK_MAX_UPLOAD_SIZE", ""); raw != "" {
 		if size, ok := datasize.Parse(raw); !ok || size <= 0 {

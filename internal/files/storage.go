@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/games"
@@ -556,7 +557,7 @@ func (s *Service) Upload(ctx context.Context, target Target, rootID, parent, nam
 	if err != nil {
 		return err
 	}
-	return s.write(ctx, target, root, normalized, size, body, nil, assertAccess)
+	return s.write(ctx, target, root, normalized, size, body, nil, true, assertAccess)
 }
 
 // Save replaces an existing file's content only while it still matches
@@ -573,14 +574,39 @@ func (s *Service) Save(ctx context.Context, target Target, rootID, relative stri
 	if normalized == "" {
 		return Error("ROOT_MUTATION", 400)
 	}
-	return s.write(ctx, target, root, normalized, int64(len(content)), bytes.NewReader(content), &expected, assertAccess)
+	return s.write(ctx, target, root, normalized, int64(len(content)), bytes.NewReader(content), &expected, false, assertAccess)
 }
 
+// UploadSpare is the free space an upload leaves on the server's disk: 1 GiB,
+// or a twentieth of a smaller disk, so the game can still save.
+func UploadSpare(total int64) int64 { return min(1<<30, total/20) }
+
 func (s *Service) write(ctx context.Context, target Target, root Root, normalized string, size int64, body io.Reader,
-	expected *helper.FileVersion, assertAccess func() error) error {
+	expected *helper.FileVersion, checkSpace bool, assertAccess func() error) error {
 	access, err := s.Acquire(ctx, target, root, false, assertAccess)
 	if err != nil {
 		return err
+	}
+	if checkSpace {
+		// Uploads have no size limit by default, so one that would fill the
+		// disk is refused before anything is written.
+		folder := path.Dir(normalized)
+		if folder == "." {
+			folder = ""
+		}
+		out, err := access.request(ctx, helper.FileRequest{Operation: "space", Root: root.Path, Path: folder}, nil, nil)
+		var space helper.FileSpace
+		if err == nil && (json.Unmarshal(out, &space) != nil || space.Total <= 0) {
+			err = Error("FILE_OPERATION_FAILED", 409)
+		}
+		if err == nil && size > space.Available-UploadSpare(space.Total) {
+			err = apperr.New("NOT_ENOUGH_SPACE", 507, fmt.Sprintf("Not enough free space: the file needs %s, and %s is free on the server’s disk, of which Ludock leaves %s for the game.",
+				datasize.Format(size), datasize.Format(space.Available), datasize.Format(UploadSpare(space.Total))))
+		}
+		if err != nil {
+			access.Cleanup(false)
+			return err
+		}
 	}
 	uploadID := identity.NewUUID()
 	_, err = access.request(ctx, helper.FileRequest{Operation: "upload", Root: root.Path, Path: normalized, Size: &size,

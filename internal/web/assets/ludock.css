@@ -1124,6 +1124,8 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .settings-jump-links { display: flex; gap: var(--gap); flex-wrap: wrap; margin: -6px 0 8px; font-size: 15px; }
 .settings-jump-links .text-link { padding: 7px 12px; border-radius: var(--radius); background: var(--block); color: var(--ink); text-decoration: none; }
 .settings-jump-links .text-link:hover { background: var(--block-2); }
+.advanced-settings { display: grid; gap: 32px; margin-top: 14px; }
+.proxy-hint > div { display: grid; gap: 10px; justify-items: start; }
 .settings-page form.stack-form { max-width: 720px; }
 .backup-storage { display: grid; gap: 10px; padding: 16px 18px; border-radius: var(--radius-lg); background: var(--block); }
 .backup-storage__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

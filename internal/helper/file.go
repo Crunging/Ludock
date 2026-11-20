@@ -543,8 +543,16 @@ func (h *fileHelper) run() error {
 	case "check":
 		return h.json(map[string]bool{"safe": true})
 	case "space":
+		// A folder below the root can be on another disk, such as a nested
+		// mount.
+		directory := root
+		if relative != "" {
+			if directory, err = h.pinDirectory(root, relative); err != nil {
+				return err
+			}
+		}
 		var stat unix.Statfs_t
-		if err := unix.Fstatfs(int(root), &stat); err != nil {
+		if err := unix.Fstatfs(int(directory), &stat); err != nil {
 			return err
 		}
 		return h.json(Space(&stat))

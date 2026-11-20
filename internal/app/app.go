@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/advanced"
 	"github.com/Crunging/Ludock/internal/attention"
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -46,6 +47,7 @@ type App struct {
 	Authz     *authz.Service
 	Auth      *auth.Service
 	ClientIP  *auth.ClientIP
+	Advanced  *advanced.Service
 	Observer  *servers.Observer
 	Servers   *servers.Service
 	Events    *events.Hub
@@ -81,10 +83,9 @@ type App struct {
 }
 
 func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
-	clientIP, err := auth.NewClientIP(cfg.TrustedProxies)
-	if err != nil {
-		return nil, err
-	}
+	clientIP := &auth.ClientIP{}
+	settings := &advanced.Service{DB: database, ClientIP: clientIP, Env: cfg}
+	settings.Apply(context.Background())
 	client := docker.New(cfg.DockerSocket)
 	table := locks.Default
 	store := &identity.Store{DB: database}
@@ -120,7 +121,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	scheduleService := &schedules.Service{DB: database, Authz: authorization, Identity: store, Runner: runner, Servers: serverService,
 		Locks: table, Notify: notifications.Notify, Console: console.Broadcaster{Runtime: runtime}}
 	a := &App{Config: cfg, DB: database, Docker: client, Locks: table, Identity: store, Authz: authorization,
-		Auth: auth.NewService(database, authorization, setup), ClientIP: clientIP, Observer: observer, Servers: serverService,
+		Auth: auth.NewService(database, authorization, setup), ClientIP: clientIP, Advanced: settings, Observer: observer, Servers: serverService,
 		Images: images, Files: &files.Service{DB: database, Docker: client, Images: images, Managed: observer.Managed}, Backups: backupService, Runner: runner, Jobs: jobService,
 		Schedules: scheduleService, Monitor: monitoring, Notify: notifications, Console: runtime, Updates: updates, Checks: checks,
 		History:   &history.Service{DB: database, Authz: authorization, Identity: store},
