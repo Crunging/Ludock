@@ -378,6 +378,51 @@ func TestProbeUsesOneHelper(t *testing.T) {
 	}
 }
 
+// A query whose player sample names the players the console listed last
+// stands in for the console's list, through a helper and through a console
+// set to connect directly; a different sample still sends the command.
+func TestProbeSkipsTheListTheQueryVouchesFor(t *testing.T) {
+	engine, runtime, id := setup(t)
+	image := "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab"
+	engine.AddImage(image)
+	runtime.Images = &launch.Images{Docker: runtime.Docker, Configured: image}
+	engine.Attach = func(c *fakedocker.Container, stdin *bufio.Reader, stdout func([]byte)) {
+		helper.RunNetworkConsole(stdin, writerFunc(stdout))
+	}
+	var mu sync.Mutex
+	commands := 0
+	rcon, _ := fakedocker.ServeRCON("secret", func(string) string {
+		mu.Lock()
+		defer mu.Unlock()
+		commands++
+		return "There are 1 of a max of 5 players online: Mara"
+	})
+	query, _ := fakedocker.ServeMinecraftPlayers(func() ([]string, int, int, bool) { return []string{"Mara"}, 1, 5, true })
+	engine.Update(id, func(c *fakedocker.Container) {
+		c.Config.Env = []string{"RCON_PASSWORD=secret", fmt.Sprintf("RCON_PORT=%d", rcon)}
+	})
+	adapter := games.ResolveAdapter("minecraft", nil)
+	for _, labels := range []map[string]string{{}, {"ludock.console.host": "127.0.0.1"}} {
+		target := Target{ContainerID: id, Labels: labels, State: "running"}
+		for _, known := range [][]string{{"Mara"}, {"Theo"}} {
+			mu.Lock()
+			before := commands
+			mu.Unlock()
+			probe := Probe{Adapter: adapter, Command: "list", Query: &games.StatusQuery{Protocol: gamequery.MinecraftPing, Port: query},
+				Known: &known}
+			result, err := runtime.Probe(ctx, target, probe, nil)
+			mu.Lock()
+			sent := commands - before
+			mu.Unlock()
+			vouched := known[0] == "Mara"
+			if err != nil || result.Status == nil || result.Unchanged != vouched || sent != map[bool]int{true: 0, false: 1}[vouched] ||
+				(!vouched && !strings.Contains(result.Response, "Mara")) {
+				t.Fatalf("%v, known %v: %+v %v, %d commands", labels, known, result, err, sent)
+			}
+		}
+	}
+}
+
 type writerFunc func([]byte)
 
 func (w writerFunc) Write(data []byte) (int, error) {

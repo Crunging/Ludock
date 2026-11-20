@@ -347,7 +347,9 @@ func (s *Service) releaser(key string, access *Access) func(ok bool) {
 		s.mu.Lock()
 		if !ok || s.listers[key] != nil {
 			s.mu.Unlock()
-			access.Cleanup(false)
+			if err := access.Cleanup(false); err != nil {
+				log.Warn("Failed to remove a file helper")
+			}
 			return
 		}
 		if s.listers == nil {
@@ -629,7 +631,8 @@ func (s *Service) write(ctx context.Context, target Target, root Root, normalize
 }
 
 // Download is an open download stream. Read returns an error instead of
-// EOF if the helper did not finish cleanly; Close removes the helper.
+// EOF if the helper did not finish cleanly; Close returns a helper that
+// finished cleanly for reuse and removes any other.
 type Download struct {
 	Name string
 	Type string
@@ -638,12 +641,15 @@ type Download struct {
 	reader   io.ReadCloser
 	conn     *docker.Conn
 	complete func() error
-	cleanup  func()
+	release  func(ok bool)
 	once     sync.Once
 	timer    *time.Timer
 	// unwatch stops closing the stream when the caller's context ends.
 	unwatch func() bool
 	done    bool
+	// clean: the helper's command exited successfully after the stream
+	// ended, so nothing is still running in it.
+	clean bool
 }
 
 func (d *Download) Read(p []byte) (int, error) {
@@ -653,6 +659,7 @@ func (d *Download) Read(p []byte) (int, error) {
 		if completeErr := d.complete(); completeErr != nil {
 			return n, completeErr
 		}
+		d.clean = true
 	}
 	if err != nil && err != io.EOF {
 		if errors.Is(err, docker.ErrIncompleteStream) {
@@ -671,7 +678,7 @@ func (d *Download) Close() error {
 		d.timer.Stop()
 		d.conn.Close()
 		d.reader.Close()
-		d.cleanup()
+		d.release(d.clean)
 	})
 	return nil
 }
@@ -685,21 +692,24 @@ func (s *Service) OpenDownload(ctx context.Context, target Target, rootID, relat
 	if normalized == "" {
 		return nil, Error("ROOT_DOWNLOAD", 400)
 	}
-	access, err := s.Acquire(ctx, target, root, true, assertAccess)
+	access, release, err := s.acquireLister(ctx, target, root, assertAccess)
 	if err != nil {
 		return nil, err
 	}
 	name := path.Base(normalized)
-	download, err := s.openDownload(ctx, access, helper.FileRequest{Operation: "download", Root: root.Path, Path: normalized}, name, assertAccess, target)
+	download, err := s.openDownload(ctx, access, release, helper.FileRequest{Operation: "download", Root: root.Path, Path: normalized},
+		name, assertAccess)
 	if err != nil {
-		access.Cleanup(false)
+		release(false)
 		return nil, err
 	}
 	return download, nil
 }
 
-// openDownload starts a download request; a folder's name gains .tar.
-func (s *Service) openDownload(ctx context.Context, access *Access, request helper.FileRequest, name string, assertAccess func() error, target Target) (*Download, error) {
+// openDownload starts a download request on a read-only helper from
+// acquireLister; a folder's name gains .tar.
+func (s *Service) openDownload(ctx context.Context, access *Access, release func(ok bool), request helper.FileRequest, name string,
+	assertAccess func() error) (*Download, error) {
 	request.Blocked = access.blocked
 	var execID string
 	err := launch.Step(ctx, "creating a download command", func(ctx context.Context) (err error) {
@@ -748,11 +758,7 @@ func (s *Service) openDownload(ctx context.Context, access *Access, request help
 			}
 			return nil
 		},
-		cleanup: func() {
-			if err := access.Cleanup(false); err != nil {
-				log.Warn("Failed to remove download helper", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
-			}
-		}}
+		release: release}
 	download.timer = time.AfterFunc(30*time.Minute, func() { conn.Close() })
 	// The started stream no longer follows ctx, so revoked access or a closed
 	// request must end it explicitly.

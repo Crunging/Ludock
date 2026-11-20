@@ -3,6 +3,7 @@ package fakedocker
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +19,15 @@ type GameStatus func() (online, capacity int, ok bool)
 // ServeMinecraftStatus answers Minecraft's Server List Ping on 127.0.0.1
 // until the process ends, and returns the port.
 func ServeMinecraftStatus(status GameStatus) (int, error) {
+	return ServeMinecraftPlayers(func() ([]string, int, int, bool) {
+		online, capacity, ok := status()
+		return nil, online, capacity, ok
+	})
+}
+
+// ServeMinecraftPlayers is ServeMinecraftStatus with a player sample, as
+// the real game sends: names, each with a UUID derived from it.
+func ServeMinecraftPlayers(status func() (sample []string, online, capacity int, ok bool)) (int, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, err
@@ -35,15 +45,23 @@ func ServeMinecraftStatus(status GameStatus) (int, error) {
 				if _, err := conn.Read(make([]byte, 512)); err != nil {
 					return
 				}
-				online, capacity, ok := status()
+				sample, online, capacity, ok := status()
 				if !ok {
 					io.Copy(io.Discard, conn)
 					return
 				}
-				json := fmt.Sprintf(`{"version":{"name":"1.21.4","protocol":769},"players":{"max":%d,"online":%d},"description":{"text":"Fake"}}`,
-					capacity, online)
-				payload := append([]byte{0x00}, binary.AppendUvarint(nil, uint64(len(json)))...)
-				conn.Write(gamequery.MinecraftPacket(append(payload, json...)))
+				players := map[string]any{"max": capacity, "online": online}
+				if len(sample) > 0 {
+					entries := []map[string]string{}
+					for _, name := range sample {
+						entries = append(entries, map[string]string{"name": name, "id": fmt.Sprintf("00000000-0000-4000-8000-%012x", len(name))})
+					}
+					players["sample"] = entries
+				}
+				encoded, _ := json.Marshal(map[string]any{"version": map[string]any{"name": "1.21.4", "protocol": 769}, "players": players,
+					"description": map[string]string{"text": "Fake"}})
+				payload := append([]byte{0x00}, binary.AppendUvarint(nil, uint64(len(encoded)))...)
+				conn.Write(gamequery.MinecraftPacket(append(payload, encoded...)))
 			}()
 		}
 	}()

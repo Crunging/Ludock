@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/servers"
 )
 
 func space(percent int64) []DiskSpace {
@@ -308,5 +309,35 @@ func TestDiskMeasuredLessOftenUnwatched(t *testing.T) {
 	s.CheckDisk(ctx, state("running", ""), DiskIdleInterval+DiskInterval+3000, true)
 	if measured != 3 {
 		t.Fatal("a watched page got a stale measurement:", measured)
+	}
+}
+
+// A stopped server measured since it stopped isn't measured again while
+// nobody watches; it is once someone watches, and on its usual schedule
+// once it runs again.
+func TestStoppedDiskMeasuredOnceUnwatched(t *testing.T) {
+	s, _, _, _ := setupWith(t, nil)
+	measured := 0
+	s.MeasureDisk = func(context.Context, identity.Server) ([]DiskSpace, error) {
+		measured++
+		return space(50), nil
+	}
+	stopped := map[string]servers.Container{"mc": {ID: "mc", State: "exited", StateSince: 500}}
+	for _, now := range []int64{1000, DiskIdleInterval + 2000, 2*DiskIdleInterval + 3000} {
+		if err := s.CheckDisk(ctx, stopped, now, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if measured != 1 {
+		t.Fatal("measurements of a stopped server:", measured)
+	}
+	s.CheckDisk(ctx, stopped, 2*DiskIdleInterval+4000, true)
+	if measured != 2 {
+		t.Fatal("a watched page got a stale measurement:", measured)
+	}
+	started := map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: 2*DiskIdleInterval + 5000}}
+	s.CheckDisk(ctx, started, 3*DiskIdleInterval+4000, false)
+	if measured != 3 {
+		t.Fatal("a started server wasn't measured:", measured)
 	}
 }

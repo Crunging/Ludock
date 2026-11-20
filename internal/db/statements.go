@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"sync/atomic"
 
 	"modernc.org/sqlite"
 )
@@ -51,7 +52,15 @@ func (c *statementConn) Prepare(query string) (driver.Stmt, error) {
 	return c.PrepareContext(context.Background(), query)
 }
 
+// statements counts the statements run since the process started.
+var statements atomic.Int64
+
+// Statements is how many SQL statements Ludock has run, for tests and
+// measurements that count a request's queries.
+func Statements() int64 { return statements.Load() }
+
 func (c *statementConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+	statements.Add(1)
 	if cached := c.statements[query]; cached != nil {
 		if !cached.busy {
 			cached.busy = true

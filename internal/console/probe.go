@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/Crunging/Ludock/internal/gamequery"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/netconsole"
@@ -17,6 +16,9 @@ type Probe struct {
 	Adapter *games.Adapter
 	Command string
 	Query   *games.StatusQuery
+	// Known is the list the command last returned in this container run, or
+	// nil. A query that lists exactly these players skips the command.
+	Known *[]string
 }
 
 type ProbeResult struct {
@@ -31,6 +33,9 @@ type ProbeResult struct {
 	// Status is nil when the query wasn't asked for or never ran, which
 	// says nothing about the game.
 	Status *helper.StatusResult
+	// Unchanged: the query listed exactly Known, so the command, if asked
+	// for, wasn't sent and Response is empty.
+	Unchanged bool
 }
 
 // Probe runs both through one helper in the game's network namespace,
@@ -61,9 +66,9 @@ func (r *Runtime) Probe(ctx context.Context, target Target, probe Probe, assertA
 	}
 	var request helper.NetworkConsoleRequest
 	var password, host string
+	var port int
 	console := probe.Adapter != nil && probe.Adapter.Transport != games.TransportContainerStdin
 	if console {
-		var port int
 		host, port, password, err = r.networkTarget(ctx, target, probe.Adapter, env)
 		switch {
 		case err != nil:
@@ -71,9 +76,6 @@ func (r *Runtime) Probe(ctx context.Context, target Target, probe Probe, assertA
 		case host == "":
 			request = helper.NetworkConsoleRequest{Transport: string(probe.Adapter.Transport), Port: port, Password: password,
 				Command: probe.Adapter.Command(probe.Command)}
-		default:
-			result.Response, result.ResponseErr = netconsole.Execute(ctx, string(probe.Adapter.Transport), host, port, password,
-				probe.Adapter.Command(probe.Command), netconsole.Control{AssertAccess: assertAccess})
 		}
 	} else if probe.Adapter != nil {
 		result.ResponseErr = errors.New("this game console does not return responses")
@@ -81,7 +83,16 @@ func (r *Runtime) Probe(ctx context.Context, target Target, probe Probe, assertA
 	if probe.Query != nil {
 		if port := probe.Query.QueryPort(env); port != 0 {
 			request.Query = &helper.StatusRequest{Protocol: string(probe.Query.Protocol), Port: port}
+			request.Known = probe.Known
 		}
+	}
+	direct := console && host != ""
+	// A direct console waits for the query when the query may make the
+	// command unnecessary.
+	if direct && request.Known == nil {
+		result.Response, result.ResponseErr = netconsole.Execute(ctx, string(probe.Adapter.Transport), host, port, password,
+			probe.Adapter.Command(probe.Command), netconsole.Control{AssertAccess: assertAccess})
+		direct = false
 	}
 	if request.Transport != "" || request.Query != nil {
 		if err := check(); err != nil {
@@ -102,6 +113,17 @@ func (r *Runtime) Probe(ctx context.Context, target Target, probe Probe, assertA
 			result.Status = bounded(reply.Status)
 		}
 	}
+	result.Unchanged = request.Known != nil && result.Status != nil && result.Status.Answered && result.Status.Lists(*request.Known)
+	if result.Unchanged && request.Transport != "" {
+		result.Response, result.ResponseErr = "", nil
+	}
+	if direct && !result.Unchanged {
+		if err := check(); err != nil {
+			return ProbeResult{}, err
+		}
+		result.Response, result.ResponseErr = netconsole.Execute(ctx, string(probe.Adapter.Transport), host, port, password,
+			probe.Adapter.Command(probe.Command), netconsole.Control{AssertAccess: assertAccess})
+	}
 	if err := check(); err != nil {
 		return ProbeResult{}, err
 	}
@@ -114,8 +136,14 @@ func (r *Runtime) Probe(ctx context.Context, target Target, probe Probe, assertA
 // bounded drops a helper's status that a real query couldn't produce.
 func bounded(status *helper.StatusResult) *helper.StatusResult {
 	if status.Online < 0 || status.Max < 0 || status.Online > 1_000_000 || status.Max > 1_000_000 ||
-		(!status.Answered && status.Status != (gamequery.Status{})) {
+		(!status.Answered && (status.Counted || status.Online != 0 || status.Max != 0 || status.Listed || len(status.Names) > 0)) ||
+		(status.Listed && len(status.Names) != status.Online) || len(status.Names) > 100 {
 		return nil
+	}
+	for _, name := range status.Names {
+		if len(name) > 64 {
+			return nil
+		}
 	}
 	return status
 }

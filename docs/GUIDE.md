@@ -403,11 +403,16 @@ again, and its entry in **Activity** says which.
 
 ### Players
 
-While someone has the server list or a server's page open, Ludock asks the
-game's console who is online about every 30 seconds; otherwise only monitored games with a status check are asked,
-about every 2 minutes. Games with a working status check but no player list,
-or no console password, still show how many are online. A count Ludock can't read shows as
-unavailable, never as empty. Readings stay in memory.
+While someone has the server list or a server's page open, Ludock reads who
+is online about every 30 seconds. It asks the game's console only when the
+game's status check can't say the list is unchanged, since games such as
+Minecraft log every console connection: once the console has listed the
+players, a status check that names the same players, or says nobody is
+online, stands in for it. While nobody has Ludock open, only monitored games
+with a status check are asked, about every 2 minutes, and only through the
+status check. Games with a working status check but no player list, or no
+console password, still show how many are online. A count Ludock can't read
+shows as unavailable, never as empty. Readings stay in memory.
 
 A kick or ban targets the player by the name or ID the game's latest list
 gave, and only when it is wholly in the game's own form, so it can't carry
@@ -432,7 +437,8 @@ Each alert is sent once, with another when it recovers. Stops and work started
 through Ludock don't alert, and a server that was already stopped when Ludock
 found it stays quiet until it runs. A game still starting, or whose status
 check is off or wrong, never counts as not answering. Disks are measured about
-every 10 minutes while someone has Ludock open and every 30 otherwise.
+every 10 minutes while someone has Ludock open and every 30 otherwise; while
+nobody has it open, a stopped server's disk is measured once after it stops.
 
 ### Notifications
 

@@ -2,9 +2,14 @@ package fakedocker
 
 import (
 	"net"
+	"sync/atomic"
 
 	"github.com/Crunging/Ludock/internal/netconsole"
 )
+
+// rconConnections counts the connections every fake console took, each of
+// which a real Minecraft server logs twice.
+var rconConnections atomic.Int64
 
 // ServeRCON serves a Source RCON console, as Minecraft's, on 127.0.0.1 until
 // the process ends. respond answers each command after the password is
@@ -30,6 +35,7 @@ func serve(password string, respond func(command string) string, zeroIDs bool) (
 			if err != nil {
 				return
 			}
+			rconConnections.Add(1)
 			go serveRCON(conn, password, respond, zeroIDs)
 		}
 	}()

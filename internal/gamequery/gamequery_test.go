@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"slices"
 	"strings"
@@ -113,6 +114,46 @@ func TestParseMinecraftStatus(t *testing.T) {
 		if ok != c.ok || status.Counted != c.counted || status.Online != c.online || status.Max != c.max {
 			t.Errorf("%s: got %+v, %v", c.name, status, ok)
 		}
+	}
+}
+
+// A player sample lists everyone online only when it holds as many valid
+// entries as are online; a partial sample, a hidden player, or a sample of
+// text lines lists nobody, and a server with nobody online lists them all.
+func TestMinecraftSampleLists(t *testing.T) {
+	entry := func(name, id string) string { return `{"name":"` + name + `","id":"` + id + `"}` }
+	mara, theo := entry("Mara", "4566e69f-c907-48ee-8d71-d7ba5aa00d20"), entry("Theo", "5566e69f-c907-48ee-8d71-d7ba5aa00d21")
+	status := func(online int, sample ...string) []byte {
+		return minecraftStatus(fmt.Sprintf(`{"players":{"max":20,"online":%d,"sample":[%s]}}`, online, strings.Join(sample, ",")))
+	}
+	cases := []struct {
+		name    string
+		payload []byte
+		listed  []string
+	}{
+		{"everyone", status(2, theo, mara), []string{"Theo", "Mara"}},
+		{"nobody", status(0), []string{}},
+		{"partial", status(3, mara, theo), nil},
+		{"hidden player", status(2, mara, entry("Anonymous Player", "00000000-0000-0000-0000-000000000000")), nil},
+		{"text line", status(2, mara, entry("§aWelcome!", "not-a-uuid")), nil},
+		{"empty name", status(1, entry("", "4566e69f-c907-48ee-8d71-d7ba5aa00d20")), nil},
+		{"control character", status(1, entry(`Ma\nra`, "4566e69f-c907-48ee-8d71-d7ba5aa00d20")), nil},
+		{"no sample", minecraftStatus(`{"players":{"max":20,"online":1}}`), nil},
+	}
+	for _, c := range cases {
+		got, ok := ParseMinecraftStatus(c.payload)
+		if !ok || got.Listed != (c.listed != nil) || (c.listed != nil && !got.Lists(c.listed)) {
+			t.Errorf("%s: got %+v, %v", c.name, got, ok)
+		}
+	}
+	listed, _ := ParseMinecraftStatus(status(2, mara, theo))
+	for _, other := range [][]string{{"Mara"}, {"Mara", "Mara"}, {"Mara", "Ada"}, {"Mara", "Theo", "Ada"}} {
+		if listed.Lists(other) {
+			t.Errorf("listed %v as %v", listed.Names, other)
+		}
+	}
+	if (Status{Counted: true, Online: 0}).Lists(nil) {
+		t.Error("a status that doesn't say it lists everyone listed nobody")
 	}
 }
 

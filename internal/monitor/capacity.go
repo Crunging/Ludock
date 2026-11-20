@@ -288,7 +288,8 @@ func bound(server identity.Server, current map[string]servers.Container) bool {
 }
 
 // CheckDisk measures the data folders of monitored servers that are due,
-// running or not, more often while someone is watching. current is the
+// more often while someone is watching, and a stopped one unwatched only
+// once after it stops. current is the
 // tick's discovery result, or nil when Docker is unreachable; then nothing
 // is measured.
 func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Container, now int64, watched bool) error {
@@ -328,6 +329,13 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 			interval = DiskInterval
 		}
 		if previous.CheckedAt != 0 && now-previous.CheckedAt < interval {
+			continue
+		}
+		// A stopped game writes nothing to its disk, so while nobody watches,
+		// one measurement since it stopped stands until it starts again.
+		// An alerting disk is still measured, so its recovery is heard.
+		if container := current[server.ContainerID]; !watched && !previous.alerting() && container.State != "running" &&
+			previous.CheckedAt != 0 && container.StateSince != 0 && previous.CheckedAt >= container.StateSince {
 			continue
 		}
 		spaces, err := s.MeasureDisk(ctx, server)

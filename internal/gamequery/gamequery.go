@@ -29,6 +29,31 @@ type Status struct {
 	Counted bool
 	Online  int
 	Max     int // 0 when the game doesn't say
+	// Listed: Names is everyone online, as when nobody is, or Minecraft's
+	// player sample holds every player.
+	Listed bool     `json:",omitempty"`
+	Names  []string `json:",omitempty"`
+}
+
+// maxListed bounds the names a reply may list.
+const maxListed = 100
+
+// Lists reports whether the status names exactly these players, in any
+// order.
+func (s Status) Lists(names []string) bool {
+	if !s.Listed || len(s.Names) != len(names) {
+		return false
+	}
+	count := map[string]int{}
+	for _, name := range names {
+		count[name]++
+	}
+	for _, name := range s.Names {
+		if count[name]--; count[name] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // ErrNoAnswer is a game that didn't answer, or answered with something
@@ -60,5 +85,5 @@ func counts(online, capacity int64) (Status, bool) {
 	if online < 0 || capacity < 0 || online > maxCount || capacity > maxCount {
 		return Status{}, false
 	}
-	return Status{Counted: true, Online: int(online), Max: int(capacity)}, true
+	return Status{Counted: true, Online: int(online), Max: int(capacity), Listed: online == 0}, true
 }

@@ -25,6 +25,11 @@ type NetworkConsoleRequest struct {
 	// Query asks the game's status query beside the command, or alone when
 	// Transport is empty.
 	Query *StatusRequest `json:"query,omitempty"`
+	// Known is the player list the command last returned. With it the query
+	// runs first, and the command is skipped when the game's status lists
+	// exactly these players, since every console connection can write to
+	// the game's log.
+	Known *[]string `json:"known,omitempty"`
 }
 
 type StatusRequest struct {
@@ -91,9 +96,12 @@ func RunNetworkConsole(stdin io.Reader, stdout io.Writer) int {
 	// A query that never ran is no evidence, so it has no status.
 	var status *StatusResult
 	var queried sync.WaitGroup
+	// Beside a query, the command ends early enough for the query's result
+	// to reach the backend within its 10-second wait.
+	deadline := time.Now().Add(combinedCommandTimeout)
 	if request.Query != nil {
 		queried.Add(1)
-		go func() {
+		query := func() {
 			defer queried.Done()
 			denied := false
 			reply, err := gamequery.Query(context.Background(), gamequery.Protocol(request.Query.Protocol), "127.0.0.1", request.Query.Port,
@@ -105,16 +113,20 @@ func RunNetworkConsole(stdin io.Reader, stdout io.Writer) int {
 			if !denied {
 				status = &StatusResult{Answered: err == nil, Status: reply}
 			}
-		}()
+		}
+		if request.Known != nil {
+			query()
+		} else {
+			go query()
+		}
 	}
+	unchanged := request.Known != nil && status != nil && status.Answered && status.Lists(*request.Known)
 	var response *string
-	if console {
+	if console && !unchanged {
 		// WebRCON sends its credential during the handshake.
-		// Beside a query, the command ends early enough for the query's
-		// result to reach the backend within its 10-second wait.
 		ctx, cancel := context.Background(), func() {}
 		if request.Query != nil {
-			ctx, cancel = context.WithTimeout(ctx, combinedCommandTimeout)
+			ctx, cancel = context.WithDeadline(ctx, deadline)
 		}
 		defer cancel()
 		if authorize() == nil {
