@@ -1,6 +1,7 @@
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test, expect, asAdmin, dockerAction, expectOperationSucceeded, fake, openServer, restoreServer, serverRow, withGame } from "../fixtures.mjs";
+import { freshStack } from "../../setup.mjs";
 
 asAdmin();
 // Each journey waits for monitoring to notice, so they run beside each other.
@@ -10,7 +11,7 @@ test.describe.configure({ mode: "parallel" });
 // status query goes silent, as a game that hangs while its container keeps
 // running. fake-hang lasts until the container starts again, which a
 // restart cures.
-const valheimFile = (name) => join(process.env.LUDOCK_E2E_DIR, "docker", "data", "valheim", name);
+const valheimFile = (name, dir = process.env.LUDOCK_E2E_DIR) => join(dir, "docker", "data", "valheim", name);
 
 /**
  * Turns Valheim's monitoring on with a short wait before alerting, then
@@ -136,6 +137,47 @@ test("a game without a status query answers through its image's health check, wh
     await expect(status).toContainText("because the game stopped answering", { timeout: 120_000 });
     await expect(status).toContainText("It answered again.", { timeout: 60_000 });
     await expect(game).toContainText("Its image’s health check passed");
+  });
+});
+
+test.describe("a game that hangs while Ludock restarts", () => {
+  // Restarting Ludock would disturb the other journeys, so this one has an
+  // install of its own.
+  let stack;
+  test.beforeAll(async ({}, info) => {
+    stack = await freshStack(info.parallelIndex);
+  });
+  test.afterAll(async () => {
+    await stack?.stop();
+  });
+
+  test("is still caught: it alerts, and automatic restart restarts it", async ({ session }) => {
+    test.setTimeout(360_000);
+    const page = await session({ baseURL: stack.env.LUDOCK_E2E_URL, storageState: stack.env.LUDOCK_E2E_ADMIN_STATE });
+    // Long enough a wait that Ludock restarts before it ends.
+    await startWatched(page, 30);
+    const game = page.locator(".overview-game");
+    await expect(game).toContainText("Answering", { timeout: 45_000 });
+    await writeFile(valheimFile("fake-hang", stack.env.LUDOCK_E2E_DIR), "");
+    await expect(game).toContainText("Not answering", { timeout: 45_000 });
+
+    // The new Ludock has never heard the game answer, but knows it did in
+    // this run, so it doesn't take it for a game still starting.
+    // A page left open would see its live updates drop.
+    await page.goto("about:blank");
+    await stack.restart();
+    await openServer(page, "valheim");
+    await expect(page.locator(".overview-game")).toContainText("Not answering", { timeout: 45_000 });
+    await page.goto("/");
+    await expect(page.locator("#attention")).toContainText("Game not answering", { timeout: 90_000 });
+
+    await openServer(page, "valheim");
+    const saved = page.waitForResponse((response) => response.url().endsWith("/availability"));
+    await page.getByLabel("Restart it if the game stops answering").check();
+    expect((await saved).ok()).toBe(true);
+    const status = page.locator(".recovery-status");
+    await expect(status).toContainText("because the game stopped answering", { timeout: 120_000 });
+    await expect(status).toContainText("It answered again.", { timeout: 60_000 });
   });
 });
 

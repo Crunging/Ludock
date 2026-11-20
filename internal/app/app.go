@@ -151,27 +151,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 			monitored, _ := monitoring.Monitored(ctx)
 			return monitored
 		}}
-	monitoring.Game = func(serverID string, container servers.Container) monitor.GameAnswer {
-		switch game, _ := a.Players.Game(serverID, container); game {
-		case players.NotChecked:
-			return monitor.GameNotChecked
-		case players.Waiting:
-			// Docker has already run a health check, while a status query
-			// may not have been asked since Ludock started.
-			if container.HealthAnswers || a.Players.Get(serverID, container) != nil {
-				return monitor.GameWaiting
-			}
-		case players.Answering:
-			return monitor.GameAnswering
-		case players.NotAnswering:
-			return monitor.GameNotAnswering
-		}
-		return monitor.GameUnknown
-	}
-	monitoring.LastAnswer = func(serverID string, container servers.Container) int64 {
-		_, answered := a.Players.Game(serverID, container)
-		return answered
-	}
+	watchGames(monitoring, a.Players)
 	monitoring.MeasureDisk = a.measureDisk
 	jobService.Hung = func(serverID string, container servers.Container) (bool, int64) {
 		return monitoring.Game(serverID, container) == monitor.GameNotAnswering, monitoring.LastAnswer(serverID, container)
@@ -449,4 +429,30 @@ func (a *App) Stop(deadline time.Time) bool {
 	case <-timer.C:
 		return false
 	}
+}
+
+// watchGames has monitoring judge each game by what p reads of it.
+func watchGames(monitoring *monitor.Service, p *players.Service) {
+	monitoring.Game = func(serverID string, container servers.Container) monitor.GameAnswer {
+		switch game, _ := p.Game(serverID, container); game {
+		case players.NotChecked:
+			return monitor.GameNotChecked
+		case players.Waiting:
+			// Docker has already run a health check, while a status query
+			// may not have been asked since Ludock started.
+			if container.HealthAnswers || p.Get(serverID, container) != nil {
+				return monitor.GameWaiting
+			}
+		case players.Answering:
+			return monitor.GameAnswering
+		case players.NotAnswering:
+			return monitor.GameNotAnswering
+		}
+		return monitor.GameUnknown
+	}
+	monitoring.LastAnswer = func(serverID string, container servers.Container) int64 {
+		_, answered := p.Game(serverID, container)
+		return answered
+	}
+	monitoring.Recall = p.Recall
 }

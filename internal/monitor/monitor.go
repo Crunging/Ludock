@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"sync/atomic"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db"
@@ -73,9 +75,55 @@ type Service struct {
 	// LastAnswer is when a running game last answered its status query in
 	// this container run, or 0. It may be nil.
 	LastAnswer func(serverID string, container servers.Container) int64
+	// Recall tells Game and LastAnswer that a container run's game answered
+	// at a time an earlier Ludock saved. It may be nil.
+	Recall func(serverID string, container servers.Container, at int64)
 	// MeasureDisk measures each of a server's data folders after confirming
 	// its binding. An error means it was skipped. It may be nil.
 	MeasureDisk func(ctx context.Context, server identity.Server) ([]DiskSpace, error)
+
+	// since is the time of this process's first check. A silence seen before
+	// it went unwatched while Ludock was down.
+	since atomic.Int64
+}
+
+// answerSaveInterval is how often a game that keeps answering has that
+// saved, after its first answer in a container run.
+const answerSaveInterval = 10 * time.Minute
+
+// answer is when a container run's game last answered, as last saved.
+type answer struct {
+	Container string `json:"container"`
+	Run       int64  `json:"run"`
+	At        int64  `json:"at"`
+}
+
+// recallAnswer passes on when this container run's game last answered as
+// saved, so a game that answered before Ludock restarted isn't taken for
+// one still starting. It saves the first answer seen in a run, then one at
+// most every answerSaveInterval.
+func (s *Service) recallAnswer(ctx context.Context, serverID string, container servers.Container, r *row) {
+	if s.LastAnswer == nil {
+		return
+	}
+	var saved answer
+	if decode(r.answered, &saved) != nil {
+		saved = answer{}
+	}
+	same := saved.Container == container.ID && saved.Run == container.StateSince
+	if same && s.Recall != nil {
+		s.Recall(serverID, container, saved.At)
+	}
+	last := s.LastAnswer(serverID, container)
+	if last == 0 || (same && last-saved.At < answerSaveInterval.Milliseconds()) {
+		return
+	}
+	next := encode(answer{Container: container.ID, Run: container.StateSince, At: last})
+	if _, err := s.DB.ExecContext(ctx, "UPDATE availability SET answered_json=? WHERE server_id=?", next, serverID); err != nil {
+		log.Warn("Could not save when a server's game last answered; it will be saved again")
+		return
+	}
+	r.answered = next
 }
 
 type GameAnswer int8
@@ -144,18 +192,27 @@ func ParsePolicy(raw []byte) (Policy, error) {
 	return policy, nil
 }
 
+// row is a server's monitoring as read. disk, memory, recovery, and
+// answered hold their states' JSON, NULL when none.
 type row struct {
-	policy                string
-	outage                sql.NullInt64
-	notified, intentional int
-	suppressed            int64
-	lastState             sql.NullString
+	policy                           string
+	outage                           sql.NullInt64
+	notified, intentional            int
+	suppressed                       int64
+	lastState                        sql.NullString
+	disk, memory, recovery, answered sql.NullString
+}
+
+const rowColumns = "policy_json,outage_started_at,notified,suppressed_until,intentionally_stopped,last_state," +
+	"disk_json,memory_json,recovery_json,answered_json"
+
+func (r *row) fields() []any {
+	return []any{&r.policy, &r.outage, &r.notified, &r.suppressed, &r.intentional, &r.lastState, &r.disk, &r.memory, &r.recovery, &r.answered}
 }
 
 func (s *Service) row(ctx context.Context, serverID string) (*row, error) {
 	var r row
-	err := s.DB.QueryRowContext(ctx, `SELECT policy_json,outage_started_at,notified,suppressed_until,intentionally_stopped,last_state
-    FROM availability WHERE server_id=?`, serverID).Scan(&r.policy, &r.outage, &r.notified, &r.suppressed, &r.intentional, &r.lastState)
+	err := s.DB.QueryRowContext(ctx, "SELECT "+rowColumns+" FROM availability WHERE server_id=?", serverID).Scan(r.fields()...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -163,8 +220,7 @@ func (s *Service) row(ctx context.Context, serverID string) (*row, error) {
 }
 
 func (s *Service) rows(ctx context.Context) (map[string]*row, error) {
-	result, err := s.DB.QueryContext(ctx, `SELECT server_id,policy_json,outage_started_at,notified,suppressed_until,intentionally_stopped,last_state
-    FROM availability`)
+	result, err := s.DB.QueryContext(ctx, "SELECT server_id,"+rowColumns+" FROM availability")
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +229,7 @@ func (s *Service) rows(ctx context.Context) (map[string]*row, error) {
 	for result.Next() {
 		var serverID string
 		var r row
-		if err := result.Scan(&serverID, &r.policy, &r.outage, &r.notified, &r.suppressed, &r.intentional, &r.lastState); err != nil {
+		if err := result.Scan(append([]any{&serverID}, r.fields()...)...); err != nil {
 			return nil, err
 		}
 		rows[serverID] = &r
@@ -221,21 +277,17 @@ func (s *Service) Get(ctx context.Context, serverID string) (*Availability, erro
 func (s *Service) Configure(ctx context.Context, adminID, tokenHash, serverID string, policy Policy) (*Availability, error) {
 	encoded, _ := json.Marshal(policy)
 	if err := s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
-		var raw string
-		if err := tx.QueryRowContext(ctx, "SELECT policy_json FROM availability WHERE server_id=?", serverID).Scan(&raw); err != nil &&
+		var r row
+		if err := tx.QueryRowContext(ctx, "SELECT "+rowColumns+" FROM availability WHERE server_id=?", serverID).Scan(r.fields()...); err != nil &&
 			!errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		previous, _ := ParsePolicy([]byte(raw))
-		if err := resetAlerts(ctx, tx, serverID, previous, policy); err != nil {
-			return err
-		}
-		if err := resetRecovery(ctx, tx, serverID, previous, policy); err != nil {
-			return err
-		}
+		previous, _ := ParsePolicy([]byte(r.policy))
+		disk, memory := resetAlerts(r.disk, r.memory, previous, policy)
 		_, err := tx.ExecContext(ctx, `INSERT INTO availability(server_id,policy_json,updated_at) VALUES(?,?,?)
-      ON CONFLICT(server_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=excluded.updated_at, outage_started_at=NULL, notified=0`,
-			serverID, string(encoded), db.Now())
+      ON CONFLICT(server_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=excluded.updated_at, outage_started_at=NULL, notified=0,
+        disk_json=?,memory_json=?,recovery_json=?`,
+			serverID, string(encoded), db.Now(), disk, memory, resetRecovery(r.recovery, previous, policy))
 		return err
 	}); err != nil {
 		return nil, err
@@ -354,6 +406,8 @@ func (s *Service) changed(serverID string) {
 // evidence that containers vanished, so bindings are kept but availability
 // is reported as unverifiable. Only state transitions are written.
 func (s *Service) Check(ctx context.Context, current map[string]servers.Container, now int64) error {
+	s.since.CompareAndSwap(0, now)
+	since := s.since.Load()
 	unavailable := current == nil
 	logical, err := s.Store.List(ctx, "")
 	if err != nil {
@@ -368,6 +422,9 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 	active, err := s.active(ctx)
 	if err != nil {
 		return err
+	}
+	if testHook != nil {
+		testHook("active")
 	}
 	if added, err := s.adopt(ctx, logical, rows, current); err != nil {
 		return err
@@ -385,11 +442,28 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		if err != nil {
 			continue
 		}
+		container, found := current[server.ContainerID]
+		running := server.Status == identity.StatusActive && found && server.ContainerID != "" && container.State == "running"
+		if running {
+			s.recallAnswer(ctx, server.ID, container, r)
+		}
 		if s.suppressed(server.ID, policy, r.suppressed, now, active[server.ID]) {
 			continue
 		}
-		container, found := current[server.ContainerID]
-		running := server.Status == identity.StatusActive && found && server.ContainerID != "" && container.State == "running"
+		// Ludock vouches only for silence it watched: a silent game's outage
+		// from before it restarted, not yet alerted, waits its grace again
+		// from this process's first check.
+		if r.lastState.String == NotAnswering && r.notified == 0 && r.outage.Valid && r.outage.Int64 < since {
+			changed, err := s.transition(ctx, server.ID, r, "outage_started_at=?", since)
+			if err != nil {
+				log.Warn("Could not save a server's availability; it will be checked again")
+				continue
+			}
+			if !changed {
+				continue
+			}
+			r.outage.Int64 = since
+		}
 		// An owner can start the container outside Ludock. Resume monitoring
 		// even if startup never passes its health check.
 		if testHook != nil {
@@ -418,7 +492,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		}
 		// While Docker is unreachable nothing is known about the restart.
 		if policy.Recover && !unavailable {
-			s.trackRecovery(ctx, server, container, running, game, r.policy, policy, now)
+			s.trackRecovery(ctx, server, container, running, game, r, policy, now)
 		}
 		if running && s.Game != nil {
 			// A game that stopped answering recovers only by answering, even
@@ -483,7 +557,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		// the outage.
 		recovering := false
 		if silent && pastGrace && policy.Recover && container.Health != "starting" {
-			recovering = s.recover(ctx, server, container, r.policy, policy, now)
+			recovering = s.recover(ctx, server, container, r, policy, now)
 		}
 		// Raising an alert always changes notified, so it is sent only when
 		// that change was saved against the state read above.

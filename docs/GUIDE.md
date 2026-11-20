@@ -471,7 +471,10 @@ by itself shows in **Needs attention** with **Start**, which is also the
 highlighted button on a stopped server's row and page. Stops and work started
 through Ludock don't alert, and a server that was already stopped when Ludock
 found it stays quiet until it runs. A game still starting, or whose status
-check is off or wrong, never counts as not answering. Disks are measured about
+check is off or wrong, never counts as not answering. Ludock remembers that a
+game answered, so one that hangs while Ludock itself restarts is still caught;
+the wait starts again when Ludock is back, unless the alert was already sent.
+Disks are measured about
 every 10 minutes while someone has Ludock open and every 30 otherwise.
 
 ### Notifications

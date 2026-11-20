@@ -33,8 +33,7 @@ func (f *fixture) recoveryRestart(t *testing.T, hung func() bool, options ...boo
 			return err
 		}
 		state, _ := json.Marshal(monitor.Recovery{OperationID: job.ID, Pending: !forgotten})
-		_, err = tx.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
-			"monitor.recovery:"+f.serverID, string(state))
+		_, err = tx.ExecContext(ctx, "UPDATE availability SET recovery_json=? WHERE server_id=?", string(state), f.serverID)
 		return err
 	}); err != nil {
 		t.Fatal(err)

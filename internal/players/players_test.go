@@ -280,6 +280,35 @@ func TestGameAnswersHealthCheck(t *testing.T) {
 	check("no health check", NotChecked, 0)
 }
 
+// An answer an earlier Ludock saw in this run counts as one: until a query
+// says, the game is unknown, and silent after it, not answering; it counts
+// for neither another run nor a game without a status check.
+func TestRecalledAnswerCounts(t *testing.T) {
+	query := &games.StatusQuery{Protocol: "a2s", Port: 2457}
+	run := servers.Container{ID: "c1", StateSince: 100, State: "running", Query: query}
+	service := &Service{readings: map[string]*Reading{}}
+	service.Recall("s1", run, 50)
+	if got, at := service.Game("s1", run); got != Unknown || at != 50 {
+		t.Errorf("before a query: %d at %d", got, at)
+	}
+	now := time.Now().UnixMilli()
+	service.store("s1", &Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now, Answer: Silent, AnswerAt: now})
+	if got, at := service.Game("s1", run); got != NotAnswering || at != 50 {
+		t.Errorf("silent: %d at %d", got, at)
+	}
+	if got, _ := service.Game("s1", servers.Container{ID: "c1", StateSince: 200, State: "running", Query: query}); got != Waiting {
+		t.Errorf("new run: %d", got)
+	}
+	if got, _ := service.Game("s1", servers.Container{ID: "c1", StateSince: 100, State: "running"}); got != NotChecked {
+		t.Errorf("no check: %d", got)
+	}
+	health := servers.Container{ID: "c2", StateSince: 100, State: "running", HealthAnswers: true, Health: "unhealthy"}
+	service.Recall("s2", health, 60)
+	if got, at := service.Game("s2", health); got != NotAnswering || at != 60 {
+		t.Errorf("health check: %d at %d", got, at)
+	}
+}
+
 type countingSource struct {
 	Source
 	reads, lists int

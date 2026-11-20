@@ -92,25 +92,38 @@ async function startStack(bin, dir, port, { found = false, children = [] } = {})
   const socket = join(dockerDir, "docker.sock");
   await waitFor(() => existsSync(socket), "the fake Docker socket", fake);
 
-  const ludock = start(join(bin, "ludock"), ["serve"], {
-    LUDOCK_LISTEN: `127.0.0.1:${port}`,
-    LUDOCK_DATA_DIR: join(dir, "data"),
-    LUDOCK_DOCKER_SOCKET: socket,
-    LUDOCK_SETUP_CODE: setupCode,
-    LUDOCK_SELF_CONTAINER: "ludock-dev",
-    LUDOCK_BACKUP_ROOTS: backups,
-    LUDOCK_HELPER_IMAGE: "ghcr.io/crunging/ludock@sha256:" + "ab".repeat(32),
-    // Its default level logs the address it listens on, which this reads.
-    LUDOCK_LOG_LEVEL: "",
-    ...(found ? { LUDOCK_DEV_COPY_ROOT: join(dir, "found") } : {}),
-  }, "ludock", join(dir, "ludock.log"));
-  children.push(ludock);
-  // The port this Ludock bound, from its own log, so nothing else that
-  // answers on a port can stand in for it.
-  let listening;
-  await waitFor(() => (listening = ludock.lines.join("").match(/Ludock listening.*?localhost:(\d+)"/)), "Ludock to listen", ludock);
-  const baseURL = `http://127.0.0.1:${listening[1]}`;
-  await waitFor(async () => (await fetch(`${baseURL}/api/v1/health`)).ok, "Ludock's health check", ludock);
+  const launch = async (listen) => {
+    const ludock = start(join(bin, "ludock"), ["serve"], {
+      LUDOCK_LISTEN: `127.0.0.1:${listen}`,
+      LUDOCK_DATA_DIR: join(dir, "data"),
+      LUDOCK_DOCKER_SOCKET: socket,
+      LUDOCK_SETUP_CODE: setupCode,
+      LUDOCK_SELF_CONTAINER: "ludock-dev",
+      LUDOCK_BACKUP_ROOTS: backups,
+      LUDOCK_HELPER_IMAGE: "ghcr.io/crunging/ludock@sha256:" + "ab".repeat(32),
+      // Its default level logs the address it listens on, which this reads.
+      LUDOCK_LOG_LEVEL: "",
+      ...(found ? { LUDOCK_DEV_COPY_ROOT: join(dir, "found") } : {}),
+    }, "ludock", join(dir, "ludock.log"));
+    children.push(ludock);
+    // The port this Ludock bound, from its own log, so nothing else that
+    // answers on a port can stand in for it.
+    let listening;
+    await waitFor(() => (listening = ludock.lines.join("").match(/Ludock listening.*?localhost:(\d+)"/)), "Ludock to listen", ludock);
+    const url = `http://127.0.0.1:${listening[1]}`;
+    await waitFor(async () => (await fetch(`${url}/api/v1/health`)).ok, "Ludock's health check", ludock);
+    return { ludock, url, port: listening[1] };
+  };
+  let running = await launch(port);
+  const baseURL = running.url;
+  // restart stops Ludock and starts it again on the same data and port, as
+  // an update of Ludock would, leaving the fake daemon and its games as
+  // they are.
+  const restart = async () => {
+    await stopStack({ children: [running.ludock] });
+    children.splice(children.indexOf(running.ludock), 1);
+    running = await launch(running.port);
+  };
 
   const form = (values) => ({ method: "POST", redirect: "manual", body: new URLSearchParams(values),
     headers: { "Content-Type": "application/x-www-form-urlencoded" } });
@@ -123,7 +136,7 @@ async function startStack(bin, dir, port, { found = false, children = [] } = {})
   const state = join(dir, "admin.json");
   writeFileSync(state, JSON.stringify({ cookies: [{ name: "ludock_session", value: token, domain: "127.0.0.1", path: "/",
     expires: -1, httpOnly: true, secure: false, sameSite: "Strict" }], origins: [] }));
-  return { children, env: { LUDOCK_E2E_URL: baseURL, LUDOCK_E2E_ADMIN_STATE: state, LUDOCK_E2E_DIR: dir } };
+  return { children, restart, env: { LUDOCK_E2E_URL: baseURL, LUDOCK_E2E_ADMIN_STATE: state, LUDOCK_E2E_DIR: dir } };
 }
 
 // stopStack stops Ludock before the fake daemon, which it may still need
@@ -138,7 +151,8 @@ async function stopStack(stack) {
 
 /**
  * Starts a stack that no other journey has used, on a port of its own, and
- * returns its env and a function that stops it and removes its data.
+ * returns its env, restart(), which restarts its Ludock alone, and a
+ * function that stops it and removes its data.
  */
 export async function freshStack(index, options) {
   const dir = mkdtempSync(join(scratch(), "ludock-e2e-fresh-"));
@@ -151,7 +165,8 @@ export async function freshStack(index, options) {
   // whatever it started.
   process.once("exit", () => children.forEach((child) => child.kill("SIGTERM")));
   try {
-    return { env: (await startStack(process.env.LUDOCK_E2E_BIN, dir, port && port + 50 + index, { ...options, children })).env, stop };
+    const { env, restart } = await startStack(process.env.LUDOCK_E2E_BIN, dir, port && port + 50 + index, { ...options, children });
+    return { env, restart, stop };
   } catch (error) {
     await stop();
     throw error;

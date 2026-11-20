@@ -606,3 +606,83 @@ func schema(t *testing.T, d *sql.DB) string {
 	}
 	return text
 }
+
+// Disk and memory alerts in progress and a recovery in each of its states
+// move from settings onto their servers' monitoring rows unchanged; a state
+// without a row and the old keys go, other settings stay, and the schema
+// ends as a fresh database's does.
+func TestMonitorStateMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "monitor.db")
+	before, err := open(path, Migrations[:13])
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk := `{"checkedAt":5,"folders":[{"path":"/data","total":100,"available":5,"used":95,"measuredAt":5,"alertSince":4,"notified":true},` +
+		`{"path":"/logs","total":10,"available":1,"used":9,"measuredAt":3,"unknown":true,"alertSince":5}],"revision":3}`
+	memory := `{"alertSince":600000,"revision":3,"from":540000}`
+	recoveries := map[string]string{
+		"pending":      `{"attempts":[1000],"operationId":"o","restartedAt":1000,"pending":true,"last":"restarted","lastAt":1000,"silentSince":500,"silentRun":400}`,
+		"answered":     `{"attempts":[1000],"operationId":"o","restartedAt":1500,"last":"answered","lastAt":2000}`,
+		"not_answered": `{"attempts":[1000],"operationId":"o","restartedAt":1500,"pending":true,"last":"not_answered","lastAt":2000,"watchRun":1200}`,
+		"failed":       `{"attempts":[1000],"operationId":"o","restartedAt":1500,"last":"failed","lastAt":2000}`,
+		"skipped":      `{"operationId":"o","restartedAt":1000,"last":"skipped","lastAt":2000}`,
+		"gave_up":      `{"attempts":[1,2,3],"restartedAt":3,"last":"gave_up","lastAt":4,"silentSince":3,"silentRun":2}`,
+		"silent":       `{"silentSince":700,"silentRun":650}`,
+	}
+	statements := []string{
+		`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
+		`INSERT INTO logical_servers(id,host_id,external_identity,container_id,display_name,game_type,status,binding_revision,
+        binding_fingerprint,first_seen_at,last_seen_at) VALUES('alerts','h','standalone:alerts','c','alerts','minecraft','active',3,'f',1,2),
+        ('quiet','h','standalone:quiet','q','quiet','minecraft','active',1,'f',1,2),
+        ('unwatched','h','standalone:unwatched','u','unwatched','minecraft','active',1,'f',1,2)`,
+		`INSERT INTO availability(server_id,policy_json,outage_started_at,notified,suppressed_until,intentionally_stopped,last_state,updated_at)
+      VALUES('alerts','{"enabled":true,"recover":true}',7,1,8,0,'not_answering',9),('quiet','{"enabled":false}',NULL,0,0,1,'exited',9)`,
+		`INSERT INTO settings(key,value_json) VALUES('notifications','{}'),('monitor.disk:alerts','` + disk + `'),
+      ('monitor.memory:alerts','` + memory + `'),('monitor.disk:unwatched','{"checkedAt":1}'),('monitor.recovery:unwatched','{"last":"failed"}')`,
+	}
+	for state := range recoveries {
+		statements = append(statements,
+			`INSERT INTO logical_servers(id,host_id,external_identity,container_id,display_name,game_type,status,binding_revision,
+          binding_fingerprint,first_seen_at,last_seen_at) VALUES('`+state+`','h','standalone:`+state+`','`+state+`','x','valheim','active',1,'f',1,2)`,
+			`INSERT INTO availability(server_id,policy_json,updated_at) VALUES('`+state+`','{"enabled":true,"recover":true}',9)`,
+			`INSERT INTO settings(key,value_json) VALUES('monitor.recovery:`+state+`','`+recoveries[state]+`')`)
+	}
+	for _, statement := range statements {
+		if _, err := before.Exec(statement); err != nil {
+			t.Fatal(statement, err)
+		}
+	}
+	before.Close()
+	after := mustOpen(t, path)
+	read := func(serverID string) (row string) {
+		t.Helper()
+		if err := after.QueryRow(`SELECT policy_json||'|'||COALESCE(outage_started_at,'-')||'|'||notified||'|'||suppressed_until||'|'||
+        intentionally_stopped||'|'||COALESCE(last_state,'-')||'|'||updated_at||'|'||COALESCE(disk_json,'-')||'|'||COALESCE(memory_json,'-')||'|'||
+        COALESCE(recovery_json,'-') FROM availability WHERE server_id=?`, serverID).Scan(&row); err != nil {
+			t.Fatal(serverID, err)
+		}
+		return row
+	}
+	if got, want := read("alerts"), `{"enabled":true,"recover":true}|7|1|8|0|not_answering|9|`+disk+`|`+memory+`|-`; got != want {
+		t.Fatalf("%s\n%s", got, want)
+	}
+	if got := read("quiet"); got != `{"enabled":false}|-|0|0|1|exited|9|-|-|-` {
+		t.Fatal(got)
+	}
+	for state, recovery := range recoveries {
+		if got := read(state); got != `{"enabled":true,"recover":true}|-|0|0|0|-|9|-|-|`+recovery {
+			t.Fatal(state, got)
+		}
+	}
+	var rows int
+	after.QueryRow("SELECT COUNT(*) FROM availability").Scan(&rows)
+	var settings string
+	after.QueryRow("SELECT group_concat(key) FROM settings WHERE key NOT LIKE 'identity%'").Scan(&settings)
+	if rows != 2+len(recoveries) || settings != "notifications" {
+		t.Fatal(rows, settings)
+	}
+	fresh := mustOpen(t, filepath.Join(t.TempDir(), "fresh.db"))
+	if got, want := schema(t, after.DB), schema(t, fresh.DB); got != want {
+		t.Fatalf("migrated schema differs from a fresh one:\n%s\n---\n%s", got, want)
+	}
+}
