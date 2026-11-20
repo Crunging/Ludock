@@ -608,7 +608,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		}
 	}()
 	for _, target := range targets {
-		request := map[string]any{"root": target.Path, "stage": stage, "maxBytes": maxBytes, "reserveBytes": reserveBytes}
+		request := helper.ExtractRequest{MaxBytes: maxBytes, ReserveBytes: &reserveBytes, Root: target.Path, Stage: stage}
 		execID, err := h.Docker.CreateExec(ctx, helperID, docker.ExecCreate{Cmd: helper.Command("restore-extract", request),
 			AttachStdin: true, AttachStdout: true, AttachStderr: true})
 		if err != nil {
@@ -683,8 +683,8 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		if err != nil {
 			return err
 		}
-		record, _ := json.Marshal(map[string]any{"name": entry, "type": header.Type, "mode": header.Mode,
-			"uid": uid, "gid": gid, "mtime": mtime, "size": header.Size})
+		record, _ := json.Marshal(helper.ExtractRecord{GID: &gid, Mode: &header.Mode, Mtime: &mtime, Name: entry, Size: &header.Size,
+			Type: header.Type, UID: &uid})
 		if err := write(extraction.conn, append(record, '\n')); err != nil {
 			return err
 		}

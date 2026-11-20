@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"regexp"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -50,8 +49,6 @@ type Query struct {
 
 var Statuses = []string{ops.Queued, ops.Running, ops.Succeeded, ops.AlreadyCurrent, ops.Skipped, ops.Failed, ops.Interrupted, ops.Cancelled}
 
-var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
 // Normalize validates a query, applying the default limit of 50.
 func (q *Query) Normalize() error {
 	invalid := apperr.New("INVALID_REQUEST", 400, "Invalid request")
@@ -60,7 +57,7 @@ func (q *Query) Normalize() error {
 	}
 	q.Actor, q.Action = strings.TrimSpace(q.Actor), strings.TrimSpace(q.Action)
 	if q.Limit < 1 || q.Limit > 250 || len(q.Cursor) > 2048 || len(q.Actor) > 200 || len(q.Action) > 200 ||
-		(q.ServerID != "" && !uuidPattern.MatchString(q.ServerID)) ||
+		(q.ServerID != "" && !identity.ValidID(q.ServerID)) ||
 		(q.Status != "" && !contains(Statuses, q.Status)) ||
 		(q.From >= 0 && q.To >= 0 && q.From > q.To) {
 		return invalid
@@ -103,7 +100,7 @@ func page(kind string, q Query, alias string) ([]string, []any, string, error) {
 		}
 		switch id := c.ID.(type) {
 		case string:
-			if kind != "operations" || !uuidPattern.MatchString(id) {
+			if kind != "operations" || !identity.ValidID(id) {
 				return nil, nil, "", errCursor
 			}
 		case float64:
@@ -272,7 +269,7 @@ func (s *Service) Audit(ctx context.Context, q Query) ([]AuditEntry, string, err
 	if err := q.Normalize(); err != nil {
 		return nil, "", err
 	}
-	if q.OperationID != "" && !uuidPattern.MatchString(q.OperationID) {
+	if q.OperationID != "" && !identity.ValidID(q.OperationID) {
 		return nil, "", apperr.New("INVALID_REQUEST", 400, "Invalid request")
 	}
 	conditions, values, scopeKey, err := page("audit", q, "a")
@@ -342,7 +339,7 @@ func (s *Service) Audit(ctx context.Context, q Query) ([]AuditEntry, string, err
 		entry.Username, entry.Status, entry.TargetType, entry.TargetID, entry.IPAddress =
 			username.String, status.String, targetType.String, targetID.String, ip.String
 		entry.Actor = PublicActor(actorID.String, actorName.String)
-		if uuidPattern.MatchString(operationID.String) {
+		if identity.ValidID(operationID.String) {
 			entry.OperationID = operationID.String
 		}
 		if details.Valid {

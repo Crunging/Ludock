@@ -8,7 +8,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -54,10 +53,8 @@ type Root struct {
 
 func fail(code, message string) *apperr.Error { return apperr.New(code, 409, message) }
 
-var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-
 func checkID(id string) error {
-	if !uuidPattern.MatchString(id) {
+	if !helper.ValidID(id) {
 		return fail("BACKUP_ID", "Invalid backup identifier.")
 	}
 	return nil
