@@ -291,7 +291,7 @@ func palworldRCON(password string) string {
 
 // gameData makes a fake game's data folder under dir.
 func gameData(dir, name string, files map[string]string) string {
-	path := filepath.Join(dir, "data", name)
+	path := filepath.Join(dir, "data", filepath.Base(name))
 	for file, content := range files {
 		os.MkdirAll(filepath.Dir(filepath.Join(path, file)), 0o755)
 		os.WriteFile(filepath.Join(path, file), []byte(content), 0o644)

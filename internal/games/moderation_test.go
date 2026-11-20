@@ -144,7 +144,7 @@ func TestPalworldOutcome(t *testing.T) {
 	for reply, want := range map[[2]string]Outcome{
 		{"kick", "Failed to Kick: steam_76561198000000000\n"}: NoPlayer,
 		{"ban", "Baned: steam_76561198000000000\n"}:           Done,
-		{"ban", "Failed to Ban: steam_76561198000000000\n"}:   OutcomeUnknown,
+		{"ban", "Failed to Ban: steam_76561198000000000\n"}:   NoPlayer,
 		{"kick", "Baned: steam_76561198000000000\n"}:          OutcomeUnknown,
 	} {
 		if got := moderation.Outcome(PlayerAction(reply[0]), reply[1]); got != want {

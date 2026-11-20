@@ -245,7 +245,8 @@ var palworldModeration = &Moderation{
 // palworldOutcome reads Palworld 1.0's replies, which name the ID.
 func palworldOutcome(action PlayerAction, reply string) Outcome {
 	switch {
-	case action == Kick && strings.HasPrefix(reply, "Failed to Kick: "):
+	case action == Kick && strings.HasPrefix(reply, "Failed to Kick: "),
+		action == Ban && strings.HasPrefix(reply, "Failed to Ban: "):
 		return NoPlayer
 	case action == Ban && strings.HasPrefix(reply, "Baned: "):
 		return Done
