@@ -451,6 +451,9 @@ func (r *Runner) persist(ctx context.Context, what string, write func() error) b
 			return false
 		}
 		log.Warn("Could not save an operation's state; retrying", logging.F("step", what), logging.F("error", err.Error()))
+		if testHook != nil {
+			testHook("retry " + what)
+		}
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
@@ -571,8 +574,8 @@ func (c *Context) WithLocks(keys []string, action func() (map[string]any, error)
 	return action()
 }
 
-// testHook, set only by tests, runs at named points in WithLocks so a test
-// can force an interleaving.
+// testHook, set only by tests, runs at named points in WithLocks and persist
+// so a test can force an interleaving or see a retry.
 var testHook func(point string)
 
 func laneFor(rw *row) string {

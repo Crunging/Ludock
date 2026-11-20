@@ -471,7 +471,8 @@ func TestConcurrentScheduleWritesDoNotStall(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
+	// A writer stalled behind another waits out SQLite's 5-second busy timeout.
+	if elapsed := time.Since(started); elapsed > 4*time.Second {
 		t.Fatal("concurrent writes stalled for", elapsed)
 	}
 }

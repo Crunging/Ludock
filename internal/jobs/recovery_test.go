@@ -40,13 +40,7 @@ func (f *fixture) recoveryRestart(t *testing.T, hung func() bool, options ...boo
 		t.Fatal(err)
 	}
 	f.runner.Wake()
-	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if current, _ := f.runner.Get(ctx, job.ID); current.Status != ops.Queued && current.Status != ops.Running {
-			return current
-		}
-	}
-	t.Fatal("job did not finish")
-	return nil
+	return finished(t, f.runner, job.ID)
 }
 
 func (f *fixture) setRecovery(t *testing.T, on bool) {

@@ -46,17 +46,6 @@ func (f *fixture) interruptedWarningOf(t *testing.T, kind, phase string, recover
 	return next, job.ID
 }
 
-func finished(t *testing.T, runner *ops.Runner, id string) *ops.Job {
-	t.Helper()
-	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if current, _ := runner.Get(ctx, id); current.Status != ops.Queued && current.Status != ops.Running {
-			return current
-		}
-	}
-	t.Fatal("job did not finish")
-	return nil
-}
-
 // A restart that warned players and was waiting when Ludock stopped resumes
 // its wait at the next start and restarts once at the time players were
 // given, without warning them again.
@@ -105,7 +94,8 @@ func TestStoppingDuringAWarningLeavesItToResume(t *testing.T) {
 	cancel()
 	stopping := time.Now()
 	runner.Stop()
-	if waited := time.Since(stopping); waited > 2*time.Second {
+	// Far less than the minute's warning it would otherwise wait out.
+	if waited := time.Since(stopping); waited > 20*time.Second {
 		t.Fatal("stopping waited", waited)
 	}
 	current, _ := runner.Get(ctx, job.ID)

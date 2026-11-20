@@ -1,16 +1,18 @@
 import { test, expect, asAdmin, dockerAction, gameCommand as command, serverRow, openServer, createUser, signIn, shareServer } from "./fixtures.mjs";
 
 asAdmin();
+// Journeys on Minecraft have a server of their own; Palworld's is shared.
+test.describe.configure({ mode: "parallel" });
 
 // onlineNames are the names in a server's list of who is online.
 function onlineNames(page) {
   return page.locator(".overview-players").getByRole("list", { name: "Online players" }).locator(".player-name");
 }
 
-test("kicking a player and seeing them leave", async ({ page }) => {
+test("kicking a player and seeing them leave", async ({ page, ownServer }) => {
   const console = await page.context().newPage();
-  await command(console, "fake-join Mara");
-  await openServer(page, "Survival");
+  await command(console, "fake-join Mara", ownServer.name);
+  await openServer(page, ownServer.name);
   await expect(onlineNames(page)).toHaveText(["Mara"], { timeout: 30_000 });
 
   // The name opens what can be done to the player.
@@ -21,15 +23,15 @@ test("kicking a player and seeing them leave", async ({ page }) => {
   await expect(page.locator(".overview-players")).toContainText(/0\s*of 10 online/);
 
   // Activity says what was done, once.
-  await page.goto("/activity?show=everything&action=kicked");
+  await page.goto(`/activity?show=everything&action=kicked&serverId=${ownServer.id}`);
   await expect(page.locator(".audit-entry").filter({ hasText: "Kicked Mara" })).toHaveCount(1);
   await expect(page.locator(".audit-entry").filter({ hasText: "Kicked Mara" })).toContainText("Succeeded");
 });
 
-test("banning a player, then lifting the ban", async ({ page }) => {
+test("banning a player, then lifting the ban", async ({ page, ownServer }) => {
   const console = await page.context().newPage();
-  await command(console, "fake-join Theo");
-  await openServer(page, "Survival");
+  await command(console, "fake-join Theo", ownServer.name);
+  await openServer(page, ownServer.name);
   await expect(onlineNames(page)).toHaveText(["Theo"], { timeout: 30_000 });
 
   // A ban lasts, so it asks first; cancelling sends nothing.
@@ -53,20 +55,20 @@ test("banning a player, then lifting the ban", async ({ page }) => {
   await banned.getByRole("button", { name: "Lift ban: Theo" }).click();
   await expect(page.locator(".player-lists")).toContainText("Theo’s ban is lifted.");
   await expect(banned).toContainText("Nobody is banned.");
-  await command(console, "fake-join Theo");
-  await openServer(page, "Survival");
+  await command(console, "fake-join Theo", ownServer.name);
+  await openServer(page, ownServer.name);
   await expect(onlineNames(page)).toHaveText(["Theo"], { timeout: 15_000 });
-  await command(console, "fake-leave Theo");
+  await command(console, "fake-leave Theo", ownServer.name);
 
   // Searching Activity for one player action finds only that action.
-  await page.goto("/activity?show=everything&action=banned");
+  await page.goto(`/activity?show=everything&action=banned&serverId=${ownServer.id}`);
   await expect(page.locator(".audit-entry strong").getByText("Banned Theo", { exact: true })).toHaveCount(1);
-  await page.goto("/activity?show=everything&action=kicked");
+  await page.goto(`/activity?show=everything&action=kicked&serverId=${ownServer.id}`);
   await expect(page.locator(".audit-entry").filter({ hasText: "Theo" })).toHaveCount(0);
 });
 
-test("adding a player to the allowlist, then removing them", async ({ page }) => {
-  await openServer(page, "Survival");
+test("adding a player to the allowlist, then removing them", async ({ page, ownServer }) => {
+  await openServer(page, ownServer.name);
   await page.getByText("Allowlist and bans", { exact: true }).click();
   const lists = page.locator(".player-lists");
   const allowed = lists.locator(".player-list", { has: page.getByRole("heading", { name: "Allowlist" }) });
@@ -92,17 +94,18 @@ test("adding a player to the allowlist, then removing them", async ({ page }) =>
   await expect(allowed).toContainText("Nobody is on the allowlist.");
 });
 
-test("someone without console access isn't offered player actions", async ({ page, session }) => {
-  await createUser(page, "watcher1", "watcher password one");
+test("someone without console access isn't offered player actions", async ({ page, session, ownServer }) => {
+  const watcher1 = "watcher-" + ownServer.container;
+  await createUser(page, watcher1, "watcher password one");
   // Starting and stopping, and reading logs, without the console.
-  await shareServer(page, "Survival", "watcher1", ["See the server", "Start", "Stop", "Read logs"]);
+  await shareServer(page, ownServer.name, watcher1, ["See the server", "Start", "Stop", "Read logs"]);
   const console = await page.context().newPage();
-  await command(console, "fake-join Mara");
+  await command(console, "fake-join Mara", ownServer.name);
 
   // A fresh profile, not the administrator this file runs as.
   const watcher = await session({ storageState: { cookies: [], origins: [] } });
-  await signIn(watcher, "watcher1", "watcher password one");
-  await openServer(watcher, "Survival");
+  await signIn(watcher, watcher1, "watcher password one");
+  await openServer(watcher, ownServer.name);
   await expect(onlineNames(watcher)).toHaveText(["Mara"], { timeout: 30_000 });
   await expect(watcher.getByRole("button", { name: "Mara: actions" })).toHaveCount(0);
   await expect(watcher.getByText("Allowlist and bans", { exact: true })).toHaveCount(0);
@@ -111,21 +114,21 @@ test("someone without console access isn't offered player actions", async ({ pag
     { form: { _csrf: csrf, player: "Mara" }, headers: { "HX-Request": "true" } });
   expect(kick.status()).toBe(403);
   await expect(onlineNames(watcher)).toHaveText(["Mara"]);
-  await command(console, "fake-leave Mara");
+  await command(console, "fake-leave Mara", ownServer.name);
 });
 
-test("seeing who is online, as players join and leave", async ({ page }) => {
+test("seeing who is online, as players join and leave", async ({ page, ownServer }) => {
   // Readings run in the background every 30 seconds, and right after a
   // console command.
-  await openServer(page, "Survival");
+  await openServer(page, ownServer.name);
   const players = page.locator(".overview-players");
   await expect(players).toContainText(/0\s*of 10 online/, { timeout: 30_000 });
   await expect(players.locator(".player-slot")).toHaveCount(10);
   await expect(players.locator(".player-slot--taken")).toHaveCount(0);
 
   const console = await page.context().newPage();
-  await command(console, "fake-join Mara");
-  await command(console, "fake-join Theo");
+  await command(console, "fake-join Mara", ownServer.name);
+  await command(console, "fake-join Theo", ownServer.name);
   await expect(players).toContainText(/2\s*of 10 online/);
   await expect(onlineNames(page)).toHaveText(["Mara", "Theo"]);
   await expect(players.locator(".player-slot--taken")).toHaveCount(2);
@@ -133,31 +136,31 @@ test("seeing who is online, as players join and leave", async ({ page }) => {
   // The list shows the count and names; stopped servers show nothing to
   // read.
   await page.goto("/");
-  const survival = serverRow(page, "Survival").locator(".server-row__players");
+  const survival = serverRow(page, ownServer.name).locator(".server-row__players");
   await expect(survival).toContainText("2/10");
   await expect(survival).toContainText("Mara, Theo");
   await expect(serverRow(page, "valheim").locator(".server-row__players")).toContainText("—Not running");
 
   // The open list updates as soon as someone leaves.
-  await command(console, "fake-leave Theo");
+  await command(console, "fake-leave Theo", ownServer.name);
   await expect(survival).toContainText("1/10");
   await expect(survival).not.toContainText("Theo");
-  await command(console, "fake-leave Mara");
+  await command(console, "fake-leave Mara", ownServer.name);
   await expect(survival).toContainText("0/10");
 
   // While the console can't list players, the game's status query still
   // counts them.
-  await command(console, "fake-join Mara");
-  await command(console, "fake-outage 20");
-  await openServer(page, "Survival");
+  await command(console, "fake-join Mara", ownServer.name);
+  await command(console, "fake-outage 20", ownServer.name);
+  await openServer(page, ownServer.name);
   await expect(players).toContainText("Counted by the game’s status query", { timeout: 15_000 });
   await expect(players).toContainText(/1\s*of 10 online/);
   await expect(players.getByRole("list", { name: "Online players" })).toHaveCount(0);
-  await command(console, "fake-leave Mara");
+  await command(console, "fake-leave Mara", ownServer.name);
 
   // A game that answers neither is reported, not shown as empty.
-  await command(console, "fake-hang 20");
-  await openServer(page, "Survival");
+  await command(console, "fake-hang 20", ownServer.name);
+  await openServer(page, ownServer.name);
   // The page can render just before the failed reading, and its live
   // events start a moment later; its next refresh, within 10 seconds,
   // shows the reading.
@@ -165,8 +168,6 @@ test("seeing who is online, as players join and leave", async ({ page }) => {
   await expect(players).toContainText("Ludock reads them over the game console.");
   await page.goto("/");
   await expect(survival).toContainText("Unknown");
-  // The next journey on this server needs a game that answers.
-  await command(console, "fake-hang 0");
 
   await openServer(page, "valheim");
   await expect(page.locator(".overview-players")).toContainText("Shown while the server is running");

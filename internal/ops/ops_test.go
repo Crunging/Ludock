@@ -147,12 +147,36 @@ func TestRetriesStateItCouldNotSave(t *testing.T) {
 		mu.Unlock()
 		return nil, nil
 	}})
+	retried := make(chan string, 64)
+	testHook = func(point string) {
+		select {
+		case retried <- point:
+		default:
+		}
+	}
+	t.Cleanup(func() {
+		r.Stop()
+		testHook = nil
+	})
+	retry := func(point string) {
+		t.Helper()
+		for {
+			select {
+			case got := <-retried:
+				if got == point {
+					return
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("no", point)
+			}
+		}
+	}
 	r.Start(ctx, nil)
 
 	// A job that cannot be saved as running never acts.
 	block(Running)
 	first, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
-	time.Sleep(400 * time.Millisecond)
+	retry("retry start")
 	mu.Lock()
 	if runs != 0 {
 		t.Fatal("ran before it was saved as running")
@@ -166,7 +190,7 @@ func TestRetriesStateItCouldNotSave(t *testing.T) {
 	block(Succeeded)
 	second, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
 	waitStatus(t, r, second.ID, Running)
-	time.Sleep(400 * time.Millisecond)
+	retry("retry finish")
 	unblock()
 	waitStatus(t, r, second.ID, Succeeded)
 	mu.Lock()

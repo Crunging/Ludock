@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { test, expect, asAdmin, serverRow, openServer, gameCommand, expectOperationSucceeded, fake } from "./fixtures.mjs";
 
 asAdmin();
@@ -20,22 +21,27 @@ test("Valheim's files and backups leave out the server its image downloads", asy
   await expect(disks).toContainText("/data/valheim");
 });
 
-/** Adds one of the fake daemon's real-image games for a journey, and takes it away after. */
+/**
+ * Adds one of the fake daemon's real-image games for a journey, and takes it
+ * away after. Its name is its own: the fake daemon's own factorio, which
+ * Ludock leaves out, would otherwise share it.
+ */
 async function withGame(page, game, run) {
-  await fake("/fake/game", { game, name: game });
+  const name = `${game}-${randomBytes(3).toString("hex")}`;
+  await fake("/fake/game", { game, name });
   try {
     // Ludock finds it from Docker's events, shortly after.
     await expect(async () => {
       await page.goto("/");
-      await expect(serverRow(page, game)).toBeVisible({ timeout: 1000 });
+      await expect(serverRow(page, name)).toBeVisible({ timeout: 1000 });
     }).toPass();
-    await run();
+    await run(name);
   } finally {
-    await openServer(page, game);
+    await openServer(page, name);
     await page.getByRole("button", { name: "Remove from Ludock" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Remove server" }).click();
     await expect(page).toHaveURL(/\/$/);
-    await fake("/fake/remove", { container: game });
+    await fake("/fake/remove", { container: name });
   }
 }
 
@@ -43,11 +49,11 @@ test("Terraria quits with its own exit command, so it stops saved and a backup s
   // Every Terraria image runs the game where Docker's stop signal never
   // reaches it, so a stop alone waited two minutes, killed it, and failed
   // the backup.
-  await withGame(page, "terraria", async () => {
+  await withGame(page, "terraria", async (terraria) => {
     await page.goto("/");
-    await expect(serverRow(page, "terraria").locator(".server-row__game")).toHaveText("Terraria");
-    await expect(serverRow(page, "terraria").locator(".server-row__address")).toContainText(":7777");
-    await openServer(page, "terraria");
+    await expect(serverRow(page, terraria).locator(".server-row__game")).toHaveText("Terraria");
+    await expect(serverRow(page, terraria).locator(".server-row__address")).toContainText(":7777");
+    await openServer(page, terraria);
     await page.getByRole("tab", { name: "Backups" }).click();
     await page.locator("#create-backup:not([disabled])").click();
     // Ludock can't count Terraria's players, so a warning would wait its minute.
@@ -58,7 +64,7 @@ test("Terraria quits with its own exit command, so it stops saved and a backup s
     await expect(operation).toContainText("Save command sent before stopping.");
     await expect(operation).not.toContainText("Force-stopped");
     await page.goto("/");
-    await serverRow(page, "terraria").getByRole("link", { name: "Console" }).click();
+    await serverRow(page, terraria).getByRole("link", { name: "Console" }).click();
     await page.getByRole("navigation", { name: "Console mode" }).getByRole("link", { name: "Logs", exact: true }).click();
     await expect(page.locator("#console-output")).toContainText("Saving before exit...");
   });
@@ -67,14 +73,14 @@ test("Terraria quits with its own exit command, so it stops saved and a backup s
 test("Factorio's console reads the password its image generates, lists who is online, and warns players in chat", async ({ page }) => {
   // The image passes its generated RCON password on the command line and
   // keeps it only in config/rconpw.
-  await withGame(page, "factorio", async () => {
+  await withGame(page, "factorio", async (factorio) => {
     await page.goto("/");
-    await expect(serverRow(page, "factorio").locator(".server-row__address")).toContainText(":34197");
-    await openServer(page, "factorio");
+    await expect(serverRow(page, factorio).locator(".server-row__address")).toContainText(":34197");
+    await openServer(page, factorio);
     await expect(page.locator(".overview-players")).toContainText(/0\s*online/, { timeout: 45_000 });
     const console = await page.context().newPage();
-    await gameCommand(console, "fake-join Ada", "factorio");
-    await openServer(page, "factorio");
+    await gameCommand(console, "fake-join Ada", factorio);
+    await openServer(page, factorio);
     await expect(page.locator(".overview-players .player-name")).toHaveText(["Ada"], { timeout: 30_000 });
 
     await page.locator(".detail-actions").getByRole("button", { name: "Stop", exact: true }).click();
@@ -84,7 +90,7 @@ test("Factorio's console reads the password its image generates, lists who is on
     await expect(page.locator("#selected-operation")).toContainText("Giving players 1 minute");
     await page.getByRole("button", { name: "Cancel stop" }).first().click();
     await expect(page.locator("#selected-operation")).toContainText("Cancelled");
-    await gameCommand(console, "fake-said", "factorio");
+    await gameCommand(console, "fake-said", factorio);
     await expect(console.locator(".xterm-rows")).toContainText("Said: Server shutting down in 1 minute. | Server shutdown cancelled.");
   });
 });

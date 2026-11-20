@@ -34,6 +34,15 @@ func dataFiles(t *testing.T, folder string) []string {
 }
 
 // forceDue makes the next save, or its copy, due now.
+// nextSecond moves the save clock a second on, so the next save gets a new
+// name.
+func nextSecond(t *testing.T) {
+	t.Helper()
+	before := dataNow
+	t.Cleanup(func() { dataNow = before })
+	dataNow = func() time.Time { return before().Add(time.Second) }
+}
+
 func (f *copyFixture) forceDue(t *testing.T, key string) {
 	t.Helper()
 	folder := f.main
@@ -264,7 +273,7 @@ func TestCopyDataFollowsSaves(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.forceDue(t, dataSaveKey)
-		time.Sleep(1100 * time.Millisecond)
+		nextSecond(t)
 	}
 	main, copies := dataFiles(t, f.main), dataFiles(t, f.copies)
 	if !slices.Equal(main, copies) || len(main) != dataKeepNewest || main[0] != dataFileName(old.Add(3*time.Minute)) {
@@ -329,7 +338,7 @@ func TestCopyDataChecksTheSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := dataFiles(t, f.copies)
-	time.Sleep(1100 * time.Millisecond)
+	nextSecond(t)
 	f.forceDue(t, dataSaveKey)
 	if err := f.s.SaveData(ctx); err != nil {
 		t.Fatal(err)
