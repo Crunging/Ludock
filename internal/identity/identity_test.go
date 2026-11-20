@@ -108,17 +108,6 @@ func TestRecreationKeepsUUID(t *testing.T) {
 	}
 	_, err := s.ResolveBinding(ctx, recreated.ID, original.BindingRevision)
 	wantCode(t, err, "SERVER_BINDING_CHANGED")
-	rows, _ := s.DB.Query("SELECT container_id FROM server_bindings ORDER BY id")
-	var ids []string
-	for rows.Next() {
-		var id string
-		rows.Scan(&id)
-		ids = append(ids, id)
-	}
-	rows.Close()
-	if strings.Join(ids, ",") != "docker-a,docker-b" {
-		t.Fatal(ids)
-	}
 }
 
 func TestUnchangedBindingsRefreshCoarsely(t *testing.T) {
@@ -159,13 +148,9 @@ func TestDuplicateComposeIdentityIsAmbiguous(t *testing.T) {
 	original := reconcile(t, s, 0, observation(func(o *Observation) { o.Compose = compose }))[0]
 	duplicate := reconcile(t, s, 0, observation(func(o *Observation) { o.Compose = compose }),
 		observation(func(o *Observation) { o.Compose = compose; o.ContainerID = "docker-b"; o.Name = "duplicate" }))[0]
-	if duplicate.ID != original.ID || duplicate.Status != StatusAmbiguous || duplicate.ContainerID != "" {
+	if duplicate.ID != original.ID || duplicate.Status != StatusAmbiguous || duplicate.ContainerID != "" ||
+		duplicate.BindingRevision != original.BindingRevision {
 		t.Fatalf("%+v", duplicate)
-	}
-	var count int
-	s.DB.QueryRow("SELECT COUNT(*) FROM server_bindings").Scan(&count)
-	if count != 1 {
-		t.Fatal(count)
 	}
 	recovered := reconcile(t, s, 0, observation(func(o *Observation) { o.Compose = compose }))[0]
 	if recovered.ID != original.ID || recovered.Status != StatusActive {

@@ -355,6 +355,40 @@ var Migrations = []Migration{
 		Version: 12,
 		SQL:     `ALTER TABLE schedule_announcements ADD COLUMN heard_binding INTEGER;`,
 	},
+	{
+		// sharing_paused: a change to the server's game or data folders paused
+		// its grants until an administrator confirms it. The binding history
+		// and the review fields before it had no readers. A server 0.6.0 left
+		// waiting for review becomes missing, still not usable, until the next
+		// discovery settles it as it would have.
+		Version: 13,
+		SQL: `
+      DROP TABLE server_bindings;
+      CREATE TABLE logical_servers_v13 (
+        id TEXT PRIMARY KEY,
+        host_id TEXT NOT NULL REFERENCES docker_hosts(id),
+        external_identity TEXT NOT NULL,
+        container_id TEXT,
+        display_name TEXT NOT NULL,
+        game_type TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('active','missing','ambiguous')),
+        binding_revision INTEGER NOT NULL,
+        binding_fingerprint TEXT NOT NULL,
+        sharing_paused INTEGER NOT NULL DEFAULT 0 CHECK (sharing_paused IN (0,1)),
+        first_seen_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        UNIQUE (host_id, external_identity)
+      ) STRICT;
+      INSERT INTO logical_servers_v13 (id, host_id, external_identity, container_id, display_name, game_type, status,
+        binding_revision, binding_fingerprint, sharing_paused, first_seen_at, last_seen_at)
+        SELECT id, host_id, external_identity, container_id, display_name, game_type,
+          CASE status WHEN 'review_required' THEN 'missing' ELSE status END,
+          binding_revision, binding_fingerprint, review_required, first_seen_at, last_seen_at FROM logical_servers;
+      DROP TABLE logical_servers;
+      ALTER TABLE logical_servers_v13 RENAME TO logical_servers;
+      CREATE INDEX logical_servers_container_idx ON logical_servers(host_id, container_id);
+    `,
+	},
 }
 
 func LatestVersion() int { return Migrations[len(Migrations)-1].Version }

@@ -131,7 +131,7 @@ func TestRecoveryNeverActs(t *testing.T) {
 			}
 		}},
 		"awaiting review": {before: func(s *Service, serverID string) {
-			if _, err := s.DB.Exec("UPDATE logical_servers SET review_required=1 WHERE id=?", serverID); err != nil {
+			if _, err := s.DB.Exec("UPDATE logical_servers SET sharing_paused=1 WHERE id=?", serverID); err != nil {
 				t.Fatal(err)
 			}
 		}},

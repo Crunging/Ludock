@@ -522,3 +522,87 @@ func TestMemberRoleMigration(t *testing.T) {
 		t.Fatal("old role accepted")
 	}
 }
+
+// Servers keep their bindings, paused sharing, and everything that refers to
+// them when the review fields and binding history go; one 0.6.0 left waiting
+// for review stays unusable until discovery settles it, and the schema ends
+// as a fresh database's does.
+func TestSharingPausedMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "servers.db")
+	before, err := open(path, Migrations[:12])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES('a','a','x','admin',1,1),('m','m','x','member',1,1)`,
+		`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
+		`INSERT INTO logical_servers(id,host_id,external_identity,container_id,display_name,game_type,status,binding_revision,
+        binding_fingerprint,pending_fingerprint,pending_game_type,review_required,first_seen_at,last_seen_at)
+      VALUES('s','h','standalone:mc','c1','mc','minecraft','active',3,'f3',NULL,NULL,0,1,2),
+        ('p','h','standalone:p','c2','p','valheim','active',5,'f5',NULL,NULL,1,1,2),
+        ('r','h','standalone:r','c3','r','minecraft','review_required',2,'f1','f2','terraria',1,1,2),
+        ('g','h','standalone:g',NULL,'g','unknown','ambiguous',0,'',NULL,NULL,0,1,2)`,
+		`INSERT INTO server_bindings(server_id,binding_revision,container_id,binding_fingerprint,observed_at,accepted)
+      VALUES('s',3,'c1','f3',2,1),('r',2,'c3','f2',2,0)`,
+		`INSERT INTO server_grants VALUES('m','p','["server.view"]',1),('m','g','["server.view"]',1)`,
+		`INSERT INTO operations(id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at)
+      VALUES('o','s','a','start','succeeded','done','{}',3,1,1)`,
+		`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
+      VALUES('b','p','f5','/b','[]',1,'x',1,'complete')`,
+		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES('x','s','a','{}',3,1)`,
+		`INSERT INTO availability(server_id,policy_json,updated_at) VALUES('s','{}',1)`,
+		`INSERT INTO resource_samples VALUES('p',1,1,1)`,
+	} {
+		if _, err := before.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before.Close()
+	after := mustOpen(t, path)
+	var servers string
+	after.QueryRow(`SELECT group_concat(row, ' ') FROM (SELECT id||'='||COALESCE(container_id,'-')||','||game_type||','||status||','||
+      binding_revision||','||binding_fingerprint||','||sharing_paused||','||first_seen_at||','||last_seen_at AS row
+      FROM logical_servers ORDER BY id)`).Scan(&servers)
+	if servers != "g=-,unknown,ambiguous,0,,0,1,2 p=c2,valheim,active,5,f5,1,1,2 r=c3,minecraft,missing,2,f1,1,1,2 s=c1,minecraft,active,3,f3,0,1,2" {
+		t.Fatal(servers)
+	}
+	var references int
+	after.QueryRow(`SELECT (SELECT COUNT(*) FROM server_grants) + (SELECT COUNT(*) FROM operations) + (SELECT COUNT(*) FROM backups) +
+      (SELECT COUNT(*) FROM schedules) + (SELECT COUNT(*) FROM availability) + (SELECT COUNT(*) FROM resource_samples)`).Scan(&references)
+	if references != 7 {
+		t.Fatal(references)
+	}
+	if _, err := after.Exec("UPDATE logical_servers SET status='review_required' WHERE id='s'"); err == nil {
+		t.Fatal("review status accepted")
+	}
+	if _, err := after.Exec(`INSERT INTO operations(id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at)
+      VALUES('o2','nobody','a','start','queued','queued','{}',1,1,1)`); err == nil {
+		t.Fatal("operation for an unknown server accepted")
+	}
+	// Removing a server still removes its grants.
+	if _, err := after.Exec("DELETE FROM logical_servers WHERE id='g'"); err != nil {
+		t.Fatal(err)
+	}
+	var grants int
+	if err := after.QueryRow("SELECT COUNT(*) FROM server_grants WHERE server_id='g'").Scan(&grants); err != nil || grants != 0 {
+		t.Fatal(grants, err)
+	}
+	fresh := mustOpen(t, filepath.Join(t.TempDir(), "fresh.db"))
+	if got, want := schema(t, after.DB), schema(t, fresh.DB); got != want {
+		t.Fatalf("migrated schema differs from a fresh one:\n%s\n---\n%s", got, want)
+	}
+	for _, retired := range []string{"server_bindings", "review_required", "pending_"} {
+		if strings.Contains(schema(t, after.DB), retired) {
+			t.Fatal(retired)
+		}
+	}
+}
+
+func schema(t *testing.T, d *sql.DB) string {
+	t.Helper()
+	var text string
+	if err := d.QueryRow("SELECT group_concat(type||' '||name||' '||COALESCE(sql,''), char(10)) FROM (SELECT * FROM sqlite_schema ORDER BY name)").Scan(&text); err != nil {
+		t.Fatal(err)
+	}
+	return text
+}

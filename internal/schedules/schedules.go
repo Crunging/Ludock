@@ -339,15 +339,15 @@ func authorityState(ctx context.Context, q queryer, serverID string, userIDs ...
 		state = append(state, []any{role, disabled, grant})
 	}
 	var status string
-	var review int
+	var paused int
 	var revision int64
 	var fingerprint, container sql.NullString
-	err := q.QueryRowContext(ctx, `SELECT status, review_required, binding_revision, binding_fingerprint, container_id
-    FROM logical_servers WHERE id = ?`, serverID).Scan(&status, &review, &revision, &fingerprint, &container)
+	err := q.QueryRowContext(ctx, `SELECT status, sharing_paused, binding_revision, binding_fingerprint, container_id
+    FROM logical_servers WHERE id = ?`, serverID).Scan(&status, &paused, &revision, &fingerprint, &container)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
-	state = append(state, []any{status, review, revision, fingerprint, container})
+	state = append(state, []any{status, paused, revision, fingerprint, container})
 	encoded, _ := json.Marshal(state)
 	return string(encoded), nil
 }

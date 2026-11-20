@@ -225,7 +225,7 @@ func (s *Store) BindingFingerprint(o Observation) (string, error) {
 }
 
 const serverColumns = `id, host_id, external_identity, container_id, display_name, game_type, status,
-  binding_revision, binding_fingerprint, review_required, first_seen_at, last_seen_at`
+  binding_revision, binding_fingerprint, sharing_paused, first_seen_at, last_seen_at`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -443,11 +443,6 @@ func (s *Store) Apply(ctx context.Context, observations []Observation, hostID st
 					id, hostID, external, containerID, o.DisplayName, gameType, string(status), revision, fingerprint, now, now); err != nil {
 					return err
 				}
-				if !ambiguous {
-					if err := recordBinding(ctx, tx, id, 1, o.ContainerID, fingerprint, now); err != nil {
-						return err
-					}
-				}
 				continue
 			}
 			// Every discovery reconciles the fleet. Skip rewriting an unchanged
@@ -482,14 +477,9 @@ func (s *Store) Apply(ctx context.Context, observations []Observation, hostID st
 				revision++
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE logical_servers SET container_id = ?, display_name = ?, game_type = ?,
-          status = 'active', binding_revision = ?, binding_fingerprint = ?, review_required = ?, last_seen_at = ? WHERE id = ?`,
+          status = 'active', binding_revision = ?, binding_fingerprint = ?, sharing_paused = ?, last_seen_at = ? WHERE id = ?`,
 				o.ContainerID, o.DisplayName, o.GameType, revision, fingerprint, paused, now, server.ID); err != nil {
 				return err
-			}
-			if changed {
-				if err := recordBinding(ctx, tx, server.ID, revision, o.ContainerID, fingerprint, now); err != nil {
-					return err
-				}
 			}
 		}
 		for _, server := range existing {
@@ -502,13 +492,6 @@ func (s *Store) Apply(ctx context.Context, observations []Observation, hostID st
 		}
 		return nil
 	})
-	return err
-}
-
-func recordBinding(ctx context.Context, tx *sql.Tx, serverID string, revision int64, containerID, fingerprint string, now int64) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO server_bindings
-    (server_id, binding_revision, container_id, binding_fingerprint, observed_at, accepted)
-    VALUES (?, ?, ?, ?, ?, 1)`, serverID, revision, containerID, fingerprint, now)
 	return err
 }
 
@@ -537,7 +520,7 @@ func (s *Store) ResumeSharing(ctx context.Context, adminID, tokenHash, id string
 		if server.Status != StatusActive || server.BindingRevision != expectedRevision {
 			return bindingError("SERVER_CHANGED_AGAIN", "The server changed again in Docker; reload and check it before confirming", 409)
 		}
-		_, err = tx.ExecContext(ctx, "UPDATE logical_servers SET review_required = 0 WHERE id = ?", id)
+		_, err = tx.ExecContext(ctx, "UPDATE logical_servers SET sharing_paused = 0 WHERE id = ?", id)
 		return err
 	})
 }
