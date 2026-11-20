@@ -182,7 +182,7 @@ func (s *Service) writeData(ctx context.Context, settings Settings, done *dataTr
 		if _, err := s.Storage.validateFolder(ctx, settings.Destination); err != nil {
 			return err
 		}
-		if err := s.separateFromGames(ctx, settings.Destination, fail("BACKUP_MOUNT_UNVERIFIED", "")); err != nil {
+		if err := s.separateFromGames(ctx, settings.Destination, fail("BACKUP_MOUNT_UNVERIFIED", ""), true); err != nil {
 			return err
 		}
 		progress()
@@ -217,6 +217,12 @@ func (s *Service) CopyData(ctx context.Context) error {
 					return errCopyMissing
 				}
 				return errCopyReadOnly
+			}
+			return err
+		}
+		if err := s.separateFromGames(ctx, settings.CopyTo, errCopyFailed, true); err != nil {
+			if apperr.Is(err, "BACKUP_SOURCE_OVERLAP") {
+				return fail("BACKUP_SOURCE_OVERLAP", "The second folder overlaps game data. Mount a separate folder.")
 			}
 			return err
 		}

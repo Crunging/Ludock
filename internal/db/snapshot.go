@@ -128,7 +128,7 @@ func settleOperations(ctx context.Context, path string) error {
 	if _, err := conn.ExecContext(ctx, "PRAGMA journal_mode = DELETE"); err != nil {
 		return err
 	}
-	_, err = conn.ExecContext(ctx, `UPDATE operations SET status='interrupted', updated_at=?,
+	_, err = conn.ExecContext(ctx, `UPDATE operations SET status='interrupted', phase='interrupted', updated_at=?,
     error='Ludock’s data was saved while this was waiting or running, and it wasn’t run again after the data was restored.'
     WHERE status IN ('queued','running')`, Now())
 	return err
@@ -216,7 +216,7 @@ func RestoreSnapshot(archivePath, dbPath string) (savedAt time.Time, err error) 
 }
 
 // placeRestored moves name from work into folder, never replacing anything
-// created there since the restore checked.
+// created there since the restore checked. The caller syncs the folder.
 func placeRestored(work, folder, name string) error {
 	source, target := filepath.Join(work, name), filepath.Join(folder, name)
 	err := unix.Renameat2(unix.AT_FDCWD, source, unix.AT_FDCWD, target, unix.RENAME_NOREPLACE)
@@ -230,10 +230,7 @@ func placeRestored(work, folder, name string) error {
 	if errors.Is(err, unix.EEXIST) || errors.Is(err, unix.ENOTEMPTY) {
 		return errRestoreInUse
 	}
-	if err != nil {
-		return err
-	}
-	return syncPath(folder)
+	return err
 }
 
 // extractSnapshot writes the archive's database and key into work and

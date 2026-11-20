@@ -303,12 +303,12 @@ func TestCopyDataFollowsSaves(t *testing.T) {
 	}
 }
 
-// A backup folder that a game server mounts would let its file helpers read
-// the save, so nothing is written there.
+// A backup folder that a game server mounts, even read-only, would let it and
+// its file helpers read the save, so nothing is written there.
 func TestSaveDataRefusesGameData(t *testing.T) {
 	f := newCopyFixture(t)
 	f.engine.AddContainer(fakedocker.GameOptions{ID: "mc", Name: "mc", Image: "itzg/minecraft-server", Running: true,
-		Mounts: []docker.MountPoint{{Type: "bind", Source: f.main, Destination: "/data", RW: true}}})
+		Mounts: []docker.MountPoint{{Type: "bind", Source: f.main, Destination: "/data", RW: false}}})
 	f.s.Observer = &servers.Observer{Docker: f.s.Docker}
 	if err := f.s.SaveData(ctx); err != nil {
 		t.Fatal(err)
