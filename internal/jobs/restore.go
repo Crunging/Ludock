@@ -356,6 +356,10 @@ func (j *Jobs) planRestore(ctx context.Context, job *ops.Context) (*restoreRun, 
 // run is the restore's phases in order. Every data change is journaled
 // before it runs, since recovery acts on the journal alone.
 func (r *restoreRun) run() (map[string]any, error) {
+	// Players are warned once the archive is validated, which can take
+	// minutes; staging reads it again and verifies its checksum before any
+	// data is replaced. A warning resumed after a restart of Ludock is waited
+	// out first, in validate, since players already heard it.
 	if err := r.validate(); err != nil {
 		return nil, err
 	}
@@ -422,10 +426,6 @@ func (r *restoreRun) stillSafe() error {
 	return r.assertAccess()
 }
 
-// Players are warned once the archive is validated, which can take
-// minutes; staging reads it again and verifies its checksum before any data
-// is replaced. A warning resumed after a restart of Ludock is waited out
-// first, since players already heard it.
 func (r *restoreRun) warn() error {
 	if err := r.j.warnFirst(r.ctx, r.job, authz.BackupsRestore, true); err != nil || !warnRequested(r.job) {
 		return err
