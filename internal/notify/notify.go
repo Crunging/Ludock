@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -106,10 +105,9 @@ type Service struct {
 	// system roots.
 	TLS *tls.Config
 
-	mu         sync.Mutex
-	active     string
-	activeTo   Destination
-	delivering bool
+	mu       sync.Mutex
+	active   string
+	activeTo Destination
 	// cancelSend ends the request in flight when its destination's settings
 	// change.
 	cancelSend context.CancelCauseFunc
@@ -404,14 +402,7 @@ func errDisabled(d Destination) error {
 
 func savedIn(ctx context.Context, tx *sql.Tx) (settings, error) {
 	saved := settings{}
-	var raw string
-	err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", settingKey).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return saved, nil
-	}
-	if err == nil {
-		err = json.Unmarshal([]byte(raw), &saved)
-	}
+	_, err := db.ReadSetting(ctx, tx, settingKey, &saved)
 	return saved, err
 }
 
@@ -521,20 +512,8 @@ func responseFailure(status int) string {
 }
 
 // Deliver sends up to ten due notifications to destinations that are on.
-// Overlapping calls return immediately.
+// Calls must not overlap.
 func (s *Service) Deliver(ctx context.Context) error {
-	s.mu.Lock()
-	if s.delivering {
-		s.mu.Unlock()
-		return nil
-	}
-	s.delivering = true
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		s.delivering = false
-		s.mu.Unlock()
-	}()
 	ready := s.settings(ctx).ready()
 	if len(ready) == 0 {
 		return nil

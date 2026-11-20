@@ -16,17 +16,14 @@ var errMeasureSkipped = errors.New("disk measurement skipped")
 // checkDisks measures monitored servers' disks beside the tick, once at a
 // time, since each folder starts a file helper.
 func (a *App) checkDisks(ctx context.Context, current map[string]servers.Container, now int64) {
-	if current == nil || !a.measuring.TryLock() {
+	if current == nil {
 		return
 	}
-	a.background.Add(1)
-	go func() {
-		defer a.background.Done()
-		defer a.measuring.Unlock()
+	a.runAlone(&a.measuring, func() {
 		if err := a.Monitor.CheckDisk(ctx, current, now, a.Events.Watched()); err != nil {
 			log.Warn("Disk space checks are temporarily unavailable")
 		}
-	}()
+	})
 }
 
 // measureDisk measures the filesystem under each of a server's data folders

@@ -25,9 +25,6 @@ const (
 	commandTimeout  = 60 * time.Second
 	// commandLate is how long after queueing a command may still be sent.
 	commandLate = time.Minute
-	// backgroundYield matches how long locks.AcquirePreempting waits for
-	// cancelled background work.
-	backgroundYield = 10 * time.Second
 )
 
 func commandFailed(message string) error { return apperr.New("COMMAND_FAILED", 409, message) }
@@ -82,30 +79,6 @@ func (r *reply) String() string {
 	return text[:cut] + "…"
 }
 
-// acquireIdle takes keys held by nobody, or only by background work such as
-// a player reading, which it cancels and waits out. Any other holder is a
-// conflict at once.
-func (j *Jobs) acquireIdle(ctx context.Context, keys []string) (func(), error) {
-	deadline := time.NewTimer(backgroundYield)
-	defer deadline.Stop()
-	for {
-		released := j.Locks.NextRelease()
-		release, err := j.Locks.Acquire(keys, nil)
-		var background *locks.BackgroundConflict
-		if !errors.As(err, &background) {
-			return release, err
-		}
-		background.Cancel()
-		select {
-		case <-released:
-		case <-deadline.C:
-			return nil, locks.ErrConflict
-		case <-ctx.Done():
-			return nil, locks.ErrConflict
-		}
-	}
-}
-
 // runCommand sends a scheduled console command once, through the game
 // console adapter. A run that can't start at once is not sent later.
 func (j *Jobs) runCommand(ctx context.Context, job *ops.Context) (map[string]any, error) {
@@ -116,7 +89,7 @@ func (j *Jobs) runCommand(ctx context.Context, job *ops.Context) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	release, err := j.acquireIdle(ctx, initial.LockKeys)
+	release, err := j.Locks.AcquireYielding(ctx, initial.LockKeys)
 	if errors.Is(err, locks.ErrConflict) {
 		return skipped(schedules.SkipBusy)
 	}

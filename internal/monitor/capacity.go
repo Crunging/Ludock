@@ -4,13 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/datasize"
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/resources"
@@ -164,18 +164,10 @@ func evaluateMemory(state MemoryState, samples []memorySample, minute, limitKiB 
 func diskKey(serverID string) string   { return "monitor.disk:" + serverID }
 func memoryKey(serverID string) string { return "monitor.memory:" + serverID }
 
-type querier interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 // loadState reads a saved state and returns its raw value, "" when none.
-func loadState(ctx context.Context, q querier, key string, value any) (string, error) {
-	var raw string
-	err := q.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", key).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
+func loadState(ctx context.Context, q db.RowQueryer, key string, value any) (string, error) {
+	raw, found, err := db.RawSetting(ctx, q, key)
+	if err != nil || !found {
 		return "", err
 	}
 	return raw, json.Unmarshal([]byte(raw), value)
@@ -497,18 +489,14 @@ func (s *Service) ResourceProblems(ctx context.Context) (map[string][]Resource, 
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.DB.QueryContext(ctx, "SELECT key,value_json FROM settings WHERE key LIKE 'monitor.%'")
+	saved, err := s.DB.SettingsWithPrefix(ctx, "monitor.")
 	if err != nil {
 		return nil, err
 	}
-	defer result.Close()
 	problems := map[string][]Resource{}
-	for result.Next() {
-		var key, raw string
-		if err := result.Scan(&key, &raw); err != nil {
-			return nil, err
-		}
-		kind, serverID, _ := strings.Cut(strings.TrimPrefix(key, "monitor."), ":")
+	for _, setting := range saved {
+		raw := setting.Value
+		kind, serverID, _ := strings.Cut(setting.Key, ":")
 		r := rows[serverID]
 		if r == nil {
 			continue
@@ -535,5 +523,5 @@ func (s *Service) ResourceProblems(ctx context.Context) (map[string][]Resource, 
 			}
 		}
 	}
-	return problems, result.Err()
+	return problems, nil
 }

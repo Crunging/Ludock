@@ -250,42 +250,32 @@ func (a *App) Start(ctx context.Context) {
 // player readings can each wait on Docker, the network, or a game console,
 // so they run beside it.
 func (a *App) Tick(ctx context.Context) {
-	if a.tick.TryLock() {
-		a.background.Add(1)
-		go func() {
-			defer a.background.Done()
-			defer a.tick.Unlock()
-			// Monitoring and schedules judge the fleet as it is now, not as
-			// a page read saw it a moment ago.
-			current, err := a.Servers.RefreshNow(ctx)
-			now := time.Now().UnixMilli()
-			if err != nil {
-				log.Warn("Discovery and schedules are temporarily unavailable")
-			} else {
-				a.Schedules.Run(ctx, now)
-				a.Schedules.Announce(ctx, now)
-			}
-			if err := a.Monitor.Check(ctx, current, now); err != nil {
-				log.Warn("Availability checks are temporarily unavailable")
-			}
-			a.record(ctx, current, now)
-			a.checkImages(ctx, current, now)
-			a.checkDisks(ctx, current, now)
-		}()
-	}
-	if a.storage.TryLock() {
-		a.background.Add(1)
-		go func() {
-			defer a.background.Done()
-			defer a.storage.Unlock()
-			if err := a.Backups.Initialize(ctx); err != nil {
-				log.Warn("Automatic backup storage setup is temporarily unavailable")
-			}
-			if err := a.Backups.FinishDeletions(ctx); err != nil {
-				log.Warn("Could not remove deleted backup archives; they will be retried")
-			}
-		}()
-	}
+	a.runAlone(&a.tick, func() {
+		// Monitoring and schedules judge the fleet as it is now, not as
+		// a page read saw it a moment ago.
+		current, err := a.Servers.RefreshNow(ctx)
+		now := time.Now().UnixMilli()
+		if err != nil {
+			log.Warn("Discovery and schedules are temporarily unavailable")
+		} else {
+			a.Schedules.Run(ctx, now)
+			a.Schedules.Announce(ctx, now)
+		}
+		if err := a.Monitor.Check(ctx, current, now); err != nil {
+			log.Warn("Availability checks are temporarily unavailable")
+		}
+		a.record(ctx, current, now)
+		a.checkImages(ctx, current, now)
+		a.checkDisks(ctx, current, now)
+	})
+	a.runAlone(&a.storage, func() {
+		if err := a.Backups.Initialize(ctx); err != nil {
+			log.Warn("Automatic backup storage setup is temporarily unavailable")
+		}
+		if err := a.Backups.FinishDeletions(ctx); err != nil {
+			log.Warn("Could not remove deleted backup archives; they will be retried")
+		}
+	})
 	a.copyBackups(ctx)
 	a.saveData(ctx)
 	// Player counts are shown only on pages that follow server changes, and a
@@ -298,49 +288,31 @@ func (a *App) Tick(ctx context.Context) {
 // copyBackups makes due second copies of backups beside other work, once at
 // a time, since a copy can take as long as the archive takes to write.
 func (a *App) copyBackups(ctx context.Context) {
-	if !a.copying.TryLock() {
-		return
-	}
-	a.background.Add(1)
-	go func() {
-		defer a.background.Done()
-		defer a.copying.Unlock()
+	a.runAlone(&a.copying, func() {
 		if err := a.Backups.CopyDue(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("Could not make second copies of backups; they will be retried")
 		}
 		if err := a.Backups.CopyData(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("Could not record the second copy of Ludock's own data; it will be retried")
 		}
-	}()
+	})
 }
 
 // saveData saves Ludock's own data into the backup folder when due, once at
 // a time, so a slow folder never piles saves up.
 func (a *App) saveData(ctx context.Context) {
-	if !a.saving.TryLock() {
-		return
-	}
-	a.background.Add(1)
-	go func() {
-		defer a.background.Done()
-		defer a.saving.Unlock()
+	a.runAlone(&a.saving, func() {
 		if err := a.Backups.SaveData(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("Could not record a save of Ludock's own data; it will be retried")
 		}
-	}()
+	})
 }
 
 // pollPlayers reads players beside other work, once at a time.
 func (a *App) pollPlayers(ctx context.Context, watched bool) {
-	if !a.polling.TryLock() {
-		return
-	}
-	a.background.Add(1)
-	go func() {
-		defer a.background.Done()
-		defer a.polling.Unlock()
+	a.runAlone(&a.polling, func() {
 		a.Players.Poll(ctx, watched)
-	}()
+	})
 }
 
 // deliver sends due notifications beside other work. A call while a pass
@@ -372,29 +344,32 @@ func (a *App) deliver(ctx context.Context) {
 // checkImages looks for newer server images beside the tick, once at a time,
 // since a registry can be slow to answer.
 func (a *App) checkImages(ctx context.Context, current map[string]servers.Container, now int64) {
-	if current == nil || !a.checking.TryLock() {
+	if current == nil {
 		return
 	}
-	a.background.Add(1)
-	go func() {
-		defer a.background.Done()
-		defer a.checking.Unlock()
-		a.Checks.Run(ctx, current, now)
-	}()
+	a.runAlone(&a.checking, func() { a.Checks.Run(ctx, current, now) })
 }
 
 // record samples resources beside the tick, at most once per minute.
 func (a *App) record(ctx context.Context, current map[string]servers.Container, now int64) {
-	if !a.sampling.TryLock() {
+	a.runAlone(&a.sampling, func() {
+		if err := a.Resources.Record(ctx, current, now); err != nil {
+			log.Warn("Could not record resource history; it will be recorded again next minute")
+		}
+	})
+}
+
+// runAlone runs work in the background unless the work mu guards is still
+// running. Stop waits for it.
+func (a *App) runAlone(mu *sync.Mutex, work func()) {
+	if !mu.TryLock() {
 		return
 	}
 	a.background.Add(1)
 	go func() {
 		defer a.background.Done()
-		defer a.sampling.Unlock()
-		if err := a.Resources.Record(ctx, current, now); err != nil {
-			log.Warn("Could not record resource history; it will be recorded again next minute")
-		}
+		defer mu.Unlock()
+		work()
 	}()
 }
 

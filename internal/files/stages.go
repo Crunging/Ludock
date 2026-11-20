@@ -39,24 +39,18 @@ func (s *Service) forgetStage(ctx context.Context, id string) error {
 
 // Stages lists the recorded staging folders.
 func (s *Service) Stages(ctx context.Context) ([]Stage, error) {
-	rows, err := s.DB.QueryContext(ctx, "SELECT value_json FROM settings WHERE substr(key, 1, ?) = ? ORDER BY key",
-		len(stagePrefix), stagePrefix)
+	saved, err := s.DB.SettingsWithPrefix(ctx, stagePrefix)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var stages []Stage
-	for rows.Next() {
-		var value string
-		if err := rows.Scan(&value); err != nil {
-			return nil, err
-		}
+	for _, setting := range saved {
 		var stage Stage
-		if json.Unmarshal([]byte(value), &stage) == nil {
+		if json.Unmarshal([]byte(setting.Value), &stage) == nil {
 			stages = append(stages, stage)
 		}
 	}
-	return stages, rows.Err()
+	return stages, nil
 }
 
 // RemoveStages removes the staging folders unpacks interrupted by Ludock

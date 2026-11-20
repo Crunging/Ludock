@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"strings"
 
 	"github.com/Crunging/Ludock/internal/db"
 )
@@ -25,24 +24,18 @@ const choicePrefix = "server.choice:"
 
 // Choices returns every saved choice by external identity.
 func (s *Store) Choices(ctx context.Context) (map[string]Choice, error) {
-	// ';' follows ':', so this reads exactly the keys with the prefix.
-	rows, err := s.DB.QueryContext(ctx, "SELECT key, value_json FROM settings WHERE key > 'server.choice:' AND key < 'server.choice;'")
+	saved, err := s.DB.SettingsWithPrefix(ctx, choicePrefix)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	choices := map[string]Choice{}
-	for rows.Next() {
-		var key, value string
-		if err := rows.Scan(&key, &value); err != nil {
-			return nil, err
-		}
+	for _, setting := range saved {
 		var choice Choice
-		if json.Unmarshal([]byte(value), &choice) == nil {
-			choices[strings.TrimPrefix(key, choicePrefix)] = choice
+		if json.Unmarshal([]byte(setting.Value), &choice) == nil {
+			choices[setting.Key] = choice
 		}
 	}
-	return choices, rows.Err()
+	return choices, nil
 }
 
 // SetChoice saves an administrator's choice with its audit entry. The

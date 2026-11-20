@@ -101,9 +101,20 @@ const (
 // foregroundWait for foreground holders. background, when set, marks this
 // holder as background work too.
 func (t *Table) AcquirePreempting(ctx context.Context, keys []string, background func()) (func(), error) {
+	return t.preempt(ctx, keys, background, foregroundWait)
+}
+
+// AcquireYielding takes keys held by nobody, or only by background work such
+// as a player reading, which it cancels and waits out as AcquirePreempting
+// does. Any other holder is a conflict at once.
+func (t *Table) AcquireYielding(ctx context.Context, keys []string) (func(), error) {
+	return t.preempt(ctx, keys, nil, 0)
+}
+
+func (t *Table) preempt(ctx context.Context, keys []string, background func(), waitForeground time.Duration) (func(), error) {
 	deadline := time.NewTimer(backgroundYield)
 	defer deadline.Stop()
-	foreground := time.Now().Add(foregroundWait)
+	foreground := time.Now().Add(waitForeground)
 	for {
 		released := t.NextRelease()
 		release, err := t.Acquire(keys, background)

@@ -204,12 +204,12 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 	var job *ops.Job
 	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		// The policy and restarts are as judged above, read on this connection.
-		var policyNow, rawNow string
+		var policyNow string
 		if err := tx.QueryRowContext(ctx, "SELECT policy_json FROM availability WHERE server_id=?", server.ID).Scan(&policyNow); err != nil {
 			return err
 		}
-		err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", recoveryKey(server.ID)).Scan(&rawNow)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		rawNow, _, err := db.RawSetting(ctx, tx, recoveryKey(server.ID))
+		if err != nil {
 			return err
 		}
 		if policyNow != policyRaw || rawNow != raw {
