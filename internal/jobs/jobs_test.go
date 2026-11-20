@@ -627,3 +627,21 @@ func TestRestartWhenDockerGoesAway(t *testing.T) {
 		t.Fatalf("%+v", job)
 	}
 }
+
+// Docker fails just as a backup's archive is read. The backup blames Docker,
+// not the server's files.
+func TestBackupWhenDockerGoesAway(t *testing.T) {
+	f := setup(t)
+	exec := f.engine.Exec
+	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+		if strings.Contains(strings.Join(cmd, " "), `"operation":"backup"`) {
+			f.engine.AddFault(`/exec/`, 500, false, 0)
+		}
+		return exec(c, cmd, stdin, stdout, stderr)
+	}
+	job := f.run(t, "backup", nil)
+	f.engine.ClearFaults()
+	if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") {
+		t.Fatalf("%+v", job)
+	}
+}
