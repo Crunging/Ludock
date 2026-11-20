@@ -467,7 +467,9 @@ func TestBackupScheduleWaitsAndWarns(t *testing.T) {
 	if first := f.first(t, admin); first.LastResult != WaitingResult || f.operations(t) != 0 {
 		t.Fatal(first)
 	}
+	// One warning per server is sent at a time.
 	f.s.Announce(ctx, due+25*minute)
+	f.s.Wait()
 	f.s.Announce(ctx, due+29*minute)
 	f.s.Wait()
 	if claims() != 2 {

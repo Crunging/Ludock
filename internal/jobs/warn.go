@@ -132,9 +132,17 @@ var errNoWarning = apperr.New("WARNING_UNAVAILABLE", 409, "This server's game ca
 
 // resumable: a warned operation interrupted while it waited, before any
 // later step was saved, so it can wait out its warning and act after a
-// restart of Ludock.
+// restart of Ludock. An update's pull and checks change nothing, so it
+// stays resumable until it saves its stop.
 func resumable(job *ops.Context) bool {
-	return warnRequested(job) && job.Job.Recovery.WarnUntil != 0 && job.Job.Phase == "warning"
+	r := job.Job.Recovery
+	if !warnRequested(job) || r.WarnUntil == 0 {
+		return false
+	}
+	if job.Job.Kind == "update" {
+		return r.InitialRunning == nil && !r.StopStarted && len(r.Swap) == 0
+	}
+	return job.Job.Phase == "warning"
 }
 
 // calledOff tells whoever reads the failure that players had been warned.
