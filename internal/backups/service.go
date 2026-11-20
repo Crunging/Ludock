@@ -942,13 +942,18 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 }
 
 // removeIdle removes a backup for retention unless it is being read or was
-// kept since it was listed.
+// kept since it was listed. One whose archive isn't in its folder stays: an
+// unmounted disk can leave its folder empty, and the second copy may then be
+// the only one.
 func (s *Service) removeIdle(ctx context.Context, backup Backup) error {
 	release, idle := s.Storage.claimIdle(backup.ID)
 	if !idle {
 		return nil
 	}
 	defer release()
+	if found, err := s.look(backup.destination, backup.ID, errFolderStalled); err != nil || !found {
+		return err
+	}
 	if err := s.remove(ctx, &backup, nil, false); !errors.Is(err, errKept) {
 		return err
 	}

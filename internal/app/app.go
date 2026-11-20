@@ -404,10 +404,11 @@ func (a *App) record(ctx context.Context, current map[string]servers.Container, 
 // startup recovery resumes or reconciles it.
 func (a *App) Stop(deadline time.Time) bool {
 	close(a.stop)
-	a.Events.Stop()
 	settled := make(chan struct{})
 	go func() {
 		defer close(settled)
+		// A delivery may be waiting on discovery, which outlasts its caller.
+		a.Events.Stop()
 		a.Runner.Stop()
 		a.background.Wait()
 		a.Schedules.Wait()

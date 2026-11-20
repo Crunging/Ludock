@@ -74,11 +74,11 @@ func (s *Server) readBackups(r *http.Request, b *views.BackupsView) {
 	if err != nil {
 		b.HistoryError = publicMessage(err)
 	}
-	if err := s.App.Backups.Locate(list); err != nil {
-		b.FolderIssue = publicMessage(err)
-	}
 	// A removed backup that waits only for its second copy to go is gone.
 	b.Backups = slices.DeleteFunc(list, func(backup backups.Backup) bool { return backup.CopyState == "removing" })
+	if err := s.App.Backups.Locate(b.Backups); err != nil {
+		b.FolderIssue = publicMessage(err)
+	}
 }
 
 // backupFits compares each backup with the server as discovery last saw it,

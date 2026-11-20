@@ -689,6 +689,20 @@ func TestBackupsInALostFolder(t *testing.T) {
 	if err := os.Rename(f.main, lost); err != nil {
 		t.Fatal(err)
 	}
+	// An unmounted disk can leave its folder empty, not gone.
+	os.Mkdir(f.main, 0o755)
+	if err := f.s.Prune(ctx, f.serverID, Settings{Destination: f.copies, CopyChosen: true}, list[4].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, backup := range list {
+		if found, _ := f.s.Exists(ctx, backup.ID, true); !found {
+			t.Fatal("retention removed a backup missing from an empty folder", backup.ID)
+		}
+	}
+	os.Remove(f.main)
 	f.settings = Settings{Destination: f.copies, CopyChosen: true}
 	if _, err := f.s.DB.Exec(`UPDATE settings SET value_json=? WHERE key='backups'`,
 		`{"destination":"`+f.copies+`","maxBytes":0,"reserveBytes":0,"copyTo":"","copyChosen":true}`); err != nil {

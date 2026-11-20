@@ -33,11 +33,14 @@ func (s *Server) backupBrowser(r *http.Request, serverID, backupID string, check
 		return browser
 	}
 	folder, err := s.App.Backups.ArchiveFolder(backup)
-	browser.Backup, browser.Roots = *backup, backup.Roots
 	if err != nil {
-		browser.Error = publicMessage(err)
-		return browser
+		// The look can take seconds; access is confirmed again first.
+		if refused := check(); refused != nil {
+			err = refused
+		}
+		return &views.BackupBrowser{ServerID: serverID, Error: publicMessage(err)}
 	}
+	browser.Backup, browser.Roots = *backup, backup.Roots
 	if len(backup.Roots) == 0 {
 		browser.Error = "This backup holds no data folders."
 		return browser
