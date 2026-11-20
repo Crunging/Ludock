@@ -442,8 +442,8 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 		action = "recreation"
 	}
 	j.notifyDone(job, "operation:"+job.Job.ID, server.Container.DisplayName+": "+action+" completed.")
-	return map[string]any{"imageChanged": imageChanged, "recreated": true, "forced": request.ForceRecreate,
-		"running": initiallyRunning, "verification": verification}, nil
+	return withSave(job, map[string]any{"imageChanged": imageChanged, "recreated": true, "forced": request.ForceRecreate,
+		"running": initiallyRunning, "verification": verification}), nil
 }
 
 // swap replaces the stopped original with a container created from body, which

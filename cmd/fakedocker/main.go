@@ -296,6 +296,8 @@ func (g *fakeGame) rcon(password, list string, format func(online []string) stri
 		case "say":
 			g.said = append(g.said, argument)
 			return "[Server] " + argument
+		case "save-all":
+			return "Saving the game (this may take a moment!)Saved the game"
 		case "fake-said":
 			return "Said: " + strings.Join(g.said, " | ")
 		case "fake-join":
