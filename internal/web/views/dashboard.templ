@@ -250,7 +250,7 @@ templ Dashboard(page Page, list ServerList) {
 			</div>
 			<div id="attention" hx-get="/fragments/attention" hx-trigger="load, server from:document delay:500ms, servers-changed from:document delay:500ms" hx-swap="innerHTML"></div>
 			if page.Admin {
-				<div id="checklist" hx-get="/fragments/checklist" hx-trigger="load, servers-changed from:document delay:500ms" hx-swap="innerHTML"></div>
+				<div id="checklist" hx-get="/fragments/checklist" hx-trigger="load, servers-changed from:document delay:500ms, refresh from:document delay:500ms" hx-swap="innerHTML"></div>
 			}
 			@serverFilters(list)
 			// Refreshes carry the current filters, which stay outside the swap

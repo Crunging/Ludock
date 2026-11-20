@@ -895,7 +895,7 @@ func Dashboard(page Page, list ServerList) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if page.Admin {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "<div id=\"checklist\" hx-get=\"/fragments/checklist\" hx-trigger=\"load, servers-changed from:document delay:500ms\" hx-swap=\"innerHTML\"></div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "<div id=\"checklist\" hx-get=\"/fragments/checklist\" hx-trigger=\"load, servers-changed from:document delay:500ms, refresh from:document delay:500ms\" hx-swap=\"innerHTML\"></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

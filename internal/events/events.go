@@ -339,6 +339,33 @@ func (h *Hub) Changed(ctx context.Context, serverID string) {
 	}
 }
 
+// NotifyAdmins tells administrators' open pages that something outside any one
+// server changed, such as whether alerts are being delivered.
+func (h *Hub) NotifyAdmins(ctx context.Context) {
+	h.mu.Lock()
+	if h.stopped {
+		h.mu.Unlock()
+		return
+	}
+	h.deliveries.Add(1)
+	defer h.deliveries.Done()
+	subscribers := make([]*Subscriber, 0, len(h.subscribers))
+	for subscriber := range h.subscribers {
+		subscribers = append(subscribers, subscriber)
+	}
+	h.mu.Unlock()
+	for _, subscriber := range subscribers {
+		user := subscriber.Validate(ctx)
+		if user == nil {
+			subscriber.Close("Authentication expired")
+			continue
+		}
+		if user.Role == db.RoleAdmin {
+			subscriber.Send(Event{Action: "refresh", Time: time.Now().Unix()})
+		}
+	}
+}
+
 func byContainer(servers []identity.Server) map[string]*identity.Server {
 	result := make(map[string]*identity.Server, len(servers))
 	for index := range servers {

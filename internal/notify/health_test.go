@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+
+	"github.com/Crunging/Ludock/internal/db"
 )
 
 // One alert that fails once or twice and is still retrying isn't failing
@@ -169,5 +171,35 @@ func TestHealthWhileRetrySends(t *testing.T) {
 	s.DB.Exec(old, "b", "b", 3)
 	if failingDuringRetry() {
 		t.Fatal("an old failure being retried made the destination failing")
+	}
+}
+
+// An alert that keeps failing and a later one that gets through within the
+// same millisecond leave the destination working: the delivery came last.
+func TestHealthKeepsOrderWithinAMillisecond(t *testing.T) {
+	up := false
+	s := setup(t, func(*http.Request) (*http.Response, error) {
+		if up {
+			return respond(204, "")
+		}
+		return nil, errors.New("connection refused")
+	})
+	clock := db.Now
+	frozen := clock()
+	db.Now = func() int64 { return frozen }
+	t.Cleanup(func() { db.Now = clock })
+	s.Notify(ServerProblems, "outage:1", "valheim: the server is down.")
+	for range failingAttempts {
+		s.DB.Exec("UPDATE notification_deliveries SET next_attempt_at=0")
+		s.Deliver(ctx)
+	}
+	if p, err := s.Problems(ctx); err != nil || len(p) != 1 {
+		t.Fatal(p, err)
+	}
+	up = true
+	s.Notify(ServerProblems, "outage:2", "valheim: the server is down.")
+	s.Deliver(ctx)
+	if h, err := s.Health(ctx); err != nil || !h[Discord].Delivered || h[Discord].Failing {
+		t.Fatalf("a later delivery in the same millisecond left it failing: %+v %v", h, err)
 	}
 }

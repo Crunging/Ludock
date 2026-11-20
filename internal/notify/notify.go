@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -119,6 +120,21 @@ type Service struct {
 	quit    chan struct{}
 	stopped bool
 	wake    chan struct{}
+	// lastStamp is the latest time given to a delivery attempt.
+	lastStamp atomic.Int64
+}
+
+// stamp is the current time, moved past any stamp before it, so attempts
+// that start and end within one millisecond keep their order: a
+// destination's health depends on which outcome came last.
+func (s *Service) stamp() int64 {
+	for {
+		last := s.lastStamp.Load()
+		next := max(db.Now(), last+1)
+		if s.lastStamp.CompareAndSwap(last, next) {
+			return next
+		}
+	}
 }
 
 // retryDelay is the first wait before queueing an event again; tests
@@ -592,7 +608,7 @@ func (s *Service) Deliver(ctx context.Context) error {
 		s.mu.Lock()
 		s.active, s.activeTo = id, d
 		s.mu.Unlock()
-		claimedAt := db.Now()
+		claimedAt := s.stamp()
 		claim := claimedAt + backoff
 		result, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET next_attempt_at=?
       WHERE id=? AND state='queued' AND attempts=? AND retry_attempts=? AND last_attempt_at IS ? AND next_attempt_at=?`,
@@ -639,7 +655,7 @@ func (s *Service) Deliver(ctx context.Context) error {
 			release()
 			continue
 		}
-		finished := db.Now()
+		finished := s.stamp()
 		state := "queued"
 		var delivered, failureCode any
 		if failure == "" {
