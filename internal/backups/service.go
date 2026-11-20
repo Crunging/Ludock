@@ -302,7 +302,13 @@ func (s *Service) SavedSettings(ctx context.Context) (*Settings, bool, error) {
 // SaveSettings validates and stores settings while admin is still an
 // administrator signed in with tokenHash.
 func (s *Service) SaveSettings(ctx context.Context, settings Settings, admin *db.SessionUser, tokenHash string) (Settings, error) {
-	settings, err := s.Storage.ValidateSettings(ctx, settings)
+	if !settings.valid() {
+		return s.Storage.ValidateSettings(ctx, settings)
+	}
+	err := s.checkFolder(ctx, settings.Destination, saveWait, func(ctx context.Context) error {
+		_, err := s.Storage.ValidateSettings(ctx, settings)
+		return err
+	})
 	if err != nil {
 		return settings, err
 	}
@@ -310,8 +316,12 @@ func (s *Service) SaveSettings(ctx context.Context, settings Settings, admin *db
 	// checks it before every copy.
 	saved, _, err := s.SavedSettings(ctx)
 	unchanged := err == nil && saved != nil && saved.CopyTo == settings.CopyTo && saved.Destination == settings.Destination
-	if !unchanged {
-		if err := s.ValidateCopyFolder(ctx, settings); err != nil {
+	if !unchanged && settings.CopyTo != "" {
+		err := s.checkFolder(ctx, settings.CopyTo, saveWait, func(ctx context.Context) error { return s.ValidateCopyFolder(ctx, settings) })
+		if errors.Is(err, errFolderStalled) {
+			err = errCopyStalled
+		}
+		if err != nil {
 			return settings, err
 		}
 	}
@@ -432,10 +442,7 @@ func (s *Service) startCopies(ctx context.Context, saved Settings) error {
 	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		// A choice saved while the folder was checked wins.
 		raw, found, err := db.RawSetting(ctx, tx, settingsKey)
-		if err == nil && !found {
-			err = sql.ErrNoRows
-		}
-		if err != nil {
+		if err != nil || !found {
 			return err
 		}
 		var current Settings
@@ -609,12 +616,22 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 	if _, err := Remaining(*settings, status.ArchiveBytes, kept); err != nil {
 		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_CAPACITY", "The backup size limit could not be checked."}))
 	}
-	if _, err := s.Storage.ValidateSettings(ctx, *settings); err != nil {
+	// A share or Docker that stops responding mustn't hold up the page.
+	err = s.checkFolder(ctx, settings.Destination, measureWait, func(ctx context.Context) error {
+		_, err := s.Storage.ValidateSettings(ctx, *settings)
+		return err
+	})
+	if err != nil {
 		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_DESTINATION",
 			"The backup folder is missing or can’t be reached. Check its mount and LUDOCK_BACKUP_ROOTS."}))
 		return status, nil
 	}
-	available, err := s.Storage.AvailableBytes(settings.Destination)
+	var available int64
+	err = s.reach(settings.Destination, errFolderStalled, measureWait, func(func()) error {
+		var err error
+		available, err = s.Storage.AvailableBytes(settings.Destination)
+		return err
+	})
 	if err != nil {
 		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_DISK_UNAVAILABLE",
 			"Free space on the backup disk couldn’t be checked. Check that the backup folder can be reached and written."}))
