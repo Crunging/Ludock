@@ -53,7 +53,7 @@ test("a backup restores the server's data and running state", async ({ page }) =
   const properties = join(stack(), "data", "server.properties");
   await openServer(page, "Test Game");
   await page.getByRole("tab", { name: "Backups" }).click();
-  await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
+  await expect(page.locator("#create-backup")).toBeEnabled();
   await page.getByRole("button", { name: "Create backup" }).click();
   await page.getByRole("dialog", { name: "Back up Test Game?" }).getByRole("button", { name: "Create backup" }).click();
   await expectOperationSucceeded(page);

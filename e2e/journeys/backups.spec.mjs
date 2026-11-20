@@ -4,6 +4,12 @@ import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded,
 
 asAdmin();
 
+/** Opens a backup row's menu and returns the named item in it. */
+async function menuItem(row, role, name) {
+  await row.getByRole("button", { name: /^More actions for the backup/ }).click();
+  return row.locator(".action-menu__content").getByRole(role, { name, exact: true });
+}
+
 // Other journeys list Survival's data, so a folder added here is removed.
 const restoreFolder = () => join(process.env.LUDOCK_E2E_DIR, "docker", "data", "minecraft", "restore-one");
 test.afterEach(() => rmSync(restoreFolder(), { recursive: true, force: true }));
@@ -11,7 +17,10 @@ test.afterEach(() => rmSync(restoreFolder(), { recursive: true, force: true }));
 test("backing up, downloading, restoring, and deleting a backup", async ({ page }) => {
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Backups" }).click();
-  await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
+  // A server that is ready says nothing about readiness.
+  await expect(page.locator("#create-backup")).toBeEnabled();
+  await expect(page.locator("#backup-readiness")).toBeEmpty();
+  await expect(page.locator("main")).not.toContainText("How backups work");
   // A readiness check that answers while the confirmation is open leaves
   // the button it would send in place, so confirming still starts the backup.
   let release;
@@ -20,7 +29,10 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page 
     await held;
     await route.continue();
   });
-  await page.getByRole("button", { name: "Check again" }).click();
+  await page.evaluate(() => {
+    htmx.ajax("GET", location.pathname.replace("/servers/", "/fragments/servers/") + "/backups/preflight",
+      { target: "#backup-readiness", swap: "outerHTML" });
+  });
   await page.getByRole("button", { name: "Create backup" }).click();
   const confirm = page.getByRole("dialog", { name: "Back up Survival?" });
   await expect(confirm).toBeVisible();
@@ -37,8 +49,8 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page 
   const rows = page.locator("#backup-list tbody tr");
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText("complete");
-  await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
   await expect(page.locator("#create-backup")).toBeEnabled();
+  await expect(page.locator("#backup-readiness")).toBeEmpty();
 
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("link", { name: "Download backup" }).click()]);
   expect(download.suggestedFilename()).toMatch(/^ludock-.*\.tar$/);
@@ -61,7 +73,9 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page 
   // The restore kept a safety backup of the replaced data.
   await expect(rows).toHaveCount(2);
   await expect(page.locator("form.danger-panel")).toHaveCount(0);
-  await rows.last().getByRole("button", { name: "Delete" }).click();
+  // Each backup has one button; the rest are in its menu.
+  await expect(rows.last().locator(".backup-row__actions > .secondary-btn")).toHaveText(["Restore…"]);
+  await (await menuItem(rows.last(), "button", "Delete")).click();
   await page.getByRole("dialog", { name: "Delete this backup?" }).getByRole("button", { name: "Delete backup" }).click();
   await expect(page.locator("#detail-status")).toHaveText("Backup deleted.");
   await expect(rows).toHaveCount(1);
@@ -111,7 +125,8 @@ test("browsing a backup, downloading one file, and restoring it alone", async ({
   writeFileSync(notes, "today's notes");
 
   // Browsing a backup changes nothing and walks it folder by folder.
-  await page.locator("#backup-list tbody tr").first().getByRole("link", { name: "Browse" }).click();
+  const backupCount = await page.locator("#backup-list tbody tr").count();
+  await (await menuItem(page.locator("#backup-list tbody tr").first(), "link", "Browse files")).click();
   await expect(page.getByRole("heading", { name: /^Backup from/ })).toBeVisible();
   const names = page.locator("#backup-folder .file-row__name");
   await expect(names.filter({ hasText: "restore-one" })).toContainText("505 items");
@@ -124,7 +139,7 @@ test("browsing a backup, downloading one file, and restoring it alone", async ({
   await page.getByRole("button", { name: "Show 1 more" }).click();
   const last = page.locator("#backup-folder .file-row", { hasText: "chunk-501.dat" });
   await last.getByRole("button", { name: "Actions for chunk-501.dat" }).click();
-  await expect(last.getByRole("link", { name: "Restore…" })).toBeVisible();
+  await expect(last.getByRole("button", { name: "Restore…" })).toBeVisible();
   await page.locator(".file-breadcrumbs").getByRole("link", { name: "restore-one" }).click();
   await page.getByRole("link", { name: "world", exact: true }).click();
   await expect(page.locator(".file-breadcrumbs a[aria-current=page]")).toHaveText("world");
@@ -137,24 +152,24 @@ test("browsing a backup, downloading one file, and restoring it alone", async ({
   expect(readFileSync(await download.path(), "utf8")).toBe("yesterday's world");
   const fileURL = await row.locator("a[download]").getAttribute("href");
 
-  // Restoring one file names it, replaces only it, and starts the server again.
+  // Restoring one file names it in the usual confirmation, backs up the
+  // server first unless told not to, replaces only that file, and starts
+  // the server again.
   await row.getByRole("button", { name: "Actions for level.dat" }).click();
-  await row.getByRole("link", { name: "Restore…" }).click();
-  const confirm = page.locator("#restore-item");
-  await expect(confirm.getByRole("heading")).toHaveText("Restore the file “level.dat”?");
-  await expect(confirm.locator("code")).toHaveText(level);
-  const submit = confirm.getByRole("button", { name: "Restore file" });
-  await expect(submit).toBeDisabled();
-  await confirm.getByLabel(/Type Survival to confirm/).fill("Survival");
-  await submit.click();
+  await row.getByRole("button", { name: "Restore…" }).click();
+  const confirm = page.getByRole("dialog", { name: "Restore the file “level.dat”?" });
+  await expect(confirm).toContainText(`replaces ${level}`);
+  await expect(confirm.getByLabel("Back up first")).toBeChecked();
+  await confirm.getByRole("button", { name: "Restore file" }).click();
   await expectOperationSucceeded(page);
   await expect(page.locator("#selected-operation")).toContainText("restore-one/world/level.dat");
   expect(readFileSync(level, "utf8")).toBe("yesterday's world");
   expect(readFileSync(notes, "utf8")).toBe("today's notes");
   await expect(page.locator(".detail-header")).toContainText("Running");
-  // No safety backup of everything was taken.
+  // The backup it took first is in the list.
   await page.getByRole("link", { name: "Dismiss" }).click();
-  const backupCount = await page.locator("#backup-list tbody tr").count();
+  await expect(page.locator("#backup-list tbody tr")).toHaveCount(backupCount + 1);
+  await expect(page.locator("#backup-list tbody tr").first()).toContainText("Taken before a restore");
 
   // Someone who may create backups but isn't an administrator is offered
   // none of a backup's contents.
@@ -166,7 +181,7 @@ test("browsing a backup, downloading one file, and restoring it alone", async ({
   await operator.getByRole("tab", { name: "Backups" }).click();
   await expect(operator.locator("#backup-retention")).toBeVisible();
   await expect(operator.locator("#backup-list")).toHaveCount(0);
-  await expect(operator.getByRole("link", { name: "Browse" })).toHaveCount(0);
+  await expect(operator.getByRole("link", { name: "Browse files" })).toHaveCount(0);
   const backupID = new URL(fileURL, page.url()).pathname.split("/")[4];
   await operator.goto(`${new URL(operator.url()).pathname}?tab=backups&browse=${backupID}`);
   await expect(operator.locator(".backup-browser")).toHaveCount(0);
@@ -181,7 +196,8 @@ test("keeping a backup with a note, seeing it outlast retention, and releasing i
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Backups" }).click();
   const retention = page.locator("#backup-retention");
-  await expect(retention).toContainText("Ludock keeps the 3 newest backups, plus the last one of each of the 7 most recent days");
+  await retention.getByText("Which backups Ludock keeps").click();
+  await expect(retention).toContainText("The 3 newest, plus the last one of each of the 7 most recent days");
   await expect(retention).toContainText("Backups you keep are never removed.");
   const rows = page.locator("#backup-list tbody tr");
   const backUp = async () => {
@@ -207,7 +223,7 @@ test("keeping a backup with a note, seeing it outlast retention, and releasing i
   }).toBe(true);
   await backUp();
 
-  await rows.first().getByRole("link", { name: "Keep…" }).click();
+  await (await menuItem(rows.first(), "link", "Keep…")).click();
   const keep = page.locator("#keep-backup");
   await expect(keep).toContainText("Ludock never removes a kept backup");
   await keep.getByLabel(/Note/).fill("before 1.21 update");
@@ -215,9 +231,9 @@ test("keeping a backup with a note, seeing it outlast retention, and releasing i
   await expect(keep).toHaveCount(0);
   const kept = rows.filter({ hasText: "before 1.21 update" });
   await expect(kept).toContainText("kept");
-  await expect(kept.getByRole("button", { name: "Delete" })).toBeDisabled();
+  await expect(kept.getByRole("button", { name: "Delete", includeHidden: true })).toBeDisabled();
   await expect(page.locator("#backup-usage")).toContainText("of it in kept backups");
-  const browse = await kept.getByRole("link", { name: "Browse" }).getAttribute("href");
+  const browse = await kept.getByRole("link", { name: "Browse files", includeHidden: true }).getAttribute("href");
 
   // Four newer backups leave the three newest and the kept one.
   for (let count = 0; count < 4; count++) await backUp();
@@ -230,7 +246,7 @@ test("keeping a backup with a note, seeing it outlast retention, and releasing i
   const before = await listed();
   const released = before.find((row) => row.kept);
   const lastOfItsDay = !before.some((row) => !row.kept && row.at > released.at && row.day === released.day);
-  await kept.getByRole("button", { name: "Release" }).click();
+  await (await menuItem(kept, "button", "Release")).click();
   await expect(page.locator("#detail-status")).toContainText("Backup released.");
   await expect(kept).toHaveCount(0);
   await expect(page.locator(`#backup-list a[href="${browse}"]`)).toHaveCount(1);
@@ -251,7 +267,7 @@ test("Ludock saving its own data beside the backups without being asked", async 
   await expect(line).toContainText("Ludock’s own data");
   // The first save follows backup storage turning itself on.
   await expect(async () => {
-    await storage.getByRole("button", { name: "Refresh" }).click();
+    await page.reload();
     await expect(line).toContainText(/Saved (just now|\d+ minutes? ago)/, { timeout: 1_000 });
   }).toPass({ timeout: 45_000 });
   await expect(storage.locator(".backup-storage__issues")).toHaveCount(0);
@@ -272,13 +288,15 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
   const settings = page.locator("#backup-settings-form");
   const chooseCopy = async (label) => {
     await page.goto("/settings");
-    await settings.getByText("Advanced").click();
+    await page.locator("#advanced-settings > summary").click();
     await settings.getByLabel("Also copy backups to").selectOption({ label });
     await settings.getByRole("button", { name: "Save backup settings" }).click();
     await expect(settings.locator(".alert--success")).toContainText("Backup settings saved.");
   };
   await chooseCopy(copyFolder);
-  await expect(settings.locator("#backup-storage")).toContainText(`Second copy in${copyFolder}`);
+  await expect(page.locator("#backup-storage")).toContainText(`Second copy in${copyFolder}`);
+  // A folder chosen by hand isn't one Ludock found.
+  await expect(page.locator("#backup-storage")).not.toContainText("Ludock found this folder");
   // Ludock's own data goes there too, the newest save first.
   await expect.poll(() => savesIn(copyFolder).length, { timeout: 45_000 }).toBeGreaterThan(0);
   const saved = savesIn(copyFolder).at(-1);
@@ -293,7 +311,7 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
   await expectOperationSucceeded(page);
   await page.getByRole("link", { name: "Dismiss" }).click();
   const rows = page.locator("#backup-list tbody tr");
-  const href = await rows.first().getByRole("link", { name: "Download" }).getAttribute("href");
+  const href = await rows.first().getByRole("link", { name: "Download", includeHidden: true }).getAttribute("href");
   const id = href.split("/")[4];
   const row = page.locator("#backup-list tbody tr", { has: page.locator(`a[href="${href}"]`) });
   await expect(async () => {
@@ -307,9 +325,10 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
   rmSync(join(backupFolder, `${id}.tar`));
   await page.reload();
   await expect(row).toContainText("Missing from the backup folder; using the second copy");
-  const [download] = await Promise.all([page.waitForEvent("download"), row.getByRole("link", { name: "Download" }).click()]);
+  const downloadLink = await menuItem(row, "link", "Download");
+  const [download] = await Promise.all([page.waitForEvent("download"), downloadLink.click()]);
   expect(readFileSync(await download.path())).toEqual(readFileSync(copy));
-  await row.getByRole("link", { name: "Browse" }).click();
+  await (await menuItem(row, "link", "Browse files")).click();
   await expect(page.locator(".backup-browser .alert--warning")).toContainText("reading the second copy");
   await page.getByRole("link", { name: "All backups" }).click();
   await row.getByRole("link", { name: "Restore…" }).click();
@@ -321,7 +340,7 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
   await page.getByRole("link", { name: "Dismiss" }).click();
 
   // Deleting the backup deletes its copy too.
-  await row.getByRole("button", { name: "Delete" }).click();
+  await (await menuItem(row, "button", "Delete")).click();
   await page.getByRole("dialog", { name: "Delete this backup?" }).getByRole("button", { name: "Delete backup" }).click();
   await expect(page.locator("#detail-status")).toHaveText("Backup deleted.");
   await expect(row).toHaveCount(0);
@@ -329,5 +348,5 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
   await expect.poll(() => existsSync(copy)).toBe(false);
 
   await chooseCopy("No second copy");
-  await expect(settings.locator("#backup-storage")).not.toContainText("Second copy in");
+  await expect(page.locator("#backup-storage")).not.toContainText("Second copy in");
 });

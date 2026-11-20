@@ -77,8 +77,10 @@ type Service struct {
 	copies copies
 
 	// initMu serializes Initialize: a backup that finds no settings waits
-	// for setup already under way instead of failing as unconfigured.
-	initMu sync.Mutex
+	// for setup already under way instead of failing as unconfigured. It
+	// also guards copyRetryAt.
+	initMu      sync.Mutex
+	copyRetryAt time.Time
 
 	// deletionCursor is where the next FinishDeletions batch starts, so rows
 	// that keep failing cannot hold back the ones after them.
@@ -291,14 +293,31 @@ func (s *Service) SaveSettings(ctx context.Context, settings Settings, admin *db
 }
 
 // Initialize enables the first approved root with the default reserve, unless
-// an administrator has ever saved backup settings.
+// an administrator has ever saved backup settings, then starts second copies
+// to a found copy folder.
 func (s *Service) Initialize(ctx context.Context) error {
 	s.initMu.Lock()
 	defer s.initMu.Unlock()
-	// Any saved value, including null, is an administrator decision.
-	if _, found, err := s.SavedSettings(ctx); err != nil || found {
+	saved, found, err := s.SavedSettings(ctx)
+	if err != nil {
 		return err
 	}
+	// Any saved value, including null, is an administrator decision.
+	if !found {
+		if err := s.enable(ctx); err != nil {
+			return err
+		}
+		if saved, _, err = s.SavedSettings(ctx); err != nil {
+			return err
+		}
+	}
+	if saved == nil {
+		return nil
+	}
+	return s.startCopies(ctx, *saved)
+}
+
+func (s *Service) enable(ctx context.Context) error {
 	if testHook != nil {
 		testHook("initializing")
 	}
@@ -331,6 +350,49 @@ func (s *Service) Initialize(ctx context.Context) error {
 		}
 		return nil
 	})
+}
+
+// foundCopyRetry spaces out checks of a found copy folder that failed one.
+const foundCopyRetry = time.Minute
+
+// startCopies copies every backup to the found copy folder, unless an
+// administrator chose a second folder or none. Mounting it says the owner
+// wants the copy.
+func (s *Service) startCopies(ctx context.Context, saved Settings) error {
+	found := s.Storage.FoundCopy()
+	if saved.CopyChosen || saved.CopyTo != "" || found == "" || found == saved.Destination || time.Now().Before(s.copyRetryAt) {
+		return nil
+	}
+	settings := saved
+	settings.CopyTo = found
+	if err := s.ValidateCopyFolder(ctx, settings); err != nil {
+		s.copyRetryAt = time.Now().Add(foundCopyRetry)
+		return nil
+	}
+	started := false
+	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		// A choice saved while the folder was checked wins.
+		var raw string
+		var current Settings
+		if err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", settingsKey).Scan(&raw); err != nil {
+			return err
+		}
+		if json.Unmarshal([]byte(raw), &current) != nil || current != saved {
+			return nil
+		}
+		if err := s.DB.SetSetting(ctx, tx, settingsKey, settings); err != nil {
+			return err
+		}
+		if err := retarget(ctx, tx, settings.CopyTo); err != nil {
+			return err
+		}
+		started = true
+		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{Action: "settings.backups.copy_auto_enabled", TargetType: "settings"})
+	})
+	if err == nil && started {
+		s.WakeCopies()
+	}
+	return err
 }
 
 // ForBackup returns validated settings, initializing them if needed: a
@@ -434,7 +496,9 @@ type StorageStatus struct {
 	Issues         []Issue
 	// CopyTo is the second copy's folder, if any. Its problem never stops
 	// backups, so it isn't among Issues.
-	CopyTo             string
+	CopyTo string
+	// CopyFound: Ludock chose CopyTo because it found the folder mounted.
+	CopyFound          bool
 	CopyAvailableBytes int64 // -1 when unknown
 	CopyIssue          string
 	// DataSavedAt is when Ludock last saved its own data, 0 if not yet, and
@@ -461,6 +525,7 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 	}
 	status.Destination, status.MaxBytes, status.ReserveBytes = settings.Destination, settings.MaxBytes, settings.ReserveBytes
 	status.DataSavedAt, status.DataProblem = s.dataStatus(ctx, *settings)
+	status.CopyFound = settings.CopyTo != "" && !settings.CopyChosen
 	if status.CopyTo = settings.CopyTo; status.CopyTo != "" {
 		// A share that stops responding mustn't hold up the page, and each
 		// folder has one reading waiting on it at most.

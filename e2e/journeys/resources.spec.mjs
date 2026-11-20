@@ -36,9 +36,10 @@ async function toggle(page, label, on) {
 /** Reloads the dashboard until Needs attention does or doesn't show text. */
 async function expectAttention(page, text, shown, timeout = 100_000) {
   const attention = expect.poll(async () => {
+    // It shows nothing until it loads, and nothing when nothing is wrong.
+    const loaded = page.waitForResponse((response) => response.url().includes("/fragments/attention"));
     await page.goto("/");
-    // The placeholder shown while it loads is busy.
-    await expect(page.locator("#attention > .needs-attention:not([aria-busy])")).toBeVisible();
+    await loaded;
     await expect(page.locator("#attention .needs-attention__error")).toHaveCount(0);
     return page.locator("#attention").textContent();
   }, { timeout, intervals: [5_000] });

@@ -71,7 +71,14 @@ async function save(card, label) {
   await expect(card.locator("form .alert--success")).toHaveText(`${label} settings saved.`);
 }
 
+/** Opens Advanced, which holds Recent deliveries, unless it is open. */
+async function openDeliveries(page) {
+  const advanced = page.locator("#advanced-settings");
+  if (!(await advanced.evaluate((details) => details.open))) await advanced.locator(":scope > summary").click();
+}
+
 async function sendTest(page, card, label) {
+  await openDeliveries(page);
   await card.getByRole("button", { name: "Send test notification" }).click();
   await expect(card.locator(".notification-destination__test .alert--success")).toContainText("Test notification queued.");
   const row = page.locator(".notification-deliveries-table tbody tr", { hasText: "Test notification" })
@@ -91,7 +98,10 @@ test("sending test alerts to ntfy, Gotify, email, and a webhook", async ({ page 
   const mail = await mailServer();
   try {
     await page.goto("/settings");
-    await expect(page.locator("#notification-deliveries")).toContainText("Recent deliveries");
+    // Delivery history waits under Advanced.
+    await expect(page.locator("#notification-deliveries")).toBeHidden();
+    await openDeliveries(page);
+    await expect(page.locator("#notification-deliveries-title")).toHaveText("Recent deliveries");
 
     const ntfy = await openDestination(page, "ntfy");
     await expect(ntfy.getByRole("button", { name: "Send test notification" })).toBeDisabled();
@@ -177,6 +187,7 @@ test("retrying a failed webhook delivery", async ({ page }) => {
     await save(webhook, "Webhook");
     await webhook.getByRole("button", { name: "Send test notification" }).click();
 
+    await openDeliveries(page);
     const row = page.locator(".notification-deliveries-table tbody tr", { hasText: "Test notification" })
       .filter({ has: page.getByRole("cell", { name: "Webhook", exact: true }) }).first();
     await expect(row).toContainText("Pending retry", { timeout: 30_000 });

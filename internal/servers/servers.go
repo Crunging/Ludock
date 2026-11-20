@@ -197,6 +197,9 @@ type View struct {
 	Permissions     []authz.Capability
 	ActiveOperation *ActiveOperation
 	LatestBackup    *BackupSummary
+	// NoDataFolders: Docker shows no writable data folder Ludock could back
+	// up, which only the server's own definition can change.
+	NoDataFolders bool
 }
 
 func (v *View) Can(capability authz.Capability) bool {
@@ -289,6 +292,7 @@ func (s *Service) view(ctx context.Context, d *details, logical identity.Server,
 	if d.admin || slices.Contains(permissions, authz.BackupsRead) || slices.Contains(permissions, authz.BackupsCreate) {
 		view.LatestBackup = d.backups[logical.ID]
 	}
+	view.NoDataFolders = container != nil && len(container.FileRoots) == 0
 	if !slices.Contains(permissions, authz.FilesRead) {
 		view.FileRoots = nil
 	}

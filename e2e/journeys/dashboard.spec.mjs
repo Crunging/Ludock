@@ -2,6 +2,12 @@ import { test, expect, asAdmin, dockerAction, openServer, serverRow } from "./fi
 
 asAdmin();
 
+/** Reloads the list as a live update does; the page has no Refresh button. */
+async function refreshList(page) {
+  await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
+  await page.locator("#server-filters").evaluate((form) => form.requestSubmit());
+}
+
 test("finding servers and starting and stopping one from the list", async ({ page }) => {
   // Pages are compressed; the server list repeats its markup for each server.
   const response = await page.goto("/");
@@ -73,7 +79,7 @@ test("a stop answered after a refresh still reaches the page", async ({ page }) 
   await serverRow(page, "Survival").getByRole("button", { name: "Stop" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Stop server" }).click();
   const refreshed = page.waitForResponse(/\/fragments\/servers/);
-  await page.getByRole("button", { name: "Refresh" }).click();
+  await refreshList(page);
   await refreshed;
   const signIn = page.waitForRequest(/\/login$/);
   release();
@@ -186,7 +192,7 @@ test("a state chosen while the list is loading still applies", async ({ page }) 
     }
     await route.continue();
   });
-  await page.getByRole("button", { name: "Refresh" }).click();
+  await refreshList(page);
   await expect.poll(() => waiting).toBe(true);
   await page.getByLabel("State").selectOption("running");
   release();
@@ -207,7 +213,7 @@ test("filters changed while the list is loading all apply", async ({ page }) => 
     }
     await route.continue();
   });
-  await page.getByRole("button", { name: "Refresh" }).click();
+  await refreshList(page);
   await expect.poll(() => waiting).toBe(true);
   // A search, then a state chosen and set back, while the refresh loads.
   await page.getByPlaceholder("Find a server…").fill("valh");

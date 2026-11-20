@@ -96,6 +96,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	notifications := &notify.Service{DB: database}
 	images := launch.NewImages(client, cfg.HelperImage, cfg.SelfContainer)
 	storage := backups.NewStorage(client, cfg.BackupRoots, cfg.SelfContainer)
+	storage.DevCopyRoot = cfg.DevCopyRoot
 	backupService := &backups.Service{DB: database, Storage: storage, Docker: client, Observer: observer, Locks: table,
 		Helpers: &backups.Helpers{Docker: client, Images: images, Storage: storage}}
 	runner := &ops.Runner{DB: database, Locks: table, Notify: notifications.Notify}

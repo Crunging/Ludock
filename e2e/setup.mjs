@@ -45,13 +45,15 @@ function start(command, args, env, log, file) {
 
 // startStack starts one Ludock and fake daemon on fresh data under dir and
 // signs in the setup administrator. Each worker gets its own stack; a
-// journey that needs a fresh install starts another with freshStack.
-async function startStack(bin, dir, port) {
+// journey that needs a fresh install starts another with freshStack. With
+// found, the folder dir/found stands in for one mounted at /backups-copy.
+async function startStack(bin, dir, port, { found = false } = {}) {
   const dockerDir = join(dir, "docker");
   // Backups go to the first root; the backups journey chooses the second
   // for second copies.
   const backups = join(dir, "backups") + ":" + join(dir, "copies");
-  const fake = start(join(bin, "fakedocker"), ["-dir", dockerDir, "-backups", backups], {}, "fakedocker");
+  const mounted = found ? backups + ":" + join(dir, "found") : backups;
+  const fake = start(join(bin, "fakedocker"), ["-dir", dockerDir, "-backups", mounted], {}, "fakedocker");
   const socket = join(dockerDir, "docker.sock");
   await waitFor(() => existsSync(socket), "the fake Docker socket");
 
@@ -64,6 +66,7 @@ async function startStack(bin, dir, port) {
     LUDOCK_SELF_CONTAINER: "ludock-dev",
     LUDOCK_BACKUP_ROOTS: backups,
     LUDOCK_HELPER_IMAGE: "ghcr.io/crunging/ludock@sha256:" + "ab".repeat(32),
+    ...(found ? { LUDOCK_DEV_COPY_ROOT: join(dir, "found") } : {}),
   }, "ludock", join(dir, "ludock.log"));
   await waitFor(async () => (await fetch(`${baseURL}/api/v1/health`)).ok, "Ludock's health check");
 
@@ -93,9 +96,9 @@ async function stopStack(stack) {
  * Starts a stack that no other journey has used, on a port of its own, and
  * returns its env and a function that stops it and removes its data.
  */
-export async function freshStack(index) {
+export async function freshStack(index, options) {
   const dir = mkdtempSync(join(tmpdir(), "ludock-e2e-fresh-"));
-  const stack = await startStack(process.env.LUDOCK_E2E_BIN, dir, port + 50 + index);
+  const stack = await startStack(process.env.LUDOCK_E2E_BIN, dir, port + 50 + index, options);
   return { env: stack.env, stop: async () => {
     await stopStack(stack);
     if (!process.env.LUDOCK_E2E_KEEP) rmSync(dir, { recursive: true, force: true });

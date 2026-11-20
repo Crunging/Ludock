@@ -375,6 +375,48 @@ func TestCopyRootApprovedWhenMounted(t *testing.T) {
 	}
 }
 
+// A found copy folder starts second copies when no choice was made, but a
+// choice saved while the folder was being checked wins, and an
+// administrator's choice of none sticks.
+func TestFoundCopyFolderStartsCopies(t *testing.T) {
+	f := newCopyFixture(t)
+	f.s.DB.Exec(`UPDATE settings SET value_json=json_remove(value_json,'$.copyTo') WHERE key='backups'`)
+	f.s.Storage.DevCopyRoot = f.other
+	backup := f.add(t, "world data", 1)
+	stale, _, _ := f.s.SavedSettings(ctx)
+	chosen := Settings{Destination: f.main, CopyChosen: true}
+	if err := f.s.DB.SetSetting(ctx, nil, settingsKey, chosen); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.startCopies(ctx, *stale); err != nil {
+		t.Fatal(err)
+	}
+	if saved, _, _ := f.s.SavedSettings(ctx); *saved != chosen {
+		t.Fatal("overrode a choice saved meanwhile:", saved)
+	}
+	if err := f.s.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if saved, _, _ := f.s.SavedSettings(ctx); saved.CopyTo != "" {
+		t.Fatal("overrode a choice of no second copy:", saved)
+	}
+	if err := f.s.DB.SetSetting(ctx, nil, settingsKey, *stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if saved, _, _ := f.s.SavedSettings(ctx); saved.CopyTo != f.other || saved.CopyChosen {
+		t.Fatal("didn't start copies to the found folder:", saved)
+	}
+	if state, _, _, _ := f.row(t, backup.ID); state != "pending" {
+		t.Fatal("existing backup not queued for a copy:", state)
+	}
+	if status := f.s.Status(ctx); !status.CopyFound || status.CopyTo != f.other {
+		t.Fatalf("%+v", status)
+	}
+}
+
 // The second copy is turned off and on while an attempt that will fail is
 // running: the new request starts over, so the old attempt neither records
 // its failure on it nor reports it.

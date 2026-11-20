@@ -700,7 +700,6 @@ templ ActivityPanel(a ActivityView) {
 		<h2 id="recent-operations-title" tabindex="-1">Recent activity</h2>
 		<div class="inline-actions">
 			<a class="text-link" href={ templ.SafeURL("/activity?serverId=" + a.ServerID) }>Search all activity</a>
-			<button class="secondary-btn" type="button" hx-get={ "/fragments/servers/" + a.ServerID + "/activity" } hx-include=".activity-filters" hx-target="#activity-list" hx-swap="outerMorph" hx-sync="#activity-list:queue last" data-busy-label="Refreshing…">Refresh</button>
 		</div>
 	</div>
 	<form class="activity-filters stack-form" role="group" aria-label="Filter recent activity" method="get" action={ templ.SafeURL("/servers/" + a.ServerID) } hx-get={ "/fragments/servers/" + a.ServerID + "/activity" } hx-trigger="change" hx-target="#activity-list" hx-swap="outerMorph" hx-sync="#activity-list:queue last">

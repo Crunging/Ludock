@@ -176,6 +176,7 @@ test("turning image update checks off", async ({ page }) => {
 
   const save = async (on) => {
     await page.goto("/settings");
+    await page.locator("#advanced-settings > summary").click();
     const form = page.locator("#image-update-settings-form");
     await form.getByLabel("Check for newer server images").setChecked(on);
     await form.getByRole("button", { name: "Save image update settings" }).click();
@@ -208,13 +209,16 @@ test("finding a newer Ludock", async ({ page }) => {
   const checkLudock = async (text) => {
     await expect(async () => {
       await page.goto("/settings");
+      await page.locator("#advanced-settings > summary").click();
       await check.getByRole("button", { name: "Check now" }).click({ timeout: 2_000 });
       await expect(check).toContainText(text, { timeout: 2_000 });
     }).toPass({ timeout: 45_000, intervals: [1_000, 3_000] });
   };
   await page.goto("/settings");
-  await expect(page.locator("#image-update-settings-form")).toBeVisible();
+  await expect(page.locator("#image-update-settings-form")).toBeAttached();
   await expect(check).toBeEmpty();
+  const notice = page.locator("#ludock-notice");
+  await expect(notice).toBeEmpty();
 
   const hook = await webhook(page);
   await fake("/fake/recreate", { container: "ludock-dev", image: tagged });
@@ -223,7 +227,9 @@ test("finding a newer Ludock", async ({ page }) => {
     await expect(check.locator(".alert")).toHaveCount(0);
     await fake("/fake/registry", { image: tagged, id: "sha256:" + "5".repeat(64) });
     await checkLudock("A newer Ludock is available.");
-    await expect(check.locator("pre")).toHaveText("docker compose pull ludock\ndocker compose up -d ludock");
+    // The everyday tab leads with how to update it.
+    await expect(notice.locator("pre")).toHaveText("docker compose pull ludock\ndocker compose up -d ludock");
+    await expect(notice).toBeVisible();
     await expect(check).toContainText("Last checked");
     await expect(check.getByRole("button")).toHaveText(["Check now"]);
     await expect.poll(() => hook.ludockAlerts().length, { timeout: 30_000 }).toBe(1);
@@ -235,6 +241,7 @@ test("finding a newer Ludock", async ({ page }) => {
     await form.getByRole("button", { name: "Save image update settings" }).click();
     await expect(form.locator(".alert--success")).toHaveText("Image update checks turned off.");
     await expect(check).toBeEmpty();
+    await expect(notice).toBeEmpty();
     await form.getByLabel("Check for newer server images").check();
     await form.getByRole("button", { name: "Save image update settings" }).click();
     await expect(form.locator(".alert--success")).toHaveText("Image update checks turned on.");

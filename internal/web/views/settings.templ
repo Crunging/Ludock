@@ -102,54 +102,59 @@ type NotificationDestinationView struct {
 	TestError, TestNotice string
 }
 
+// advancedOpen opens Advanced when something there needs the administrator.
+func (s SettingsView) advancedOpen() bool {
+	return s.Advanced.Proxies.Forwarded != "" || s.Backups.Error != "" || (!s.Backups.Configured && len(s.Backups.Roots) > 0)
+}
+
 templ SettingsPage(page Page, s SettingsView) {
 	@Shell(page) {
 		<div class="page settings-page">
 			<div class="page__header">
 				<h1 class="page__title">Settings</h1>
-				<p class="page__subtitle">Server controls work without any setup. Changes here take effect when saved.</p>
 			</div>
 			@settingsTabs("/settings")
-			<nav class="settings-jump-links" aria-label="Settings sections">
-				<a class="text-link" href="#connection-settings-title">Server address</a>
-				<a class="text-link" href="#backup-settings-title">Backup storage</a>
-				<a class="text-link" href="#image-update-settings-title">Image updates</a>
-				<a class="text-link" href="#notification-settings-title">Notifications</a>
-				<a class="text-link" href="#advanced-settings-title">Advanced</a>
-			</nav>
+			@LudockNotice(s.Ludock)
 			<section class="settings-section settings-section--divided" aria-labelledby="connection-settings-title">
 				<h2 id="connection-settings-title" tabindex="-1">Server address</h2>
 				@ConnectionForm(s.Connection)
 			</section>
-			<section class="settings-section settings-section--divided" aria-labelledby="backup-settings-title">
-				<h2 id="backup-settings-title" tabindex="-1">Backup storage</h2>
-				@BackupSettingsForm(s.Backups)
-			</section>
-			<section class="settings-section settings-section--divided" aria-labelledby="image-update-settings-title">
-				<h2 id="image-update-settings-title" tabindex="-1">Image updates</h2>
-				@ImageUpdateSettingsForm(s.ImageUpdates)
-				@LudockCheck(s.Ludock)
-			</section>
 			<section class="settings-section settings-section--divided" aria-labelledby="notification-settings-title">
 				<h2 id="notification-settings-title" tabindex="-1">Notifications</h2>
-				<p class="section-lede">Receive outage, full disk, and memory alerts and their recoveries, backup or schedule failures, and restore and update results. Turn on as many destinations as you like; each can choose its alert types, and notices of newer server images are off until chosen. Every server is monitored unless you turn it off on its Overview.</p>
+				<p class="section-lede">Get alerts when a server goes down, runs short of space, or a backup fails. Turn on as many destinations as you like.</p>
 				<div class="notification-destinations">
 					for _, n := range s.Notifications {
 						@NotificationDestination(n)
 					}
 				</div>
-				<div id="notification-deliveries" hx-get="/fragments/settings/deliveries" hx-trigger="load, notifications-changed from:document" hx-swap="innerHTML">
-					<p class="muted" role="status">Loading notification deliveries…</p>
-				</div>
+			</section>
+			<section class="settings-section settings-section--divided" aria-labelledby="backup-settings-title">
+				<h2 id="backup-settings-title" tabindex="-1">Backups</h2>
+				@BackupSummary(s.Backups)
 			</section>
 			<section class="settings-section settings-section--divided" aria-labelledby="advanced-settings-title">
-				<h2 id="advanced-settings-title" tabindex="-1">Advanced</h2>
-				<details class="disclosure" id="advanced-settings" open?={ s.Advanced.Proxies.Forwarded != "" }>
-					<summary>Upload size limit, verbose logging, and reverse proxy</summary>
+				<details class="disclosure settings-advanced" id="advanced-settings" open?={ s.advancedOpen() }>
+					<summary><h2 id="advanced-settings-title">Advanced</h2></summary>
+					<p class="muted">Image checks, backup folder and limits, a second copy, uploads, logging, reverse proxy, and notification history.</p>
 					<div class="advanced-settings">
+						<section class="settings-group" aria-labelledby="image-update-settings-title">
+							<h3 id="image-update-settings-title" tabindex="-1">Image updates</h3>
+							@ImageUpdateSettingsForm(s.ImageUpdates)
+							@LudockCheck(s.Ludock)
+						</section>
+						<section class="settings-group" aria-labelledby="backup-storage-settings-title">
+							<h3 id="backup-storage-settings-title" tabindex="-1">Backup folder and limits</h3>
+							@BackupSettingsForm(s.Backups)
+						</section>
 						@UploadLimitForm(s.Advanced.Upload)
 						@LoggingForm(s.Advanced.Logging)
 						@ProxyForm(s.Advanced.Proxies)
+						<section class="settings-group" aria-labelledby="notification-deliveries-title">
+							<h3 id="notification-deliveries-title" tabindex="-1">Recent deliveries</h3>
+							<div id="notification-deliveries" hx-get="/fragments/settings/deliveries" hx-trigger="load, notifications-changed from:document" hx-swap="innerHTML">
+								<p class="muted" role="status">Loading notification deliveries…</p>
+							</div>
+						</section>
 					</div>
 				</details>
 			</section>
@@ -158,7 +163,7 @@ templ SettingsPage(page Page, s SettingsView) {
 }
 
 templ fixedByDeployment(variable string) {
-	<p class="muted">Ludock’s deployment sets this with <code>{ variable }</code>, which wins over the panel. Remove it from Ludock’s Compose file to change it here.</p>
+	<p class="muted">Set by <code>{ variable }</code> in Ludock’s Compose file, which wins over this page.</p>
 }
 
 templ settingFeedback(errorText, notice string) {
@@ -171,9 +176,8 @@ templ settingFeedback(errorText, notice string) {
 }
 
 templ UploadLimitForm(u UploadLimitSettings) {
-	<form class="stack-form" id="upload-limit-form" hx-post="/settings/upload-limit" hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form settings-group" id="upload-limit-form" hx-post="/settings/upload-limit" hx-target="this" hx-swap="outerHTML">
 		<h3>Upload size limit</h3>
-		<p class="muted">Without a limit, any file that leaves the server’s disk 1 GiB to spare can be uploaded (a twentieth of the disk when it is smaller than 20 GiB).</p>
 		if u.Fixed {
 			<p>Each uploaded file can be up to <strong>{ u.Limit }</strong>.</p>
 			@fixedByDeployment("LUDOCK_MAX_UPLOAD_SIZE")
@@ -183,7 +187,7 @@ templ UploadLimitForm(u UploadLimitSettings) {
 					Largest file
 					<input name="limit" value={ u.Limit } placeholder="No limit" maxlength="32" autocomplete="off" spellcheck="false" aria-describedby="upload-limit-help"/>
 				</label>
-				<p class="muted" id="upload-limit-help">For example 500 MB or 4 GiB. Leave it empty for no limit.</p>
+				<p class="muted" id="upload-limit-help">For example 500 MB or 4 GiB. Empty allows any file that leaves the server’s disk room to spare.</p>
 			</div>
 			@settingFeedback(u.Error, u.Notice)
 			<button class="primary-btn" type="submit" data-busy-label="Saving…">Save upload limit</button>
@@ -192,17 +196,17 @@ templ UploadLimitForm(u UploadLimitSettings) {
 }
 
 templ LoggingForm(l LoggingSettings) {
-	<form class="stack-form" id="logging-form" hx-post="/settings/logging" hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form settings-group" id="logging-form" hx-post="/settings/logging" hx-target="this" hx-swap="outerHTML">
 		<h3>Verbose logging</h3>
-		<p class="muted">Adds detail to Ludock’s log to help with a bug report. It turns itself off after 24 hours. To read the log, run <code>docker compose logs ludock</code> in the folder with Ludock’s compose.yaml.</p>
 		if l.Fixed {
 			<p>Ludock logs at the <strong>{ l.Level }</strong> level.</p>
 			@fixedByDeployment("LUDOCK_LOG_LEVEL")
 		} else {
 			<label class="check-label">
-				<input type="checkbox" name="verbose" value="true" checked?={ l.Verbose }/>
+				<input type="checkbox" name="verbose" value="true" checked?={ l.Verbose } aria-describedby="logging-help"/>
 				Log extra detail
 			</label>
+			<p class="muted check-help" id="logging-help">For a bug report; it turns itself off after 24 hours. Read it with <code>docker compose logs ludock</code>.</p>
 			if l.Verbose && l.Notice == "" {
 				<p class="muted">On until @Time(l.Until, "", "")</p>
 			}
@@ -213,9 +217,8 @@ templ LoggingForm(l LoggingSettings) {
 }
 
 templ ProxyForm(p ProxySettings) {
-	<form class="stack-form" id="proxy-form" hx-post="/settings/proxies" hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form settings-group" id="proxy-form" hx-post="/settings/proxies" hx-target="this" hx-swap="outerHTML">
 		<h3>Reverse proxy</h3>
-		<p class="muted">Behind Traefik, Caddy, Nginx Proxy Manager, or another proxy, trust the proxy’s address so sign-in limits and the audit log see each visitor’s own address. A trusted address can claim to be any visitor, so trust only your own proxy.</p>
 		if p.Fixed {
 			if p.Trusted == "" {
 				<p>Ludock trusts no proxy.</p>
@@ -237,7 +240,7 @@ templ ProxyForm(p ProxySettings) {
 					Trusted proxy addresses
 					<input name="trusted" value={ p.Trusted } placeholder="None" maxlength="2048" autocapitalize="none" autocomplete="off" spellcheck="false" aria-describedby="proxy-help"/>
 				</label>
-				<p class="muted" id="proxy-help">IP addresses or ranges separated by commas, such as 172.18.0.2 or 172.18.0.0/16. Leave it empty to trust none.</p>
+				<p class="muted" id="proxy-help">Only your own proxy, such as 172.18.0.2 or 172.18.0.0/16, so sign-in limits see each visitor’s address.</p>
 			</div>
 			@settingFeedback(p.Error, p.Notice)
 			<button class="primary-btn" type="submit" data-busy-label="Saving…">Save proxies</button>
@@ -247,14 +250,12 @@ templ ProxyForm(p ProxySettings) {
 
 templ ConnectionForm(c ConnectionSettings) {
 	<form class="stack-form" id="connection-form" hx-post="/settings/connection" hx-target="this" hx-swap="outerHTML">
-		<p class="section-lede">The name or IP address players use to reach this host. Ludock adds each server’s port and shows the result with a copy button.</p>
+		<p class="section-lede">The name or IP address players use to reach this host. Ludock adds each server’s port.</p>
 		<label class="narrow-field">
 			Public address
 			<input name="host" value={ c.Host } placeholder={ c.PageHost } maxlength="253" autocapitalize="none" autocomplete="off" spellcheck="false" aria-describedby="connection-host-help"/>
 		</label>
-		<p class="muted" id="connection-host-help">
-			For example, play.example.com or 203.0.113.10. Leave it empty to use the address you opened Ludock with ({ c.PageHost }). To give one server its own address, add a <code>ludock.address</code> label to it.
-		</p>
+		<p class="muted" id="connection-host-help">For example, play.example.com. Leave it empty to use the address you opened Ludock with ({ c.PageHost }).</p>
 		if c.Error != "" {
 			@Alert("error", c.Error)
 		}
@@ -267,11 +268,11 @@ templ ConnectionForm(c ConnectionSettings) {
 
 templ ImageUpdateSettingsForm(u ImageUpdateSettings) {
 	<form class="stack-form" id="image-update-settings-form" hx-post="/settings/image-updates" hx-target="this" hx-swap="outerHTML">
-		<p class="section-lede">A few times a day, Ludock asks each server’s registry, through Docker, whether its image tag points to a newer image, without pulling it. Administrators see the result on the server list and the server’s Update tab, and notifications announce each new version once. Nothing updates automatically.</p>
 		<label class="check-label">
-			<input type="checkbox" name="enabled" value="true" checked?={ u.Enabled }/>
+			<input type="checkbox" name="enabled" value="true" checked?={ u.Enabled } aria-describedby="image-update-help"/>
 			Check for newer server images
 		</label>
+		<p class="muted check-help" id="image-update-help">A few times a day, without downloading or installing anything.</p>
 		if u.Error != "" {
 			@Alert("error", u.Error)
 		}
@@ -289,6 +290,31 @@ templ ImageUpdateSettingsSaved(u ImageUpdateSettings, ludock *update.CheckStatus
 	@Partial("#ludock-check", "outerHTML") {
 		@LudockCheck(ludock)
 	}
+	@Partial("#ludock-notice", "outerHTML") {
+		@LudockNotice(ludock)
+	}
+}
+
+// LudockCheckSaved is a fresh Ludock check and the notice above Settings.
+templ LudockCheckSaved(check *update.CheckStatus) {
+	@LudockCheck(check)
+	@Partial("#ludock-notice", "outerHTML") {
+		@LudockNotice(check)
+	}
+}
+
+// LudockNotice tops Settings while a newer Ludock is available.
+templ LudockNotice(check *update.CheckStatus) {
+	<div id="ludock-notice">
+		if check != nil && check.State == update.CheckAvailable {
+			<div class="alert alert--info" role="status">
+				<div>
+					<p><strong>A newer Ludock is available.</strong> Ludock doesn’t update itself. Where you started it, in the folder with its compose.yaml, run:</p>
+					<pre><code>docker compose pull ludock{ "\n" }docker compose up -d ludock</code></pre>
+				</div>
+			</div>
+		}
+	</div>
 }
 
 // LudockCheck shows whether Ludock's own image tag points to a newer image.
@@ -296,23 +322,19 @@ templ ImageUpdateSettingsSaved(u ImageUpdateSettings, ludock *update.CheckStatus
 templ LudockCheck(check *update.CheckStatus) {
 	<div class="image-check ludock-check" id="ludock-check">
 		if check != nil && check.State != update.CheckUnknown && check.State != update.CheckPlatform {
-			<h3>Ludock itself</h3>
-			switch check.State {
-				case update.CheckAvailable:
-					<div class="alert alert--info" role="status">
-						<div>
-							<p><strong>A newer Ludock is available.</strong> Ludock doesn’t update itself. Where you started it, in the folder with its compose.yaml, run:</p>
-							<pre><code>docker compose pull ludock{ "\n" }docker compose up -d ludock</code></pre>
-						</div>
-					</div>
-				case update.CheckCurrent:
-					<p class="muted">Ludock runs the newest image its tag points to.</p>
-				default:
-					<p class="muted">Ludock hasn’t checked the registry for a newer version of itself yet.</p>
-			}
-			if check.CheckedAt != 0 {
-				<p class="muted">Last checked @Time(check.CheckedAt, "plain", "")</p>
-			}
+			<p class="muted">
+				switch check.State {
+					case update.CheckAvailable:
+						<strong>A newer Ludock is available.</strong>
+					case update.CheckCurrent:
+						Ludock runs the newest image its tag points to.
+					default:
+						Ludock hasn’t checked for a newer version of itself yet.
+				}
+				if check.CheckedAt != 0 {
+					Last checked @Time(check.CheckedAt, "plain", "")
+				}
+			</p>
 			if check.Failed {
 				<p class="muted">
 					if check.ConfigProblem {
@@ -330,10 +352,12 @@ templ LudockCheck(check *update.CheckStatus) {
 	</div>
 }
 
-templ BackupSettingsForm(b BackupSettingsView) {
-	<form class="stack-form" id="backup-settings-form" hx-post="/settings/backups" hx-target="this" hx-swap="outerHTML">
+// BackupSummary is where backups go and how much they use, or what turns
+// them on.
+templ BackupSummary(b BackupSettingsView) {
+	<div id="backup-summary">
 		if b.Configured {
-			<section class="backup-storage" aria-labelledby="backup-storage-summary-title" id="backup-storage" hx-get="/fragments/settings/backup-storage" hx-trigger="load" hx-swap="outerHTML">
+			<section class="backup-storage" aria-label="Backup storage" id="backup-storage" hx-get="/fragments/settings/backup-storage" hx-trigger="load" hx-swap="outerHTML">
 				<p class="muted" role="status">Checking backup storage…</p>
 			</section>
 		} else if len(b.Roots) == 0 {
@@ -341,90 +365,90 @@ templ BackupSettingsForm(b BackupSettingsView) {
 				<h3>Mount a backup folder first</h3>
 				<ol>
 					<li>Create a separate backup folder on the Docker host and mount it writable into Ludock, for example <code>/srv/ludock-backups:/backups</code>.</li>
-					<li>In Ludock’s Compose file, remove the empty <code>LUDOCK_BACKUP_ROOTS</code> setting or set it to <code>/backups</code>, then run <code>docker compose up -d</code> from its folder to apply the mount and setting.</li>
-					<li>Enter that mounted path below and save. You can then create a backup from a server’s Backups tab.</li>
+					<li>In Ludock’s Compose file, remove the empty <code>LUDOCK_BACKUP_ROOTS</code> setting, then run <code>docker compose up -d</code> from its folder.</li>
+					<li>Ludock turns backups on by itself once it finds the folder.</li>
 				</ol>
 			</div>
 		} else {
-			<p>Backups are off. Choose a backup folder below and save to turn them on.</p>
+			<p>Backups are off. Choose a backup folder under <a class="text-link" href="#backup-storage-settings-title">Advanced</a> and save to turn them on.</p>
 		}
-		<p class="muted">Backups run when you start one or a schedule does, and each one stops its server while it copies. Ludock keeps a spread of recent and older backups for each server and removes the rest; each server’s Backups tab says which.</p>
-		<details class="disclosure" id="backup-advanced" open?={ !b.Configured || b.Error != "" }>
-			<summary>Advanced</summary>
-			<div class="stack-form">
-				if len(b.Roots) > 1 {
-					<div class="admin-root-options">
-						for _, root := range b.Roots {
-							<button type="button" class="secondary-btn" data-fill="backup-destination" data-fill-value={ root }>Use <code>{ root }</code></button>
-						}
-					</div>
+	</div>
+}
+
+templ BackupSettingsForm(b BackupSettingsView) {
+	<form class="stack-form" id="backup-settings-form" hx-post="/settings/backups" hx-target="this" hx-swap="outerHTML">
+		if len(b.Roots) > 1 {
+			<div class="admin-root-options">
+				for _, root := range b.Roots {
+					<button type="button" class="secondary-btn" data-fill="backup-destination" data-fill-value={ root }>Use <code>{ root }</code></button>
 				}
-				<div>
-					<label>
-						Backup folder
-						<input id="backup-destination" name="destination" value={ b.Destination } placeholder="/backups" autocapitalize="none" spellcheck="false" aria-describedby="backup-destination-help" required/>
-					</label>
-					<p class="muted" id="backup-destination-help">A folder mounted into Ludock and listed in <code>LUDOCK_BACKUP_ROOTS</code>, separate from game data.</p>
-				</div>
-				<div class="form-columns">
-					<div>
-						<label>
-							Minimum free space (GiB)
-							<input type="number" name="reserveGiB" min="0" step="any" inputmode="decimal" value={ b.ReserveGiB } aria-describedby="backup-reserve-help" required/>
-						</label>
-						<p class="muted" id="backup-reserve-help">Backups and restores never fill the backup disk or a game-data disk past this, leaving room for temporary files. Use 0 for none.</p>
-					</div>
-					<div>
-						<label>
-							Total limit for all backups (GiB)
-							<input type="number" name="maxGiB" min="0.000000001" step="any" inputmode="decimal" value={ b.MaxGiB } placeholder="No limit" aria-describedby="backup-limit-help"/>
-						</label>
-						<p class="muted" id="backup-limit-help">Optional. Leave empty to let backups use the disk down to the free-space minimum.</p>
-					</div>
-				</div>
-				if roots := b.copyRoots(); len(roots) > 0 {
-					<div>
-						<label>
-							Also copy backups to
-							<select name="copyTo" aria-describedby="backup-copy-help">
-								<option value="" selected?={ b.CopyTo == "" }>No second copy</option>
-								for _, root := range roots {
-									<option value={ root } selected?={ root == b.CopyTo }>{ root }</option>
-								}
-							</select>
-						</label>
-						<p class="muted" id="backup-copy-help">Each backup is copied there after its server is back, so a lost backup disk doesn’t take every backup with it. Choose a folder on another disk or a NAS.</p>
-					</div>
-				} else {
-					<p class="muted" id="backup-copy-help">To keep a second copy of every backup on another disk, mount a folder from that disk at <code>/backups-copy</code> in Ludock’s Compose file, for example <code>/mnt/nas/ludock:/backups-copy</code>, recreate Ludock, and choose it here.</p>
-				}
-				<button class="primary-btn" type="submit" data-busy-label="Saving backup settings…">Save backup settings</button>
 			</div>
-		</details>
+		}
+		<div>
+			<label>
+				Backup folder
+				<input id="backup-destination" name="destination" value={ b.Destination } placeholder="/backups" autocapitalize="none" spellcheck="false" aria-describedby="backup-destination-help" required/>
+			</label>
+			<p class="muted" id="backup-destination-help">A folder mounted into Ludock and listed in <code>LUDOCK_BACKUP_ROOTS</code>, separate from game data.</p>
+		</div>
+		<div class="form-columns">
+			<div>
+				<label>
+					Minimum free space (GiB)
+					<input type="number" name="reserveGiB" min="0" step="any" inputmode="decimal" value={ b.ReserveGiB } aria-describedby="backup-reserve-help" required/>
+				</label>
+				<p class="muted" id="backup-reserve-help">Backups and restores leave this much free on each disk; 0 for none.</p>
+			</div>
+			<div>
+				<label>
+					Total limit for all backups (GiB)
+					<input type="number" name="maxGiB" min="0.000000001" step="any" inputmode="decimal" value={ b.MaxGiB } placeholder="No limit" aria-describedby="backup-limit-help"/>
+				</label>
+				<p class="muted" id="backup-limit-help">Empty for no limit but the free space.</p>
+			</div>
+		</div>
+		if roots := b.copyRoots(); len(roots) > 0 {
+			<div>
+				<label>
+					Also copy backups to
+					<select name="copyTo" aria-describedby="backup-copy-help">
+						<option value="" selected?={ b.CopyTo == "" }>No second copy</option>
+						for _, root := range roots {
+							<option value={ root } selected?={ root == b.CopyTo }>{ root }</option>
+						}
+					</select>
+				</label>
+				<p class="muted" id="backup-copy-help">A folder on another disk or a NAS, so losing one disk doesn’t lose every backup.</p>
+			</div>
+		} else {
+			<p class="muted" id="backup-copy-help">For a second copy of every backup, mount a folder from another disk at <code>/backups-copy</code> in Ludock’s Compose file. Ludock starts copying to it by itself.</p>
+		}
 		if b.Error != "" {
 			@Alert("error", b.Error)
 		}
 		if b.Saved {
-			<div class="alert alert--success admin-settings-feedback" role="status">
-				<div>
-					<p>Backup settings saved.</p>
-					<a class="text-link" href="/">Choose a server and open Backups to create a backup.</a>
-				</div>
-			</div>
+			@Alert("success", "Backup settings saved.")
 		}
+		<button class="primary-btn" type="submit" data-busy-label="Saving backup settings…">Save backup settings</button>
 	</form>
 }
 
+// BackupSettingsSaved is the saved form and a fresh summary.
+templ BackupSettingsSaved(b BackupSettingsView) {
+	@BackupSettingsForm(b)
+	@Partial("#backup-summary", "outerHTML") {
+		@BackupSummary(b)
+	}
+}
+
 templ BackupStorage(status backups.StorageStatus) {
-	<section class="backup-storage" aria-labelledby="backup-storage-summary-title" id="backup-storage">
-		<div class="backup-storage__header">
-			<h3 id="backup-storage-summary-title">Current storage</h3>
-			<button type="button" class="secondary-btn" hx-get="/fragments/settings/backup-storage" hx-target="#backup-storage" hx-swap="outerHTML" data-busy-label="Checking…">Refresh</button>
-		</div>
+	<section class="backup-storage" aria-label="Backup storage" id="backup-storage">
 		<dl class="backup-storage__values">
 			<div class="backup-storage__folder"><dt>Saved in</dt><dd><code>{ status.Destination }</code></dd></div>
 			<div><dt>Backups use</dt><dd>{ FormatBytes(status.ArchiveBytes) }</dd></div>
-			<div><dt>Kept backups</dt><dd>{ FormatBytes(status.KeptBytes) }</dd></div>
+			if status.KeptBytes > 0 {
+				<div><dt>Kept backups</dt><dd>{ FormatBytes(status.KeptBytes) }</dd></div>
+			}
 			<div>
 				<dt>Free on disk</dt>
 				<dd>
@@ -439,10 +463,18 @@ templ BackupStorage(status backups.StorageStatus) {
 				<div><dt>Total limit</dt><dd>{ FormatBytes(status.MaxBytes) }</dd></div>
 			}
 			if status.CopyTo != "" {
-				<div class="backup-storage__folder"><dt>Second copy in</dt><dd><code>{ status.CopyTo }</code></dd></div>
-				if status.CopyAvailableBytes >= 0 {
-					<div><dt>Free there</dt><dd>{ FormatBytes(status.CopyAvailableBytes) }</dd></div>
-				}
+				<div class="backup-storage__folder">
+					<dt>Second copy in</dt>
+					<dd>
+						<code>{ status.CopyTo }</code>
+						if status.CopyAvailableBytes >= 0 {
+							<span class="muted">({ FormatBytes(status.CopyAvailableBytes) } free)</span>
+						}
+						if status.CopyFound {
+							<small class="backup-storage__found">Ludock found this folder mounted, so it copies every backup there. Change that under <a class="text-link" href="#backup-storage-settings-title">Advanced</a>.</small>
+						}
+					</dd>
+				</div>
 			}
 			if status.Destination != "" {
 				<div class="backup-storage__folder" id="ludock-data-save">
@@ -790,13 +822,7 @@ templ Deliveries(d DeliveriesView) {
 		if d.Notice != "" {
 			@Alert("success", d.Notice)
 		}
-		<div class="section-heading notification-deliveries__heading">
-			<h3>Recent deliveries</h3>
-			<button type="button" class="secondary-btn" hx-get="/fragments/settings/deliveries" hx-target="#notification-deliveries" data-busy-label="Refreshing…">Refresh deliveries</button>
-		</div>
-		<p class="muted notification-deliveries__help" id="notification-deliveries-help">
-			The latest 50 notifications, one row for each destination. Pending deliveries refresh every five seconds; a destination that is turned off holds its deliveries until it is turned on again. Failed deliveries can be retried after fixing and saving the destination.
-		</p>
+		<p class="muted notification-deliveries__help" id="notification-deliveries-help">The latest 50 notifications. Retry a failed one after fixing its destination.</p>
 		<div class="table-scroll">
 			<table class="data-table notification-deliveries-table" aria-label="Recent notification deliveries" role="table">
 				<thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Notification</th><th scope="col" role="columnheader">Destination</th><th scope="col" role="columnheader">Delivery</th><th scope="col" role="columnheader">Action</th></tr></thead>

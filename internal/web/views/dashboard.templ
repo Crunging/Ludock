@@ -217,7 +217,6 @@ templ Dashboard(page Page, list ServerList) {
 					}
 					@fleet(list)
 				</div>
-				<button class="secondary-btn" type="button" hx-get="/fragments/servers" hx-include="#server-filters" hx-target="#servers" hx-swap="innerMorph" hx-sync="#servers:queue last" data-busy-label="Refreshing…">Refresh</button>
 			</div>
 			<div id="action-error" aria-live="polite"></div>
 			<div class="server-connection" role="status" data-live-status hidden>
@@ -226,12 +225,7 @@ templ Dashboard(page Page, list ServerList) {
 					<p class="muted">Showing the last known state. Ludock reconnects automatically.</p>
 				</div>
 			</div>
-			<div id="attention" hx-get="/fragments/attention" hx-trigger="load, server from:document delay:500ms, servers-changed from:document delay:500ms" hx-swap="innerHTML">
-				<section class="needs-attention" aria-labelledby="needs-attention-title" aria-busy="true">
-					<div class="needs-attention__heading"><h2 id="needs-attention-title">Needs attention</h2></div>
-					<p class="muted" aria-live="polite">Checking for issues…</p>
-				</section>
-			</div>
+			<div id="attention" hx-get="/fragments/attention" hx-trigger="load, server from:document delay:500ms, servers-changed from:document delay:500ms" hx-swap="innerHTML"></div>
 			if page.Admin {
 				<div id="checklist" hx-get="/fragments/checklist" hx-trigger="load, servers-changed from:document delay:500ms" hx-swap="innerHTML"></div>
 			}
@@ -291,10 +285,17 @@ templ fleet(list ServerList) {
 	</p>
 }
 
+// filterAt is the number of servers worth a search box and state filter;
+// fewer fit at a glance.
+const filterAt = 4
+
 // serverFilters narrows the list. Without scripts it submits to the page;
-// the page hides it while there is no list to filter.
+// it shows only for a list long enough to filter, or already filtered.
 templ serverFilters(list ServerList) {
-	<form class="list-toolbar" id="server-filters" role="search" aria-label="Filter servers" method="get" action="/" hx-get="/fragments/servers" hx-target="#servers" hx-swap="innerMorph" hx-sync="#servers:queue last" hx-trigger="submit, input changed delay:250ms target:input">
+	<form
+		hidden?={ list.Total < filterAt && list.Search == "" && (list.State == "" || list.State == "all") }
+		class="list-toolbar"
+		id="server-filters" role="search" aria-label="Filter servers" method="get" action="/" hx-get="/fragments/servers" hx-target="#servers" hx-swap="innerMorph" hx-sync="#servers:queue last" hx-trigger="submit, input changed delay:250ms target:input">
 		<label class="search-field">
 			<span class="sr-only">Find a server</span>
 			<input name="search" value={ list.Search } placeholder="Find a server…" type="search"/>
@@ -455,6 +456,8 @@ templ ServerCard(row ServerRow) {
 						<span class="muted">—</span>
 					} else if server.LatestBackup != nil {
 						@Time(server.LatestBackup.CreatedAt, "sentence", "")
+					} else if server.NoDataFolders {
+						<span class="muted">—<span class="sr-only">Can’t be backed up</span></span>
 					} else {
 						<span class="server-row__never">Never</span>
 					}
@@ -598,9 +601,15 @@ templ attentionDetail(item attention.Item) {
 	}
 }
 
+// NeedsAttention shows nothing while nothing needs attention.
 templ NeedsAttention(view AttentionView) {
-	{{ clear := len(view.Items) == 0 && !view.DiscoveryUnavailable && view.Error == "" }}
-	<section class={ "needs-attention", templ.KV("needs-attention--clear", clear) } aria-labelledby="needs-attention-title">
+	if len(view.Items) > 0 || view.DiscoveryUnavailable || view.Error != "" {
+		@needsAttention(view)
+	}
+}
+
+templ needsAttention(view AttentionView) {
+	<section class="needs-attention" aria-labelledby="needs-attention-title">
 		<div class="needs-attention__heading">
 			<h2 id="needs-attention-title">Needs attention</h2>
 			if len(view.Items) > 0 {
@@ -622,13 +631,7 @@ templ NeedsAttention(view AttentionView) {
 			</p>
 		}
 		if len(view.Items) == 0 && view.Error == "" {
-			<p class="muted">
-				if view.DiscoveryUnavailable {
-					Nothing in the last known state.
-				} else {
-					Nothing right now.
-				}
-			</p>
+			<p class="muted">Nothing in the last known state.</p>
 		}
 		if len(view.Items) > 0 {
 			<ul class="needs-attention__list" data-collapse-after="10">

@@ -44,12 +44,13 @@ func (f *fixture) staged() bool {
 	return false
 }
 
-// Restoring one file replaces only it, takes no safety backup, and returns
-// the server to running; a failed swap puts the current copy back.
+// Restoring one file needs no typed name, replaces only it, takes no safety
+// backup unless asked, and returns the server to running; a failed swap
+// puts the current copy back.
 func TestRestoreItem(t *testing.T) {
 	f := setup(t)
 	backupID, rootID := f.itemBackup(t)
-	input := map[string]any{"backupId": backupID, "confirmation": "mc", "root": rootID, "item": "world/level.dat"}
+	input := map[string]any{"backupId": backupID, "root": rootID, "item": "world/level.dat"}
 	f.mu.Lock()
 	f.failStep = "moveNew"
 	f.mu.Unlock()
@@ -69,6 +70,17 @@ func TestRestoreItem(t *testing.T) {
 	}
 	if list, _ := f.jobs.Backups.List(ctx, f.serverID); len(list) != 1 {
 		t.Fatal("took a safety backup of everything:", len(list))
+	}
+	os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("newest"), 0o644)
+	input["createBackup"] = true
+	backedUp := f.run(t, "restore", input)
+	if backedUp.Status != ops.Succeeded || backedUp.Result["safetyBackupId"] == nil || backedUp.Result["restoredItem"] != "world/level.dat" ||
+		f.staged() || !f.running() || read(t, filepath.Join(f.data, "world", "level.dat")) != "original" {
+		t.Fatalf("%+v", backedUp)
+	}
+	safety, err := f.jobs.Backups.Get(ctx, f.serverID, backedUp.Result["safetyBackupId"].(string))
+	if err != nil || safety.Reason != "restore" || safety.State != "complete" {
+		t.Fatal(safety, err)
 	}
 }
 
