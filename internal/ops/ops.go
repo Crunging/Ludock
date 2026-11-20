@@ -442,6 +442,9 @@ func (r *Runner) persist(ctx context.Context, what string, write func() error) b
 		if err == nil {
 			return true
 		}
+		if ctx.Err() != nil {
+			return false
+		}
 		log.Warn("Could not save an operation's state; retrying", logging.F("step", what), logging.F("error", err.Error()))
 		select {
 		case <-time.After(delay):
@@ -606,6 +609,9 @@ func (r *Runner) fill(ctx context.Context) {
 	}
 	r.mu.Unlock()
 	rows, err := r.DB.QueryContext(ctx, "SELECT "+columns+" FROM operations WHERE status='queued' ORDER BY created_at,id")
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		r.retryFill()
 		return
@@ -682,7 +688,8 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 		if docker.Unavailable(err) {
 			message = "Ludock couldn’t reach Docker, so this stopped. Check the server before trying again."
 		}
-		if _, public := apperr.As(err); !public {
+		// Work stopped by shutdown is reconciled on the next start, not failed.
+		if _, public := apperr.As(err); !public && ctx.Err() == nil {
 			log.Error("Operation failed unexpectedly", append([]logging.Field{logging.F("operation", rw.id), logging.F("kind", rw.kind)},
 				logging.Cause(err, docker.StatusCode(err))...)...)
 		}
