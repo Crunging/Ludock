@@ -78,8 +78,9 @@ type App struct {
 	polling    sync.Mutex
 	checking   sync.Mutex
 	measuring  sync.Mutex
-	// deliverAgain asks the running delivery pass for another.
+	// deliverAgain and pollAgain ask the running pass for another.
 	deliverAgain atomic.Bool
+	pollAgain    atomic.Bool
 	stop         chan struct{}
 }
 
@@ -190,7 +191,7 @@ func (a *App) Start(ctx context.Context) {
 		select {
 		case <-a.stop:
 		default:
-			a.pollPlayers(ctx, true)
+			a.pollPlayers(ctx)
 		}
 	}
 	// Requests wait for recovery to take its operations' locks; Start runs
@@ -279,9 +280,9 @@ func (a *App) Tick(ctx context.Context) {
 	a.copyBackups(ctx)
 	a.saveData(ctx)
 	// Player counts are shown only on pages that follow server changes, and a
-	// reading can start a console helper, so nobody watching means no reading
-	// except the status queries of monitored servers.
-	a.pollPlayers(ctx, a.Events.Watched())
+	// reading starts a helper, so a server no open page shows is read only
+	// for the status query of a monitored one.
+	a.pollPlayers(ctx)
 	a.deliver(ctx)
 }
 
@@ -308,11 +309,32 @@ func (a *App) saveData(ctx context.Context) {
 	})
 }
 
-// pollPlayers reads players beside other work, once at a time.
-func (a *App) pollPlayers(ctx context.Context, watched bool) {
-	a.runAlone(&a.polling, func() {
-		a.Players.Poll(ctx, watched)
-	})
+// pollPlayers reads players beside other work, once at a time. A call while
+// a pass runs makes it run once more, so a page opened meanwhile is read
+// without waiting for the next tick.
+func (a *App) pollPlayers(ctx context.Context) {
+	a.pollAgain.Store(true)
+	if !a.polling.TryLock() {
+		return
+	}
+	a.background.Add(1)
+	go func() {
+		defer a.background.Done()
+		for {
+			for a.pollAgain.Swap(false) {
+				var watched func(string) bool
+				if a.Events.Watched() {
+					watched = a.Events.Follows
+				}
+				a.Players.Poll(ctx, watched)
+			}
+			a.polling.Unlock()
+			// A call between the last pass and the unlock found the lock held.
+			if !a.pollAgain.Load() || !a.polling.TryLock() {
+				return
+			}
+		}
+	}()
 }
 
 // deliver sends due notifications beside other work. A call while a pass

@@ -403,11 +403,17 @@ again, and its entry in **Activity** says which.
 
 ### Players
 
-While someone has the server list or a server's page open, Ludock asks the
-game's console who is online about every 30 seconds; otherwise only monitored games with a status check are asked,
-about every 2 minutes. Games with a working status check but no player list,
-or no console password, still show how many are online. A count Ludock can't read shows as
-unavailable, never as empty. Readings stay in memory.
+While someone has the server list open, Ludock reads who is online on its
+servers about every 30 seconds, and while a server's page is open, on that
+server. It asks the game's console only when the
+game's status check can't say the list is unchanged, since games such as
+Minecraft log every console connection: once the console has listed the
+players, a status check that names the same players, or says nobody is
+online, stands in for it. While nobody has Ludock open, only monitored games
+with a status check are asked, about every 2 minutes, and only through the
+status check. Games with a working status check but no player list, or no
+console password, still show how many are online. A count Ludock can't read
+shows as unavailable, never as empty. Readings stay in memory.
 
 A kick or ban targets the player by the name or ID the game's latest list
 gave, and only when it is wholly in the game's own form, so it can't carry

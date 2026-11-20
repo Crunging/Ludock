@@ -439,6 +439,10 @@ func (e *Engine) control(w http.ResponseWriter, r *http.Request) {
 		e.mu.Unlock()
 		w.Write([]byte(requests))
 		return
+	case "/fake/rcon":
+		// Counts the connections the fake game consoles have taken.
+		fmt.Fprint(w, rconConnections.Load())
+		return
 	case "/fake/registry":
 		// Lets journeys publish a new version of a tag or break its registry:
 		// POST /fake/registry?image=REF&id=IMAGE-ID or &status=CODE.

@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -118,6 +119,29 @@ func TestRecordPrunesOldSamples(t *testing.T) {
 	}
 	if count(t, s) != 2 {
 		t.Fatal(count(t, s))
+	}
+}
+
+// Pruning runs every minute inside the write transaction, so it walks each
+// server's samples through the primary key instead of scanning them all.
+func TestPruneUsesThePrimaryKey(t *testing.T) {
+	s, _, _ := setup(t)
+	rows, err := s.DB.QueryContext(ctx, "EXPLAIN QUERY PLAN "+pruneSQL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if joined := strings.Join(plan, "; "); !strings.Contains(joined, "SEARCH resource_samples USING PRIMARY KEY (server_id=? AND at<?)") {
+		t.Fatal(joined)
 	}
 }
 

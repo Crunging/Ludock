@@ -47,7 +47,7 @@ func (p ServerPlayers) Online(ctx context.Context, user *db.SessionUser, serverI
 	if !p.Players.Source.Lists(server.Container) {
 		return Occupancy{}, nil
 	}
-	online, readAt, known := p.Players.OnlineAt(serverID, server.Container)
+	online, readAt, known := p.Players.ListedAt(serverID, server.Container)
 	return Occupancy{Online: online, Known: known, ReadAt: readAt}, nil
 }
 

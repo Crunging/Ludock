@@ -95,6 +95,11 @@ type sample struct {
 	cpu, memory, limit int64
 }
 
+// pruneSQL removes expired samples through the primary key, one server at a
+// time, instead of scanning every sample each minute; the foreign key keeps
+// every sample's server in logical_servers.
+const pruneSQL = "DELETE FROM resource_samples WHERE server_id IN (SELECT id FROM logical_servers) AND at < ?"
+
 // Record samples every running server once per minute and removes samples
 // older than the longest range. current is the discovery result of the same
 // tick, or nil when Docker is unreachable; then nothing is sampled and the
@@ -123,7 +128,7 @@ func (s *Service) Record(ctx context.Context, current map[string]servers.Contain
 				return err
 			}
 		}
-		_, err := tx.ExecContext(ctx, "DELETE FROM resource_samples WHERE at < ?", minute-retained())
+		_, err := tx.ExecContext(ctx, pruneSQL, minute-retained())
 		return err
 	}); err != nil {
 		return err

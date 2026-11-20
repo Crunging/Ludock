@@ -81,6 +81,14 @@ keeps their temporary data. That data goes in the system temporary folder,
 which needs more than 5 GiB free: backups keep that much in reserve and
 refuse to run otherwise. Point `TMPDIR` at a roomier disk if it is smaller.
 
+### Measuring
+
+Build with `-tags pprof` and set `LUDOCK_PPROF` to a loopback address such as
+`127.0.0.1:6060` to serve CPU and allocation profiles under `/debug/pprof/`
+and the number of SQL statements run so far at `/debug/queries`; release
+builds have neither. The fake daemon lists every Engine API request at
+`/fake/requests` and counts its game consoles' connections at `/fake/rcon`.
+
 ### Screenshots
 
 The README screenshots come from `fakedocker -demo`.

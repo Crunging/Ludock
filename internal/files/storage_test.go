@@ -110,6 +110,8 @@ func TestPreviewCapAndBinaryDetection(t *testing.T) {
 	if preview, _ := ReadPreview(strings.NewReader("\xff\xfe")); preview.Kind != PreviewBinary {
 		t.Fatal("invalid UTF-8 shown as text")
 	}
+	// A preview read to its end leaves its helper idle for the next request.
+	f.service.Close()
 	f.helpersLeft(t)
 }
 
@@ -176,6 +178,7 @@ func TestSaveRefusesChangedFile(t *testing.T) {
 	if _, err := os.Stat(name); !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
+	f.service.Close()
 	f.helpersLeft(t)
 }
 
@@ -257,6 +260,71 @@ func TestListReusesHelperUntilTargetChanges(t *testing.T) {
 		t.Fatal(helpers, "file helpers running")
 	}
 	f.service.Close()
+	f.helpersLeft(t)
+}
+
+// Browsing a folder, previewing its files, and downloading one share one
+// read-only helper and one mount proof. A download cut off partway may
+// still be running in its helper, so that helper is removed, as is one
+// from the game's previous run and one whose request was refused.
+func TestBrowsingSharesOneHelper(t *testing.T) {
+	f := setup(t)
+	creates := func() int {
+		count := 0
+		for _, request := range f.engine.Requests {
+			if strings.HasSuffix(request, "/containers/create") {
+				count++
+			}
+		}
+		return count
+	}
+	if _, err := f.service.List(ctx, f.target, f.root, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"server.properties", "level.dat", "server.properties"} {
+		if _, err := f.service.Preview(ctx, f.target, f.root, name, nil); err != nil {
+			t.Fatal(name, err)
+		}
+	}
+	download, err := f.service.OpenDownload(ctx, f.target, f.root, "server.properties", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content, err := io.ReadAll(download); err != nil || string(content) != "motd=hello\n" {
+		t.Fatal(string(content), err)
+	}
+	download.Close()
+	if _, err := f.service.List(ctx, f.target, f.root, "World", nil); err != nil {
+		t.Fatal(err)
+	}
+	// The helper and the validator that proved its mount.
+	if creates() != 2 {
+		t.Fatal(creates(), "helpers for one browsing session")
+	}
+	download, err = f.service.OpenDownload(ctx, f.target, f.root, "big.log", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	download.Close()
+	if _, err := f.service.Preview(ctx, f.target, f.root, "server.properties", nil); err != nil {
+		t.Fatal(err)
+	}
+	if creates() != 4 {
+		t.Fatal("reused the helper of a download that was cut off")
+	}
+	// A restart may follow a host folder's replacement, which the running
+	// helper's bind mount wouldn't see.
+	f.engine.Update(f.game, func(game *fakedocker.Container) { game.State.StartedAt = "2026-01-02T03:04:05Z" })
+	if _, err := f.service.Preview(ctx, f.target, f.root, "server.properties", nil); err != nil {
+		t.Fatal(err)
+	}
+	if creates() != 6 {
+		t.Fatal("reused a helper from the game's previous run")
+	}
+	denied := apperr.New("FORBIDDEN", 403, "Insufficient server permissions")
+	if _, err := f.service.Preview(ctx, f.target, f.root, "server.properties", func() error { return denied }); !apperr.Is(err, "FORBIDDEN") {
+		t.Fatal(err)
+	}
 	f.helpersLeft(t)
 }
 

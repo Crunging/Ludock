@@ -1,9 +1,12 @@
 package players
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,7 +17,9 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/games"
+	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -113,7 +118,7 @@ func TestSecretInsidePlayerID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reading, err := players.Source.Read(context.Background(), *identified)
+	reading, err := players.Source.Read(context.Background(), *identified, Ask{Players: true})
 	if err != nil || reading == nil || reading.Failed {
 		t.Fatal(reading, err)
 	}
@@ -148,7 +153,7 @@ func TestSecretInsideAccountName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reading, err := players.Source.Read(context.Background(), *identified)
+	reading, err := players.Source.Read(context.Background(), *identified, Ask{Players: true})
 	if err != nil || reading == nil || reading.Failed || strings.Join(reading.Names, ",") != "Ada,x[redacted]y" {
 		t.Fatal(reading, err)
 	}
@@ -184,6 +189,16 @@ func TestOnlineNeedsFreshReading(t *testing.T) {
 		if online, known := service.Online("s1", run); online != c.online || known != c.known {
 			t.Errorf("%s: %d %v", name, online, known)
 		}
+	}
+	// A query's count shows, but a schedule waiting for an empty server
+	// doesn't take it over the console's list.
+	service := &Service{readings: map[string]*Reading{"s1": {ContainerID: "c1", StartedAt: 100, CheckedAt: now, Via: ViaQuery, partial: true,
+		Players: games.Players{Online: 1}}}}
+	if online, known := service.Online("s1", run); online != 1 || !known {
+		t.Error("query count:", online, known)
+	}
+	if _, _, known := service.ListedAt("s1", run); known {
+		t.Error("a schedule took a query-only count")
 	}
 }
 
@@ -235,17 +250,21 @@ func TestGameAnswers(t *testing.T) {
 
 type countingSource struct {
 	Source
-	reads int
-	run   servers.Container
+	reads, lists int
+	run          servers.Container
 }
 
-func (c *countingSource) Read(context.Context, identity.Server) (*Reading, error) {
+func (c *countingSource) Read(_ context.Context, _ identity.Server, ask Ask) (*Reading, error) {
 	c.reads++
-	return &Reading{ContainerID: c.run.ID, StartedAt: c.run.StateSince, CheckedAt: time.Now().UnixMilli()}, nil
+	if ask.Players {
+		c.lists++
+	}
+	return &Reading{ContainerID: c.run.ID, StartedAt: c.run.StateSince, CheckedAt: time.Now().UnixMilli(), partial: !ask.Players}, nil
 }
 
-// A monitored game's status is read every Interval while someone watches
-// and every IdleInterval otherwise, since each reading starts a helper.
+// A monitored game's status is read every Interval while a page showing it
+// is open and every IdleInterval otherwise, such as while only another
+// server's page is, since each reading starts a helper.
 func TestMonitoredReadsSlowWhenUnwatched(t *testing.T) {
 	ctx := context.Background()
 	engine, err := fakedocker.Start(t.TempDir())
@@ -270,16 +289,206 @@ func TestMonitoredReadsSlowWhenUnwatched(t *testing.T) {
 		players.readings[server].CheckedAt = time.Now().Add(-by).UnixMilli()
 		players.mu.Unlock()
 	}
-	players.Poll(ctx, false)
+	all := func(string) bool { return true }
+	// Another server's page is open: this one is read as if nobody watched.
+	other := func(id string) bool { return id != server }
+	players.Poll(ctx, nil)
 	age(Interval)
-	players.Poll(ctx, false)
+	players.Poll(ctx, nil)
+	players.Poll(ctx, other)
 	if source.reads != 1 {
 		t.Fatal("unwatched reads:", source.reads)
 	}
-	players.Poll(ctx, true)
+	players.Poll(ctx, all)
 	age(IdleInterval)
-	players.Poll(ctx, false)
-	if source.reads != 3 {
-		t.Fatal("reads:", source.reads)
+	players.Poll(ctx, nil)
+	if source.reads != 3 || source.lists != 1 {
+		t.Fatal("reads:", source.reads, "lists:", source.lists)
 	}
+	// A page opening after a query-only reading gets the list at once, and
+	// the list then counts as fresh.
+	players.Poll(ctx, all)
+	players.Poll(ctx, all)
+	if source.reads != 4 || source.lists != 2 {
+		t.Fatal("reads:", source.reads, "lists:", source.lists)
+	}
+}
+
+// A Minecraft server's console writes two lines to the game's log for every
+// connection. Once the console has listed the players, a status query that
+// says nobody is online, or whose player sample names the same ones, stands
+// in for the command; a change, a sample that doesn't name everyone, a
+// check after a command, or a reading taken while nobody watches never uses
+// the console's list in place of the current one.
+func TestStatusQueryStandsInForTheList(t *testing.T) {
+	ctx := context.Background()
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	image := "ghcr.io/crunging/ludock@sha256:" + strings.Repeat("ab", 32)
+	engine.AddImage(image)
+	engine.Attach = func(c *fakedocker.Container, stdin *bufio.Reader, stdout func([]byte)) {
+		helper.RunNetworkConsole(stdin, writerFunc(stdout))
+	}
+	var mu sync.Mutex
+	online, sampled, commands := []string{}, true, 0
+	rcon, _ := fakedocker.ServeRCON("secret", func(string) string {
+		mu.Lock()
+		defer mu.Unlock()
+		commands++
+		return fmt.Sprintf("There are %d of a max of 10 players online: %s", len(online), strings.Join(online, ", "))
+	})
+	query, _ := fakedocker.ServeMinecraftPlayers(func() ([]string, int, int, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !sampled {
+			return nil, len(online), 10, true
+		}
+		return slices.Clone(online), len(online), 10, true
+	})
+	engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
+		Labels: map[string]string{"ludock.query.port": fmt.Sprint(query)},
+		Env:    []string{"RCON_PASSWORD=secret", fmt.Sprintf("RCON_PORT=%d", rcon)}})
+	players, server := gameService(t, engine)
+	players.Source.(*GameSource).Runtime.Images = &launch.Images{Docker: players.Source.(*GameSource).Runtime.Docker, Configured: image}
+	identified, err := players.Identity.Get(ctx, server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var previous *Reading
+	read := func(ask Ask) *Reading {
+		ask.Previous = previous
+		reading, err := players.Source.Read(ctx, *identified, ask)
+		if err != nil || reading == nil || reading.Failed {
+			t.Fatal(reading, err)
+		}
+		previous = reading
+		return reading
+	}
+	expect := func(step string, reading *Reading, wantCommands int, via Via, names ...string) {
+		t.Helper()
+		mu.Lock()
+		got := commands
+		mu.Unlock()
+		if got != wantCommands || reading.Via != via || strings.Join(reading.Names, ",") != strings.Join(names, ",") {
+			t.Fatalf("%s: %d commands, %+v", step, got, reading)
+		}
+	}
+	expect("first list", read(Ask{Players: true}), 1, ViaConsole)
+	expect("still nobody", read(Ask{Players: true}), 1, ViaConsole)
+	mu.Lock()
+	online = []string{"Mara"}
+	mu.Unlock()
+	expect("someone joined", read(Ask{Players: true}), 2, ViaConsole, "Mara")
+	expect("same players", read(Ask{Players: true}), 2, ViaConsole, "Mara")
+	expect("after a command", read(Ask{Players: true, Fresh: true}), 3, ViaConsole, "Mara")
+	mu.Lock()
+	online = []string{"Mara", "Theo"}
+	mu.Unlock()
+	expect("another joined", read(Ask{Players: true}), 4, ViaConsole, "Mara", "Theo")
+	expect("unwatched, same players", read(Ask{}), 4, ViaConsole, "Mara", "Theo")
+	mu.Lock()
+	sampled = false
+	mu.Unlock()
+	expect("sample hidden", read(Ask{Players: true}), 5, ViaConsole, "Mara", "Theo")
+	mu.Lock()
+	online, sampled = []string{"Mara"}, true
+	mu.Unlock()
+	if reading := read(Ask{}); !reading.partial || reading.Online != 1 {
+		t.Fatalf("unwatched, someone left: %+v", reading)
+	}
+	expect("unwatched, someone left", previous, 5, ViaQuery)
+	expect("watched after a count", read(Ask{Players: true}), 6, ViaConsole, "Mara")
+}
+
+type writerFunc func([]byte)
+
+func (w writerFunc) Write(data []byte) (int, error) {
+	w(data)
+	return len(data), nil
+}
+
+type blockingSource struct {
+	Source
+	mu      sync.Mutex
+	reads   int
+	release chan struct{}
+}
+
+func (b *blockingSource) Read(ctx context.Context, _ identity.Server, _ Ask) (*Reading, error) {
+	b.mu.Lock()
+	b.reads++
+	b.mu.Unlock()
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+	}
+	return nil, errSkipped
+}
+
+// A refused kick waits for a reading that starts after it asks, not one
+// already running on the list it compared, and never longer than its limit.
+func TestCheckAndWaitWaitsForANewReading(t *testing.T) {
+	ctx := context.Background()
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true})
+	players, server := gameService(t, engine)
+	source := &blockingSource{Source: players.Source, release: make(chan struct{})}
+	players.Source = source
+	reads := func() int {
+		source.mu.Lock()
+		defer source.mu.Unlock()
+		return source.reads
+	}
+	players.Check(ctx, server)
+	for deadline := time.Now().Add(5 * time.Second); reads() != 1; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("no reading started")
+		}
+	}
+	returned := make(chan int, 1)
+	go func() {
+		players.CheckAndWait(ctx, server, time.Minute)
+		returned <- reads()
+	}()
+	release := func() {
+		t.Helper()
+		select {
+		case source.release <- struct{}{}:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no reading to release")
+		}
+	}
+	// The running reading ends; the one asked for starts and holds the
+	// caller until it ends too.
+	time.Sleep(50 * time.Millisecond)
+	release()
+	for deadline := time.Now().Add(5 * time.Second); reads() != 2; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the reading asked for never started")
+		}
+	}
+	select {
+	case got := <-returned:
+		t.Fatal("returned while the reading asked for ran, after", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("still waiting after the reading ended")
+	}
+	start := time.Now()
+	players.CheckAndWait(ctx, server, 100*time.Millisecond)
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("waited past the limit")
+	}
+	close(source.release)
 }

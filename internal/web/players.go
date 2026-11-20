@@ -2,9 +2,11 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -47,6 +49,12 @@ func (s *Server) playerAction(w http.ResponseWriter, r *http.Request, request *R
 		panel = s.playerLists(act)
 	}
 	act.Done()
+	// The list the account check compared may be one the status query
+	// vouched for in an older order, so the refusal waits for a new one for
+	// the next attempt.
+	if errors.Is(err, errUnconfirmed) {
+		s.App.Players.CheckAndWait(r.Context(), id, 15*time.Second)
+	}
 	if err != nil {
 		if public, ok := apperr.As(err); ok && panel != nil && public.Status != http.StatusUnauthorized {
 			panel.Alert = views.PlayerAlert{Kind: "error", Message: public.Message}

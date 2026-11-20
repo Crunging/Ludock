@@ -10,6 +10,8 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -136,6 +138,9 @@ func ParseMinecraftStatus(payload []byte) (Status, bool) {
 		Players *struct {
 			Online *int64 `json:"online"`
 			Max    *int64 `json:"max"`
+			// Decoded on its own, so a sample in another shape still
+			// leaves the counts.
+			Sample json.RawMessage `json:"sample"`
 		} `json:"players"`
 	}
 	if json.Unmarshal(text, &reply) != nil {
@@ -148,5 +153,42 @@ func ParseMinecraftStatus(payload []byte) (Status, bool) {
 	if reply.Players.Online == nil || reply.Players.Max == nil {
 		return Status{}, false
 	}
-	return counts(*reply.Players.Online, *reply.Players.Max)
+	status, ok := counts(*reply.Players.Online, *reply.Players.Max)
+	var sample []struct {
+		Name string `json:"name"`
+		ID   string `json:"id"`
+	}
+	if !ok || status.Online == 0 || status.Online > maxListed || json.Unmarshal(reply.Players.Sample, &sample) != nil ||
+		len(sample) != status.Online {
+		return status, ok
+	}
+	// The sample names every player only when it holds as many as are
+	// online; players who hide from server lists appear as an anonymous
+	// entry with the nil UUID, and a sample of text lines has no real ID.
+	names := make([]string, 0, len(sample))
+	for _, player := range sample {
+		if player.Name == "" || len(player.Name) > 64 || strings.IndexFunc(player.Name, unicode.IsControl) >= 0 ||
+			!validUUID(player.ID) || player.ID == "00000000-0000-0000-0000-000000000000" {
+			return status, true
+		}
+		names = append(names, player.Name)
+	}
+	status.Listed, status.Names = true, names
+	return status, true
+}
+
+func validUUID(id string) bool {
+	if len(id) != 36 {
+		return false
+	}
+	for index, char := range id {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if char != '-' {
+				return false
+			}
+		} else if !strings.ContainsRune("0123456789abcdefABCDEF", char) {
+			return false
+		}
+	}
+	return true
 }

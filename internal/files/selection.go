@@ -100,7 +100,7 @@ func (s *Service) OpenSelectionDownload(ctx context.Context, target Target, root
 	if err != nil {
 		return nil, err
 	}
-	access, err := s.Acquire(ctx, target, root, true, assertAccess)
+	access, release, err := s.acquireLister(ctx, target, root, assertAccess)
 	if err != nil {
 		return nil, err
 	}
@@ -108,10 +108,10 @@ func (s *Service) OpenSelectionDownload(ctx context.Context, target Target, root
 	if normalized != "" {
 		name = path.Base(normalized)
 	}
-	download, err := s.openDownload(ctx, access, helper.FileRequest{Operation: "download-paths", Root: root.Path, Path: normalized,
-		Paths: names}, name+" selection", assertAccess, target)
+	download, err := s.openDownload(ctx, access, release, helper.FileRequest{Operation: "download-paths", Root: root.Path,
+		Path: normalized, Paths: names}, name+" selection", assertAccess)
 	if err != nil {
-		access.Cleanup(false)
+		release(false)
 		return nil, err
 	}
 	return download, nil

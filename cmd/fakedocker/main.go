@@ -232,7 +232,7 @@ func minecraftGame(password string, online ...string) (*fakeGame, string, string
 		game.publishLists()
 		return map[string]string{"ban": "Banned " + name + ": Banned by an operator", "pardon": "Unbanned " + name}[verb], true
 	})
-	query, err := fakedocker.ServeMinecraftStatus(game.status)
+	query, err := fakedocker.ServeMinecraftPlayers(game.sample)
 	if err != nil {
 		panic(err)
 	}
@@ -404,14 +404,27 @@ func (g *fakeGame) status() (int, int, bool) {
 	return len(g.online), 10, !time.Now().Before(g.hungUntil)
 }
 
+// sample is the status with Minecraft's player sample, which a console
+// outage also hides, as hide-online-players does.
+func (g *fakeGame) sample() ([]string, int, int, bool) {
+	online, capacity, ok := g.status()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if time.Now().Before(g.outageUntil) {
+		return nil, online, capacity, ok
+	}
+	return slices.Clone(g.online), online, capacity, ok
+}
+
 // rcon serves an RCON console that answers the game's list command with
 // format, and the game's own commands with commands, and returns its port.
 // "say MESSAGE" answers with the message as players see it. Besides those,
 // it takes commands only the fake has: "fake-said" lists what "say" sent,
 // "fake-join NAME" and "fake-leave
-// NAME" change who is online, "fake-outage SECONDS" makes the list fail for
-// that long, and "fake-hang SECONDS" also silences the status query, as a
-// game that hangs while its container runs.
+// NAME" change who is online, "fake-outage SECONDS" makes the list fail, and
+// hides Minecraft's player sample, for that long, and "fake-hang SECONDS"
+// also silences the status query, as a game that hangs while its container
+// runs.
 func (g *fakeGame) rcon(password, list string, format func(online []string) string,
 	commands func(verb, argument string) (string, bool)) string {
 	serve := fakedocker.ServeRCON

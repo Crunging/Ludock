@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/servers"
 )
 
 func space(percent int64) []DiskSpace {
@@ -308,5 +309,25 @@ func TestDiskMeasuredLessOftenUnwatched(t *testing.T) {
 	s.CheckDisk(ctx, state("running", ""), DiskIdleInterval+DiskInterval+3000, true)
 	if measured != 3 {
 		t.Fatal("a watched page got a stale measurement:", measured)
+	}
+}
+
+// A stopped server's disk can still fill from outside the game, so it keeps
+// being measured on the idle schedule while nobody watches.
+func TestStoppedDiskStaysMeasuredUnwatched(t *testing.T) {
+	s, _, _, _ := setupWith(t, nil)
+	measured := 0
+	s.MeasureDisk = func(context.Context, identity.Server) ([]DiskSpace, error) {
+		measured++
+		return space(50), nil
+	}
+	stopped := map[string]servers.Container{"mc": {ID: "mc", State: "exited", StateSince: 500}}
+	for _, now := range []int64{1000, DiskIdleInterval + 2000, 2*DiskIdleInterval + 3000} {
+		if err := s.CheckDisk(ctx, stopped, now, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if measured != 3 {
+		t.Fatal("measurements of a stopped server:", measured)
 	}
 }
