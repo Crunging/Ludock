@@ -106,10 +106,9 @@ type Service struct {
 	// system roots.
 	TLS *tls.Config
 
-	mu         sync.Mutex
-	active     string
-	activeTo   Destination
-	delivering bool
+	mu       sync.Mutex
+	active   string
+	activeTo Destination
 	// cancelSend ends the request in flight when its destination's settings
 	// change.
 	cancelSend context.CancelCauseFunc
@@ -521,20 +520,8 @@ func responseFailure(status int) string {
 }
 
 // Deliver sends up to ten due notifications to destinations that are on.
-// Overlapping calls return immediately.
+// Calls must not overlap.
 func (s *Service) Deliver(ctx context.Context) error {
-	s.mu.Lock()
-	if s.delivering {
-		s.mu.Unlock()
-		return nil
-	}
-	s.delivering = true
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		s.delivering = false
-		s.mu.Unlock()
-	}()
 	ready := s.settings(ctx).ready()
 	if len(ready) == 0 {
 		return nil
