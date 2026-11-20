@@ -168,7 +168,7 @@ templ settingFeedback(errorText, notice string) {
 templ UploadLimitForm(u UploadLimitSettings) {
 	<form class="stack-form" id="upload-limit-form" hx-post="/settings/upload-limit" hx-target="this" hx-swap="outerHTML">
 		<h3>Upload size limit</h3>
-		<p class="muted">Without a limit, any file that leaves the server’s disk 1 GiB to spare can be uploaded.</p>
+		<p class="muted">Without a limit, any file that leaves the server’s disk 1 GiB to spare can be uploaded (a twentieth of the disk when it is smaller than 20 GiB).</p>
 		if u.Fixed {
 			<p>Each uploaded file can be up to <strong>{ u.Limit }</strong>.</p>
 			@fixedByDeployment("LUDOCK_MAX_UPLOAD_SIZE")

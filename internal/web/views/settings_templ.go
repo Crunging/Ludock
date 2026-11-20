@@ -299,7 +299,7 @@ func UploadLimitForm(u UploadLimitSettings) templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<form class=\"stack-form\" id=\"upload-limit-form\" hx-post=\"/settings/upload-limit\" hx-target=\"this\" hx-swap=\"outerHTML\"><h3>Upload size limit</h3><p class=\"muted\">Without a limit, any file that leaves the server’s disk 1 GiB to spare can be uploaded.</p>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<form class=\"stack-form\" id=\"upload-limit-form\" hx-post=\"/settings/upload-limit\" hx-target=\"this\" hx-swap=\"outerHTML\"><h3>Upload size limit</h3><p class=\"muted\">Without a limit, any file that leaves the server’s disk 1 GiB to spare can be uploaded (a twentieth of the disk when it is smaller than 20 GiB).</p>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
