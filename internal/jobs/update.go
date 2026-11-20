@@ -131,12 +131,25 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 	})
 }
 
-func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) error {
-	// Starting is safe to reconcile, but only once the backup completed.
-	if job.Job.Recovery.InitialRunning != nil {
-		return j.recoverBackup(ctx, job, j.backupCompleted(ctx, job))
+// recoverBackupRestart returns the server to running, as the restart was
+// asked to. Ludock restarting is not a failed backup, so a server stopped
+// for one is started again even if the backup didn't complete, and the
+// backup is not taken again.
+func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	if job.Job.Recovery.InitialRunning == nil {
+		return nil, nil
 	}
-	return nil
+	completed := j.backupCompleted(ctx, job)
+	if err := j.recoverBackup(ctx, job, true); err != nil {
+		return nil, err
+	}
+	result := map[string]any{"action": "restart"}
+	if completed {
+		result["backupId"] = job.Job.Recovery.BackupID
+	} else {
+		result["guidance"] = "Ludock restarted before the backup finished, so there’s no new backup. The server was started again."
+	}
+	return withSave(job, result), nil
 }
 
 // recoverUpdate reconciles an interrupted update. Once it began swapping

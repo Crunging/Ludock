@@ -225,6 +225,14 @@ func MovedDetail(result map[string]any) string {
 	return ""
 }
 
+// DockerWaitDetail notes work that waited for Docker to come back.
+func DockerWaitDetail(result map[string]any) string {
+	if result["waitedForDocker"] == true {
+		return "Waited for Docker, which was briefly unreachable."
+	}
+	return ""
+}
+
 // ConnectAddress is the address players type. An unset host uses the host
 // the browser used to reach Ludock.
 func ConnectAddress(connection *servers.Connection, pageHost string) string {

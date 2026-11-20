@@ -112,7 +112,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 				return nil, ops.ErrResume
 			}
 			if job.Job.Input["createBackup"] == true {
-				return nil, j.recoverBackupRestart(ctx, job)
+				return j.recoverBackupRestart(ctx, job)
 			}
 			return j.recoverLifecycle(ctx, job)
 		},
