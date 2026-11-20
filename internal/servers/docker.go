@@ -790,7 +790,8 @@ func (o *Observer) stop(ctx context.Context, id string, info *docker.ContainerIn
 	defer cancel()
 	if conn, err := o.Docker.Attach(attach, id, docker.AttachOptions{Stream: true, Stdin: true}); err == nil {
 		stop := context.AfterFunc(attach, func() { conn.Close() })
-		if current, err := o.Docker.Inspect(attach, id); err == nil && current.State.Running &&
+		// A restarting container keeps its old start time until the next run.
+		if current, err := o.Docker.Inspect(attach, id); err == nil && current.State.Running && !current.State.Restarting &&
 			current.State.StartedAt == info.State.StartedAt {
 			conn.Write([]byte(command + "\n"))
 		}
