@@ -125,7 +125,7 @@ func (s *Server) serverRow(r *http.Request, request *Request, view servers.View,
 		row.Players.Reading = s.App.Players.Get(view.ID, view.Container)
 	}
 	if row.CanStop || row.CanRestart {
-		row.Warn = s.warnOffer(view.ID, view.Container)
+		row.Warn = warnOffer(view.Container)
 	}
 	row.Game = views.GameView{Running: row.Players.Running}
 	if view.Query != nil {
@@ -275,7 +275,7 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 		if createBackup {
 			input["createBackup"] = true
 		}
-		if warn && s.warnPlayers(resolved) {
+		if warn && warnOffer(resolved.Container) {
 			input[jobs.WarnInput] = true
 		}
 		job, err := s.App.Runner.Enqueue(r.Context(), nil, ops.EnqueueOptions{ServerID: resolved.Logical.ID, ActorID: current.User.ID,
@@ -292,44 +292,10 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 }
 
 // warnOffer is whether work that takes a server down offers to warn players
-// first: "on" while players are online, "off" while their count is unknown,
-// and "" when nobody is online or the game can't message them.
-func (s *Server) warnOffer(id string, container servers.Container) string {
-	if container.State != "running" || !jobs.CanWarn(container) {
-		return ""
-	}
-	online, known := s.App.Players.Online(id, container)
-	switch {
-	case known && online == 0:
-		return ""
-	case known:
-		return views.WarnOn
-	}
-	return views.WarnOff
-}
-
-// updateWarnOffer is warnOffer for an update, which stops the server only
-// after downloading the new image: someone can join meanwhile, so the
-// warning stays on offer, unticked, while nobody is online.
-func (s *Server) updateWarnOffer(view *servers.View) string {
-	return updateOffer(s.warnOffer(view.ID, view.Container), view.State == "running" && jobs.CanWarn(view.Container))
-}
-
-func updateOffer(offer string, canWarn bool) string {
-	if offer == "" && canWarn {
-		return views.WarnOff
-	}
-	return offer
-}
-
-// warnPlayers decides a request to warn players first: a server found empty
-// since the page was shown goes down at once.
-func (s *Server) warnPlayers(server *servers.Context) bool {
-	if server.Container.State != "running" || !jobs.CanWarn(server.Container) {
-		return false
-	}
-	online, known := s.App.Players.Online(server.Logical.ID, server.Container)
-	return !known || online > 0
+// first. Whether anyone is online is decided when the work runs, not from
+// the page.
+func warnOffer(container servers.Container) bool {
+	return container.State == "running" && jobs.CanWarn(container)
 }
 
 // requestKey is the optional idempotency key of a form submission.

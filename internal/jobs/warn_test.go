@@ -9,7 +9,11 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/games"
+	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/players"
+	"github.com/Crunging/Ludock/internal/servers"
 )
 
 // interruptedWarning saves a restart that warned players and was waiting
@@ -17,9 +21,14 @@ import (
 // runner as Ludock's next start would.
 func (f *fixture) interruptedWarning(t *testing.T, phase string, recovery ops.Recovery) (*ops.Runner, string) {
 	t.Helper()
+	return f.interruptedWarningOf(t, "restart", phase, recovery)
+}
+
+func (f *fixture) interruptedWarningOf(t *testing.T, kind, phase string, recovery ops.Recovery) (*ops.Runner, string) {
+	t.Helper()
 	f.runner.Stop()
 	server, _ := f.jobs.Identity.Get(ctx, f.serverID)
-	job, err := f.runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: "restart",
+	job, err := f.runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: kind,
 		BindingRevision: server.BindingRevision, Input: map[string]any{WarnInput: true}})
 	if err != nil {
 		t.Fatal(err)
@@ -182,5 +191,125 @@ func TestWarnedRestoreIsRecoveredOncePastItsWait(t *testing.T) {
 	if job := (&ops.Context{Job: &ops.Job{Kind: "restore", Phase: phases[0], Input: restore.Input,
 		Recovery: ops.Recovery{WarnUntil: restore.Recovery.WarnUntil}}}); resumable(job) {
 		t.Fatalf("the first helper started in phase %q, which a restart of Ludock resumes", phases[0])
+	}
+}
+
+// onlineSource reads a set number of players online, or fails to read
+// them when online is negative, counting its readings.
+type onlineSource struct {
+	servers *servers.Service
+	mu      sync.Mutex
+	online  int
+	reads   int
+	// unheld counts readings taken without the server's lock.
+	unheld int
+}
+
+func (s *onlineSource) Lists(servers.Container) bool { return true }
+
+func (s *onlineSource) Read(ctx context.Context, server identity.Server, ask players.Ask) (*players.Reading, error) {
+	observed, _, err := s.servers.Observe(ctx, server)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reads++
+	if !ask.Held {
+		s.unheld++
+	}
+	return &players.Reading{ContainerID: observed.Container.ID, StartedAt: observed.Container.StateSince, Failed: s.online < 0,
+		Players: games.Players{Online: max(s.online, 0)}, CheckedAt: time.Now().UnixMilli()}, nil
+}
+
+func (s *onlineSource) counts() (int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reads, s.unheld
+}
+
+// withPlayers gives the fixture players online, -1 for a count that can't
+// be read.
+func (f *fixture) withPlayers(online int) *onlineSource {
+	source := &onlineSource{servers: f.jobs.Servers, online: online}
+	f.jobs.Players = &players.Service{Servers: f.jobs.Servers, Identity: f.jobs.Identity, Source: source}
+	return source
+}
+
+// A restart, backup or update asked to warn players reads who is online
+// when it reaches its warning, whatever the page showed; an update reads
+// under the server lock it already holds: with someone on, or a count it can't
+// read, it warns and waits; with nobody on, it goes ahead at once and says
+// so. The panel's reading from moments ago of someone online is used
+// rather than taken again; one of nobody isn't, since someone may have
+// joined since.
+func TestWarningReadsPlayersWhenItRuns(t *testing.T) {
+	for _, kind := range []string{"restart", "backup", "update"} {
+		for _, c := range []struct {
+			name   string
+			online int
+			warns  bool
+		}{{"someone", 1, true}, {"nobody", 0, false}, {"unknown", -1, true}} {
+			t.Run(kind+"/"+c.name, func(t *testing.T) {
+				f := setup(t)
+				f.jobs.WarningLead = 300 * time.Millisecond
+				source := f.withPlayers(c.online)
+				started := time.Now()
+				input := map[string]any{WarnInput: true}
+				if kind == "update" {
+					input["request"] = skipBackup["request"]
+				}
+				job := f.run(t, kind, input)
+				waited := time.Since(started) >= 300*time.Millisecond
+				reads, unheld := source.counts()
+				if job.Status != ops.Succeeded || reads != 1 || unheld != 0 {
+					t.Fatalf("%+v, %d readings, %d without the lock", job, reads, unheld)
+				}
+				if c.warns {
+					if job.Recovery.WarnUntil == 0 || job.Recovery.WarnSkipped || !waited || job.Result["warnSkipped"] != nil {
+						t.Fatalf("didn't warn and wait: %+v", job)
+					}
+					return
+				}
+				if job.Recovery.WarnUntil != 0 || job.Recovery.WarnSent || !job.Recovery.WarnSkipped || waited || job.Result["warnSkipped"] != true {
+					t.Fatalf("warned or waited with nobody online: %+v", job)
+				}
+			})
+		}
+	}
+
+	for _, c := range []struct {
+		online, reads int
+	}{{1, 1}, {0, 2}} {
+		f := setup(t)
+		f.jobs.WarningLead = 100 * time.Millisecond
+		source := f.withPlayers(c.online)
+		server, _ := f.jobs.Identity.Get(ctx, f.serverID)
+		f.jobs.Players.ReadHeld(ctx, *server)
+		if job := f.run(t, "restart", map[string]any{WarnInput: true}); job.Status != ops.Succeeded || job.Recovery.WarnSkipped == (c.online > 0) {
+			t.Fatalf("%+v", job)
+		}
+		if reads, _ := source.counts(); reads != c.reads {
+			t.Fatal(c.online, "online:", reads, "readings")
+		}
+	}
+}
+
+// A restart or backup that warned players and was waiting when Ludock
+// stopped waits out the time players were given after the next start, even
+// if nobody is online by then: a warning sent is never taken back.
+func TestResumedWarningIgnoresAnEmptyServer(t *testing.T) {
+	for _, kind := range []string{"restart", "backup"} {
+		t.Run(kind, func(t *testing.T) {
+			f := setup(t)
+			source := f.withPlayers(0)
+			until := time.Now().Add(300 * time.Millisecond).UnixMilli()
+			runner, id := f.interruptedWarningOf(t, kind, ops.PhaseWarning, ops.Recovery{WarnUntil: until, WarnSent: true})
+			job := finished(t, runner, id)
+			if reads, _ := source.counts(); job.Status != ops.Succeeded || job.Recovery.WarnSkipped || reads != 0 ||
+				job.Recovery.WarnUntil != until || job.UpdatedAt < until {
+				t.Fatalf("%+v, %d readings", job, reads)
+			}
+		})
 	}
 }

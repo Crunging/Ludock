@@ -31,7 +31,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		CanRestore: can(view, authz.BackupsRestore), CanDelete: can(view, authz.BackupsDelete),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
 		LatestBackup: view.LatestBackup, NoData: view.NoDataFolders, BindingRevision: view.BindingRevision,
-		Warn: s.warnOffer(view.ID, view.Container)}
+		Warn: warnOffer(view.Container)}
 	// The tab follows any running work, so readiness and paused controls come
 	// back when it ends.
 	b.Operation = views.ActivityView{ServerID: view.ID, Admin: d.Admin, Tab: "backups", SelectedID: r.URL.Query().Get("operation"),
@@ -148,7 +148,7 @@ func (s *Server) backupPreflight(w http.ResponseWriter, r *http.Request, request
 	resolved, user, err := s.resolveFresh(r, request, id, authz.BackupsCreate)
 	view := views.ReadinessView{ServerID: id, Admin: request.User().Role == db.RoleAdmin}
 	if err == nil {
-		view.ServerName, view.Warn = resolved.Container.DisplayName, s.warnOffer(resolved.Logical.ID, resolved.Container)
+		view.ServerName, view.Warn = resolved.Container.DisplayName, warnOffer(resolved.Container)
 		preflight := s.App.Backups.Preflight(r.Context(), resolved)
 		if _, err = s.App.Authz.Assert(r.Context(), user, id, authz.BackupsCreate); err == nil {
 			view.Preflight = &preflight
@@ -217,7 +217,7 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request, request *R
 		return
 	}
 	var input map[string]any
-	if r.PostFormValue(jobs.WarnInput) == "true" && s.warnPlayers(resolved) {
+	if r.PostFormValue(jobs.WarnInput) == "true" && warnOffer(resolved.Container) {
 		input = map[string]any{jobs.WarnInput: true}
 	}
 	s.enqueue(w, r, request, resolved, user, "backup", input)
@@ -266,7 +266,7 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 		input["createBackup"] = true
 	}
 	input["backupId"] = backupID
-	if r.PostFormValue(jobs.WarnInput) == "true" && s.warnPlayers(resolved) {
+	if r.PostFormValue(jobs.WarnInput) == "true" && warnOffer(resolved.Container) {
 		input[jobs.WarnInput] = true
 	}
 	if fit.Moved {
@@ -379,7 +379,7 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 	view := &d.Row.Server
 	u := views.UpdateView{ServerID: id, ServerName: view.DisplayName, CanBackup: can(view, authz.BackupsCreate),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
-		Recreate: r.URL.Query().Get("recreate") == "1", Warn: s.updateWarnOffer(view)}
+		Recreate: r.URL.Query().Get("recreate") == "1", Warn: warnOffer(view.Container)}
 	resolved, _, err := s.resolveFresh(r, request, id, capability)
 	if err == nil {
 		result := s.App.Updates.Capability(r.Context(), resolved, func() bool {

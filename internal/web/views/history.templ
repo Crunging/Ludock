@@ -523,6 +523,9 @@ templ OperationSummary(o OperationDetailView) {
 		if detail := SaveDetail(operation.Result); detail != "" {
 			<p class="section-note">{ detail }</p>
 		}
+		if detail := WarnDetail(operation.Result); detail != "" {
+			<p class="section-note">{ detail }</p>
+		}
 		if detail := MovedDetail(operation.Result); detail != "" {
 			<p class="section-note">{ detail }</p>
 		}

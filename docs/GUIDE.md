@@ -273,11 +273,14 @@ and Don't Starve Together), or the container's own `stop_grace_period` if it
 is longer. Terraria's images never pass Docker's stop signal on to the game,
 so Ludock also types its `exit` command, which saves and quits.
 
-When someone may be online and the game can message its players, the Restart,
+When the server is running and the game can message its players, the Restart,
 Stop, and **Create backup** dialogs, a restore, and the **Update** tab offer
-**Warn players and wait 1 minute**, ticked when players are online. Ludock tells players in the game,
-waits the minute (shown in **Activity**), then goes ahead; an update warns once
-the new image is downloaded. If Ludock restarts during the minute, it finishes
+**Warn players and wait 1 minute**, ticked. Ludock checks who is online when
+the work starts, not when the page loaded; an update checks once the new image
+is downloaded. If someone is on, or Ludock can't tell, it tells players in the
+game, waits the minute (shown in **Activity**), then goes ahead. If nobody is
+on, it goes ahead at once, and **Activity** says nobody was online, so players
+weren't warned. If Ludock restarts during the minute, it finishes
 the wait afterwards; if it was down for more than five minutes past the time
 players were given, it leaves the server alone and says so in **Activity**.
 

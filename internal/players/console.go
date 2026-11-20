@@ -33,16 +33,18 @@ func (c *GameSource) Lists(container servers.Container) bool {
 var errSkipped = errors.New("player reading skipped")
 
 // Read takes one reading under the server lock, as background work that
-// anything needing the server cancels.
+// anything needing the server cancels, unless the caller holds it.
 func (c *GameSource) Read(ctx context.Context, server identity.Server, ask Ask) (*Reading, error) {
 	ctx, cancel := context.WithTimeout(ctx, readLimit)
 	defer cancel()
-	release, err := c.Locks.Acquire([]string{locks.ServerKey(server.ID)}, cancel)
-	if err != nil {
-		return nil, err
+	if !ask.Held {
+		release, err := c.Locks.Acquire([]string{locks.ServerKey(server.ID)}, cancel)
+		if err != nil {
+			return nil, err
+		}
+		// Held until the console helper, if any, is removed.
+		defer release()
 	}
-	// Held until the console helper, if any, is removed.
-	defer release()
 	observed, assertBinding, err := c.Servers.Observe(ctx, server)
 	if err != nil {
 		return nil, err

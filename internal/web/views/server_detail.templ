@@ -843,6 +843,9 @@ templ SelectedOperation(a ActivityView) {
 			if detail := SaveDetail(operation.Result); detail != "" {
 				<p class="section-note">{ detail }</p>
 			}
+			if detail := WarnDetail(operation.Result); detail != "" {
+				<p class="section-note">{ detail }</p>
+			}
 			if detail := MovedDetail(operation.Result); detail != "" {
 				<p class="section-note">{ detail }</p>
 			}
@@ -928,6 +931,9 @@ templ OperationList(operations []history.Operation, empty string, showContext bo
 								<p class="operation-error">{ operation.Error }</p>
 							}
 							if detail := SaveDetail(operation.Result); detail != "" {
+								<p class="muted">{ detail }</p>
+							}
+							if detail := WarnDetail(operation.Result); detail != "" {
 								<p class="muted">{ detail }</p>
 							}
 							if detail := MovedDetail(operation.Result); detail != "" {

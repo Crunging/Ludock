@@ -50,6 +50,8 @@ test("Terraria quits with its own exit command, so it stops saved and a backup s
     await openServer(page, "terraria");
     await page.getByRole("tab", { name: "Backups" }).click();
     await page.locator("#create-backup:not([disabled])").click();
+    // Ludock can't count Terraria's players, so a warning would wait its minute.
+    await page.getByRole("dialog").getByLabel("Warn players and wait 1 minute").uncheck();
     await page.getByRole("dialog").getByRole("button", { name: "Create backup" }).click();
     await expectOperationSucceeded(page);
     const operation = page.locator("#selected-operation");
