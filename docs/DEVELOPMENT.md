@@ -103,6 +103,36 @@ docker build --pull --no-cache-filter runtime -t ludock:test .
 cd e2e && LUDOCK_DOCKER_E2E=disposable-daemon npx playwright test -c docker.config.mjs
 ```
 
+### A real Minecraft server
+
+[`e2e/real/rig.mjs`](../e2e/real/rig.mjs) brings up the local image beside a
+real Minecraft Java server, as an owner would, for trying changes by hand. It
+never runs in CI. Use a disposable daemon: it publishes Ludock on
+`127.0.0.1:3000` and Minecraft on `127.0.0.1:25565`, and `down` removes the
+containers, volumes, and networks of its Compose projects, named
+`ludocktest-…`, and the files it made.
+
+```sh
+docker build -t ludock:test .
+cd e2e
+export LUDOCK_DOCKER_E2E=disposable-daemon
+MINECRAFT_EULA=TRUE node real/rig.mjs up
+node real/rig.mjs bot Steve                # a headless player; Ctrl-C leaves
+node real/rig.mjs down
+```
+
+`up` finishes setup with the journeys' administrator and prints how to sign
+in. `MINECRAFT_EULA=TRUE` accepts the
+[Minecraft EULA](https://aka.ms/MinecraftEULA) for the test servers. The
+bot (mineflayer, installed into the rig folder on first use) joins in offline
+mode, chats once a minute, and prints every message, kick, and silence it
+sees, such as a warning before a restart. Game data lives in the rig folder
+(`LUDOCK_RIG_DIR`, a temporary folder by default) so you can read it from the
+host; its `backups-copy` folder is mounted as the second backup copy, so
+point it at a disk where the temporary folder is kept in memory. Images
+stay after `down`; `LUDOCK_RIG_JAVA_IMAGE` picks another Minecraft image,
+such as an older tag to try an update.
+
 ## CI and releases
 
 The image cross-compiles a static binary (`CGO_ENABLED=0`) and copies it into

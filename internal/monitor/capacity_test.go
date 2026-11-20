@@ -192,6 +192,17 @@ func addSamples(t *testing.T, s *Service, serverID string, minute int64, kib ...
 	}
 }
 
+// An alert after one minute near the limit says so in the singular.
+func TestMemoryAlertOneMinute(t *testing.T) {
+	s, events, server, _ := setupWith(t, func(policy *Policy) { policy.MemoryMinutes = 1 })
+	const minute = 10 * 60_000
+	addSamples(t, s, server.ID, minute, 950)
+	s.CheckMemory(ctx, map[string]int64{server.ID: 1000}, state("running", ""), minute)
+	if !slices.Equal(events.events, []string{"Minecraft: over 90% of its memory limit for 1 minute."}) {
+		t.Fatal(events.events)
+	}
+}
+
 // Memory alerts once a running server with a limit stays near it, and
 // recovers when it stops. A server without a limit never alerts.
 func TestMemoryAlert(t *testing.T) {

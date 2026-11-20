@@ -177,6 +177,7 @@ func (s *Server) attentionFragment(w http.ResponseWriter, r *http.Request, reque
 	view := views.AttentionView{Admin: request.User().Role == db.RoleAdmin}
 	result, err := s.App.Attention.List(r.Context(), request.User(), time.Now().UnixMilli())
 	if err != nil {
+		log.Warn("The attention check failed", logging.F("error", err.Error()))
 		view.Error = "The attention check failed. Try again."
 	} else {
 		view.DiscoveryUnavailable = result.DiscoveryUnavailable

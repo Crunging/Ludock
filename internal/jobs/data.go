@@ -42,9 +42,24 @@ func (j *Jobs) dataAuthority(ctx context.Context, server *servers.Context, job *
 	return err
 }
 
+// withSave adds the outcome of the save before the stop to a result.
+func withSave(job *ops.Context, result map[string]any) map[string]any {
+	if recovery := job.Job.Recovery; recovery.SaveStatus != "" {
+		result["saveStatus"], result["saveReason"] = recovery.SaveStatus, recovery.SaveReason
+	}
+	return result
+}
+
 // stopForData stops the server, recording its initial state and the locks
 // it needs before the stop is dispatched.
 func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *ops.Context) error {
+	// The copy is only as fresh as the game's last save. A job that already
+	// saved, or resumes after its stop, doesn't save again.
+	if server.Container.State == "running" && job.Job.Recovery.InitialRunning == nil && job.Job.Recovery.SaveStatus == "" {
+		if err := j.saveWorld(ctx, job, server, func() error { return j.dataAuthority(ctx, server, job) }); err != nil {
+			return err
+		}
+	}
 	err := j.Servers.Observer.ChangeState(ctx, server.Container.ID, servers.Stop, func(observation identity.Observation, info *docker.ContainerInspect) error {
 		if err := backups.AssertDataOperationState(info.State.Status); err != nil {
 			return err

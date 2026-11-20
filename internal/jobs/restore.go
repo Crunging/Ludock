@@ -446,7 +446,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err := saveRestore(job, restoreRecovery{Status: "committed", Roots: current}, ""); err != nil {
 				return nil, err
 			}
-			restored = map[string]any{"restoredBackupId": row.ID}
+			restored = withSave(job, map[string]any{"restoredBackupId": row.ID})
 			if fit.Moved {
 				restored[MovedInput] = true
 			}

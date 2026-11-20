@@ -46,6 +46,8 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page 
   await expect(page).toHaveURL(/\?tab=backups&operation=/);
   await expect(page.getByRole("tab", { name: "Backups" })).toHaveAttribute("aria-selected", "true");
   await expectOperationSucceeded(page);
+  // The copy holds what the game last saved, so it is asked to save first.
+  await expect(page.locator("#selected-operation")).toContainText("Save command sent before stopping.");
   const rows = page.locator("#backup-list tbody tr");
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText("complete");

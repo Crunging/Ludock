@@ -444,7 +444,7 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 		}
 		if next.AlertSince != 0 && !next.Notified {
 			s.notify(notify.ServerProblems, "memory:"+server.ID+":"+strconv.FormatInt(next.AlertSince, 10),
-				fmt.Sprintf("%s: over %d%% of its memory limit for %d minutes.", server.DisplayName, policy.MemoryPercent, policy.MemoryMinutes))
+				fmt.Sprintf("%s: over %d%% of its memory limit for %s.", server.DisplayName, policy.MemoryPercent, minutes(policy.MemoryMinutes)))
 			next.Notified = true
 			if _, _, err := s.saveState(ctx, policy, memoryKey(server.ID), saved, next); err != nil {
 				log.Warn("Could not save a server's memory alert; it may be sent again")
@@ -524,4 +524,11 @@ func (s *Service) ResourceProblems(ctx context.Context) (map[string][]Resource, 
 		}
 	}
 	return problems, nil
+}
+
+func minutes(count int) string {
+	if count == 1 {
+		return "1 minute"
+	}
+	return strconv.Itoa(count) + " minutes"
 }

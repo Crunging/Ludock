@@ -156,6 +156,20 @@ test("finding a newer image, being told once, and updating to it", async ({ page
   }
 });
 
+// An owner who pulls a newer image with their own tool, such as
+// `docker compose pull`, without recreating the server keeps it in Ludock,
+// though Docker then lists the container by its image's ID.
+test("pulling a newer image outside Ludock keeps the server", async ({ page }) => {
+  await registry({ id: "sha256:" + "5".repeat(64) });
+  await fake("/images/create", { fromImage: image });
+  await page.goto("/");
+  await expect(serverRow(page, "Survival")).toContainText("Running");
+  await expect(page.getByText("Server missing in Docker")).toHaveCount(0);
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Update" }).click();
+  await updateSurvival(page);
+});
+
 // A registry that refuses is not an alert: the Update tab says so quietly.
 test("a registry that refuses the check", async ({ page }) => {
   await registry({ status: "401" });

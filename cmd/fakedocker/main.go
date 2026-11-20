@@ -110,9 +110,15 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 			return code
 		}
 		// Shell commands behind the bounded wrapper: timeout -k 5 60 /bin/sh -c command.
+		// Like sh, a command exits with its own status.
 		if len(cmd) > 7 && cmd[3] == "ludock-console" {
-			if text, ok := strings.CutPrefix(cmd[len(cmd)-1], "echo "); ok {
+			command := cmd[len(cmd)-1]
+			if text, ok := strings.CutPrefix(command, "echo "); ok {
 				stdout([]byte(text + "\n"))
+			}
+			if code, ok := strings.CutPrefix(command, "exit "); ok {
+				status, _ := strconv.Atoi(code)
+				return status
 			}
 		}
 		return 0
@@ -296,6 +302,8 @@ func (g *fakeGame) rcon(password, list string, format func(online []string) stri
 		case "say":
 			g.said = append(g.said, argument)
 			return "[Server] " + argument
+		case "save-all":
+			return "Saving the game (this may take a moment!)Saved the game"
 		case "fake-said":
 			return "Said: " + strings.Join(g.said, " | ")
 		case "fake-join":

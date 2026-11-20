@@ -148,10 +148,10 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		}
 		// Limit recent work before filtering issues; read summary fields only.
 		rows, err := s.DB.QueryContext(ctx, `SELECT id,kind,status,updated_at,
-      CASE WHEN json_valid(result_json) THEN json_extract(result_json,'$.forceStopped') = 1 ELSE 0 END
+      CASE WHEN json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1 THEN 1 ELSE 0 END
       FROM (SELECT id,kind,status,updated_at,result_json FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100)
       WHERE status IN ('failed','interrupted') OR (status='succeeded' AND kind IN ('stop','restart') AND
-        CASE WHEN json_valid(result_json) THEN json_extract(result_json,'$.forceStopped') = 1 ELSE 0 END)`, server.ID)
+        CASE WHEN json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1 THEN 1 ELSE 0 END)`, server.ID)
 		if err != nil {
 			return nil, err
 		}

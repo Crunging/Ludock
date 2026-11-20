@@ -266,7 +266,8 @@ it meanwhile.
 ### Stopping and restarting
 
 When the game's console has a **Save world** shortcut, Ludock sends it and
-waits five seconds before stopping. Docker then gives the game 120 seconds to
+waits five seconds before stopping, including for a backup, restore, or
+update. Docker then gives the game 120 seconds to
 shut down (more for slow savers such as ARK, Palworld, Valheim, 7 Days to Die,
 and Don't Starve Together), or the container's own `stop_grace_period` if it
 is longer.
@@ -329,7 +330,11 @@ Ludock considers safe. It shows container paths, never host paths.
   and `.mrpack`) into a new folder beside it. It never replaces anything.
 - **Select** picks several entries to download as one tar, move, or delete.
 
-Stop a game before replacing a world or configuration it has open. Ludock
+Stop a game before replacing a world or configuration it has open. Many
+images write some settings from their environment variables each time they
+start, such as `MOTD` into Minecraft's `server.properties` on
+`itzg/minecraft-server`, so an edit to one of those is undone at the next
+start; change it where you define the server instead. Ludock
 never follows symbolic links, and blocks system and sensitive paths and Docker
 sockets. To limit access to some folders, set
 [`ludock.files`](REFERENCE.md#labels). Size and time limits are in the
