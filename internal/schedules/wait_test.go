@@ -522,3 +522,37 @@ func TestConsiderateDefaults(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// Cancelling a run waiting for players to leave ends it without acting,
+// even for a tick that read the run as waiting just before; the schedule's
+// next run still happens.
+func TestCancelWaitingRun(t *testing.T) {
+	f := setup(t)
+	players := f.withPlayers(1, true)
+	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(30, WaitRun)); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due)
+	first := f.first(t, admin)
+	stale, err := f.s.get(ctx, f.s.DB, first.ID, f.serverID)
+	if err != nil || !waiting(stale) {
+		t.Fatal(err, stale)
+	}
+	if err := f.s.CancelWait(ctx, admin, adminSession, f.serverID, first.ID, first.LastSlot); err != nil {
+		t.Fatal(err)
+	}
+	players.now.Online = 0
+	f.s.runOne(ctx, stale, due+30*minute)
+	if last := f.first(t, admin); f.operations(t) != 0 || last.WaitingUntil != 0 || !last.Enabled ||
+		!strings.HasPrefix(last.LastResult, "Cancelled by ") {
+		t.Fatal(last)
+	}
+	if err := f.s.CancelWait(ctx, admin, adminSession, f.serverID, first.ID, first.LastSlot); !apperr.Is(err, "SCHEDULE_WAIT_OVER") {
+		t.Fatal(err)
+	}
+	players.now.Online = 1
+	f.s.Run(ctx, due+86_400_000)
+	if next := f.first(t, admin); next.LastResult != WaitingResult || next.WaitingUntil != due+86_400_000+30*minute {
+		t.Fatal("the next day's run didn't start", next)
+	}
+}

@@ -96,7 +96,7 @@ func (s *Server) schedulesView(r *http.Request, request *Request, d *views.Serve
 	query := r.URL.Query()
 	view := &d.Row.Server
 	v := views.SchedulesView{ServerID: view.ID, Selected: query.Get("schedule"), Editing: query.Get("edit"),
-		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Now: db.Now(), CanResume: map[string]bool{},
+		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Now: db.Now(), CanResume: map[string]bool{}, CanCancelWait: map[string]bool{},
 		Viewer: request.User().ID, Admin: request.User().Role == db.RoleAdmin,
 		ShowReplies: can(view, authz.ConsoleExecute),
 		Form:        s.scheduleForm(r, d)}
@@ -113,6 +113,7 @@ func (s *Server) schedulesView(r *http.Request, request *Request, d *views.Serve
 	v.Schedules = list
 	for _, item := range list {
 		v.CanResume[item.ID] = canRunSchedule(view, item.Input)
+		v.CanCancelWait[item.ID] = item.WaitingUntil != 0 && s.App.Schedules.CanCancelWait(r.Context(), request.User(), &item)
 	}
 	if v.Selected != "" && err == nil && !slices.ContainsFunc(list, func(item schedules.Schedule) bool { return item.ID == v.Selected }) {
 		v.SelectedMissing = true

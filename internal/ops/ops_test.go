@@ -174,6 +174,9 @@ func TestRetriesStateItCouldNotSave(t *testing.T) {
 func TestFailedCheckpoint(t *testing.T) {
 	r, servers := setup(t, 1)
 	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "restore"})
+	if _, err := r.DB.Exec("UPDATE operations SET status='running' WHERE id=?", job.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := r.DB.Exec(`CREATE TRIGGER fail_phase BEFORE UPDATE OF phase ON operations WHEN NEW.phase = 'moving_old'
 		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
 		t.Fatal(err)
@@ -417,5 +420,58 @@ func TestStaleQueuedRowDoesNotRunAgain(t *testing.T) {
 	r.DB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='server.stop.succeeded'").Scan(&audits)
 	if runs != 1 || audits != 1 {
 		t.Fatal(runs, audits)
+	}
+}
+
+// Of a cancel and a waiting job's next save, whichever commits first wins:
+// the other is refused, and the saved status agrees with the winner.
+func TestCancelOrNextStep(t *testing.T) {
+	r, servers := setup(t, 1)
+	cancelled, stepped := 0, 0
+	for range 40 {
+		job, err := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "restart"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.DB.Exec("UPDATE operations SET status='running', phase=? WHERE id=?", PhaseWarning, job.ID); err != nil {
+			t.Fatal(err)
+		}
+		job.Status, job.Phase = Running, PhaseWarning
+		running := &Context{Job: job, runner: r}
+		var cancelErr, stepErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _, cancelErr = r.Cancel(ctx, job.ID, "admin", nil) }()
+		go func() { defer wg.Done(); stepErr = running.Progress("stopping", nil, nil) }()
+		wg.Wait()
+		saved, _ := r.Get(ctx, job.ID)
+		switch {
+		case cancelErr == nil && errors.Is(stepErr, ErrCancelled) && saved.Status == Cancelled:
+			cancelled++
+		case apperr.Is(cancelErr, "OPERATION_STARTED") && stepErr == nil && saved.Status == Running && saved.Phase == "stopping":
+			stepped++
+			if _, err := r.DB.Exec("UPDATE operations SET status='succeeded' WHERE id=?", job.ID); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatalf("cancel %v, step %v, saved %s/%s", cancelErr, stepErr, saved.Status, saved.Phase)
+		}
+	}
+	t.Log("cancel won", cancelled, "times; the step won", stepped)
+}
+
+// A job past its wait, or finished, can't be cancelled, and says why.
+func TestCancelRefusesWorkThatActed(t *testing.T) {
+	r, servers := setup(t, 1)
+	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "restart"})
+	for _, state := range []struct{ status, phase, code string }{
+		{Running, "saving_world", "OPERATION_STARTED"}, {Running, "validating", "OPERATION_STARTED"}, {Succeeded, Succeeded, "OPERATION_ENDED"},
+	} {
+		if _, err := r.DB.Exec("UPDATE operations SET status=?, phase=? WHERE id=?", state.status, state.phase, job.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Cancel(ctx, job.ID, "admin", nil); !apperr.Is(err, state.code) {
+			t.Fatal(state, err)
+		}
 	}
 }

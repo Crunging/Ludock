@@ -216,6 +216,9 @@ type Schedule struct {
 // pauses, and the run's own end replace it in the same write.
 const WaitingResult = "Waiting for players to leave"
 
+// stillWaitingSQL limits a write that ends a wait to a run still waiting.
+const stillWaitingSQL = " AND last_result='" + WaitingResult + "' AND last_run_at IS NOT NULL AND last_operation_id IS NULL"
+
 func waiting(r *row) bool {
 	return r.lastResult.String == WaitingResult && r.lastRunAt.Valid && !r.lastOpID.Valid
 }
@@ -869,11 +872,15 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 	}
 	var result sql.Result
 	var recordErr error
+	stillWaiting := ""
+	if waiting(r) {
+		stillWaiting = stillWaitingSQL
+	}
 	if slot != "" {
-		result, recordErr = s.DB.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=NULL,last_result=? WHERE id=? AND revision=?",
+		result, recordErr = s.DB.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=NULL,last_result=? WHERE id=? AND revision=?"+stillWaiting,
 			slot, now, reason, r.id, r.revision)
 	} else {
-		result, recordErr = s.DB.ExecContext(ctx, "UPDATE schedules SET last_result=? WHERE id=? AND revision=?", reason, r.id, r.revision)
+		result, recordErr = s.DB.ExecContext(ctx, "UPDATE schedules SET last_result=? WHERE id=? AND revision=?"+stillWaiting, reason, r.id, r.revision)
 	}
 	if recordErr != nil {
 		log.Warn("Could not record or notify a skipped schedule run", logging.F("scheduleId", r.id))
@@ -899,6 +906,11 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 // queue enqueues a run's operation and records it on the schedule in one
 // transaction, while the owner's access is still as read in state.
 func (s *Service) queue(ctx context.Context, r *row, data Input, state string, user *db.SessionUser, binding *identity.Server, slot string, now int64) error {
+	// A run that waited goes ahead only if nobody cancelled the wait.
+	stillWaiting := ""
+	if waiting(r) {
+		stillWaiting = stillWaitingSQL
+	}
 	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		// The owner's access is as checked above, read on this connection.
 		if err := assertUnchanged(ctx, tx, state, r.serverID, r.ownerID); err != nil {
@@ -914,7 +926,7 @@ func (s *Service) queue(ctx context.Context, r *row, data Input, state string, u
 			return err
 		}
 		// Queue and associate the same attempt atomically.
-		result, err := tx.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=?,last_result=? WHERE id=? AND revision=?",
+		result, err := tx.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=?,last_result=? WHERE id=? AND revision=?"+stillWaiting,
 			slot, now, job.ID, "Queued operation "+job.ID, r.id, r.revision)
 		if err != nil {
 			return err
@@ -971,8 +983,13 @@ func (s *Service) commandReady(ctx context.Context, user *db.SessionUser, server
 func (s *Service) claimAnnouncement(ctx context.Context, r *row, slot string, lead int, now int64) bool {
 	claimed := false
 	if err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schedule_announcements(schedule_id,slot,lead_minutes)
-      SELECT id,?,? FROM schedules WHERE id=? AND revision=?`, slot, lead, r.id, r.revision)
+		// A waiting run's countdown is claimed only while it still waits.
+		query, args := `INSERT OR IGNORE INTO schedule_announcements(schedule_id,slot,lead_minutes)
+      SELECT id,?,? FROM schedules WHERE id=? AND revision=?`, []any{slot, lead, r.id, r.revision}
+		if waiting(r) {
+			query, args = query+stillWaitingSQL+" AND last_slot=?", append(args, r.lastSlot.String)
+		}
+		result, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
 			return err
 		}
@@ -1080,15 +1097,22 @@ func (s *Service) Announce(ctx context.Context, now int64) {
 }
 
 func (s *Service) announce(ctx context.Context, r *row, data Input, runAt int64, lead int) error {
+	return s.say(ctx, r, data, waiting(r), time.UnixMilli(runAt).Add(-announceCutoff), WarningMessage(data.Action, lead))
+}
+
+// say sends players message on the owner's authority, before deadline and
+// while the schedule is unchanged; stillWaiting also requires r's waiting
+// run to be waiting still, not cancelled or ended.
+func (s *Service) say(ctx context.Context, r *row, data Input, stillWaiting bool, deadline time.Time, message string) error {
 	if s.Console == nil {
 		return errors.New("no console")
 	}
-	deadline := time.UnixMilli(runAt).Add(-announceCutoff)
 	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	assertCurrent := func() (*db.SessionUser, *identity.Server, error) {
 		latest, err := s.get(ctx, s.DB, r.id, r.serverID)
-		if err != nil || latest == nil || latest.revision != r.revision || ctx.Err() != nil || time.Now().After(deadline) {
+		if err != nil || latest == nil || latest.revision != r.revision || ctx.Err() != nil || time.Now().After(deadline) ||
+			(stillWaiting && (!waiting(latest) || latest.lastSlot != r.lastSlot)) {
 			return nil, nil, errors.New("the announcement is no longer current")
 		}
 		user, binding, err := s.authority(ctx, s.DB, latest, data)
@@ -1128,7 +1152,6 @@ func (s *Service) announce(ctx context.Context, r *row, data Input, runAt int64,
 	if template == "" {
 		return nil
 	}
-	message := WarningMessage(data.Action, lead)
 	return s.Console.Broadcast(ctx, current, strings.ReplaceAll(template, "{message}", message), func() error {
 		if _, _, err := assertCurrent(); err != nil {
 			return err

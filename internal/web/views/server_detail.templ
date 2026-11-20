@@ -40,6 +40,7 @@ type ServerDetail struct {
 	NextSchedule   *schedules.Schedule
 	// WaitingSchedule is a run waiting for players to leave.
 	WaitingSchedule *schedules.Schedule
+	WaitingCancel   bool
 	Now             int64
 	Activity       ActivityView
 	Backups        BackupsView
@@ -68,8 +69,13 @@ type ActivityView struct {
 	AlreadyCurrent bool
 	// Tab is the tab showing the selected operation.
 	Tab string
-	// Waiting is a scheduled run waiting for players to leave.
-	Waiting *schedules.Schedule
+	// Waiting is a scheduled run waiting for players to leave;
+	// WaitingCancel, whether the viewer may cancel it.
+	Waiting       *schedules.Schedule
+	WaitingCancel bool
+	// Cancellable are the waiting operations the viewer may cancel.
+	Cancellable         map[string]bool
+	SelectedCancelledBy *history.Actor
 	// Archives offers the download of a backup the operation made.
 	Archives bool
 }
@@ -242,6 +248,9 @@ templ DetailLive(d ServerDetail) {
 					<strong>{ Capitalize(operation.Kind) }</strong>: { OperationLabel(operation.Status, operation.Phase) }. Server controls, backups, and updates are paused until it finishes.
 				</p>
 				<a class="text-link" href={ templ.SafeURL(OperationPath(server.ID, operation.Kind, operation.ID)) } { inPage()... }>View progress</a>
+				if CanCancelActive(server) {
+					@CancelButton(server.ID, operation.ID, operation.Kind, "#detail-status")
+				}
 			</div>
 		}
 	</div>
@@ -453,6 +462,9 @@ templ OverviewLive(d ServerDetail) {
 						if waiting := d.WaitingSchedule; waiting != nil {
 							<span class="schedule-waiting">{ ActionLabel(waiting.Action) } waiting for players to leave, until</span>
 							@Time(waiting.WaitingUntil, "plain", "")
+							if d.WaitingCancel {
+								@CancelWaitButton(server.ID, waiting.ID, waiting.LastSlot)
+							}
 						} else if next := d.NextSchedule; next != nil {
 							<span>{ ActionLabel(next.Action) }</span>
 							@Time(next.NextRunAt, "plain", "")
@@ -730,7 +742,7 @@ templ ActivityPanel(a ActivityView) {
 	@ActivityList(a)
 }
 
-var operationStatuses = []string{"queued", "running", "succeeded", "already_current", "skipped", "failed", "interrupted"}
+var operationStatuses = []string{"queued", "running", "succeeded", "already_current", "skipped", "failed", "interrupted", "cancelled"}
 
 // ActivityList is the filtered operation list; it reloads itself. Like the
 // server list, its refreshes read the filters from the form and share its
@@ -742,12 +754,15 @@ templ ActivityList(a ActivityView) {
 			@Alert("error", a.Error)
 		}
 		if waiting := a.Waiting; waiting != nil {
-			<p class="section-note activity-waiting" role="status">
+			<div class="section-note activity-waiting" role="status">
 				A scheduled { waiting.Action } is waiting for players to leave, until
 				@Time(waiting.WaitingUntil, "plain", "")
 				.
 				<a class="text-link" href={ detailURL(a.ServerID, "tab=schedules&schedule="+waiting.ID) } { inPage()... }>View schedule</a>
-			</p>
+				if a.WaitingCancel {
+					@CancelWaitButton(a.ServerID, waiting.ID, waiting.LastSlot)
+				}
+			</div>
 		}
 		<p class="section-note activity-filter-count" aria-live="polite">Showing { strconv.Itoa(len(a.Visible)) } of { strconv.Itoa(a.Total) }.</p>
 		if a.HiddenActive {
@@ -756,7 +771,7 @@ templ ActivityList(a ActivityView) {
 				<a class="text-link" href={ detailURL(a.ServerID, "tab=activity") } { inPage()... }>Show active work</a>
 			</p>
 		}
-		@OperationList(a.Visible, map[bool]string{true: "Nothing matches these filters.", false: "Nothing has happened yet."}[a.Total > 0], false, nil)
+		@OperationList(a.Visible, map[bool]string{true: "Nothing matches these filters.", false: "Nothing has happened yet."}[a.Total > 0], false, nil, a.Cancellable)
 		if a.Admin && a.AlreadyCurrent {
 			<p class="section-note">
 				Already up to date. Some games update when they start.
@@ -814,6 +829,14 @@ templ SelectedOperation(a ActivityView) {
 				<dt>Progress</dt>
 				<dd>{ OperationLabel(operation.Status, operation.Phase) }</dd>
 			</dl>
+			if a.Cancellable[operation.ID] {
+				<p class="inline-actions">
+					@CancelButton(a.ServerID, operation.ID, operation.Kind, "#detail-status")
+				</p>
+			}
+			if operation.Status == "cancelled" {
+				<p class="section-note">{ CancelledNote(a.SelectedCancelledBy) }</p>
+			}
 			if operation.Error != "" {
 				<p class="operation-error">{ operation.Error }</p>
 			}
@@ -848,7 +871,7 @@ func newBackup(operation *ops.Job) string {
 
 // OperationList is a table of operations; showContext adds the server and
 // actor column for the history page.
-templ OperationList(operations []history.Operation, empty string, showContext bool, serverNames map[string]string) {
+templ OperationList(operations []history.Operation, empty string, showContext bool, serverNames map[string]string, cancellable map[string]bool) {
 	<div class="table-scroll">
 		<table class="data-table" aria-label={ map[bool]string{true: "Activity", false: "Recent activity"}[showContext] }>
 			<thead>
@@ -895,6 +918,12 @@ templ OperationList(operations []history.Operation, empty string, showContext bo
 								@Pip(OperationTones[operation.Status])
 								{ OperationLabel(operation.Status, operation.Phase) }
 							</span>
+							if cancellable[operation.ID] {
+								@CancelButton(operation.ServerID, operation.ID, operation.Kind, "#detail-status")
+							}
+							if operation.Status == "cancelled" {
+								<p class="muted">{ CancelledNote(operation.CancelledBy) }</p>
+							}
 							if operation.Error != "" {
 								<p class="operation-error">{ operation.Error }</p>
 							}

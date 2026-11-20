@@ -699,6 +699,12 @@ dialog[open] { animation: rise 0.16s ease-out; }
   background: color-mix(in srgb, var(--busy) 16%, var(--block)); font-size: 15px;
 }
 .detail-operation-notice a { font-weight: 700; }
+/* Cancel sits under a row's result, or after a line's text. */
+.cancel-btn { justify-self: start; }
+td > .cancel-btn { display: block; margin-top: 6px; }
+.cancel-form { display: inline; }
+td > .cancel-form { display: block; margin-top: 6px; }
+.activity-waiting .cancel-form, dd > .cancel-form { margin-left: 8px; }
 #detail-status:not(:empty) { margin-bottom: 16px; }
 #detail-status > .alert { margin: 0; }
 

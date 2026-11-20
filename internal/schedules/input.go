@@ -111,6 +111,16 @@ func WarningMessage(action string, minutes int) string {
 	return fmt.Sprintf("%s in %d %s.", what, minutes, unit)
 }
 
+// CalledOffMessage tells players a warned action won't happen.
+func CalledOffMessage(action string) string {
+	what := map[string]string{"stop": "Server shutdown", "backup": "Server restart for a backup",
+		"update": "Server restart for an update"}[action]
+	if what == "" {
+		what = "Server restart"
+	}
+	return what + " cancelled."
+}
+
 func invalid(message string) error { return apperr.New("INVALID_REQUEST", 400, message) }
 
 func (i *Input) Validate() error {

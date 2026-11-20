@@ -4,6 +4,22 @@ templ Alert(kind, message string) {
 	<div class={ "alert", "alert--" + kind } role={ map[bool]string{true: "alert", false: "status"}[kind == "error"] }>{ message }</div>
 }
 
+// CancelButton calls off an operation that is still waiting; the outcome
+// shows in target.
+templ CancelButton(serverID, operationID, kind, target string) {
+	<button type="button" class="secondary-btn cancel-btn" hx-post={ "/servers/" + serverID + "/operations/" + operationID + "/cancel" } hx-target={ target } data-busy-label="Cancelling…">Cancel { kind }</button>
+}
+
+// CancelWaitButton ends a scheduled run's wait for players to leave
+// without acting; the outcome shows in the page's status.
+// slot names the waiting run, so a stale button can't cancel a later one.
+templ CancelWaitButton(serverID, scheduleID, slot string) {
+	<form class="cancel-form" hx-post={ "/servers/" + serverID + "/schedules/" + scheduleID + "/cancel-wait" } hx-target="#detail-status">
+		<input type="hidden" name="slot" value={ slot }/>
+		<button type="submit" class="secondary-btn cancel-btn" data-busy-label="Cancelling…">Cancel this run</button>
+	</form>
+}
+
 // Partial sends its children to another part of the page along with a
 // response: target is a selector and swap an hx-swap value.
 templ Partial(target, swap string) {

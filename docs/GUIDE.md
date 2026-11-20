@@ -225,7 +225,13 @@ Everyone who can set up schedules on a server sees all of its schedules and
 who set each up, so nobody adds a second nightly backup by accident. Only the
 owner or an administrator can change one.
 
-**Pause** a schedule in the list to stop it without deleting it.
+**Pause** a schedule in the list to stop it without deleting it. While a run
+waits for players to leave, the schedule, the server's overview, and its
+**Activity** tab show **Cancel this run**: that run ends without acting, the
+schedule's last result says who cancelled it, and the next run happens as
+planned. A scheduled run that is queued or warning players can be cancelled
+from **Activity** too; a cancelled run doesn't count as a failure or send an
+alert.
 
 ## How things work
 
@@ -266,6 +272,15 @@ waits the minute (shown in **Activity**), then goes ahead; an update warns once
 the new image is downloaded. If Ludock restarts during the minute, it finishes
 the wait afterwards; if it was down for more than five minutes past the time
 players were given, it leaves the server alone and says so in **Activity**.
+
+Until the minute is up, the server's page, its row on the server list, and its
+**Activity** row show **Cancel restart** (or stop, or update) to anyone who
+may start it. Cancelling changes nothing on the server and tells the players
+in the game that it's off. Work queued behind other work on the same server
+can be cancelled the same way while it waits. Cancel is there only while
+Ludock waits: once it saves, stops, downloads, or replaces anything, the work
+finishes. If the cancel and the end of the wait happen at once, the page says
+which won.
 
 **Take a backup first** in the Restart dialog checks the backup folder, stops
 the server, backs it up, and starts it once. If the backup fails, the server

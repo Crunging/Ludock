@@ -34,7 +34,17 @@ const (
 	// Skipped work decided not to act, such as a scheduled command for a
 	// stopped server.
 	Skipped = "skipped"
+	// Cancelled work was called off while it waited, before it acted.
+	Cancelled = "cancelled"
 )
+
+// PhaseWarning is a running operation waiting out the time players were
+// given. Only it and queued work can be cancelled: every later phase acts.
+const PhaseWarning = "warning"
+
+// ErrCancelled is what a cancelled job's next save returns; the job then
+// stops without acting.
+var ErrCancelled = errors.New("operation cancelled")
 
 // RecoveryActor starts the restarts of automatic recovery, on the authority
 // of the server's monitoring policy instead of an account.
@@ -104,8 +114,24 @@ type Recovery struct {
 }
 
 type Context struct {
-	Job    *Job
-	runner *Runner
+	Job       *Job
+	runner    *Runner
+	cancelled chan struct{}
+}
+
+// Cancelled closes when someone cancels the job while it waits.
+func (c *Context) Cancelled() <-chan struct{} { return c.cancelled }
+
+// Active returns ErrCancelled once the job was cancelled.
+func (c *Context) Active(ctx context.Context) error {
+	var status string
+	if err := c.runner.DB.QueryRowContext(ctx, "SELECT status FROM operations WHERE id=?", c.Job.ID).Scan(&status); err != nil {
+		return err
+	}
+	if status != Running {
+		return ErrCancelled
+	}
+	return nil
 }
 
 // Progress atomically persists the phase, the recovery state after change
@@ -132,9 +158,17 @@ func (c *Context) Progress(phase string, change func(*Recovery), result map[stri
 		}
 		resultJSON = string(encoded)
 	}
-	if _, err := c.runner.DB.Exec("UPDATE operations SET phase=?, recovery_json=?, result_json=?, updated_at=? WHERE id=?",
-		phase, string(recoveryJSON), resultJSON, db.Now(), c.Job.ID); err != nil {
+	// A cancelled job is no longer running, so it saves nothing more, and
+	// whichever of the cancel and this write commits first wins.
+	saved, err := c.runner.DB.Exec("UPDATE operations SET phase=?, recovery_json=?, result_json=?, updated_at=? WHERE id=? AND status='running'",
+		phase, string(recoveryJSON), resultJSON, db.Now(), c.Job.ID)
+	if err != nil {
 		return err
+	}
+	if changed, err := saved.RowsAffected(); err != nil {
+		return err
+	} else if changed == 0 {
+		return ErrCancelled
 	}
 	c.Job.Recovery, c.Job.Result, c.Job.Phase = merged, result, phase
 	return nil
@@ -185,7 +219,9 @@ type Runner struct {
 	yielded map[string]bool
 	// waiting jobs wait for background work's cleanup; they leave their lane
 	// and return to the queue at the next lock release.
-	waiting  map[string]bool
+	waiting map[string]bool
+	// signals tell running handlers they were cancelled.
+	signals  map[string]chan struct{}
 	laneLoad map[string]int
 	settled  chan struct{}
 	wake     chan struct{}
@@ -347,7 +383,9 @@ func (r *Runner) Enqueue(ctx context.Context, tx *sql.Tx, options EnqueueOptions
 	return result.job()
 }
 
-func (r *Runner) finish(ctx context.Context, job *Job, status string, result map[string]any, errorText string) error {
+// finish records a running job's outcome, reporting false when it was
+// cancelled instead.
+func (r *Runner) finish(ctx context.Context, job *Job, status string, result map[string]any, errorText string) (bool, error) {
 	var resultJSON, errorValue any
 	if result != nil {
 		encoded, _ := json.Marshal(result)
@@ -365,21 +403,31 @@ func (r *Runner) finish(ctx context.Context, job *Job, status string, result map
 	if user, _ := r.DB.FindUserByID(ctx, job.ActorID); user != nil {
 		entry.UserID = job.ActorID
 	}
-	// The outcome and its audit entry commit together.
+	// The outcome and its audit entry commit together. A job cancelled
+	// meanwhile keeps the outcome its cancellation recorded.
+	finished := false
 	if err := r.DB.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "UPDATE operations SET status=?,phase=?,result_json=COALESCE(?,result_json),error=?,updated_at=? WHERE id=?",
-			status, status, resultJSON, errorValue, db.Now(), job.ID); err != nil {
+		updated, err := tx.ExecContext(ctx, "UPDATE operations SET status=?,phase=?,result_json=COALESCE(?,result_json),error=?,updated_at=? WHERE id=? AND status='running'",
+			status, status, resultJSON, errorValue, db.Now(), job.ID)
+		if err != nil {
 			return err
 		}
+		if changed, err := updated.RowsAffected(); err != nil || changed == 0 {
+			return err
+		}
+		finished = true
 		return r.DB.FinishOperationAudit(ctx, tx, job.ID, "server."+job.Kind+".queued", entry)
 	}); err != nil {
-		return err
+		return false, err
+	}
+	if !finished {
+		return false, nil
 	}
 	if r.Changed != nil {
 		r.Changed(job.ServerID)
 	}
 	r.DB.PruneAuditIfNeeded(ctx)
-	return nil
+	return true, nil
 }
 
 // persist retries a state transition the runner must not skip, such as
@@ -623,10 +671,19 @@ func (r *Runner) handler(kind string) (Handler, bool) {
 }
 
 func (r *Runner) run(ctx context.Context, rw *row) {
+	defer func() {
+		r.mu.Lock()
+		delete(r.signals, rw.id)
+		r.mu.Unlock()
+	}()
 	fail := func(err error) {
 		message, _ := apperr.Public(err)
 		job := &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}
-		if r.persist(ctx, "finish", func() error { return r.finish(ctx, job, Failed, nil, message) }) {
+		finished := false
+		if r.persist(ctx, "finish", func() (err error) {
+			finished, err = r.finish(ctx, job, Failed, nil, message)
+			return err
+		}) && finished {
 			r.notifyScheduledFailure(rw)
 		}
 	}
@@ -659,7 +716,12 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 			fail(apperr.New("UNSUPPORTED_OPERATION", 409, "This operation type is unavailable"))
 			return
 		}
-		result, err := handler.Run(ctx, &Context{Job: job, runner: r})
+		// The signal stays registered while the job waits in the queue below.
+		signal := make(chan struct{})
+		r.mu.Lock()
+		r.signals[job.ID] = signal
+		r.mu.Unlock()
+		result, err := handler.Run(ctx, &Context{Job: job, runner: r, cancelled: signal})
 		var busy *resourcesBusy
 		if !errors.As(err, &busy) {
 			if err != nil {
@@ -675,15 +737,24 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 			} else if result["skipped"] == true {
 				status = Skipped
 			}
-			r.persist(ctx, "finish", func() error { return r.finish(ctx, job, status, result, "") })
+			r.persist(ctx, "finish", func() error {
+				_, err := r.finish(ctx, job, status, result, "")
+				return err
+			})
 			return
 		}
 		// Nothing has changed yet, so keep the job queued: a restart while it
 		// waits runs it normally instead of reconciling it.
+		requeued := false
 		if !r.persist(ctx, "requeue", func() error {
-			_, err := r.DB.ExecContext(ctx, "UPDATE operations SET status='queued', phase='queued', updated_at=? WHERE id=?", db.Now(), job.ID)
+			result, err := r.DB.ExecContext(ctx, "UPDATE operations SET status='queued', phase='queued', updated_at=? WHERE id=? AND status='running'", db.Now(), job.ID)
+			if err != nil {
+				return err
+			}
+			changed, err := result.RowsAffected()
+			requeued = changed == 1
 			return err
-		}) {
+		}) || !requeued {
 			return
 		}
 		if !busy.holdsQueue {
@@ -706,6 +777,7 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 		case <-busy.released:
 		case <-busy.settled:
 		case <-r.stopped:
+		case <-signal:
 		}
 		current, err := r.row(ctx, job.ID)
 		r.mu.Lock()
@@ -729,6 +801,7 @@ func (r *Runner) Start(ctx context.Context, recovered func()) error {
 	}
 	r.enabled = true
 	r.claimed, r.yielded, r.waiting, r.laneLoad = map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]int{}
+	r.signals = map[string]chan struct{}{}
 	r.wake = make(chan struct{}, 1)
 	r.stopped = make(chan struct{})
 	r.mu.Unlock()
@@ -797,13 +870,13 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 			continue
 		}
 		if err != nil {
-			if err := r.finish(ctx, &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}, Interrupted, nil,
+			if _, err := r.finish(ctx, &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}, Interrupted, nil,
 				"Recovery requires administrator attention. The server has been left stopped where possible."); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := r.finish(ctx, job, Interrupted, result, "Ludock restarted while this ran. Check the server before trying again."); err != nil {
+		if _, err := r.finish(ctx, job, Interrupted, result, "Ludock restarted while this ran. Check the server before trying again."); err != nil {
 			return err
 		}
 	}
@@ -826,4 +899,76 @@ func (r *Runner) Stop() {
 	r.mu.Unlock()
 	r.loop.Wait()
 	r.inFlight.Wait()
+}
+
+var (
+	errNotWaiting = apperr.New("OPERATION_STARTED", 409, "It already began, so it can’t be cancelled. Ludock will finish it.")
+	errEnded      = apperr.New("OPERATION_ENDED", 409, "It already ended, so there’s nothing to cancel.")
+)
+
+// Waiting reports whether a job can still be cancelled: it is queued, or
+// waits out a warning.
+func Waiting(job *Job) bool {
+	return job.Status == Queued || (job.Status == Running && job.Phase == PhaseWarning)
+}
+
+// Cancel calls off a job that is still waiting, on behalf of userID, and
+// returns it as it was just before. The status write is conditional on
+// the job still waiting, so of a cancel and the job's next save, whichever
+// commits first wins; a running handler then stops at its next wait or save.
+// within, when set, runs the write in a transaction that also rechecks the
+// requester, such as db.AdminMutation.
+func (r *Runner) Cancel(ctx context.Context, id, userID string, within func(func(*sql.Tx) error) error) (*Job, error) {
+	if within == nil {
+		within = func(fn func(*sql.Tx) error) error { return r.DB.Tx(ctx, fn) }
+	}
+	var before *Job
+	err := within(func(tx *sql.Tx) error {
+		rw, err := scan(tx.QueryRowContext(ctx, "SELECT "+columns+" FROM operations WHERE id = ?", id))
+		if errors.Is(err, sql.ErrNoRows) {
+			return apperr.New("NOT_FOUND", 404, "Not found")
+		}
+		if err != nil {
+			return err
+		}
+		if before, err = rw.job(); err != nil {
+			return err
+		}
+		if !Waiting(before) {
+			if before.Status == Running {
+				return errNotWaiting
+			}
+			return errEnded
+		}
+		updated, err := tx.ExecContext(ctx, `UPDATE operations SET status=?, phase=?, error=NULL,
+      result_json=json_set(COALESCE(result_json,'{}'),'$.cancelledBy',?), updated_at=? WHERE id=? AND status=? AND phase=?`,
+			Cancelled, Cancelled, userID, db.Now(), id, rw.status, rw.phase)
+		if err != nil {
+			return err
+		}
+		if changed, err := updated.RowsAffected(); err != nil {
+			return err
+		} else if changed == 0 {
+			return errNotWaiting
+		}
+		details := map[string]any{"operationId": id, "actorId": before.ActorID, "cancelledBy": userID}
+		// The entry stays the owner's, as queued; details name who cancelled.
+		entry := db.AuditEntry{Action: "server." + before.Kind + "." + Cancelled, TargetType: "server",
+			TargetID: before.ServerID, Details: details}
+		return r.DB.FinishOperationAudit(ctx, tx, id, "server."+before.Kind+".queued", entry)
+	})
+	if err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	if signal := r.signals[id]; signal != nil {
+		close(signal)
+		delete(r.signals, id)
+	}
+	r.mu.Unlock()
+	if r.Changed != nil {
+		r.Changed(before.ServerID)
+	}
+	r.DB.PruneAuditIfNeeded(ctx)
+	return before, nil
 }

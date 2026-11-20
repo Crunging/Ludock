@@ -515,6 +515,26 @@ Ludock runs short-lived helper containers from its own image:
   network and connect on `127.0.0.1`, so console and query ports needn't be
   published. A console password reaches its helper over standard input.
 
+### Activity results
+
+Each piece of work in **Activity** shows one result:
+
+| Result | Means |
+| --- | --- |
+| Queued | Waiting for other work on the server, or on the backup folder, to finish |
+| Running | Under way; a warned restart, stop, or update first shows **Giving players 1 minute** |
+| Succeeded | Done |
+| Already current | An update found nothing newer |
+| Skipped | Decided not to act, such as a scheduled command for a stopped server |
+| Failed | Stopped with the reason shown; Ludock left the server as safe as it could |
+| Interrupted | Ludock restarted while it acted; check the server |
+| Cancelled | Called off while it was queued or warning players, before it changed anything, by the person named |
+
+Only queued work and work warning players can be cancelled, by an
+administrator or anyone who may start that action on the server; a cancelled
+run doesn't pause its schedule. **Show → Everything** also records cancelling
+a scheduled run that waited for players to leave.
+
 ### After an interruption
 
 Work is recorded before it runs. When Ludock starts after a crash or restart,
@@ -522,7 +542,8 @@ it removes helpers left behind before anything else runs, waits for a stop that
 was in progress instead of sending it again, finishes or rolls back an
 interrupted restore from its journal, and removes unpacking leftovers. Work it
 can't safely finish is marked interrupted, never repeated, and scheduled runs
-missed by more than five minutes are recorded as missed.
+missed by more than five minutes are recorded as missed. Cancelled work stays
+cancelled, and a warning Ludock resumes can still be cancelled.
 
 Asked to stop, Ludock gives running work about six seconds to finish, inside
 the ten Docker waits before killing it. Work still running then, such as a

@@ -66,9 +66,12 @@ type Jobs struct {
 	// which a recovery restart requires, and when it last answered. It may
 	// be nil.
 	Hung func(serverID string, container servers.Container) (bool, int64)
+
+	runner *ops.Runner
 }
 
 func (j *Jobs) Register(runner *ops.Runner) {
+	j.runner = runner
 	for _, action := range []servers.Action{servers.Start, servers.Stop} {
 		runner.Register(string(action), ops.Handler{
 			Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {

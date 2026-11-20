@@ -281,7 +281,7 @@ func (s *Service) trackRecovery(ctx context.Context, server identity.Server, con
 		case status == ops.Failed || (status == ops.Interrupted && !newRun):
 			next.Last = RecoveryFailed
 			message = server.DisplayName + ": Ludock couldn’t restart it after the game stopped answering. Its Activity says why."
-		case status == ops.Skipped:
+		case status == ops.Skipped || status == ops.Cancelled:
 			// It never acted, so it doesn't count as an attempt.
 			next.Last = RecoverySkipped
 			if n := len(next.Attempts); n > 0 && next.Attempts[n-1] == state.RestartedAt {

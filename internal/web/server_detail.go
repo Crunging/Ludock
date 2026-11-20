@@ -91,6 +91,7 @@ func (s *Server) overview(r *http.Request, request *Request, d *views.ServerDeta
 				}
 				if item.WaitingUntil != 0 && d.WaitingSchedule == nil {
 					d.WaitingSchedule = item
+					d.WaitingCancel = s.App.Schedules.CanCancelWait(ctx, request.User(), item)
 				}
 			}
 		}
@@ -133,8 +134,10 @@ func (s *Server) activity(r *http.Request, request *Request, id string, query ur
 		list, _ := s.App.Schedules.List(r.Context(), request.User(), id)
 		if index := slices.IndexFunc(list, func(item schedules.Schedule) bool { return item.WaitingUntil != 0 }); index >= 0 {
 			a.Waiting = &list[index]
+			a.WaitingCancel = s.App.Schedules.CanCancelWait(r.Context(), request.User(), a.Waiting)
 		}
 	}
+	a.Cancellable = s.cancellable(r, request.User(), a.Visible)
 	if a.SelectedID != "" {
 		s.selectOperation(r, &a)
 	}
@@ -257,6 +260,13 @@ func (s *Server) selectOperation(r *http.Request, a *views.ActivityView) {
 		return
 	}
 	a.Selected = job
+	a.SelectedCancelledBy = s.canceller(r, job)
+	if request, _ := r.Context().Value(contextKey{}).(*Request); request != nil && s.App.Jobs.CanCancel(r.Context(), request.User(), job) {
+		if a.Cancellable == nil {
+			a.Cancellable = map[string]bool{}
+		}
+		a.Cancellable[job.ID] = true
+	}
 }
 
 func (s *Server) detailActivity(w http.ResponseWriter, r *http.Request, request *Request) {

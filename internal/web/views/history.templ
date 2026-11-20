@@ -187,7 +187,7 @@ templ ActivityPage(page Page, h HistoryView) {
 			if h.Everything {
 				@auditList(h)
 			} else if h.Error == "" {
-				@OperationList(h.Operations, map[bool]string{true: "Nothing matches these filters.", false: "Nothing has happened yet."}[h.filtered()], true, h.Names)
+				@OperationList(h.Operations, map[bool]string{true: "Nothing matches these filters.", false: "Nothing has happened yet."}[h.filtered()], true, h.Names, nil)
 			}
 			@historyPagination(h)
 		</div>
@@ -206,6 +206,19 @@ func auditActor(entry history.AuditEntry) string {
 		return "Ludock"
 	}
 	return ActorLabel(entry.Actor)
+}
+
+// cancelledBy names who cancelled the operation an entry records.
+func cancelledBy(entry history.AuditEntry, users map[string]string) string {
+	details, _ := entry.Details.(map[string]any)
+	id, _ := details["cancelledBy"].(string)
+	if id == "" {
+		return ""
+	}
+	if name := users[id]; name != "" {
+		return name
+	}
+	return "a deleted user"
 }
 
 // auditLabels name recorded actions in plain words. Server work is recorded
@@ -239,6 +252,7 @@ var auditLabels = map[string]string{
 	"schedule.deleted":                   "Deleted a schedule",
 	"schedule.paused":                    "Paused a schedule",
 	"schedule.resumed":                   "Resumed a schedule",
+	"schedule.wait.cancelled":            "Cancelled a scheduled run waiting for players to leave",
 	"server.added":                       "Added a server",
 	"server.start":                       "Started the server",
 	"server.stop":                        "Stopped the server",
@@ -360,6 +374,9 @@ templ auditList(h HistoryView) {
 				<div>
 					<strong>{ entryLabel(entry) }</strong>
 					<span>{ auditActor(entry) }</span>
+					if by := cancelledBy(entry, h.Users); by != "" {
+						<span>Cancelled by { by }</span>
+					}
 					if entry.Status != "" {
 						<span>
 							@Pip(OperationTones[entry.Status])
@@ -418,11 +435,13 @@ templ auditList(h HistoryView) {
 }
 
 type OperationDetailView struct {
-	Operation  *ops.Job
-	Actor      *history.Actor
-	ServerName string
-	Admin      bool
-	Error      string
+	Operation   *ops.Job
+	Actor       *history.Actor
+	CancelledBy *history.Actor
+	CanCancel   bool
+	ServerName  string
+	Admin       bool
+	Error       string
 }
 
 templ OperationDetailPage(page Page, o OperationDetailView) {
@@ -441,6 +460,7 @@ templ OperationDetailPage(page Page, o OperationDetailView) {
 				@Alert("error", o.Error)
 				<p><a class="text-link" href="/activity">Activity</a></p>
 			} else {
+				<div id="operation-status" aria-live="polite"></div>
 				@OperationSummary(o)
 			}
 		</div>
@@ -489,6 +509,14 @@ templ OperationSummary(o OperationDetailView) {
 			<dt>Progress</dt>
 			<dd>{ OperationLabel(operation.Status, operation.Phase) }</dd>
 		</dl>
+		if o.CanCancel {
+			<p class="inline-actions">
+				@CancelButton(operation.ServerID, operation.ID, operation.Kind, "#operation-status")
+			</p>
+		}
+		if operation.Status == "cancelled" {
+			<p class="section-note">{ CancelledNote(o.CancelledBy) }</p>
+		}
 		if operation.Error != "" {
 			<p class="operation-error">{ operation.Error }</p>
 		}

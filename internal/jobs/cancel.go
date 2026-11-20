@@ -1,0 +1,136 @@
+package jobs
+
+import (
+	"context"
+	"database/sql"
+	"time"
+
+	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/schedules"
+)
+
+// StartCapabilities are what starting an operation like job takes. Whoever
+// holds them on its server may cancel it while it waits; nil means only
+// administrators may.
+func StartCapabilities(job *ops.Job) []authz.Capability {
+	var capabilities []authz.Capability
+	switch job.Kind {
+	case "start", "stop", "restart":
+		capabilities = []authz.Capability{authz.Capability("server." + job.Kind)}
+		if job.Input["createBackup"] == true {
+			capabilities = append(capabilities, authz.BackupsCreate)
+		}
+	case "backup":
+		capabilities = []authz.Capability{authz.BackupsCreate}
+	case "restore":
+		capabilities = []authz.Capability{authz.BackupsRestore}
+	case "update":
+		capabilities = []authz.Capability{authz.ServerUpdate}
+		if request, _ := job.Input["request"].(map[string]any); request["forceRecreate"] == true {
+			capabilities = append(capabilities, authz.ServerRecreate)
+		}
+	case "command":
+		capabilities = []authz.Capability{authz.ConsoleExecute}
+	}
+	return capabilities
+}
+
+// CanCancel reports whether user may cancel job, which must be waiting.
+func (j *Jobs) CanCancel(ctx context.Context, user *db.SessionUser, job *ops.Job) bool {
+	return ops.Waiting(job) && j.assertCanCancel(ctx, user, job, false) == nil
+}
+
+func (j *Jobs) assertCanCancel(ctx context.Context, user *db.SessionUser, job *ops.Job, audited bool) error {
+	if user.Role == db.RoleAdmin {
+		return nil
+	}
+	capabilities := StartCapabilities(job)
+	if len(capabilities) == 0 {
+		return errCannotCancel
+	}
+	for _, capability := range append([]authz.Capability{authz.ServerView}, capabilities...) {
+		if audited {
+			if _, err := j.Authz.Assert(ctx, user, job.ServerID, capability); err != nil {
+				return err
+			}
+			continue
+		}
+		if ok, err := j.Authz.Has(ctx, user, job.ServerID, capability); err != nil || !ok {
+			return errCannotCancel
+		}
+	}
+	return nil
+}
+
+var errCannotCancel = apperr.New("FORBIDDEN", 403, "You can’t cancel this")
+
+// Cancel calls off an operation on serverID that is still waiting, on
+// behalf of user, whose access the caller has just rechecked; an
+// administrator's session and role are checked again in the write, by
+// tokenHash. Players who were warned hear that it's off.
+func (j *Jobs) Cancel(ctx context.Context, user *db.SessionUser, tokenHash, serverID, id string) error {
+	if _, err := j.Authz.Assert(ctx, user, serverID, authz.ServerView); err != nil {
+		return err
+	}
+	job, err := j.runner.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if job == nil || job.ServerID != serverID {
+		return apperr.New("NOT_FOUND", 404, "Not found")
+	}
+	if err := j.assertCanCancel(ctx, user, job, true); err != nil {
+		return err
+	}
+	var within func(func(*sql.Tx) error) error
+	if user.Role == db.RoleAdmin {
+		within = func(fn func(*sql.Tx) error) error { return j.DB.AdminMutation(ctx, user.ID, tokenHash, db.Now(), fn) }
+	}
+	before, err := j.runner.Cancel(ctx, id, user.ID, within)
+	if err != nil {
+		return err
+	}
+	// A warning sent and saved before the cancel is answered here; one still
+	// going out is answered by the operation itself.
+	if before.Recovery.WarnSent || j.countedDown(ctx, before) {
+		j.sayCalledOff(context.WithoutCancel(ctx), user, before)
+	}
+	return nil
+}
+
+// countedDown reports whether players heard a schedule's countdown to the
+// run that queued job; schedules record their warnings by run, not on the
+// operation.
+func (j *Jobs) countedDown(ctx context.Context, job *ops.Job) bool {
+	scheduleID, scheduled := job.Input["scheduleId"].(string)
+	if !scheduled {
+		return false
+	}
+	var warned bool
+	if err := j.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schedules s JOIN schedule_announcements a ON a.schedule_id=s.id AND a.slot=s.last_slot
+    WHERE s.id=? AND s.last_operation_id=?)`, scheduleID, job.ID).Scan(&warned); err != nil {
+		return false
+	}
+	return warned
+}
+
+// sayCalledOff tells players a warned operation is off, best effort, on the
+// binding it warned on.
+func (j *Jobs) sayCalledOff(ctx context.Context, user *db.SessionUser, job *ops.Job) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	server, err := j.Servers.ResolveAuthorized(ctx, user, job.ServerID, authz.ServerView, job.BindingRevision)
+	if err != nil || server.Container.State != "running" {
+		return
+	}
+	assertAccess := func() error {
+		_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, server.Observation, job.BindingRevision)
+		return err
+	}
+	if err := j.broadcast(ctx, server, schedules.CalledOffMessage(job.Kind), nil, assertAccess, false); err != nil {
+		log.Debug("Could not tell players a warned operation was cancelled")
+	}
+}
