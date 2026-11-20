@@ -516,7 +516,12 @@ func (j *Jobs) swap(ctx context.Context, job *ops.Context, server *servers.Conte
 			if err := j.assertCapability(ctx, job, capability); err != nil {
 				return "", err
 			}
-			if err := j.assertStopped(ctx, server, job); err != nil {
+			// The checks hold only together: after waiting for Docker, another
+			// manager may have started the original, so all are made again.
+			if err := j.assertStopped(docker.Promptly(ctx), server, job); err != nil {
+				if docker.Unavailable(err) && j.Docker.WaitForDocker(ctx, err, &since) {
+					continue
+				}
 				return "", err
 			}
 			state.Stage = swapStarting

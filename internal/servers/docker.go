@@ -725,7 +725,14 @@ const (
 // which is not a failure.
 func (o *Observer) ChangeState(ctx context.Context, id string, action Action,
 	assertAccess func(identity.Observation, *docker.ContainerInspect) error) error {
-	if err := o.ChangeStateExact(ctx, id, action, assertAccess); !errors.Is(err, ErrUnchanged) {
+	return o.ChangeStateUnsent(ctx, id, action, assertAccess, nil)
+}
+
+// ChangeStateUnsent is ChangeState that calls unsent, when not nil, as soon
+// as a request is known never to have reached Docker, before any retry.
+func (o *Observer) ChangeStateUnsent(ctx context.Context, id string, action Action,
+	assertAccess func(identity.Observation, *docker.ContainerInspect) error, unsent func() error) error {
+	if err := o.changeStateExact(ctx, id, action, assertAccess, unsent); !errors.Is(err, ErrUnchanged) {
 		return err
 	}
 	return nil
@@ -741,9 +748,19 @@ var ErrUnchanged = errors.New("container already in the requested state")
 // lost counts as done if Docker then shows the state it asked for.
 func (o *Observer) ChangeStateExact(ctx context.Context, id string, action Action,
 	assertAccess func(identity.Observation, *docker.ContainerInspect) error) error {
+	return o.changeStateExact(ctx, id, action, assertAccess, nil)
+}
+
+func (o *Observer) changeStateExact(ctx context.Context, id string, action Action,
+	assertAccess func(identity.Observation, *docker.ContainerInspect) error, unsent func() error) error {
 	var since time.Time
 	for {
 		before, err := o.changeState(ctx, id, action, assertAccess)
+		if before != nil && docker.NotSent(err) && unsent != nil {
+			if unsentErr := unsent(); unsentErr != nil {
+				return unsentErr
+			}
+		}
 		if before == nil || !docker.Unavailable(err) || !o.Docker.WaitForDocker(ctx, err, &since) {
 			return err
 		}
