@@ -33,7 +33,8 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await form.getByRole("button", { name: "Add schedule" }).click();
 
   await expect(page).toHaveURL(/saved=created/);
-  const row = page.locator("#schedule-list tbody tr").first();
+  // Other journeys leave their own schedules on this server.
+  const row = page.locator("#schedule-list tbody tr", { hasText: "weekdays" });
   await expect(row).toContainText("05:30, weekdays");
   await expect(row).toContainText("Warnings: 5, 1 min before");
 
@@ -62,7 +63,7 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   const other = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
   await openServer(other, "Survival");
   await other.getByRole("tab", { name: "Schedules" }).click();
-  await other.locator("#schedule-list tbody tr").first().getByRole("button", { name: "Pause" }).click();
+  await other.locator("#schedule-list tbody tr", { hasText: "weekdays" }).getByRole("button", { name: "Pause" }).click();
   await expect(other.locator("#detail-status")).toHaveText("Schedule paused.");
 
   const editor = page.locator("#schedule-form");
@@ -86,7 +87,7 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "Delete" }).click();
   await confirm.getByRole("button", { name: "Delete schedule" }).click();
-  await expect(page.locator("#schedule-list")).toContainText("No schedules.");
+  await expect(row).toHaveCount(0);
 });
 
 // The common case needs no choices: a daily restart at 08:00 in the
