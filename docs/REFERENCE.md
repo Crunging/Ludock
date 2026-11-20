@@ -41,7 +41,7 @@ is public (`SERVER_PUBLIC`). If your server answers one that isn't listed, set
 
 What each game gets beyond start, stop, files, and backups:
 
-| Game | Who's online | Kick and ban | Countdown warnings | Restart updates the game |
+| Game | Who's online | Kick and ban | Warnings to players | Restart updates the game |
 | --- | --- | --- | --- | --- |
 | Minecraft | Names | Kick, ban, allowlist | ✓ | ✓ |
 | Factorio | Names | Kick, ban | | |
@@ -142,7 +142,7 @@ needs `ludock.address`.
 | Shell command | 60 seconds |
 | Schedules | 100 per server and 1,000 in total, including paused ones |
 | Scheduled command | One line, 500 characters |
-| Countdown warnings | Up to 10, each 1 to 60 minutes before |
+| Schedule warnings | Up to 10, each 1 to 60 minutes before |
 | Waiting for an empty server | 1 to 360 minutes |
 | Email recipients | 10 per destination |
 

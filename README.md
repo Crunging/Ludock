@@ -50,8 +50,9 @@ server list.
 - **Backups** as plain tar archives, on a schedule, with weeks to months kept
   and an optional second copy on another disk. Restore a whole backup or one
   file.
-- **Schedules** for restarts, backups, and console commands, which can wait
-  until no one is online and warn players with a countdown.
+- **Schedules** for restarts, backups, and console commands, which wait until
+  no one is online and warn players with a countdown, unless you say otherwise.
+  Restart, Stop, and Update offer to warn players a minute ahead too.
 - **Alerts** to Discord, ntfy, Gotify, Telegram, email, or a webhook when a
   server goes down, its game stops answering, or a disk fills up, and an
   automatic restart when a game hangs.
