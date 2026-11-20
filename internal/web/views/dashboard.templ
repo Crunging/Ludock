@@ -289,11 +289,15 @@ templ fleet(list ServerList) {
 // fewer fit at a glance.
 const filterAt = 4
 
+// filterable is a list long enough to filter, or already filtered.
+func (list ServerList) filterable() bool {
+	return list.Total >= filterAt || list.Search != "" || (list.State != "" && list.State != "all")
+}
+
 // serverFilters narrows the list. Without scripts it submits to the page;
-// it shows only for a list long enough to filter, or already filtered.
+// the page hides it unless the list it shows is filterable.
 templ serverFilters(list ServerList) {
 	<form
-		hidden?={ list.Total < filterAt && list.Search == "" && (list.State == "" || list.State == "all") }
 		class="list-toolbar"
 		id="server-filters" role="search" aria-label="Filter servers" method="get" action="/" hx-get="/fragments/servers" hx-target="#servers" hx-swap="innerMorph" hx-sync="#servers:queue last" hx-trigger="submit, input changed delay:250ms target:input">
 		<label class="search-field">
@@ -353,7 +357,7 @@ templ ServerListFragment(list ServerList) {
 		</div>
 	}
 	if list.Total > 0 {
-		<section class={ "server-list", templ.KV("server-list--backups", list.ShowBackup), templ.KV("server-list--players", list.ShowPlayers) } aria-label="Game servers">
+		<section class={ "server-list", templ.KV("server-list--backups", list.ShowBackup), templ.KV("server-list--players", list.ShowPlayers), templ.KV("server-list--filterable", list.filterable()) } aria-label="Game servers">
 			<div class="server-list__header">
 				<span>Server</span>
 				<span>State</span>

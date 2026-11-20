@@ -544,7 +544,7 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 .state-filter select { width: auto; min-width: 150px; }
 .list-toolbar__count { margin-left: auto; font-size: 14px; }
 /* Server filters show only while there is a list to filter. */
-.dashboard-page:not(:has(#servers .server-list)) #server-filters { display: none; }
+.dashboard-page:not(:has(#servers .server-list--filterable)) #server-filters { display: none; }
 
 .server-list {
   display: grid; column-gap: 22px; row-gap: var(--gap);

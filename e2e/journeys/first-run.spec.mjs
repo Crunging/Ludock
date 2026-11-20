@@ -173,8 +173,7 @@ test("a folder mounted for second copies is used without asking, until an admini
   await form.getByRole("button", { name: "Save backup settings" }).click();
   await expect(form.locator(".alert--success")).toHaveText("Backup settings saved.");
   await expect(storage).not.toContainText("Second copy in");
-  // Ludock looks for the folder again every 15 seconds; the choice holds.
-  await page.waitForTimeout(16_000);
+  // The choice is saved; the Go tests cover it holding as Ludock looks again.
   await page.reload();
   await expect(storage.locator("#ludock-data-save")).toBeVisible();
   await expect(storage).not.toContainText("Second copy in");
