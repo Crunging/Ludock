@@ -114,19 +114,52 @@ func (s *Service) Game(serverID string, container servers.Container) (Game, int6
 		return NotChecked, 0
 	}
 	reading := s.Get(serverID, container)
-	if reading == nil || reading.AnsweredAt == 0 {
+	answered := s.recalledAt(serverID, container)
+	if reading != nil {
+		answered = max(answered, reading.AnsweredAt)
+	}
+	if answered == 0 {
 		return Waiting, 0
 	}
-	if reading.Answer == NotAsked || time.Since(time.UnixMilli(reading.AnswerAt)) > answerFresh {
-		return Unknown, reading.AnsweredAt
+	if reading == nil || reading.Answer == NotAsked || time.Since(time.UnixMilli(reading.AnswerAt)) > answerFresh {
+		return Unknown, answered
 	}
 	if reading.Answer == Silent {
-		return NotAnswering, reading.AnsweredAt
+		return NotAnswering, answered
 	}
-	return Answering, reading.AnsweredAt
+	return Answering, answered
 }
 
-// healthRun is when a container run's health check last passed.
+// Recall tells the service that a container run's game answered at at, as
+// an earlier Ludock saw it, so its silence counts after Ludock restarts.
+func (s *Service) Recall(serverID string, container servers.Container, at int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recalled == nil {
+		s.recalled = map[string]healthRun{}
+	}
+	run := s.recalled[serverID]
+	if run.containerID != container.ID || run.startedAt != container.StateSince {
+		run = healthRun{containerID: container.ID, startedAt: container.StateSince}
+	}
+	run.healthyAt = max(run.healthyAt, at)
+	s.recalled[serverID] = run
+}
+
+func (s *Service) recalledAt(serverID string, container servers.Container) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recalledLocked(serverID, container)
+}
+
+func (s *Service) recalledLocked(serverID string, container servers.Container) int64 {
+	if run := s.recalled[serverID]; run.containerID == container.ID && run.startedAt == container.StateSince {
+		return run.healthyAt
+	}
+	return 0
+}
+
+// healthRun is when a container run's game last answered.
 type healthRun struct {
 	containerID string
 	startedAt   int64
@@ -149,6 +182,7 @@ func (s *Service) health(serverID string, container servers.Container) (Game, in
 	if container.HealthyAt >= container.StateSince {
 		run.healthyAt = max(run.healthyAt, container.HealthyAt)
 	}
+	run.healthyAt = max(run.healthyAt, s.recalledLocked(serverID, container))
 	s.healthy[serverID] = run
 	switch {
 	case container.Health == "healthy":
@@ -210,9 +244,11 @@ type Service struct {
 	// it.
 	waiters map[string]chan struct{}
 	healthy map[string]healthRun
-	slots   chan struct{}
-	work    sync.WaitGroup
-	stopped bool
+	// recalled holds the answers Recall was told of.
+	recalled map[string]healthRun
+	slots    chan struct{}
+	work     sync.WaitGroup
+	stopped  bool
 }
 
 // Get is the latest reading of a server's current container run, or nil.

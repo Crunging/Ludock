@@ -253,7 +253,15 @@ func (s *Service) trackRecovery(ctx context.Context, server identity.Server, con
 	next := state
 	// An answer between two checks ends the silence they saw.
 	answeredSince := running && state.SilentSince != 0 && s.lastAnswer(server.ID, container) > state.SilentSince
-	if running && game == GameNotAnswering && (state.SilentSince == 0 || state.SilentRun != container.StateSince || answeredSince) {
+	// A silence in this run timed before Ludock restarted went unwatched
+	// meanwhile, so while its outage hasn't alerted it is timed again from
+	// this process's first check, as that outage is.
+	since := s.since.Load()
+	unwatched := state.SilentSince != 0 && state.SilentSince < since && state.SilentRun == container.StateSince && r.notified == 0 &&
+		!(state.Last == RecoveryGaveUp && state.LastAt >= state.SilentSince)
+	if running && unwatched && (game == GameNotAnswering || game == GameUnknown) {
+		next.SilentSince = since
+	} else if running && game == GameNotAnswering && (state.SilentSince == 0 || state.SilentRun != container.StateSince || answeredSince) {
 		next.SilentSince, next.SilentRun = now, container.StateSince
 	} else if running && game == GameAnswering {
 		next.SilentSince, next.SilentRun = 0, 0

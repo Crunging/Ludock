@@ -392,12 +392,14 @@ var Migrations = []Migration{
 	{
 		// A server's disk, memory, and recovery state join the policy they are
 		// judged by, from the settings that held them. A state without a
-		// monitoring row had no effect and is dropped.
+		// monitoring row had no effect and is dropped. answered_json is when
+		// the game last answered in its container run.
 		Version: 14,
 		SQL: `
       ALTER TABLE availability ADD COLUMN disk_json TEXT;
       ALTER TABLE availability ADD COLUMN memory_json TEXT;
       ALTER TABLE availability ADD COLUMN recovery_json TEXT;
+      ALTER TABLE availability ADD COLUMN answered_json TEXT;
       UPDATE availability SET
         disk_json = (SELECT value_json FROM settings WHERE key = 'monitor.disk:' || availability.server_id),
         memory_json = (SELECT value_json FROM settings WHERE key = 'monitor.memory:' || availability.server_id),
