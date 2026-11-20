@@ -449,10 +449,10 @@ func TestLastAdminIsProtected(t *testing.T) {
 	if err := s.DeleteUser(ctx, principal, adminID, Client{}); !apperr.Is(err, "SELF_DELETE") {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleMember, false, Client{}); err != nil {
+	if _, err := s.ChangeAccess(ctx, principal, targetID, db.RoleMember, new(false), Client{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdateAccess(ctx, principal, adminID, db.RoleAdmin, true, Client{}); !apperr.Is(err, "LAST_ADMIN") {
+	if _, err := s.ChangeAccess(ctx, principal, adminID, db.RoleAdmin, new(true), Client{}); !apperr.Is(err, "LAST_ADMIN") {
 		t.Fatal(err)
 	}
 	if err := s.DeleteUser(ctx, principal, targetID, Client{}); err != nil {
@@ -467,7 +467,7 @@ func TestLastAdminIsProtected(t *testing.T) {
 // share from before can't come back unnoticed.
 func TestAdministratorAndBackStartsWithNothingShared(t *testing.T) {
 	s, _, principal := racingService(t)
-	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleMember, false, Client{}); err != nil {
+	if _, err := s.ChangeAccess(ctx, principal, targetID, db.RoleMember, new(false), Client{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
@@ -478,19 +478,19 @@ func TestAdministratorAndBackStartsWithNothingShared(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleAdmin, false, Client{}); err != nil {
+	if _, err := s.ChangeAccess(ctx, principal, targetID, db.RoleAdmin, new(false), Client{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleMember, false, Client{}); err != nil {
+	if _, err := s.ChangeAccess(ctx, principal, targetID, db.RoleMember, new(false), Client{}); err != nil {
 		t.Fatal(err)
 	}
 	if grants, err := s.Authz.UserGrants(ctx, targetID); err != nil || len(grants) != 0 {
 		t.Fatal(grants, err)
 	}
-	if _, err := s.UpdateAccess(ctx, principal, adminID, db.RoleMember, false, Client{}); !apperr.Is(err, "LAST_ADMIN") {
+	if _, err := s.ChangeAccess(ctx, principal, adminID, db.RoleMember, new(false), Client{}); !apperr.Is(err, "LAST_ADMIN") {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdateAccess(ctx, principal, targetID, "operator", false, Client{}); !apperr.Is(err, "INVALID_REQUEST") {
+	if _, err := s.ChangeAccess(ctx, principal, targetID, "operator", new(false), Client{}); !apperr.Is(err, "INVALID_REQUEST") {
 		t.Fatal(err)
 	}
 }
@@ -589,7 +589,7 @@ func TestUserDeletedAfterChange(t *testing.T) {
 	if _, err := s.CreateUser(ctx, principal, "newcomer", "a long enough password", db.RoleMember, client); !apperr.Is(err, "USER_NOT_FOUND") {
 		t.Fatal("create", err)
 	}
-	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleMember, false, client); !apperr.Is(err, "USER_NOT_FOUND") {
+	if _, err := s.ChangeAccess(ctx, principal, targetID, db.RoleMember, new(false), client); !apperr.Is(err, "USER_NOT_FOUND") {
 		t.Fatal("update", err)
 	}
 }

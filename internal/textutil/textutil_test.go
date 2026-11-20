@@ -16,7 +16,7 @@ func TestCompare(t *testing.T) {
 	if CompareNatural("map2", "Map10") >= 0 || CompareNatural("é", "E") != 0 {
 		t.Fatal("natural order")
 	}
-	if Compare("apple", "Banana") >= 0 || CompareFold("Éclair", "eclair") != 0 || Compare("a", "a") != 0 {
+	if Compare("apple", "Banana") >= 0 || Compare("a", "a") != 0 {
 		t.Fatal("unexpected order")
 	}
 }
@@ -43,7 +43,7 @@ func TestCompareConcurrently(t *testing.T) {
 		go func() {
 			defer group.Done()
 			for range 1000 {
-				if CompareNatural("map2", "map10") >= 0 || CompareFold("Éclair", "eclair") != 0 {
+				if CompareNatural("map2", "map10") >= 0 || CompareNatural("Éclair", "eclair") != 0 {
 					t.Error("unexpected order")
 					return
 				}

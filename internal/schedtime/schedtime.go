@@ -271,12 +271,3 @@ func NextRun(input Input, now int64, lastSlot string) (int64, bool) {
 	}
 	return 0, false
 }
-
-// LocalDate is today's date in a time zone, as YYYY-MM-DD.
-func LocalDate(timezone string, now int64) (string, bool) {
-	location, ok := Location(timezone)
-	if !ok {
-		return "", false
-	}
-	return localClock(location, now).date, true
-}
