@@ -39,6 +39,12 @@ test("sending game commands, reading logs, and using the shell", async ({ page }
   await page.getByLabel("Shell command").fill("echo hello");
   await page.getByRole("button", { name: "Send" }).click();
   await expect(output).toContainText("> echo hello");
+  // A command that exits with a status of its own, as grep does when it
+  // finds nothing, ran fine.
+  await page.getByLabel("Shell command").fill("exit 3");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(output).toContainText("[system] Exited with code 3.");
+  await expect(output).not.toContainText("[error]");
 });
 
 test("a stopped server offers no command connection", async ({ page }) => {

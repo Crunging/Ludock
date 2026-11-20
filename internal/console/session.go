@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -400,6 +401,16 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 		return false
 	}
 	failed := func(err error) {
+		var exit *ExitError
+		if mode == ShellMode && errors.As(err, &exit) {
+			// sh exits 127 for a command it can't find, timeout(1) included.
+			if exit.Code == 127 {
+				send("error", "Command not found. Shell commands also need timeout in the image.")
+			} else {
+				send("system", "Exited with code "+itoa(exit.Code)+".")
+			}
+			return
+		}
 		log.Warn("Console command could not complete", logging.F("serverId", access.ServerID), logging.F("mode", string(mode)))
 		if public, ok := apperr.As(err); ok {
 			send("error", public.Message)

@@ -531,10 +531,20 @@ func (r *Runtime) exec(ctx context.Context, containerID string, options docker.E
 		return errTimedOut
 	case *result.ExitCode == 125:
 		return errCancelled
-	case result.Running || *result.ExitCode != 0:
+	case result.Running:
 		return errors.New("game console command failed")
+	case *result.ExitCode != 0:
+		return &ExitError{Code: *result.ExitCode}
 	}
 	return nil
+}
+
+// ExitError is a command that ran to its end and exited with a non-zero
+// status, such as grep finding nothing.
+type ExitError struct{ Code int }
+
+func (e *ExitError) Error() string {
+	return "console command failed with exit code " + strconv.Itoa(e.Code)
 }
 
 func (r *Runtime) cancel(containerID, control, user string) error {
