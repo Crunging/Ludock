@@ -1,17 +1,6 @@
-import { test, expect, asAdmin, dockerAction, serverRow, openServer, createUser, signIn, shareServer } from "./fixtures.mjs";
+import { test, expect, asAdmin, dockerAction, gameCommand as command, serverRow, openServer, createUser, signIn, shareServer } from "./fixtures.mjs";
 
 asAdmin();
-
-// The fake game consoles take fake-join, fake-leave, and fake-outage, which
-// change what their list command answers.
-async function command(page, text, server = "Survival") {
-  await page.goto("/");
-  await serverRow(page, server).getByRole("link", { name: "Console" }).click();
-  await expect(page.locator("[data-console-status]")).toHaveText("Connected");
-  await page.getByLabel("Game command").fill(text);
-  await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.locator("[data-console-feedback]")).toHaveText("Command sent. Check the output for its result.");
-}
 
 // onlineNames are the names in a server's list of who is online.
 function onlineNames(page) {
@@ -125,30 +114,6 @@ test("someone without console access isn't offered player actions", async ({ pag
   await command(console, "fake-leave Mara");
 });
 
-// With someone online, a restart offers to warn them first and is on by
-// default; the game hears it, and the restart follows a minute later.
-test("restarting with players online warns them first", async ({ page }) => {
-  test.setTimeout(150_000);
-  const console = await page.context().newPage();
-  await command(console, "fake-join Ada");
-  try {
-    await openServer(page, "Survival");
-    await expect(onlineNames(page)).toHaveText(["Ada"], { timeout: 30_000 });
-    await page.reload();
-    await page.locator(".detail-actions").getByRole("button", { name: "Restart" }).click();
-    const dialog = page.getByRole("dialog", { name: "Restart Survival?" });
-    await expect(dialog.getByLabel("Warn players and wait 1 minute")).toBeChecked();
-    await expect(dialog.getByLabel("Take a backup first")).not.toBeChecked();
-    await dialog.getByRole("button", { name: "Restart server" }).click();
-    await expect(page.locator("#selected-operation")).toContainText("Giving players 1 minute");
-    await command(console, "fake-said");
-    await expect(console.locator(".xterm-rows")).toContainText("Server restart in 1 minute.");
-    await expect(page.locator("#selected-operation")).toContainText("Succeeded", { timeout: 90_000 });
-  } finally {
-    await command(console, "fake-leave Ada");
-  }
-});
-
 test("seeing who is online, as players join and leave", async ({ page }) => {
   // Readings run in the background every 30 seconds, and right after a
   // console command.
@@ -200,6 +165,8 @@ test("seeing who is online, as players join and leave", async ({ page }) => {
   await expect(players).toContainText("Ludock reads them over the game console.");
   await page.goto("/");
   await expect(survival).toContainText("Unknown");
+  // The next journey on this server needs a game that answers.
+  await command(console, "fake-hang 0");
 
   await openServer(page, "valheim");
   await expect(page.locator(".overview-players")).toContainText("Shown while the server is running");
@@ -239,6 +206,7 @@ test("seeing who is online on a Palworld server", async ({ page }) => {
     await openServer(page, "palworld");
     await expect(players).toContainText("Couldn’t read players", { timeout: 15_000 });
     await expect(players).toContainText("Ludock reads them over the game console.");
+    await command(console, "fake-outage 0", "palworld");
   } finally {
     await dockerAction("palworld", "stop");
   }

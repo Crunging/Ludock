@@ -81,6 +81,21 @@ export async function openServer(page, name) {
 }
 
 /**
+ * Sends a command from a server's console page. The fake game consoles take
+ * fake-join, fake-leave, fake-outage, fake-hang, and fake-said, which change
+ * who is online and what their list command answers; a command sent from the
+ * console also starts a new reading of who is online.
+ */
+export async function gameCommand(page, text, server = "Survival") {
+  await page.goto("/");
+  await serverRow(page, server).getByRole("link", { name: "Console" }).click();
+  await expect(page.locator("[data-console-status]")).toHaveText("Connected");
+  await page.getByLabel("Game command").fill(text);
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.locator("[data-console-feedback]")).toHaveText("Command sent. Check the output for its result.");
+}
+
+/**
  * Leaves a server as other files expect it: stopped through Ludock, so
  * monitoring stays quiet, with monitoring on at its default levels.
  */
@@ -143,7 +158,9 @@ export async function createUser(page, username, password, role = "member") {
   await form.getByLabel("Initial password").fill(password);
   await form.getByLabel("Account").selectOption(role === "admin" ? "admin" : "member");
   await form.getByRole("button", { name: "Create user" }).click();
-  await expect(page.locator("#users .alert--success")).toContainText(`Created ${username}.`);
+  // Hashing the password is deliberately slow, and slower while other
+  // workers hash theirs.
+  await expect(page.locator("#users .alert--success")).toContainText(`Created ${username}.`, { timeout: 30_000 });
 }
 
 /**

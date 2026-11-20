@@ -46,16 +46,31 @@ real binary and `cmd/fakedocker`, start one of each on fresh temporary data for
 every worker, and use the product as people do. Add or extend a journey for
 anything a user can reach in the browser; Go unit tests are for what a journey
 can't reach. Workers run whole files, so a file must pass on a fresh server
-without the files before it, and a file whose journeys each pass on their own
-can set `test.describe.configure({ mode: "parallel" })`. `--workers=1` runs
-every file on one server. CI retries a failed journey once to show whether it's
-flaky, but a flaky journey still fails the run.
+without the files before it and leave each server as the next file expects it
+(`restoreServer()`). A file whose journeys each pass on their own can set
+`test.describe.configure({ mode: "parallel" })` to spread them over workers.
+`--workers=1` runs every file on one server. CI retries a failed journey once
+to show whether it's flaky, but a flaky journey still fails the run.
+
+A journey that waits on Ludock's own clocks goes in `journeys/slow`, in
+parallel mode, one wait per journey: player and game readings come every 30
+seconds on the 15-second tick that also runs monitoring and schedules, an
+alerting disk is measured every minute, memory is sampled every minute, and a
+warned restart waits one. Shorten what Ludock lets you, such as the shortest
+"Wait before alerting", and start a server through Ludock after changing it,
+which replaces an earlier stop's quiet time with the new wait. The `slow`
+project runs beside `quick`, everything else, so the whole suite takes about
+three minutes locally with 6 and 3 workers; each worker needs about 400 MB. CI
+runs each project in two jobs, with a worker for each slow journey, so a slow
+job takes about as long as its longest journey. Ordering a slow file's longest
+journeys first keeps one from starting last.
 
 [`e2e/journeys/fixtures.mjs`](../e2e/journeys/fixtures.mjs) holds the shared
 helpers: `asAdmin()` signs a file's journeys in as the setup administrator,
 `session()` opens another browser profile, `dockerAction()` changes a container
-behind Ludock's back, and `fake()` calls the fake daemon's controls, such as
-`/fake/disk`. Every page fails its journey on a script error or a browser
+behind Ludock's back, `gameCommand()` types into a server's game console (the
+fake games take `fake-join` and the like), and `fake()` calls the fake
+daemon's controls, such as `/fake/disk`. Every page fails its journey on a script error or a browser
 dialog. A journey that needs a fresh install, such as the first-run checklist,
 starts its own stack with `freshStack()` from `setup.mjs`.
 
@@ -97,8 +112,9 @@ inside helper containers), and `version`.
 
 - **CI** runs on every PR and every push to `main` that changes more than
   Markdown or the license: formatting, vet, generated templates, race-enabled
-  Go tests, the journeys, the pin check, the container journeys on AMD64 and
-  ARM64 (one job per journey file), and an image scan. Runs reuse the Go
+  Go tests, the journeys (each of their two projects in two jobs),
+  the pin check, the container journeys on AMD64 and ARM64 (one job per
+  journey file), and an image scan. Runs reuse the Go
   build cache and image layers from `main`'s latest run, except the runtime
   stage, so `apk upgrade` picks up security fixes.
 - **Weekly:** `govulncheck`, `npm audit` for the journey dependencies, and a

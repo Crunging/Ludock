@@ -194,6 +194,7 @@ func serveA2S(t *testing.T, respond func(request []byte) [][]byte) (int, func() 
 // A server that asks for a challenge gets the request again with it, and
 // one that keeps asking, sends a split reply, or stays silent is no answer.
 func TestA2SQuery(t *testing.T) {
+	t.Parallel()
 	challenge := []byte{0xff, 0xff, 0xff, 0xff, 'A', 9, 8, 7, 6}
 	port, requests := serveA2S(t, func(request []byte) [][]byte {
 		if bytes.HasSuffix(request, []byte{9, 8, 7, 6}) {
@@ -215,20 +216,24 @@ func TestA2SQuery(t *testing.T) {
 	})
 	silent, _ := serveA2S(t, func([]byte) [][]byte { return nil })
 	for name, port := range map[string]int{"endless challenges": endless, "split": split, "silent": silent} {
-		started := time.Now()
-		if _, err := Query(context.Background(), ValveA2S, "127.0.0.1", port, nil); !errors.Is(err, ErrNoAnswer) {
-			t.Errorf("%s: %v", name, err)
-		}
-		if time.Since(started) > Timeout+time.Second {
-			t.Errorf("%s took %s", name, time.Since(started))
-		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			started := time.Now()
+			if _, err := Query(context.Background(), ValveA2S, "127.0.0.1", port, nil); !errors.Is(err, ErrNoAnswer) {
+				t.Error(err)
+			}
+			if time.Since(started) > Timeout+time.Second {
+				t.Errorf("took %s", time.Since(started))
+			}
+		})
 	}
 }
 
 // A Minecraft server gets a status handshake and request, and a reply cut
 // short, oversized, or never sent is no answer.
 func TestMinecraftQuery(t *testing.T) {
-	serve := func(reply []byte, keepOpen bool) (int, chan []byte) {
+	t.Parallel()
+	serve := func(t *testing.T, reply []byte, keepOpen bool) (int, chan []byte) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
@@ -251,7 +256,7 @@ func TestMinecraftQuery(t *testing.T) {
 		}()
 		return listener.Addr().(*net.TCPAddr).Port, received
 	}
-	port, received := serve(MinecraftPacket(minecraftStatus(`{"players":{"max":10,"online":4}}`)), false)
+	port, received := serve(t, MinecraftPacket(minecraftStatus(`{"players":{"max":10,"online":4}}`)), false)
 	status, err := Query(context.Background(), MinecraftPing, "127.0.0.1", port, nil)
 	if err != nil || status.Online != 4 || status.Max != 10 {
 		t.Fatalf("query: %+v, %v", status, err)
@@ -264,10 +269,13 @@ func TestMinecraftQuery(t *testing.T) {
 	huge := appendVarInt(nil, maxMinecraftPacket+1)
 	for name, reply := range map[string][]byte{"truncated": full[:len(full)-3], "oversized": huge, "nothing": nil,
 		"garbage": []byte(strings.Repeat("\xff", 8))} {
-		port, _ := serve(reply, name == "nothing")
-		if _, err := Query(context.Background(), MinecraftPing, "127.0.0.1", port, nil); !errors.Is(err, ErrNoAnswer) {
-			t.Errorf("%s: %v", name, err)
-		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			port, _ := serve(t, reply, name == "nothing")
+			if _, err := Query(context.Background(), MinecraftPing, "127.0.0.1", port, nil); !errors.Is(err, ErrNoAnswer) {
+				t.Error(err)
+			}
+		})
 	}
 	closed, _ := net.Listen("tcp", "127.0.0.1:0")
 	unused := closed.Addr().(*net.TCPAddr).Port

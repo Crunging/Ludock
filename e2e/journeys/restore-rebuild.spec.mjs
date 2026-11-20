@@ -30,6 +30,19 @@ async function deleteBackups(page) {
   }
 }
 
+/**
+ * Reloads until the newest backup says text. Pages reuse a discovery from
+ * the last two seconds, so one can miss a change made outside Ludock.
+ */
+async function expectNewestBackup(page, text) {
+  const row = page.locator("#backup-list tbody tr").first();
+  await expect(async () => {
+    await page.reload();
+    await expect(row).toContainText(text, { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+  return row;
+}
+
 test.afterEach(async () => {
   await fake("/fake/recreate", { container: "valheim", mount: `${valheim()}=${valheim()}` });
   await fake("/fake/recreate", { container: "valheim", label: "ludock.files" });
@@ -47,9 +60,7 @@ test("restoring a backup taken before the server's data moved to another folder"
   writeFileSync(marker(valheim()), "left behind");
   await fake("/fake/recreate", { container: "valheim", mount: `${valheim()}=${moved()}` });
 
-  await page.reload();
-  const row = page.locator("#backup-list tbody tr").first();
-  await expect(row).toContainText("Taken when the server’s data lived somewhere else");
+  const row = await expectNewestBackup(page, "Taken when the server’s data lived somewhere else");
 
   // Browsing it says so before restoring one file.
   await row.getByRole("button", { name: /^More actions for the backup/ }).click();
@@ -87,9 +98,7 @@ test("a backup of other folders inside the server says why it can't be restored"
   cpSync(join(valheim(), "world"), join(valheim(), "kept"), { recursive: true });
   await fake("/fake/recreate", { container: "valheim", label: `ludock.files=${join(valheim(), "kept")}` });
 
-  await page.reload();
-  const row = page.locator("#backup-list tbody tr").first();
-  await expect(row).toContainText(`Can’t be restored here. This backup has the folder ${valheim()}, which the server no longer has. ` +
+  const row = await expectNewestBackup(page, `Can’t be restored here. This backup has the folder ${valheim()}, which the server no longer has. ` +
     `The server now has the folder ${join(valheim(), "kept")}, which this backup doesn’t.`);
   await expect(row.getByRole("link", { name: "Restore…" })).toHaveCount(0);
   await expect(row.getByRole("button", { name: "Restore…" })).toHaveCount(0);
