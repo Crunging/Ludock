@@ -261,7 +261,56 @@ const MovedInput = "dataMoved"
 var errMovedConfirmation = fail("RESTORE_MOVED_CONFIRMATION",
 	"This backup was taken when the server’s data lived somewhere else. Confirm restoring it from the server’s backups.")
 
+// restoreRun is one restore's state while it holds its locks.
+type restoreRun struct {
+	j      *Jobs
+	ctx    context.Context
+	job    *ops.Context
+	server *servers.Context
+	row    *backups.Backup
+	moved  bool
+	// A selective restore replaces one item of one root; a full one, every root.
+	roots   []backups.Root
+	item    string
+	whole   bool
+	what    string
+	reserve int64
+	// resumed says a warning was in progress when Ludock restarted.
+	resumed bool
+	folder  string
+	staged  map[string]int64
+	data    *backups.DataHelper
+	targets []backups.StageTarget
+	safety  *backups.Backup
+	// restored is the result, set once the restore commits.
+	restored map[string]any
+}
+
 func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	r, err := j.planRestore(ctx, job)
+	if err != nil {
+		return nil, err
+	}
+	// The archive is validated once its locks are held.
+	return job.WithLocks(append(slices.Clone(r.server.LockKeys), locks.StorageKey), func() (result map[string]any, err error) {
+		r.resumed = job.Job.Recovery.WarnUntil != 0
+		defer func() {
+			if r.data != nil {
+				r.data.Cleanup()
+			}
+			if restoreErr := j.restoreInitialState(context.WithoutCancel(ctx), r.server, job); restoreErr != nil && err == nil {
+				err = restoreErr
+			}
+		}()
+		if result, err = r.run(); err == nil {
+			return result, nil
+		}
+		return r.failed(err)
+	})
+}
+
+// planRestore runs the checks that need no locks.
+func (j *Jobs) planRestore(ctx context.Context, job *ops.Context) (*restoreRun, error) {
 	server, err := j.resolve(ctx, job, authz.BackupsRestore, true)
 	if err != nil {
 		return nil, err
@@ -284,7 +333,6 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 	if fit.Moved && job.Job.Input[MovedInput] != true {
 		return nil, errMovedConfirmation
 	}
-	// A selective restore replaces one item of one root; a full one, every root.
 	roots := row.Roots
 	if !whole {
 		index := slices.IndexFunc(row.Roots, func(root backups.Root) bool { return root.ID == rootID })
@@ -301,215 +349,253 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	// The archive is validated once its locks are held.
-	return job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), func() (result map[string]any, err error) {
-		var data *backups.DataHelper
-		var restored map[string]any
-		assertAccess := func() error { return j.dataAuthority(ctx, server, job) }
-		defer func() {
-			if data != nil {
-				data.Cleanup()
-			}
-			if restoreErr := j.restoreInitialState(context.WithoutCancel(ctx), server, job); restoreErr != nil && err == nil {
-				err = restoreErr
-			}
-		}()
-		// Players are warned once the archive is validated, which can take
-		// minutes; staging reads it again and verifies its checksum before
-		// any data is replaced. A warning resumed after a restart of Ludock
-		// is waited out first, since players already heard it.
-		resumed := job.Job.Recovery.WarnUntil != 0
-		warn := func() error {
-			if err := j.warnFirst(ctx, job, authz.BackupsRestore, true); err != nil || !warnRequested(job) {
-				return err
-			}
-			// Past the wait, an interruption is recovered like any other.
-			return job.Progress("validating", nil, nil)
+	return &restoreRun{j: j, ctx: ctx, job: job, server: server, row: row, moved: fit.Moved, roots: roots, item: item, whole: whole,
+		what: what, reserve: settings.ReserveBytes}, nil
+}
+
+// run is the restore's phases in order. Every data change is journaled
+// before it runs, since recovery acts on the journal alone.
+func (r *restoreRun) run() (map[string]any, error) {
+	// Players are warned once the archive is validated, which can take
+	// minutes; staging reads it again and verifies its checksum before any
+	// data is replaced. A warning resumed after a restart of Ludock is waited
+	// out first, in validate, since players already heard it.
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+	if !r.resumed {
+		if err := r.warn(); err != nil {
+			return nil, err
 		}
-		result, err = func() (map[string]any, error) {
-			if resumed {
-				if err := warn(); err != nil {
-					return nil, err
-				}
-			}
-			if err := j.assertCapability(ctx, job, authz.BackupsRestore); err != nil {
-				return nil, err
-			}
-			// A restore reads the second copy when the archive is missing
-			// from its own folder.
-			// A folder that stops responding fails the restore, which releases
-			// its locks, before the server stops.
-			folder, err := j.Backups.ArchiveFolder(row)
-			if err != nil {
-				return nil, err
-			}
-			rootID := ""
-			if item != "" {
-				rootID = roots[0].ID
-			}
-			staged, err := j.Backups.Validate(row, folder, rootID, item)
-			if err != nil {
-				return nil, err
-			}
-			if err := j.assertStagingRoom(ctx, server, job, roots, item, staged, settings.ReserveBytes, assertAccess); err != nil {
-				return nil, err
-			}
-			if !resumed {
-				if err := warn(); err != nil {
-					return nil, err
-				}
-			}
-			if err := j.stopForData(ctx, server, job); err != nil {
-				return nil, err
-			}
-			// One item's replaced copy is kept in the stage until the swap
-			// commits; a whole restore, or one asked to, also keeps a safety
-			// backup.
-			var safety *backups.Backup
-			if whole || job.Job.Input["createBackup"] == true {
-				if safety, err = j.createStoppedBackup(ctx, server, job); err != nil {
-					return nil, err
-				}
-			}
-			if err := job.Progress("restore_staging", nil, nil); err != nil {
-				return nil, err
-			}
-			var entries []journal
-			for _, root := range roots {
-				entries = append(entries, journal{Root: root, Item: item, Phase: "staging"})
-			}
-			if err := saveRestore(job, restoreRecovery{Status: "staging", Roots: entries}, ""); err != nil {
-				return nil, err
-			}
-			if err := assertAccess(); err != nil {
-				return nil, err
-			}
-			if data, err = j.Backups.Helpers.NewDataHelper(ctx, server, false, job.Job.ID); err != nil {
-				return nil, err
-			}
-			if err := job.Progress("restore_staging", func(r *ops.Recovery) { r.DataHelperID = data.Container }, nil); err != nil {
-				return nil, err
-			}
-			if err := j.assertStopped(ctx, server, job); err != nil {
-				return nil, err
-			}
-			// Extraction also stops at the reserve as it writes.
-			if err := j.stagingRoom(ctx, data, server, job, roots, staged, settings.ReserveBytes, assertAccess); err != nil {
-				return nil, err
-			}
-			var targets []backups.StageTarget
-			for _, root := range roots {
-				destination, err := backups.HelperRoot(server, root)
-				if err != nil {
-					return nil, err
-				}
-				targets = append(targets, backups.StageTarget{Root: root, Path: destination, Item: item})
-			}
-			for _, target := range targets {
-				if err := assertAccess(); err != nil {
-					return nil, err
-				}
-				if _, err := j.restoreStep(ctx, data, target.Path, "", job, "stage", assertAccess); err != nil {
-					return nil, err
-				}
-			}
-			if err := j.assertStopped(ctx, server, job); err != nil {
-				return nil, err
-			}
-			if err := assertAccess(); err != nil {
-				return nil, err
-			}
-			if err := j.Backups.Helpers.ExtractToStage(ctx, folder, row.ID, data.Container, targets, stageName(job),
-				row.Roots, row.Size, settings.ReserveBytes, row.Checksum, assertAccess); err != nil {
-				return nil, err
-			}
-			if err := assertAccess(); err != nil {
-				return nil, err
-			}
-			current, _ := journals(job)
-			if err := saveRestore(job, restoreRecovery{Status: "replacing", Roots: current}, ""); err != nil {
-				return nil, err
-			}
-			for index, root := range roots {
-				if err := j.assertStopped(ctx, server, job); err != nil {
-					return nil, err
-				}
-				if err := assertAccess(); err != nil {
-					return nil, err
-				}
-				destination, err := backups.HelperRoot(server, root)
-				if err != nil {
-					return nil, err
-				}
-				if err := persistJournal(job, index, "moving_old"); err != nil {
-					return nil, err
-				}
-				if _, err := j.restoreStep(ctx, data, destination, item, job, "moveOld", assertAccess); err != nil {
-					return nil, err
-				}
-				if err := persistJournal(job, index, "old_moved"); err != nil {
-					return nil, err
-				}
-				if err := assertAccess(); err != nil {
-					return nil, err
-				}
-				if _, err := j.restoreStep(ctx, data, destination, item, job, "moveNew", assertAccess); err != nil {
-					return nil, err
-				}
-				if err := persistJournal(job, index, "replaced"); err != nil {
-					return nil, err
-				}
-			}
-			if err := j.assertStopped(ctx, server, job); err != nil {
-				return nil, err
-			}
-			if err := assertAccess(); err != nil {
-				return nil, err
-			}
-			current, _ = journals(job)
-			if err := saveRestore(job, restoreRecovery{Status: "committed", Roots: current}, ""); err != nil {
-				return nil, err
-			}
-			restored = withSave(job, map[string]any{"restoredBackupId": row.ID})
-			if fit.Moved {
-				restored[MovedInput] = true
-			}
-			if safety != nil {
-				restored["safetyBackupId"] = safety.ID
-			}
-			if !whole {
-				restored["restoredRoot"], restored["restoredItem"] = roots[0].ID, item
-			}
-			if err := j.cleanupRestore(ctx, server, job, data); err != nil {
-				return nil, err
-			}
-			j.notifyDone(job, "restore-result:"+job.Job.ID, server.Container.DisplayName+": "+what+" completed.")
-			return restored, nil
-		}()
-		if err == nil {
-			return result, nil
+	}
+	if err := r.stop(); err != nil {
+		return nil, err
+	}
+	if err := r.job.Progress("restore_staging", nil, nil); err != nil {
+		return nil, err
+	}
+	var entries []journal
+	for _, root := range r.roots {
+		entries = append(entries, journal{Root: root, Item: r.item, Phase: "staging"})
+	}
+	if err := saveRestore(r.job, restoreRecovery{Status: "staging", Roots: entries}, ""); err != nil {
+		return nil, err
+	}
+	if err := r.stage(); err != nil {
+		return nil, err
+	}
+	if err := r.unpack(); err != nil {
+		return nil, err
+	}
+	if err := saveStatus(r.job, "replacing"); err != nil {
+		return nil, err
+	}
+	for index, root := range r.roots {
+		if err := r.replace(index, root); err != nil {
+			return nil, err
 		}
-		state, _ := restoreState(job)
-		// The restored data is in place; only its staging copy of the old data
-		// remains, which blocks every later backup until it is removed.
-		if restored != nil && state != nil && state.Status == "committed" {
-			if cleanErr := j.cleanupAfterFailure(context.WithoutCancel(ctx), server, job, &data); cleanErr == nil {
-				j.notifyDone(job, "restore-result:"+job.Job.ID, server.Container.DisplayName+": "+what+" completed.")
-				return restored, nil
-			}
-			j.notify(notify.Results, "restore-result:"+job.Job.ID, server.Container.DisplayName+": "+what+
-				" completed, but its staging folder could not be removed. Review the operation before backing up.")
-			return nil, fail("RESTORE_STAGING_LEFT", "The backup was restored, but Ludock could not remove the folder "+stageName(job)+
-				" from the server's data, which holds the replaced data. Delete that folder, then back up the server.")
+	}
+	if err := r.stillSafe(); err != nil {
+		return nil, err
+	}
+	if err := saveStatus(r.job, "committed"); err != nil {
+		return nil, err
+	}
+	r.restored = r.result()
+	if err := r.j.cleanupRestore(r.ctx, r.server, r.job, r.data); err != nil {
+		return nil, err
+	}
+	r.j.notifyDone(r.job, "restore-result:"+r.job.Job.ID, r.server.Container.DisplayName+": "+r.what+" completed.")
+	return r.restored, nil
+}
+
+// saveStatus saves the journal's current roots under a new status.
+func saveStatus(job *ops.Context, status string) error {
+	current, _ := journals(job)
+	return saveRestore(job, restoreRecovery{Status: status, Roots: current}, "")
+}
+
+func (r *restoreRun) assertAccess() error { return r.j.dataAuthority(r.ctx, r.server, r.job) }
+
+// stillSafe confirms the server is still the one this restore stopped and
+// that its requester may still restore it.
+func (r *restoreRun) stillSafe() error {
+	if err := r.j.assertStopped(r.ctx, r.server, r.job); err != nil {
+		return err
+	}
+	return r.assertAccess()
+}
+
+func (r *restoreRun) warn() error {
+	if err := r.j.warnFirst(r.ctx, r.job, authz.BackupsRestore, true); err != nil || !warnRequested(r.job) {
+		return err
+	}
+	// Past the wait, an interruption is recovered like any other.
+	return r.job.Progress("validating", nil, nil)
+}
+
+// validate checks the archive and that it fits, before the server stops.
+func (r *restoreRun) validate() error {
+	if r.resumed {
+		if err := r.warn(); err != nil {
+			return err
 		}
-		if data != nil && (state == nil || (state.Status != "committed" && state.Status != "cleaned")) {
-			if rollbackErr := j.rollbackAfterFailure(context.WithoutCancel(ctx), server, job, &data); rollbackErr != nil {
-				err = errors.Join(err, rollbackErr)
-			}
+	}
+	if err := r.j.assertCapability(r.ctx, r.job, authz.BackupsRestore); err != nil {
+		return err
+	}
+	// A restore reads the second copy when the archive is missing from its
+	// own folder. A folder that stops responding fails the restore, which
+	// releases its locks, before the server stops.
+	folder, err := r.j.Backups.ArchiveFolder(r.row)
+	if err != nil {
+		return err
+	}
+	rootID := ""
+	if r.item != "" {
+		rootID = r.roots[0].ID
+	}
+	staged, err := r.j.Backups.Validate(r.row, folder, rootID, r.item)
+	if err != nil {
+		return err
+	}
+	r.folder, r.staged = folder, staged
+	return r.j.assertStagingRoom(r.ctx, r.server, r.job, r.roots, r.item, r.staged, r.reserve, r.assertAccess)
+}
+
+// stop stops the server and takes the safety backup. One item's replaced
+// copy is kept in the stage until the swap commits; a whole restore, or one
+// asked to, also keeps a safety backup.
+func (r *restoreRun) stop() error {
+	if err := r.j.stopForData(r.ctx, r.server, r.job); err != nil {
+		return err
+	}
+	if r.whole || r.job.Job.Input["createBackup"] == true {
+		var err error
+		r.safety, err = r.j.createStoppedBackup(r.ctx, r.server, r.job)
+		return err
+	}
+	return nil
+}
+
+// stage starts the data helper and makes each root's stage folder, which
+// the staging journal already covers.
+func (r *restoreRun) stage() error {
+	if err := r.assertAccess(); err != nil {
+		return err
+	}
+	var err error
+	if r.data, err = r.j.Backups.Helpers.NewDataHelper(r.ctx, r.server, false, r.job.Job.ID); err != nil {
+		return err
+	}
+	helperID := r.data.Container
+	// assertStopped counts any helper but the recorded one as another writer.
+	if err := r.job.Progress("restore_staging", func(recovery *ops.Recovery) { recovery.DataHelperID = helperID }, nil); err != nil {
+		return err
+	}
+	if err := r.j.assertStopped(r.ctx, r.server, r.job); err != nil {
+		return err
+	}
+	// Extraction also stops at the reserve as it writes.
+	if err := r.j.stagingRoom(r.ctx, r.data, r.server, r.job, r.roots, r.staged, r.reserve, r.assertAccess); err != nil {
+		return err
+	}
+	for _, root := range r.roots {
+		destination, err := backups.HelperRoot(r.server, root)
+		if err != nil {
+			return err
 		}
-		j.notify(notify.Results, "restore-result:"+job.Job.ID, server.Container.DisplayName+": "+what+" failed. Its Activity says why.")
-		return nil, publicFirst(err)
-	})
+		r.targets = append(r.targets, backups.StageTarget{Root: root, Path: destination, Item: r.item})
+	}
+	for _, target := range r.targets {
+		if err := r.assertAccess(); err != nil {
+			return err
+		}
+		if _, err := r.j.restoreStep(r.ctx, r.data, target.Path, "", r.job, "stage", r.assertAccess); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unpack extracts the archive into the stage folders.
+func (r *restoreRun) unpack() error {
+	if err := r.stillSafe(); err != nil {
+		return err
+	}
+	if err := r.j.Backups.Helpers.ExtractToStage(r.ctx, r.folder, r.row.ID, r.data.Container, r.targets, stageName(r.job),
+		r.row.Roots, r.row.Size, r.reserve, r.row.Checksum, r.assertAccess); err != nil {
+		return err
+	}
+	return r.assertAccess()
+}
+
+// replace swaps one root's data for its staged copy, journaling each move
+// before and after it runs.
+func (r *restoreRun) replace(index int, root backups.Root) error {
+	if err := r.stillSafe(); err != nil {
+		return err
+	}
+	destination, err := backups.HelperRoot(r.server, root)
+	if err != nil {
+		return err
+	}
+	if err := persistJournal(r.job, index, "moving_old"); err != nil {
+		return err
+	}
+	if _, err := r.j.restoreStep(r.ctx, r.data, destination, r.item, r.job, "moveOld", r.assertAccess); err != nil {
+		return err
+	}
+	if err := persistJournal(r.job, index, "old_moved"); err != nil {
+		return err
+	}
+	if err := r.assertAccess(); err != nil {
+		return err
+	}
+	if _, err := r.j.restoreStep(r.ctx, r.data, destination, r.item, r.job, "moveNew", r.assertAccess); err != nil {
+		return err
+	}
+	return persistJournal(r.job, index, "replaced")
+}
+
+func (r *restoreRun) result() map[string]any {
+	restored := withSave(r.job, map[string]any{"restoredBackupId": r.row.ID})
+	if r.moved {
+		restored[MovedInput] = true
+	}
+	if r.safety != nil {
+		restored["safetyBackupId"] = r.safety.ID
+	}
+	if !r.whole {
+		restored["restoredRoot"], restored["restoredItem"] = r.roots[0].ID, r.item
+	}
+	return restored
+}
+
+// failed finishes a committed restore whose cleanup failed, or rolls back
+// one that had not committed.
+func (r *restoreRun) failed(err error) (map[string]any, error) {
+	ctx, job := context.WithoutCancel(r.ctx), r.job
+	state, _ := restoreState(job)
+	// The restored data is in place; only its staging copy of the old data
+	// remains, which blocks every later backup until it is removed.
+	if r.restored != nil && state != nil && state.Status == "committed" {
+		if cleanErr := r.j.cleanupAfterFailure(ctx, r.server, job, &r.data); cleanErr == nil {
+			r.j.notifyDone(job, "restore-result:"+job.Job.ID, r.server.Container.DisplayName+": "+r.what+" completed.")
+			return r.restored, nil
+		}
+		r.j.notify(notify.Results, "restore-result:"+job.Job.ID, r.server.Container.DisplayName+": "+r.what+
+			" completed, but its staging folder could not be removed. Review the operation before backing up.")
+		return nil, fail("RESTORE_STAGING_LEFT", "The backup was restored, but Ludock could not remove the folder "+stageName(job)+
+			" from the server's data, which holds the replaced data. Delete that folder, then back up the server.")
+	}
+	if r.data != nil && (state == nil || (state.Status != "committed" && state.Status != "cleaned")) {
+		if rollbackErr := r.j.rollbackAfterFailure(ctx, r.server, job, &r.data); rollbackErr != nil {
+			err = errors.Join(err, rollbackErr)
+		}
+	}
+	r.j.notify(notify.Results, "restore-result:"+job.Job.ID, r.server.Container.DisplayName+": "+r.what+" failed. Its Activity says why.")
+	return nil, publicFirst(err)
 }
 
 // rollbackAfterFailure rolls back through a fresh helper when the command
