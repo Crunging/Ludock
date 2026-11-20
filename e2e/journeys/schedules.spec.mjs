@@ -49,9 +49,15 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await expect(page).toHaveURL(/saved=saved/);
   await expect(row).toContainText("06:45, weekdays");
 
+  // The notice comes with the refreshed list, not ahead of a slower read of it.
+  await page.route(/\/fragments\/servers\/[^/]+\/schedules(\?|$)/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue();
+  });
   await row.getByRole("button", { name: "Pause" }).click();
   await expect(page.locator("#detail-status")).toHaveText("Schedule paused.");
-  await expect(row.locator("td").nth(2)).toHaveText("Paused");
+  expect(await row.locator("td").nth(2).textContent()).toBe("Paused");
+  await page.unrouteAll();
   await row.getByRole("button", { name: "Resume" }).click();
   await expect(row.locator("td").nth(2)).toHaveText("Enabled");
 

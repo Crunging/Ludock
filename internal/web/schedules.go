@@ -301,7 +301,19 @@ func (s *Server) toggleSchedule(w http.ResponseWriter, r *http.Request, request 
 	if enabled {
 		message = "Schedule resumed."
 	}
-	render(w, r, http.StatusOK, views.Alert("success", message))
+	s.scheduleOutcome(w, r, request, message)
+}
+
+// scheduleOutcome sends a change's notice with the refreshed list, so no row
+// from before the change stays on screen after the notice.
+func (s *Server) scheduleOutcome(w http.ResponseWriter, r *http.Request, request *Request, message string) {
+	d, err := s.detail(r, request, r.PathValue("id"), "schedules", false)
+	if err != nil || d.Tab != "schedules" {
+		render(w, r, http.StatusOK, views.Alert("success", message))
+		return
+	}
+	w.Header().Del("HX-Trigger")
+	render(w, r, http.StatusOK, views.ScheduleOutcome("success", message, s.schedulesView(r, request, d)))
 }
 
 func (s *Server) deleteSchedule(w http.ResponseWriter, r *http.Request, request *Request) {
@@ -311,7 +323,7 @@ func (s *Server) deleteSchedule(w http.ResponseWriter, r *http.Request, request 
 		s.fail(w, r, request, err)
 		return
 	}
-	render(w, r, http.StatusOK, views.Alert("success", "Schedule deleted."))
+	s.scheduleOutcome(w, r, request, "Schedule deleted.")
 }
 
 // previewSchedule shows a draft's next run as the form changes.

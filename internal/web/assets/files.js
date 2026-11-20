@@ -92,7 +92,7 @@
   var controller = null;
 
   function disabled() { return zone.getAttribute("aria-disabled") === "true" || controller !== null; }
-  function show(kind, message) {
+  function showNotice(kind, message) {
     if (!feedback) return;
     var alert = document.createElement("div");
     alert.className = "alert alert--" + kind;
@@ -108,8 +108,22 @@
     return text || "Upload failed (HTTP " + response.status + ").";
   }
 
+  // The notice waits for the folder, so no row from before the upload is on
+  // screen once it says the upload finished.
+  async function refreshFolder() {
+    var list = document.getElementById("file-list");
+    if (!list || !window.htmx) return;
+    try {
+      await window.htmx.ajax("GET", list.getAttribute("hx-get"), { source: list, target: list, swap: "outerMorph" });
+    } catch (error) {
+      // The notice still shows; the folder's own error replaces the rows.
+    }
+  }
+
   async function upload(files) {
     if (disabled() || files.length === 0) return;
+    var notice = null;
+    function show(kind, message) { notice = [kind, message]; }
     controller = new AbortController();
     var completed = 0, current = files[0].name;
     zone.setAttribute("aria-disabled", "true");
@@ -161,7 +175,9 @@
     } finally {
       status.textContent = "Refreshing folder…";
       cancel.disabled = true;
-      if (window.htmx) window.htmx.trigger(document.body, "files-changed");
+      await refreshFolder();
+      if (notice) showNotice(notice[0], notice[1]);
+      document.dispatchEvent(new CustomEvent("files-updated"));
       controller = null;
       progress.hidden = true;
       zone.setAttribute("aria-disabled", "false");
@@ -242,7 +258,9 @@
     if (event.target.matches("[data-file-select], [data-file-select-all]")) update();
   });
   document.addEventListener("htmx:after:swap", update);
-  document.addEventListener("files-changed", function () {
-    if (manager.hasAttribute("data-selecting")) selecting(false);
+  ["files-changed", "files-updated"].forEach(function (name) {
+    document.addEventListener(name, function () {
+      if (manager.hasAttribute("data-selecting")) selecting(false);
+    });
   });
 })();

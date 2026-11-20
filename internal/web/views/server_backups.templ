@@ -232,6 +232,14 @@ templ BackupReadiness(r ReadinessView) {
 	}
 }
 
+// BackupOutcome is a change's notice, sent with the refreshed archive table.
+templ BackupOutcome(message string, b BackupsView) {
+	@Alert("success", message)
+	@Partial("#backup-list", "outerHTML") {
+		@BackupList(b)
+	}
+}
+
 // BackupList is the archive table; it reloads after a deletion.
 templ BackupList(b BackupsView) {
 	<div id="backup-list" hx-get={ "/fragments/servers/" + b.ServerID + "/backups" } hx-trigger="backups-changed from:document" hx-swap="outerHTML">
