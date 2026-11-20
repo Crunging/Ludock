@@ -611,3 +611,19 @@ func TestBackupOfReplacedServer(t *testing.T) {
 		t.Fatalf("%+v", job)
 	}
 }
+
+// Docker stops answering right after a restart stopped the server. The
+// restart fails and the server stays stopped; Ludock keeps running.
+func TestRestartWhenDockerGoesAway(t *testing.T) {
+	f := setup(t)
+	f.engine.OnStop = func(c *fakedocker.Container) {
+		if c.ID == f.game {
+			f.engine.AddFault(`^GET .*/containers/`, 500, false, 0)
+		}
+	}
+	job := f.run(t, "restart", nil)
+	f.engine.ClearFaults()
+	if job.Status != ops.Failed || f.running() || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") {
+		t.Fatalf("%+v", job)
+	}
+}

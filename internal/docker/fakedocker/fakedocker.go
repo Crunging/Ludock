@@ -71,8 +71,9 @@ type Engine struct {
 	// Exec handles exec commands; nil exits 0 without output.
 	Exec ExecHandler
 	// OnStart runs when a container starts, under no lock, e.g. to fill in
-	// the logs a helper process would print.
+	// the logs a helper process would print; OnStop when one stops.
 	OnStart func(c *Container)
+	OnStop  func(c *Container)
 	// Attach runs a container's process on an attached stream, under no
 	// lock; nil collects stdin in Container.Stdin.
 	Attach     func(c *Container, stdin *bufio.Reader, stdout func([]byte))
@@ -1038,7 +1039,11 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 		if autoRemove, _ := c.HostConfig["AutoRemove"].(bool); autoRemove {
 			e.removeLocked(id)
 		}
+		hook := e.OnStop
 		e.mu.Unlock()
+		if hook != nil {
+			hook(c)
+		}
 		w.WriteHeader(204)
 	case action == "/restart" && r.Method == "POST":
 		c.State.Status, c.State.Running, c.State.StartedAt = "running", true, now

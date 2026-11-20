@@ -49,8 +49,7 @@ func IsNotFound(err error) bool { return StatusCode(err) == http.StatusNotFound 
 // Unavailable reports whether err means the daemon couldn't be reached, didn't
 // answer in time, or failed on its side, rather than refusing the request.
 func Unavailable(err error) bool {
-	var network *net.OpError
-	return errors.Is(err, ErrReadTimeout) || StatusCode(err) >= 500 || errors.As(err, &network)
+	return errors.Is(err, ErrRequestFailed) || errors.Is(err, ErrReadTimeout) || StatusCode(err) >= 500
 }
 
 // StreamOpenError reports a failed hijacked stream. A failed opening may
@@ -61,6 +60,10 @@ type StreamOpenError struct{ RequestStarted bool }
 func (e *StreamOpenError) Error() string { return "Docker stream connection failed" }
 
 var ErrReadTimeout = errors.New("docker read timed out")
+
+// ErrRequestFailed stands for a request that never got an answer; the
+// transport's own error names the socket.
+var ErrRequestFailed = errors.New("docker request failed")
 
 var resourcePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
@@ -187,7 +190,7 @@ func (c *Client) request(ctx context.Context, method, path string, body any, hea
 		c.writes.Add(1)
 	}
 	if err != nil {
-		return nil, errors.New("docker request failed")
+		return nil, ErrRequestFailed
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))

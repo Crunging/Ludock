@@ -479,7 +479,9 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 		if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
 			return nil, err
 		}
-		defer func() { j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID)) }()
+		// server is nil after a failed resolve, so the ID is kept apart.
+		serverID := server.Logical.ID
+		defer func() { j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), serverID)) }()
 		if action != servers.Start {
 			if err := j.saveWorld(ctx, job, server, assertAccess); err != nil {
 				return nil, err
