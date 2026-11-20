@@ -140,6 +140,69 @@ func TestFirstViewerReadsPlayers(t *testing.T) {
 	}
 }
 
+// A server page opened while a pass is still reading another server's
+// players is read once that pass ends, not at the next tick.
+func TestViewerDuringAPassReadsPlayers(t *testing.T) {
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	release := make(chan struct{})
+	reads := map[string]chan struct{}{"first": make(chan struct{}, 8), "second": make(chan struct{}, 8)}
+	for _, name := range []string{"first", "second"} {
+		port, err := fakedocker.ServeRCON("secret", func(string) string {
+			reads[name] <- struct{}{}
+			if name == "first" {
+				<-release
+			}
+			return "There are 0 of a max of 10 players online:"
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		engine.AddContainer(fakedocker.GameOptions{Name: name, Image: "itzg/minecraft-server", Running: true,
+			Labels: map[string]string{"ludock.console.host": "127.0.0.1", "ludock.query": "disabled"},
+			Env:    []string{"RCON_PORT=" + strconv.Itoa(port), "RCON_PASSWORD=secret"}})
+	}
+	a, err := New(config.Config{DockerSocket: engine.Socket}, dbtest.Open(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a.Start(ctx)
+	defer a.Stop(time.Now().Add(time.Minute))
+	var released sync.Once
+	defer released.Do(func() { close(release) })
+	if _, err := a.Servers.RefreshNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	logical, _ := a.Identity.List(ctx, "")
+	ids := map[string]string{}
+	for _, server := range logical {
+		ids[server.DisplayName] = server.ID
+	}
+	follow := func(name string) func() {
+		id := ids[name]
+		return a.Events.Subscribe(&events.Subscriber{Validate: func(context.Context) *db.SessionUser { return nil },
+			Send: func(events.Event) {}, Close: func(string) {}, Follows: func(server string) bool { return server == id }})
+	}
+	defer follow("first")()
+	select {
+	case <-reads["first"]:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first page wasn't read")
+	}
+	defer follow("second")()
+	released.Do(func() { close(release) })
+	select {
+	case <-reads["second"]:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second page waited for the pass reading the first")
+	}
+}
+
 // A console helper left by an interrupted run may still be sending a
 // command. Docker refuses to remove it at first, and no work takes a server
 // until it is gone.

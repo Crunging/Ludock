@@ -160,7 +160,10 @@ type Service struct {
 	reading  map[string]bool
 	// again holds a Check that arrived during that server's reading, which
 	// may have started before the change; it runs once the reading ends.
-	again   map[string]identity.Server
+	again map[string]identity.Server
+	// waiters are told when the next fresh reading of their server, one
+	// that starts after they ask, ends.
+	waiters map[string][]chan struct{}
 	slots   chan struct{}
 	work    sync.WaitGroup
 	stopped bool
@@ -198,10 +201,11 @@ func (s *Service) OnlineAt(serverID string, container servers.Container) (int, i
 // listed, for a schedule waiting for an empty server, which goes by its own
 // console checks.
 func (s *Service) ListedAt(serverID string, container servers.Container) (int, int64, bool) {
-	if reading := s.Get(serverID, container); reading != nil && reading.partial {
+	reading := s.Get(serverID, container)
+	if reading == nil || reading.Failed || reading.partial || time.Since(time.UnixMilli(reading.CheckedAt)) > Fresh {
 		return 0, 0, false
 	}
-	return s.OnlineAt(serverID, container)
+	return reading.Online, reading.CheckedAt, true
 }
 
 // Poll starts a reading for every running server that is due: those that
@@ -271,15 +275,28 @@ func (s *Service) Check(ctx context.Context, serverID string) {
 	s.start(ctx, *server, true, true, nil)
 }
 
-// CheckAndWait is Check, returning once the reading ends.
-func (s *Service) CheckAndWait(ctx context.Context, serverID string) {
+// CheckAndWait is Check, returning once a reading that started after the
+// call ends, when ctx ends, or after limit.
+func (s *Service) CheckAndWait(ctx context.Context, serverID string, limit time.Duration) {
 	server, err := s.Identity.ResolveBinding(ctx, serverID, -1)
 	if err != nil {
 		return
 	}
-	var wait sync.WaitGroup
-	s.start(ctx, *server, true, true, &wait)
-	wait.Wait()
+	done := make(chan struct{})
+	s.mu.Lock()
+	if s.waiters == nil {
+		s.waiters = map[string][]chan struct{}{}
+	}
+	s.waiters[serverID] = append(s.waiters[serverID], done)
+	s.mu.Unlock()
+	s.start(context.WithoutCancel(ctx), *server, true, true, nil)
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 }
 
 // Stop waits for readings to finish; none start after it.
@@ -305,6 +322,11 @@ func (s *Service) start(ctx context.Context, server identity.Server, players, fr
 	}
 	s.reading[server.ID] = true
 	ask := Ask{Players: players, Previous: s.readings[server.ID], Fresh: fresh}
+	var waiters []chan struct{}
+	if players && fresh {
+		waiters = s.waiters[server.ID]
+		delete(s.waiters, server.ID)
+	}
 	s.work.Add(1)
 	if wait != nil {
 		wait.Add(1)
@@ -317,6 +339,9 @@ func (s *Service) start(ctx context.Context, server identity.Server, players, fr
 			next, again := s.again[server.ID]
 			delete(s.again, server.ID)
 			s.mu.Unlock()
+			for _, waiter := range waiters {
+				close(waiter)
+			}
 			if again {
 				s.start(ctx, next, true, true, nil)
 			}

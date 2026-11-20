@@ -78,8 +78,9 @@ type App struct {
 	polling    sync.Mutex
 	checking   sync.Mutex
 	measuring  sync.Mutex
-	// deliverAgain asks the running delivery pass for another.
+	// deliverAgain and pollAgain ask the running pass for another.
 	deliverAgain atomic.Bool
+	pollAgain    atomic.Bool
 	stop         chan struct{}
 }
 
@@ -308,15 +309,32 @@ func (a *App) saveData(ctx context.Context) {
 	})
 }
 
-// pollPlayers reads players beside other work, once at a time.
+// pollPlayers reads players beside other work, once at a time. A call while
+// a pass runs makes it run once more, so a page opened meanwhile is read
+// without waiting for the next tick.
 func (a *App) pollPlayers(ctx context.Context) {
-	a.runAlone(&a.polling, func() {
-		var watched func(string) bool
-		if a.Events.Watched() {
-			watched = a.Events.Follows
+	a.pollAgain.Store(true)
+	if !a.polling.TryLock() {
+		return
+	}
+	a.background.Add(1)
+	go func() {
+		defer a.background.Done()
+		for {
+			for a.pollAgain.Swap(false) {
+				var watched func(string) bool
+				if a.Events.Watched() {
+					watched = a.Events.Follows
+				}
+				a.Players.Poll(ctx, watched)
+			}
+			a.polling.Unlock()
+			// A call between the last pass and the unlock found the lock held.
+			if !a.pollAgain.Load() || !a.polling.TryLock() {
+				return
+			}
 		}
-		a.Players.Poll(ctx, watched)
-	})
+	}()
 }
 
 // deliver sends due notifications beside other work. A call while a pass

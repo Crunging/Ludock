@@ -409,3 +409,65 @@ func (w writerFunc) Write(data []byte) (int, error) {
 	w(data)
 	return len(data), nil
 }
+
+type blockingSource struct {
+	Source
+	mu      sync.Mutex
+	reads   int
+	release chan struct{}
+}
+
+func (b *blockingSource) Read(ctx context.Context, _ identity.Server, _ Ask) (*Reading, error) {
+	b.mu.Lock()
+	b.reads++
+	b.mu.Unlock()
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+	}
+	return nil, errSkipped
+}
+
+// A refused kick waits for a reading that starts after it asks, not one
+// already running on the list it compared, and never longer than its limit.
+func TestCheckAndWaitWaitsForANewReading(t *testing.T) {
+	ctx := context.Background()
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true})
+	players, server := gameService(t, engine)
+	source := &blockingSource{Source: players.Source, release: make(chan struct{})}
+	players.Source = source
+	reads := func() int {
+		source.mu.Lock()
+		defer source.mu.Unlock()
+		return source.reads
+	}
+	players.Check(ctx, server)
+	for deadline := time.Now().Add(5 * time.Second); reads() != 1; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("no reading started")
+		}
+	}
+	returned := make(chan int, 1)
+	go func() {
+		players.CheckAndWait(ctx, server, time.Minute)
+		returned <- reads()
+	}()
+	time.Sleep(50 * time.Millisecond)
+	// Each release ends one reading: the running one, then the one asked for.
+	source.release <- struct{}{}
+	source.release <- struct{}{}
+	if got := <-returned; got != 2 {
+		t.Fatal("returned after", got, "readings")
+	}
+	start := time.Now()
+	players.CheckAndWait(ctx, server, 100*time.Millisecond)
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("waited past the limit")
+	}
+	close(source.release)
+}
