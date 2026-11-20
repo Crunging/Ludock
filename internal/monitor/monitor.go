@@ -16,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/notify"
+	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -33,6 +34,8 @@ type Policy struct {
 	MemoryAlert   bool `json:"memoryAlert"`
 	MemoryPercent int  `json:"memoryPercent"`
 	MemoryMinutes int  `json:"memoryMinutes"`
+	// Recover restarts a running server whose game stopped answering.
+	Recover bool `json:"recover"`
 }
 
 // DefaultPolicy is a server's policy until an administrator saves one:
@@ -55,8 +58,10 @@ type Availability struct {
 }
 
 type Service struct {
-	DB     *db.DB
-	Locks  *locks.Table
+	DB    *db.DB
+	Locks *locks.Table
+	// Runner queues recovery restarts. It may be nil.
+	Runner *ops.Runner
 	Notify func(alert notify.Alert, key, message string)
 	// Changed is told when an alert is raised or cleared, which no Docker
 	// event announces to open pages. It must not block.
@@ -65,6 +70,9 @@ type Service struct {
 	// Game reports whether a running game answers its status query. It may
 	// be nil.
 	Game func(serverID string, container servers.Container) GameAnswer
+	// LastAnswer is when a running game last answered its status query in
+	// this container run, or 0. It may be nil.
+	LastAnswer func(serverID string, container servers.Container) int64
 	// MeasureDisk measures each of a server's data folders after confirming
 	// its binding. An error means it was skipped. It may be nil.
 	MeasureDisk func(ctx context.Context, server identity.Server) ([]DiskSpace, error)
@@ -78,8 +86,11 @@ const (
 	// GameNotAnswering: the game answered in this container run, then
 	// stopped.
 	GameNotAnswering
-	// GameUnknown: no recent query says, or the game hasn't answered yet.
+	// GameUnknown: no recent query says.
 	GameUnknown
+	// GameWaiting: the game was asked in this container run and hasn't
+	// answered yet.
+	GameWaiting
 )
 
 // NotAnswering is the last state of a running container whose game stopped
@@ -97,6 +108,7 @@ func ParsePolicy(raw []byte) (Policy, error) {
 		MemoryAlert   *bool    `json:"memoryAlert"`
 		MemoryPercent *float64 `json:"memoryPercent"`
 		MemoryMinutes *float64 `json:"memoryMinutes"`
+		Recover       *bool    `json:"recover"`
 	}
 	decoder := json.NewDecoder(bytesReader(raw))
 	decoder.DisallowUnknownFields()
@@ -108,7 +120,8 @@ func ParsePolicy(raw []byte) (Policy, error) {
 	for _, flag := range []struct {
 		input  *bool
 		output *bool
-	}{{input.Maintenance, &policy.Maintenance}, {input.DiskAlert, &policy.DiskAlert}, {input.MemoryAlert, &policy.MemoryAlert}} {
+	}{{input.Maintenance, &policy.Maintenance}, {input.DiskAlert, &policy.DiskAlert}, {input.MemoryAlert, &policy.MemoryAlert},
+		{input.Recover, &policy.Recover}} {
 		if flag.input != nil {
 			*flag.output = *flag.input
 		}
@@ -215,6 +228,9 @@ func (s *Service) Configure(ctx context.Context, adminID, tokenHash, serverID st
 		}
 		previous, _ := ParsePolicy([]byte(raw))
 		if err := resetAlerts(ctx, tx, serverID, previous, policy); err != nil {
+			return err
+		}
+		if err := resetRecovery(ctx, tx, serverID, previous, policy); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO availability(server_id,policy_json,updated_at) VALUES(?,?,?)
@@ -396,11 +412,18 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		// Silence names the outage even when a health check that asks the
 		// game, as Minecraft's does, also fails.
 		silent := false
+		game := GameNotChecked
 		if running && s.Game != nil {
-			game := s.Game(server.ID, container)
+			game = s.Game(server.ID, container)
+		}
+		// While Docker is unreachable nothing is known about the restart.
+		if policy.Recover && !unavailable {
+			s.trackRecovery(ctx, server, container, running, game, r.policy, policy, now)
+		}
+		if running && s.Game != nil {
 			// A game that stopped answering recovers only by answering, even
 			// after Ludock restarts and whatever the health check says.
-			if game == GameUnknown && r.lastState.String == NotAnswering {
+			if (game == GameUnknown || game == GameWaiting) && r.lastState.String == NotAnswering {
 				continue
 			}
 			silent = game == GameNotAnswering
@@ -456,9 +479,15 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 				continue
 			}
 		}
+		// A recovery restart, or giving up on one, is announced instead of
+		// the outage.
+		recovering := false
+		if silent && pastGrace && policy.Recover && container.Health != "starting" {
+			recovering = s.recover(ctx, server, container, r.policy, policy, now)
+		}
 		// Raising an alert always changes notified, so it is sent only when
 		// that change was saved against the state read above.
-		if changed && pastGrace && r.notified == 0 {
+		if changed && pastGrace && r.notified == 0 && !recovering {
 			message := server.DisplayName + " is unavailable."
 			if unavailable {
 				message = "Ludock cannot reach Docker to verify " + server.DisplayName + "."

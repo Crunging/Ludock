@@ -36,6 +36,10 @@ const (
 	Skipped = "skipped"
 )
 
+// RecoveryActor starts the restarts of automatic recovery, on the authority
+// of the server's monitoring policy instead of an account.
+const RecoveryActor = "ludock-recovery"
+
 type Job struct {
 	ID              string
 	ServerID        string
@@ -319,8 +323,12 @@ func (r *Runner) Enqueue(ctx context.Context, tx *sql.Tx, options EnqueueOptions
 		options.BindingRevision, key, now, now); err != nil {
 		return nil, err
 	}
-	if err := r.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: options.ActorID, Action: "server." + options.Kind + ".queued",
-		TargetType: "server", TargetID: options.ServerID, Details: map[string]string{"operationId": id}}); err != nil {
+	entry := db.AuditEntry{UserID: options.ActorID, Action: "server." + options.Kind + ".queued",
+		TargetType: "server", TargetID: options.ServerID, Details: map[string]string{"operationId": id}}
+	if options.ActorID == RecoveryActor {
+		entry.UserID, entry.Details = "", map[string]string{"operationId": id, "actorId": RecoveryActor}
+	}
+	if err := r.DB.WriteAudit(ctx, tx, entry); err != nil {
 		return nil, err
 	}
 	result, err := scan(tx.QueryRowContext(ctx, "SELECT "+columns+" FROM operations WHERE id = ?", id))

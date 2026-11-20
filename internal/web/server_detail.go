@@ -70,6 +70,9 @@ func (s *Server) overview(r *http.Request, request *Request, d *views.ServerDeta
 		return err
 	}
 	d.Availability = availability
+	if d.Recovery, err = s.App.Monitor.Recovery(ctx, id); err != nil {
+		return err
+	}
 	d.FolderPaths = can(&d.Row.Server, authz.FilesRead)
 	if d.Disk, err = s.App.Monitor.Disk(ctx, id); err != nil {
 		return err
@@ -292,7 +295,19 @@ func (s *Server) configureAvailability(w http.ResponseWriter, r *http.Request, r
 	invalid := apperr.New("INVALID_REQUEST", 400,
 		"Enter a grace period of 10 to 86400 seconds, alert levels of 50 to 99%, and a memory time of 1 to 60 minutes.")
 	values := map[string]any{"enabled": r.PostFormValue("enabled") == "true", "maintenance": r.PostFormValue("maintenance") == "true",
-		"diskAlert": r.PostFormValue("diskAlert") == "true", "memoryAlert": r.PostFormValue("memoryAlert") == "true"}
+		"diskAlert": r.PostFormValue("diskAlert") == "true", "memoryAlert": r.PostFormValue("memoryAlert") == "true",
+		"recover": r.PostFormValue("recover") == "true"}
+	// The switch is left off the form while Ludock can't tell whether the
+	// game supports recovery, such as during a Docker outage; that is not
+	// the administrator turning it off.
+	if r.PostFormValue("recoverOffered") != "true" {
+		saved, err := s.App.Monitor.Get(r.Context(), id)
+		if err != nil {
+			s.fail(w, r, request, err)
+			return
+		}
+		values["recover"] = saved.Policy.Recover
+	}
 	for _, name := range []string{"graceSeconds", "diskPercent", "memoryPercent", "memoryMinutes"} {
 		value, err := strconv.ParseFloat(r.PostFormValue(name), 64)
 		if err != nil {

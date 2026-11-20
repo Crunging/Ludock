@@ -23,6 +23,8 @@ type ServerDetail struct {
 	Tab                  string
 	Tabs                 []DetailTab
 	Availability         *monitor.Availability
+	// Recovery is what automatic restarts last did.
+	Recovery             monitor.Recovery
 	Disk                 monitor.DiskState
 	// ResourceAlerts are the server's active disk and memory alerts.
 	ResourceAlerts []monitor.Resource
@@ -159,7 +161,7 @@ templ detailBody(d ServerDetail) {
 					@PlayerListsDisclosure(server.ID)
 				}
 				if d.Admin && d.Availability != nil {
-					@AvailabilityForm(server.ID, d.Availability.Policy)
+					@AvailabilityForm(server.ID, d.Availability.Policy, monitor.RecoveryOffered(server.Container))
 				}
 				if d.Admin {
 					@RemoveServer(server)
@@ -569,6 +571,10 @@ templ AvailabilityStatus(d ServerDetail) {
 					<dt>Monitoring resumes</dt>
 					<dd>@Time(a.State.SuppressedUntil, "", "")</dd>
 				}
+				if a.Policy.Recover && monitor.RecoveryOffered(d.Row.Server.Container) {
+					<dt>Automatic restart</dt>
+					<dd class="recovery-status">@RecoveryStatus(d.Recovery)</dd>
+				}
 				for _, alert := range d.ResourceAlerts {
 					if alert.Kind == "disk" {
 						<dt>Disk nearly full</dt>
@@ -597,7 +603,30 @@ templ AvailabilityStatus(d ServerDetail) {
 	</section>
 }
 
-templ AvailabilityForm(serverID string, policy monitor.Policy) {
+// RecoveryStatus says what automatic restarts last did.
+templ RecoveryStatus(r monitor.Recovery) {
+	switch r.Last {
+		case monitor.RecoveryRestarted:
+			Restarted it @Time(r.RestartedAt, "plain", "") because the game stopped answering.
+			if r.Pending {
+				{ " Waiting for it to answer." }
+			}
+		case monitor.RecoveryAnswered:
+			Restarted it @Time(r.RestartedAt, "plain", "") because the game stopped answering. It answered again.
+		case monitor.RecoveryNotAnswered:
+			Restarted it @Time(r.RestartedAt, "plain", ""), but the game hasn’t answered since. It won’t be restarted again until the game answers.
+		case monitor.RecoveryFailed:
+			Tried to restart it @Time(r.RestartedAt, "plain", "") and couldn’t; Activity says why.
+		case monitor.RecoverySkipped:
+			A restart @Time(r.RestartedAt, "plain", "") wasn’t needed: the game answered or the server stopped first.
+		case monitor.RecoveryGaveUp:
+			Stopped restarting it @Time(r.LastAt, "plain", "") after { strconv.Itoa(monitor.RecoveryAttempts) } restarts in 6 hours. It needs a look.
+		default:
+			On. Not needed so far.
+	}
+}
+
+templ AvailabilityForm(serverID string, policy monitor.Policy, recoveryOffered bool) {
 	// Each change saves right away; the result says so.
 	<form class="stack-form" hx-post={ "/servers/" + serverID + "/availability" } hx-target="#availability-result" hx-trigger="change, submit" hx-sync="this:replace">
 		<label class="check-label">
@@ -611,6 +640,14 @@ templ AvailabilityForm(serverID string, policy monitor.Policy) {
 				Pause alerts for maintenance
 			</label>
 			<p class="muted check-help">Until you turn this off. The server and its schedules keep running.</p>
+			if recoveryOffered {
+				<input type="hidden" name="recoverOffered" value="true"/>
+				<label class="check-label">
+					<input type="checkbox" name="recover" value="true" checked?={ policy.Recover }/>
+					Restart it if the game stops answering
+				</label>
+				<p class="muted check-help">Ludock restarts it the way the Restart button does, at most { strconv.Itoa(monitor.RecoveryAttempts) } times in 6 hours. A server that is stopped or hasn’t answered since it started is left alone.</p>
+			}
 			<details class="disclosure">
 				<summary>Alert levels</summary>
 				<div class="stack-form">
@@ -826,7 +863,12 @@ templ OperationList(operations []history.Operation, empty string, showContext bo
 				}
 				for _, operation := range operations {
 					<tr>
-						<td><a class="text-link" href={ templ.SafeURL("/operations/" + operation.ID) }>{ Capitalize(operation.Kind) }</a></td>
+						<td>
+							<a class="text-link" href={ templ.SafeURL("/operations/" + operation.ID) }>{ Capitalize(operation.Kind) }</a>
+							if !showContext && operation.Actor != nil && operation.Actor.ID == ops.RecoveryActor {
+								<p class="muted">By Ludock, because the game stopped answering</p>
+							}
+						</td>
 						if showContext {
 							<td class="operation-server">
 								<a class="text-link" href={ templ.SafeURL("/servers/" + operation.ServerID) }>
@@ -870,6 +912,8 @@ func ActorLabel(actor *history.Actor) string {
 	switch {
 	case actor == nil:
 		return "Not recorded"
+	case actor.ID == ops.RecoveryActor:
+		return "Ludock (automatic restart)"
 	case actor.Name != "":
 		return actor.Name
 	case actor.ID != "":

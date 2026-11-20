@@ -677,6 +677,19 @@ const (
 // which is not a failure.
 func (o *Observer) ChangeState(ctx context.Context, id string, action Action,
 	assertAccess func(identity.Observation, *docker.ContainerInspect) error) error {
+	if err := o.ChangeStateExact(ctx, id, action, assertAccess); !errors.Is(err, ErrUnchanged) {
+		return err
+	}
+	return nil
+}
+
+// ErrUnchanged: Docker found the container already in the requested state,
+// such as one stopped by another tool after the final inspection.
+var ErrUnchanged = errors.New("container already in the requested state")
+
+// ChangeStateExact is ChangeState, reporting ErrUnchanged.
+func (o *Observer) ChangeStateExact(ctx context.Context, id string, action Action,
+	assertAccess func(identity.Observation, *docker.ContainerInspect) error) error {
 	observed, info, err := o.Inspect(ctx, id)
 	if err != nil {
 		return err
@@ -698,7 +711,7 @@ func (o *Observer) ChangeState(ctx context.Context, id string, action Action,
 		return errors.New("unknown container action")
 	}
 	if docker.StatusCode(err) == http.StatusNotModified {
-		return nil
+		return ErrUnchanged
 	}
 	return err
 }

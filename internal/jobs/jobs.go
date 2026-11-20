@@ -59,6 +59,10 @@ type Jobs struct {
 	ReplacementSettle time.Duration
 	// Poll is the reconciliation poll interval; tests shorten it.
 	Poll time.Duration
+	// Hung reports whether a running server's game still doesn't answer,
+	// which a recovery restart requires, and when it last answered. It may
+	// be nil.
+	Hung func(serverID string, container servers.Container) (bool, int64)
 }
 
 func (j *Jobs) Register(runner *ops.Runner) {
@@ -173,19 +177,57 @@ func (j *Jobs) Actor(ctx context.Context, job *ops.Context) (*db.SessionUser, er
 	return actor, nil
 }
 
-func (j *Jobs) resolve(ctx context.Context, job *ops.Context, capability authz.Capability, pinned bool) (*servers.Context, error) {
-	actor, err := j.Actor(ctx, job)
-	if err != nil {
-		return nil, err
+var errRecoveryOff = apperr.New("RECOVERY_OFF", 403, "Automatic restarts were turned off for this server, or it changed and awaits review")
+
+// recoveryAllowed is the authority of a recovery restart: the server's
+// monitoring policy still asks for it, and no change to the server awaits
+// an administrator's review.
+func (j *Jobs) recoveryAllowed(ctx context.Context, job *ops.Context) error {
+	if job.Job.Kind != "restart" || job.Job.Input["createBackup"] == true {
+		return errRecoveryOff
 	}
+	availability, err := j.Monitor.Get(ctx, job.Job.ServerID)
+	if err != nil {
+		return err
+	}
+	logical, err := j.Identity.Get(ctx, job.Job.ServerID)
+	if err != nil {
+		return err
+	}
+	if !availability.Policy.RecoveryOn() || logical == nil || logical.SharingPaused {
+		return errRecoveryOff
+	}
+	// Turning recovery off forgets the restart it queued, even if it is on
+	// again by now.
+	state, err := j.Monitor.Recovery(ctx, job.Job.ServerID)
+	if err != nil {
+		return err
+	}
+	if !state.Pending || state.OperationID != job.Job.ID {
+		return errRecoveryOff
+	}
+	return nil
+}
+
+func (j *Jobs) resolve(ctx context.Context, job *ops.Context, capability authz.Capability, pinned bool) (*servers.Context, error) {
 	revision := int64(-1)
 	if pinned {
 		revision = job.Job.BindingRevision
+	}
+	if job.Job.ActorID == ops.RecoveryActor {
+		return j.Servers.ResolveChecked(ctx, job.Job.ServerID, revision, func(ctx context.Context) error { return j.recoveryAllowed(ctx, job) })
+	}
+	actor, err := j.Actor(ctx, job)
+	if err != nil {
+		return nil, err
 	}
 	return j.Servers.ResolveAuthorized(ctx, actor, job.Job.ServerID, capability, revision)
 }
 
 func (j *Jobs) assertCapability(ctx context.Context, job *ops.Context, capability authz.Capability) error {
+	if job.Job.ActorID == ops.RecoveryActor {
+		return j.recoveryAllowed(ctx, job)
+	}
 	actor, err := j.Actor(ctx, job)
 	if err != nil {
 		return err
@@ -295,10 +337,14 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 	if err != nil {
 		return nil, err
 	}
+	recovery := job.Job.ActorID == ops.RecoveryActor
 	return job.WithLocks(initial.LockKeys, func() (map[string]any, error) {
 		server, err := j.resolve(ctx, job, permission, true)
 		if err != nil {
 			return nil, err
+		}
+		if recovery && !j.stillHung(job, server) {
+			return recoverySkipped, nil
 		}
 		var accessMu sync.Mutex
 		var accessFailure error
@@ -345,6 +391,10 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			if err := assertAccess(); err != nil {
 				return err
 			}
+			// Someone stopped the server meanwhile; it stays down.
+			if recovery && mutation == servers.Stop && !j.stillHung(job, server) {
+				return errRecoveryStopped
+			}
 			phase := "starting"
 			if mutation == servers.Stop {
 				phase = "stopping"
@@ -354,12 +404,21 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			if err := record(job, phase, func(r *ops.Recovery) { r.ContainerID = server.Container.ID }); err != nil {
 				return err
 			}
-			return j.Servers.Observer.ChangeState(ctx, server.Container.ID, mutation, func(observation identity.Observation, info *docker.ContainerInspect) error {
+			change := j.Servers.Observer.ChangeState
+			if recovery {
+				change = j.Servers.Observer.ChangeStateExact
+			}
+			err := change(ctx, server.Container.ID, mutation, func(observation identity.Observation, info *docker.ContainerInspect) error {
 				if err := j.assertCapability(ctx, job, permission); err != nil {
 					return err
 				}
 				if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observation, job.Job.BindingRevision); err != nil {
 					return err
+				}
+				// Only the run judged hung is stopped and started again: one
+				// stopped, or started anew, by someone else stays as they left it.
+				if recovery && (!sameRun(job, info) || (mutation == servers.Stop && !info.State.Running)) {
+					return errRecoveryStopped
 				}
 				if mutation == servers.Stop {
 					// Recovery takes these locks before checking authority again.
@@ -370,6 +429,10 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 				}
 				return nil
 			})
+			if recovery && errors.Is(err, servers.ErrUnchanged) {
+				return errRecoveryStopped
+			}
+			return err
 		}
 		// Pause outage tracking before acting, or the change could alert.
 		if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
@@ -380,7 +443,9 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			if err := j.saveWorld(ctx, job, server, assertAccess); err != nil {
 				return nil, err
 			}
-			if err := mutate(servers.Stop); err != nil {
+			if err := mutate(servers.Stop); errors.Is(err, errRecoveryStopped) {
+				return recoverySkipped, nil
+			} else if err != nil {
 				return nil, err
 			}
 			// Persist the actual stop before a restart clears Docker's exit code.
@@ -396,7 +461,9 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			}
 		}
 		if action != servers.Stop {
-			if err := mutate(servers.Start); err != nil {
+			if err := mutate(servers.Start); errors.Is(err, errRecoveryStopped) {
+				return recoverySkipped, nil
+			} else if err != nil {
 				return nil, err
 			}
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
@@ -406,6 +473,34 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 		}
 		return lifecycleResult(job.Job.Kind, job.Job.Recovery), nil
 	})
+}
+
+var (
+	recoverySkipped = map[string]any{"action": "restart", "skipped": true,
+		"guidance": "Skipped: the game answered again, or the server was no longer running"}
+	errRecoveryStopped = errors.New("server stopped before its recovery restart")
+)
+
+// stillHung confirms right before a recovery restart that the container run
+// judged hung still runs and its game still doesn't answer.
+// sameRun reports whether a container's latest run is the one a recovery
+// restart was queued for; a stop keeps its start time.
+func sameRun(job *ops.Context, info *docker.ContainerInspect) bool {
+	run, ok := number(job.Job.Input["run"])
+	started, err := time.Parse(time.RFC3339Nano, info.State.StartedAt)
+	return ok && err == nil && float64(started.UnixMilli()) == run
+}
+
+// stillHung also requires the silence judged: an answer since starts a new
+// one, with its own wait.
+func (j *Jobs) stillHung(job *ops.Context, server *servers.Context) bool {
+	run, ok := number(job.Job.Input["run"])
+	answered, known := number(job.Job.Input["answered"])
+	if !ok || !known || run != float64(server.Container.StateSince) || server.Container.State != "running" || j.Hung == nil {
+		return false
+	}
+	hung, last := j.Hung(server.Logical.ID, server.Container)
+	return hung && float64(last) == answered
 }
 
 // awaitStopDeadline holds the locks until a dispatched stop's saved deadline

@@ -714,6 +714,31 @@ levels**.
   Minecraft's pre-1.7 legacy ping and split Steam replies, counts as no
   answer.
 
+- **Restart it if the game stops answering:** off until an administrator
+  turns it on for a server with a status query, and only while that server is
+  monitored and not paused for maintenance. When its game stops answering
+  while the container runs, after the wait before alerting Ludock restarts it
+  the way **Restart** does: saving first where the game supports it, with the
+  game's stop time, as an operation in **Activity** marked as started by
+  Ludock. One alert says it is restarting, and another says when the game
+  answers again. It never restarts a server that is stopped, starting,
+  restarting, or exited by itself (its own restart policy decides that), one
+  whose game hasn't answered since it last started, one Ludock can't verify
+  because Docker is unreachable, or one busy with another operation, which it
+  waits for. If someone stops the server before the restart runs, it stays
+  down.
+
+  After a restart the game has five times the wait before alerting (10
+  minutes by default, at most 30) to answer. If it doesn't, Ludock says so in
+  one alert and doesn't restart it again: a game that hasn't answered since it
+  started never counts as hung. Ludock also waits that long between restarts,
+  and makes at most 3 in 6 hours; after that it says in one alert that it
+  stopped trying. The count survives a restart of Ludock. The **Overview**
+  shows what the last automatic restart did. Recovery runs on the server's
+  setting rather than as the administrator who turned it on, so it keeps
+  working if that person's role changes, and stops as soon as the setting is
+  turned off, monitoring is paused, or a change to the server awaits review.
+
 - **Disk nearly full:** about every 10 minutes while someone has Ludock open,
   and every 30 minutes otherwise, Ludock measures the free and total space of
   the filesystem under each data folder of a monitored server, even while it's
