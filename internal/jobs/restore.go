@@ -549,7 +549,9 @@ func (r *restoreRun) replace(index int, root backups.Root) error {
 	if err := persistJournal(r.job, index, "old_moved"); err != nil {
 		return err
 	}
-	if err := r.assertAccess(); err != nil {
+	// The folder is empty now: a server started elsewhere meanwhile must not
+	// have the backup's data moved in under it.
+	if err := r.stillSafe(); err != nil {
 		return err
 	}
 	if _, err := r.j.restoreStep(r.ctx, r.data, destination, r.item, r.job, "moveNew", r.assertAccess); err != nil {
