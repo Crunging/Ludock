@@ -84,7 +84,7 @@ services:
 
 | Label | Purpose |
 | --- | --- |
-| `ludock.enable` | `"true"` adds the container, `"false"` leaves it out, whatever the panel says |
+| `ludock.enable` | `"true"` adds the container, even one that can control the host; `"false"` leaves it out, whatever the panel says |
 | `ludock.name` | Display name; defaults to the container name |
 | `ludock.game` | Game integration, such as `minecraft` or `terraria` |
 | `ludock.address` | Exactly what players type to connect, such as `mc.example.com`, `play.example.com:30000`, or `[2001:db8::1]:2456` |
@@ -108,9 +108,14 @@ Variables whose names look like credentials, such as `RCON_PASSWORD`,
 
 1. A `ludock.enable` label decides. Any value other than `true` or `false`
    leaves the container out.
-2. Compose one-off containers (`docker compose run`) are left out.
-3. A container added in the panel is managed; one removed there is left out.
-4. Containers on supported images are managed; others are left out.
+2. Containers that can control the host are left out: privileged ones, and ones
+   that mount a Docker, Podman, containerd, or CRI-O socket, or bind `/`,
+   `/run`, `/var/run`, the container runtime's storage, or a folder holding
+   them. The panel can't add them, and a `ludock.enable` label their image
+   sets doesn't count: it must be set where the container is defined.
+3. Compose one-off containers (`docker compose run`) are left out.
+4. A container added in the panel is managed; one removed there is left out.
+5. Containers on supported images are managed; others are left out.
 
 Ludock remembers panel choices, sharing, and schedules by Compose project,
 service, and replica, or by container name for a standalone container, so they

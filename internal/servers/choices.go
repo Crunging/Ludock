@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"maps"
 	"net/http"
 	"path"
@@ -128,32 +129,66 @@ func (c candidate) unaddable() string {
 
 // withChoice is the container's labels with an administrator's choice
 // applied beneath the owner's own: any ludock.enable label decides alone,
-// and a container the panel can't add is never added by it. panel reports
-// a container the choice added.
+// a container that controls the host is left out without one, and a
+// container the panel can't add is never added by it. panel reports a
+// container the choice added.
 func (c candidate) withChoice(choices map[string]identity.Choice) (labels map[string]string, panel bool) {
-	if len(choices) == 0 {
+	if _, owner := c.labels[games.LabelEnable]; owner {
 		return c.labels, false
+	}
+	if c.controlsHost() {
+		return c.excluded(), false
 	}
 	choice, found := choices[c.external()]
-	if !found {
+	if !found || (choice.Managed && c.unaddable() != "") {
 		return c.labels, false
 	}
-	if _, owner := c.labels[games.LabelEnable]; owner || (choice.Managed && c.unaddable() != "") {
-		return c.labels, false
+	if !choice.Managed {
+		return c.excluded(), false
 	}
 	labels = maps.Clone(c.labels)
 	if labels == nil {
 		labels = map[string]string{}
-	}
-	if !choice.Managed {
-		labels[games.LabelEnable] = "false"
-		return labels, false
 	}
 	labels[games.LabelEnable] = "true"
 	if choice.Game != "" && strings.TrimSpace(labels[games.LabelGame]) == "" {
 		labels[games.LabelGame] = choice.Game
 	}
 	return labels, true
+}
+
+func (c candidate) excluded() map[string]string {
+	labels := maps.Clone(c.labels)
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[games.LabelEnable] = "false"
+	return labels
+}
+
+// ownLabels is info, without a host-controlling container's ludock.enable
+// when its image may have set it. Docker merges an image's labels into its
+// containers', and only the owner's own label can add such a container: one
+// that differs from the image's. It fails closed when the image can't be
+// read.
+func (o *Observer) ownLabels(ctx context.Context, info *docker.ContainerInspect) *docker.ContainerInspect {
+	value := info.Config.Labels[games.LabelEnable]
+	if enable, ok := games.ParseBool(value, true); !ok || !enable || !inspectCandidate(info).controlsHost() {
+		return info
+	}
+	image, err := o.Docker.InspectImageConfig(ctx, info.Image)
+	if err == nil {
+		var labels map[string]string
+		if raw := image.Config["Labels"]; len(raw) == 0 || json.Unmarshal(raw, &labels) == nil {
+			if inherited, set := labels[games.LabelEnable]; !set || inherited != value {
+				return info
+			}
+		}
+	}
+	stripped := *info
+	stripped.Config.Labels = maps.Clone(info.Config.Labels)
+	delete(stripped.Config.Labels, games.LabelEnable)
+	return &stripped
 }
 
 // applyChoice returns a copy of info whose labels include the choice, which
@@ -183,7 +218,7 @@ func (o *Observer) Managed(ctx context.Context, info *docker.ContainerInspect) b
 	if err != nil {
 		return false
 	}
-	applied, _ := applyChoice(info, choices)
+	applied, _ := applyChoice(o.ownLabels(ctx, info), choices)
 	return games.Evaluate(applied.Config.Image, applied.Config.Labels).Eligible
 }
 
@@ -202,10 +237,13 @@ type Unmanaged struct {
 	External string
 	// Chosen: an administrator already decided about it, such as removing it.
 	Chosen bool
+	// ControlsHost: a game that can control the host, which only its owner's
+	// label can add. It is listed to explain why it isn't a server.
+	ControlsHost bool
 }
 
 // Unmanaged lists the containers an administrator can add, likely games
-// first.
+// first, and the games left out because they can control the host.
 func (o *Observer) Unmanaged(ctx context.Context) ([]Unmanaged, error) {
 	containers, err := o.Docker.ListContainers(ctx, true, nil)
 	if err != nil {
@@ -215,13 +253,28 @@ func (o *Observer) Unmanaged(ctx context.Context) ([]Unmanaged, error) {
 	if err != nil {
 		return nil, err
 	}
+	o.mu.Lock()
+	inspected := o.inspections
+	o.mu.Unlock()
 	var ids []string
 	for _, container := range containers {
 		c := summaryCandidate(container)
 		labels, _ := c.withChoice(choices)
-		if c.unaddable() == "" && !games.Evaluate(c.image, labels).Eligible {
-			ids = append(ids, container.ID)
+		reason := c.unaddable()
+		// A label that adds a container Ludock doesn't manage may be its
+		// image's, on a container that controls the host.
+		labeledIn, _ := games.ParseBool(c.labels[games.LabelEnable], reason == "label")
+		if reason != "" && reason != "host" && !labeledIn {
+			continue
 		}
+		// A summary has no privileged flag. Discovery caches only the
+		// containers it manages, so any other is inspected to find out.
+		if games.Evaluate(c.image, labels).Eligible {
+			if _, managed := inspected[container.ID]; managed || isReplacement(container.Names) {
+				continue
+			}
+		}
+		ids = append(ids, container.ID)
 	}
 	results := make([]*Unmanaged, len(ids))
 	var failure error
@@ -236,7 +289,8 @@ func (o *Observer) Unmanaged(ctx context.Context) ([]Unmanaged, error) {
 			for index := range work {
 				entry, err := o.addable(ctx, ids[index], choices)
 				mu.Lock()
-				if err != nil && !apperr.Is(err, "NOT_ADDABLE") && docker.StatusCode(err) != http.StatusNotFound && failure == nil {
+				if err != nil && !apperr.Is(err, "NOT_ADDABLE") && docker.StatusCode(err) != http.StatusNotFound &&
+					docker.StatusCode(err) != http.StatusForbidden && failure == nil {
 					failure = err
 				}
 				results[index] = entry
@@ -282,7 +336,7 @@ func (o *Observer) Addable(ctx context.Context, id string) (*Unmanaged, error) {
 		return nil, err
 	}
 	entry, err := o.addable(ctx, id, choices)
-	if docker.IsNotFound(err) {
+	if docker.IsNotFound(err) || (err == nil && entry.ControlsHost) {
 		return nil, errNotAddable
 	}
 	return entry, err
@@ -293,9 +347,10 @@ func (o *Observer) addable(ctx context.Context, id string, choices map[string]id
 	if err != nil {
 		return nil, err
 	}
-	c := inspectCandidate(info)
+	c := inspectCandidate(o.ownLabels(ctx, info))
 	labels, _ := c.withChoice(choices)
-	if c.unaddable() != "" || games.Evaluate(c.image, labels).Eligible {
+	reason := c.unaddable()
+	if (reason != "" && reason != "host") || games.Evaluate(c.image, labels).Eligible {
 		return nil, errNotAddable
 	}
 	container, err := toContainer(info)
@@ -327,6 +382,14 @@ func (o *Observer) addable(ctx context.Context, id string, choices map[string]id
 		entry.Game = choice.Game
 	}
 	entry.Chosen = chosen
+	// Tools such as Portainer can control the host too; only games, or a
+	// container once added in the panel, need explaining.
+	if reason == "host" {
+		if entry.Game == "unknown" && !chosen {
+			return nil, errNotAddable
+		}
+		entry.ControlsHost = true
+	}
 	return entry, nil
 }
 

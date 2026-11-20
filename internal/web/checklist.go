@@ -252,7 +252,7 @@ func (s *Server) checklistView(r *http.Request, request *Request) views.Checklis
 	if !slices.Contains(state.Dismissed, views.ChecklistServers) {
 		if containers, err := s.App.Observer.Unmanaged(ctx); err == nil {
 			for _, container := range containers {
-				if container.Game != "unknown" && !container.Chosen {
+				if container.Game != "unknown" && !container.Chosen && !container.ControlsHost {
 					state.Unmanaged = append(state.Unmanaged, container.Name)
 				}
 			}

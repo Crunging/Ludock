@@ -250,7 +250,7 @@ func SystemPage(page Page, d SystemView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "</tbody></table></div></section><section class=\"settings-section\"><h2>Supported games</h2><p class=\"section-note\">Ludock adds servers made from these images by itself, with the console and status check listed. To add another container, choose it under Missing a server? on the server list, or label it <code>ludock.enable=true</code>.</p><div class=\"table-scroll\"><table class=\"data-table\"><thead><tr><th>Game</th><th>Images</th><th>Console</th><th>Status check</th></tr></thead> <tbody>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "</tbody></table></div></section><section class=\"settings-section\"><h2>Supported games</h2><p class=\"section-note\">Ludock adds servers made from these images by itself, with the console and status check listed, unless the container can control the host: Missing a server? on the server list says which. To add another container, choose it under Missing a server? on the server list, or label it <code>ludock.enable=true</code>.</p><div class=\"table-scroll\"><table class=\"data-table\"><thead><tr><th>Game</th><th>Images</th><th>Console</th><th>Status check</th></tr></thead> <tbody>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

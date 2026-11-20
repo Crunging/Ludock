@@ -19,6 +19,9 @@ func (s *Server) sharingView(r *http.Request, request *Request, serverID string)
 		return views.SharingView{}, err
 	}
 	v := views.SharingView{ServerID: server.ID, ServerName: server.DisplayName, Paused: server.SharingPaused}
+	if current, err := s.App.Servers.Refresh(r.Context()); err == nil {
+		v.ControlsHost = current[server.ContainerID].ControlsHost
+	}
 	if v.Shares, err = s.App.Authz.Sharing(r.Context(), server.ID); err != nil {
 		return v, err
 	}

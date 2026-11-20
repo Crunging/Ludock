@@ -737,6 +737,10 @@ func (c *Container) inspection() map[string]any {
 		host = maps.Clone(host)
 		host["Memory"] = c.Host.Memory
 	}
+	if c.Host.Privileged {
+		host = maps.Clone(host)
+		host["Privileged"] = true
+	}
 	result["HostConfig"] = host
 	if settings, ok := result["NetworkSettings"].(map[string]any); ok {
 		settings["Networks"] = c.Networks

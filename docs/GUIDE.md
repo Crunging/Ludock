@@ -52,10 +52,19 @@ backups come back if you add it again. A server labeled
 `ludock.enable: "true"` leaves only when you change the label to `"false"` and
 recreate the container.
 
-Ludock never offers itself, its helpers, Compose one-off containers, or
-containers that could control the host (privileged ones, or ones given a Docker
-socket or the host's root). Add those only with a
-[label](REFERENCE.md#labels), deliberately.
+Ludock never offers itself, its helpers, or Compose one-off containers.
+
+A container that could control the host is never added by itself or from the
+panel, even on a supported game image: a privileged one, or one given a Docker
+or other container engine socket, the host's root, or its system folders.
+Whoever uses its console or files could take over the machine. If it looks
+like a game, **Missing a server?** lists it under **Not added because they can
+control the host**. If it really is a game server, remove the access it doesn't
+need, or add the label `ludock.enable: "true"` where it is defined and recreate
+it. Its **Sharing** tab then warns that sharing it can hand over the host. A
+server that gains such access later, recreated as privileged say, leaves
+Ludock as a relabeled one does, and its sharing, schedules, and backups come
+back when it returns without that access.
 
 ### Share a server with a friend
 
