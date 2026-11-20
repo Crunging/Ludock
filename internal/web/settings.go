@@ -143,11 +143,7 @@ func (s *Server) saveImageUpdateSettings(w http.ResponseWriter, r *http.Request,
 	}
 	ludock := s.App.Checks.SelfStatus(r.Context())
 	// SelfStatus waits on Docker; the session may have lost the role meanwhile.
-	if err := s.recheckAdmin(r.Context(), request); err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	render(w, r, status, views.ImageUpdateSettingsSaved(u, ludock))
+	s.renderAdmin(w, r, request, status, views.ImageUpdateSettingsSaved(u, ludock))
 }
 
 func (s *Server) uploadLimitView(r *http.Request) views.UploadLimitSettings {
@@ -328,11 +324,7 @@ func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, requ
 
 func (s *Server) backupStorage(w http.ResponseWriter, r *http.Request, request *Request) {
 	status := s.App.Backups.Status(r.Context())
-	if err := s.recheckAdmin(r.Context(), request); err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	render(w, r, http.StatusOK, views.BackupStorage(status))
+	s.renderAdmin(w, r, request, http.StatusOK, views.BackupStorage(status))
 }
 
 // destination is the destination named in the path; false means the

@@ -574,7 +574,7 @@ func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 	deadline := time.UnixMilli(time.Now().Add(400 * time.Millisecond).UnixMilli())
 	job := &ops.Context{Job: &ops.Job{ID: "stop", ServerID: f.serverID, ActorID: "admin", Kind: "stop",
 		BindingRevision: logical.BindingRevision, Recovery: ops.Recovery{ContainerID: logical.ContainerID,
-			StopStarted: true, StopRecoveryDeadlineAt: deadline.UnixMilli(), LockKeys: []string{"server:" + f.serverID}}}}
+			StopStarted: true, StopRecoveryDeadlineAt: deadline.UnixMilli(), LockKeys: []string{locks.ServerKey(f.serverID)}}}}
 	if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, true); err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +584,7 @@ func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 		done <- err
 	}()
 	time.Sleep(100 * time.Millisecond)
-	if release, err := f.jobs.Locks.Acquire([]string{"server:" + f.serverID}, nil); err == nil {
+	if release, err := f.jobs.Locks.Acquire([]string{locks.ServerKey(f.serverID)}, nil); err == nil {
 		release()
 		t.Fatal("new work could take the server while its stop may still be running")
 	}

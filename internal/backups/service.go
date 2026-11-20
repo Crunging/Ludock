@@ -178,7 +178,7 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, forget bool, 
 	if err != nil {
 		return false, err
 	}
-	release, err := s.Locks.AcquirePreempting(ctx, []string{"server:" + serverID, "backups:storage"}, nil)
+	release, err := s.Locks.AcquirePreempting(ctx, []string{locks.ServerKey(serverID), locks.StorageKey}, nil)
 	if err != nil {
 		return false, err
 	}
@@ -867,7 +867,7 @@ func (s *Service) FinishDeletions(ctx context.Context) error {
 	}
 	var failed error
 	for _, backup := range pending {
-		release, err := s.Locks.Acquire([]string{"server:" + backup.ServerID, "backups:storage"}, nil)
+		release, err := s.Locks.Acquire([]string{locks.ServerKey(backup.ServerID), locks.StorageKey}, nil)
 		if err != nil {
 			continue
 		}

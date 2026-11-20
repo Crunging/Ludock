@@ -10,6 +10,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -131,7 +132,7 @@ func TestScheduledCommandRefusedWithoutConsoleAccess(t *testing.T) {
 func TestScheduledCommandSkipsBusyServer(t *testing.T) {
 	f := setup(t)
 	serverID, _, received := f.commandServer(t, "")
-	release, err := f.jobs.Locks.Acquire([]string{"server:" + serverID}, nil)
+	release, err := f.jobs.Locks.Acquire([]string{locks.ServerKey(serverID)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,11 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 )
 
+// StorageKey is held by work that writes backup storage.
+const StorageKey = "backups:storage"
+
+func ServerKey(id string) string { return "server:" + id }
+
 var ErrConflict = apperr.New("OPERATION_CONFLICT", 409, "Other work on this server is still running. Wait for it to finish.")
 
 var ErrRecovering = apperr.New("RECOVERY_PENDING", 409, "Ludock is finishing work its restart interrupted. Try again shortly.")
@@ -232,7 +237,7 @@ func (t *Table) NextRelease() <-chan struct{} {
 func (t *Table) ServerBusy(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	owner, busy := t.active["server:"+id]
+	owner, busy := t.active[ServerKey(id)]
 	return busy && owner.background == nil
 }
 

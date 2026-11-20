@@ -13,6 +13,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
@@ -73,7 +74,7 @@ func (f *fixture) interrupt(t *testing.T, prepare func(id string, swap *swapStat
 	running := true
 	swapJSON, _ := json.Marshal(swap)
 	encoded, _ := json.Marshal(ops.Recovery{ContainerID: f.game, Fingerprint: logical.BindingFingerprint,
-		LockKeys: []string{"server:" + f.serverID}, InitialRunning: &running, StopStarted: true, StopSettled: true, Swap: swapJSON})
+		LockKeys: []string{locks.ServerKey(f.serverID)}, InitialRunning: &running, StopStarted: true, StopSettled: true, Swap: swapJSON})
 	input, _ := json.Marshal(skipBackup)
 	if _, err := f.jobs.DB.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at)
 		VALUES (?,?,'admin','update','running','starting',?,?,?,?,?)`, id, f.serverID, string(input), string(encoded),
@@ -328,7 +329,7 @@ func TestUpdateRecoveryEndsWhenPolicyCannotBeRestored(t *testing.T) {
 	if ids := f.engine.SortedIDs(); len(ids) != 2 {
 		t.Fatal("replacement left behind:", ids)
 	}
-	release, err := f.jobs.Locks.Acquire([]string{"server:" + f.serverID}, nil)
+	release, err := f.jobs.Locks.Acquire([]string{locks.ServerKey(f.serverID)}, nil)
 	if err != nil {
 		t.Fatal("server still held:", err)
 	}
