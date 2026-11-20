@@ -480,8 +480,11 @@ func (s *Service) isolate(ctx context.Context, folder string, fn func(ctx contex
 	progress := func() { last.Store(time.Now().UnixNano()) }
 	work = context.WithValue(work, progressKey{}, progress)
 	go func() {
-		defer s.copies.leave(folder)
-		done <- fn(work, progress)
+		err := fn(work, progress)
+		// Released before the result is reported, so the caller's next
+		// call in this folder doesn't find it still claimed.
+		s.copies.leave(folder)
+		done <- err
 	}()
 	ticker := time.NewTicker(copyStall / 4)
 	defer ticker.Stop()
