@@ -245,7 +245,7 @@ type Unmanaged struct {
 // Unmanaged lists the containers an administrator can add, likely games
 // first, and the games left out because they can control the host.
 func (o *Observer) Unmanaged(ctx context.Context) ([]Unmanaged, error) {
-	containers, err := o.Docker.ListContainers(ctx, true, nil)
+	containers, err := o.listContainers(ctx)
 	if err != nil {
 		return nil, err
 	}

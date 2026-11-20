@@ -121,6 +121,9 @@ type Observer struct {
 
 	mu          sync.Mutex
 	inspections map[string]inspection
+	// images are the references containers listed by image ID were created
+	// from, by container ID.
+	images map[string]string
 
 	samplesMu sync.Mutex
 	samples   map[string]*statsSample
@@ -165,11 +168,52 @@ func listSummary(container docker.ContainerSummary) string {
 	return string(encoded)
 }
 
+// listContainers lists every container by the image reference it was
+// created from. Docker lists a container by its image's ID instead once the
+// reference points to another image, as after the pull for an update.
+func (o *Observer) listContainers(ctx context.Context) ([]docker.ContainerSummary, error) {
+	containers, err := o.Docker.ListContainers(ctx, true, nil)
+	if err != nil {
+		return nil, err
+	}
+	o.mu.Lock()
+	known := o.images
+	o.mu.Unlock()
+	images := map[string]string{}
+	for index := range containers {
+		container := &containers[index]
+		if !isImageID(container.Image) {
+			continue
+		}
+		reference, ok := known[container.ID]
+		if !ok {
+			info, err := o.Docker.Inspect(ctx, container.ID)
+			if docker.IsNotFound(err) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			reference = info.Config.Image
+		}
+		images[container.ID], container.Image = reference, reference
+	}
+	o.mu.Lock()
+	o.images = images
+	o.mu.Unlock()
+	return containers, nil
+}
+
+func isImageID(image string) bool {
+	id := strings.TrimPrefix(image, "sha256:")
+	return len(id) >= 12 && len(id) <= 64 && strings.Trim(id, "0123456789abcdef") == ""
+}
+
 // List observes every eligible container. A failure of any inspection other
 // than a vanished or forbidden container fails the whole listing, so callers
 // never reconcile a partial snapshot.
 func (o *Observer) List(ctx context.Context) ([]Observed, error) {
-	containers, err := o.Docker.ListContainers(ctx, true, nil)
+	containers, err := o.listContainers(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -774,7 +818,7 @@ type Diagnostic struct {
 }
 
 func (o *Observer) Diagnostics(ctx context.Context) ([]Diagnostic, error) {
-	containers, err := o.Docker.ListContainers(ctx, true, nil)
+	containers, err := o.listContainers(ctx)
 	if err != nil {
 		return nil, err
 	}

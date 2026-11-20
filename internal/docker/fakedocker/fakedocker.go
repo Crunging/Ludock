@@ -572,7 +572,13 @@ func (e *Engine) list(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		state, status := c.State.Status, c.State.Status
-		result = append(result, docker.ContainerSummary{ID: id, Names: []string{c.Name}, Image: c.Config.Image,
+		// Like Docker, a container whose tag now points to another image, such
+		// as after a pull, is listed by its own image's ID.
+		image := c.Config.Image
+		if local, ok := e.images[image]; ok && local != c.Image {
+			image = c.Image
+		}
+		result = append(result, docker.ContainerSummary{ID: id, Names: []string{c.Name}, Image: image,
 			Labels: c.Config.Labels, State: &state, Status: &status, Mounts: c.Mounts})
 	}
 	writeJSON(w, 200, result)
