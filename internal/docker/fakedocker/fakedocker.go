@@ -196,14 +196,14 @@ func (e *Engine) Disconnect(duration time.Duration) error {
 		close(events)
 	}
 	e.events = nil
-	server, streams := e.server, e.streams
+	server := e.server
 	e.mu.Unlock()
 	// Refuse requests before cutting streams, so a client that sees its
 	// stream end can't reach the daemon in between.
 	server.Close()
 	os.Remove(e.Socket)
 	e.mu.Lock()
-	for conn := range streams {
+	for conn := range e.streams {
 		conn.Close()
 	}
 	e.mu.Unlock()
