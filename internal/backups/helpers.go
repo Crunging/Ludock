@@ -174,63 +174,6 @@ func (h *Helpers) prepare(ctx context.Context, id string, plan *Plan, proof *lau
 	return nil
 }
 
-// terminate stops a helper. Docker cannot signal an exec; stopping the
-// helper ends its PID namespace, so nothing can still run inside it.
-func (h *Helpers) terminate(id string) bool {
-	ctx := context.Background()
-	zero := 0
-	if err := h.Docker.Stop(ctx, id, &zero); err != nil {
-		if status := docker.StatusCode(err); status == 404 {
-			return true
-		} else if status != 304 {
-			return false
-		}
-	}
-	info, err := h.Docker.Inspect(ctx, id)
-	if docker.IsNotFound(err) {
-		return true
-	}
-	return err == nil && !info.State.Running
-}
-
-// waitForExit waits for an exec to finish. Losing the stream does not end
-// the process, so the next step must not write concurrently with it; once
-// expired, the helper is stopped so a hang cannot hold the operation.
-func (h *Helpers) waitForExit(id, execID string, expired func() bool) *docker.ExecInspect {
-	interval := h.pollInterval
-	if interval == 0 {
-		interval = 250 * time.Millisecond
-	}
-	for {
-		result, err := h.Docker.InspectExec(context.Background(), execID)
-		if err == nil && !result.Running && result.ExitCode != nil {
-			return result
-		}
-		if docker.IsNotFound(err) {
-			return nil
-		}
-		if expired() && h.terminate(id) {
-			return nil
-		}
-		time.Sleep(interval)
-	}
-}
-
-func (h *Helpers) start(ctx context.Context, id, execID string) (*docker.Conn, error) {
-	conn, err := h.Docker.StartExec(ctx, execID)
-	if err != nil {
-		var open *docker.StreamOpenError
-		if errors.As(err, &open) && open.RequestStarted {
-			h.waitForExit(id, execID, func() bool { return ctx.Err() != nil })
-		}
-		if ctx.Err() != nil {
-			return nil, context.Cause(ctx)
-		}
-		return nil, err
-	}
-	return conn, nil
-}
-
 var (
 	errTimeout       = fail("BACKUP_TIMEOUT", "Copying the server’s data took too long and was stopped.")
 	errBackupTimeout = fail("BACKUP_TIMEOUT", "Reading a data folder for the backup took longer than 4 hours, so the backup was stopped. Exclude large folders with ludock.files, or back up through the tool that created the server.")
@@ -245,53 +188,12 @@ func (h *Helpers) Exec(ctx context.Context, id string, command []string, assertA
 // ExecWithin is Exec with its own time limit, for commands that walk a whole
 // data root.
 func (h *Helpers) ExecWithin(ctx context.Context, id string, command []string, assertAccess func() error, limit time.Duration) ([]byte, error) {
-	execID, err := h.Docker.CreateExec(ctx, id, docker.ExecCreate{Cmd: command, AttachStdout: true, AttachStderr: true})
-	if err != nil {
-		return nil, err
-	}
-	if assertAccess != nil {
-		if err := assertAccess(); err != nil {
-			return nil, err
-		}
-	}
-	deadline, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), limit, errTimeout)
-	defer cancel()
-	conn, err := h.start(deadline, id, execID)
-	if err != nil {
-		return nil, err
-	}
-	stop := context.AfterFunc(deadline, func() { conn.Close() })
-	defer stop()
-	var output limited
-	demuxErr := docker.Demux(conn, &output, nil)
-	conn.Close()
-	result := h.waitForExit(id, execID, func() bool { return deadline.Err() != nil })
-	if demuxErr != nil {
-		if errors.Is(demuxErr, errOutput) {
-			return nil, errOutput
-		}
-		if deadline.Err() != nil {
-			return nil, errTimeout
-		}
-		return nil, errFailed
-	}
-	if result == nil || *result.ExitCode != 0 {
-		return nil, errFailed
-	}
-	return output.data, nil
+	return launch.Exec(ctx, h.Docker, id, launch.ExecOptions{Cmd: command, AssertAccess: assertAccess, Limit: limit,
+		Errors: helperErrors, Settle: true, Poll: h.pollInterval})
 }
 
-var errOutput = fail("HELPER_OUTPUT", "A data operation produced too much output.")
-
-type limited struct{ data []byte }
-
-func (l *limited) Write(p []byte) (int, error) {
-	if len(l.data)+len(p) > 4*1024*1024 {
-		return 0, errOutput
-	}
-	l.data = append(l.data, p...)
-	return len(p), nil
-}
+var helperErrors = &launch.ExecErrors{Timeout: errTimeout, Failed: errFailed, Unsafe: errFailed,
+	OutputLimit: fail("HELPER_OUTPUT", "A data operation produced too much output.")}
 
 // IsRunning reports whether a reused restore helper is still running.
 func (h *Helpers) IsRunning(ctx context.Context, id string) (bool, error) {
@@ -321,7 +223,7 @@ func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess fun
 		limit = h.openLimit
 	}
 	opening, cancel := context.WithTimeoutCause(ctx, limit, errTimeout)
-	conn, err := h.start(opening, id, execID)
+	conn, err := launch.Start(opening, h.Docker, id, execID, h.pollInterval)
 	cancel()
 	if err != nil {
 		return nil, nil, err
@@ -637,7 +539,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 				return err
 			}
 		}
-		conn, err := h.start(deadline, helperID, execID)
+		conn, err := launch.Start(deadline, h.Docker, helperID, execID, h.pollInterval)
 		if err != nil {
 			return err
 		}
@@ -648,7 +550,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		mu.Unlock()
 		go func() {
 			err := docker.Demux(conn, nil, nil)
-			result := h.waitForExit(helperID, execID, expired)
+			result := launch.WaitForExit(h.Docker, helperID, execID, h.pollInterval, expired)
 			switch {
 			case result != nil && *result.ExitCode == helper.ExtractFullStatus:
 				err = errStagingCapacity
