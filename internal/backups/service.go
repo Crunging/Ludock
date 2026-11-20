@@ -454,22 +454,31 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 	}
 	status.Destination, status.MaxBytes, status.ReserveBytes = settings.Destination, settings.MaxBytes, settings.ReserveBytes
 	if status.CopyTo = settings.CopyTo; status.CopyTo != "" {
-		// A share that stops responding mustn't hold up the page.
-		measured := make(chan int64, 1)
-		go func() {
-			available, err := s.Storage.AvailableBytes(settings.CopyTo)
-			if err != nil {
-				available = -1
-			}
-			measured <- available
-		}()
-		select {
-		case available := <-measured:
-			if status.CopyAvailableBytes = available; available < 0 {
-				status.CopyIssue = errCopyMissing.Message
-			}
-		case <-time.After(5 * time.Second):
+		// A share that stops responding mustn't hold up the page, and each
+		// folder has one reading waiting on it at most.
+		if !s.copies.measure(settings.CopyTo) {
 			status.CopyIssue = errCopyStalled.Message
+		} else {
+			measured := make(chan int64, 1)
+			go func() {
+				defer s.copies.measured(settings.CopyTo)
+				if testHook != nil {
+					testHook("measuring")
+				}
+				available, err := s.Storage.AvailableBytes(settings.CopyTo)
+				if err != nil {
+					available = -1
+				}
+				measured <- available
+			}()
+			select {
+			case available := <-measured:
+				if status.CopyAvailableBytes = available; available < 0 {
+					status.CopyIssue = errCopyMissing.Message
+				}
+			case <-time.After(measureWait):
+				status.CopyIssue = errCopyStalled.Message
+			}
 		}
 	}
 	if _, err := Remaining(*settings, status.ArchiveBytes, kept); err != nil {

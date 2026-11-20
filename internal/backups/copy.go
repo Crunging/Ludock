@@ -45,6 +45,9 @@ var copyRetry = []time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute, 
 // copyStall ends a copy that makes no progress for this long.
 var copyStall = 2 * time.Minute
 
+// measureWait is how long the storage summary waits for the second folder.
+var measureWait = 5 * time.Second
+
 var (
 	errCopyMissing  = fail("BACKUP_COPY_FOLDER", "The second folder is missing or not mounted.")
 	errCopyReadOnly = fail("BACKUP_COPY_FOLDER", "Ludock can’t write to the second folder.")
@@ -387,7 +390,30 @@ type copies struct {
 	mu      sync.Mutex
 	current string
 	stuck   map[string]bool
-	wake    chan struct{}
+	// measuring holds folders whose free-space reading hasn't returned.
+	measuring map[string]bool
+	wake      chan struct{}
+}
+
+// measure claims a folder's free-space reading; false while an earlier one
+// is still waiting on the folder, so readings of a stuck share don't pile up.
+func (c *copies) measure(folder string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.measuring[folder] {
+		return false
+	}
+	if c.measuring == nil {
+		c.measuring = map[string]bool{}
+	}
+	c.measuring[folder] = true
+	return true
+}
+
+func (c *copies) measured(folder string) {
+	c.mu.Lock()
+	delete(c.measuring, folder)
+	c.mu.Unlock()
 }
 
 func (c *copies) channel() chan struct{} {

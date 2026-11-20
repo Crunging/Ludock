@@ -579,3 +579,29 @@ func TestPublishNeverReplacesAValidCopy(t *testing.T) {
 		t.Fatal("left partial files", entries)
 	}
 }
+
+// The second folder is a share that has stopped responding: each look at the
+// storage summary reports it without waiting, and only one free-space
+// reading is ever left waiting on it.
+func TestStuckFolderIsMeasuredOnce(t *testing.T) {
+	f := newCopyFixture(t)
+	previous := measureWait
+	measureWait = 50 * time.Millisecond
+	release := make(chan struct{})
+	var started atomic.Int32
+	testHook = func(point string) {
+		if point == "measuring" {
+			started.Add(1)
+			<-release
+		}
+	}
+	t.Cleanup(func() { close(release); testHook = nil; measureWait = previous })
+	for range 3 {
+		if status := f.s.Status(ctx); status.CopyIssue != errCopyStalled.Message {
+			t.Fatal(status.CopyIssue)
+		}
+	}
+	if started.Load() != 1 {
+		t.Fatal("readings piled up on a stuck folder", started.Load())
+	}
+}
