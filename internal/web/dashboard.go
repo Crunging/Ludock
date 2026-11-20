@@ -38,7 +38,7 @@ func backupSummary(user *db.SessionUser, view *servers.View) bool {
 func (s *Server) serverList(r *http.Request, request *Request) views.ServerList {
 	ctx := r.Context()
 	list := views.ServerList{Admin: request.User().Role == db.RoleAdmin, Username: request.User().Username,
-		Search: r.URL.Query().Get("search"), State: r.URL.Query().Get("state")}
+		Search: r.URL.Query().Get("search"), State: r.URL.Query().Get("state"), AddOpen: r.URL.Query().Has("add")}
 	all, err := s.App.Servers.List(ctx, request.User())
 	if err != nil {
 		list.DiscoveryUnavailable = true

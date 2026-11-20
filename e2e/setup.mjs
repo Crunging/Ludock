@@ -40,7 +40,8 @@ function start(command, args, env, log) {
 }
 
 // startStack starts one Ludock and fake daemon on fresh data under dir and
-// signs in the setup administrator. Each worker gets its own stack.
+// signs in the setup administrator. Each worker gets its own stack; a
+// journey that needs a fresh install starts another with freshStack.
 async function startStack(bin, dir, port) {
   const dockerDir = join(dir, "docker");
   // Backups go to the first root; the backups journey chooses the second
@@ -76,6 +77,27 @@ async function startStack(bin, dir, port) {
   return { children: [ludock, fake], env: { LUDOCK_E2E_URL: baseURL, LUDOCK_E2E_ADMIN_STATE: state, LUDOCK_E2E_DIR: dir } };
 }
 
+async function stopStack(stack) {
+  for (const child of stack.children) {
+    child.stopping = true;
+    child.kill("SIGTERM");
+    await new Promise((done) => (child.exitCode !== null ? done() : child.once("exit", done)));
+  }
+}
+
+/**
+ * Starts a stack that no other journey has used, on a port of its own, and
+ * returns its env and a function that stops it and removes its data.
+ */
+export async function freshStack(index) {
+  const dir = mkdtempSync(join(tmpdir(), "ludock-e2e-fresh-"));
+  const stack = await startStack(process.env.LUDOCK_E2E_BIN, dir, port + 50 + index);
+  return { env: stack.env, stop: async () => {
+    await stopStack(stack);
+    if (!process.env.LUDOCK_E2E_KEEP) rmSync(dir, { recursive: true, force: true });
+  } };
+}
+
 export default async function setup(config) {
   const dir = mkdtempSync(join(tmpdir(), "ludock-e2e-"));
   const bin = join(dir, "bin");
@@ -89,15 +111,10 @@ export default async function setup(config) {
   }));
   // fixtures.mjs picks the stack for its worker's parallel index.
   process.env.LUDOCK_E2E_STACKS = JSON.stringify(stacks.map((stack) => stack.env));
+  process.env.LUDOCK_E2E_BIN = bin;
 
   return async () => {
-    await Promise.all(stacks.map(async (stack) => {
-      for (const child of stack.children) {
-        child.stopping = true;
-        child.kill("SIGTERM");
-        await new Promise((done) => (child.exitCode !== null ? done() : child.once("exit", done)));
-      }
-    }));
+    await Promise.all(stacks.map(stopStack));
     if (!process.env.LUDOCK_E2E_KEEP) rmSync(dir, { recursive: true, force: true });
   };
 }

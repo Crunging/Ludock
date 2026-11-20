@@ -46,6 +46,34 @@ chain right to left and stops at the first untrusted address. Host names and
 addresses with ports are refused when you save. Changing the list never signs
 anyone out; `LUDOCK_TRUSTED_PROXIES` sets it from outside the panel instead.
 
+## Finish setting up
+
+After the first administrator is created, the server list shows administrators
+a short **Finish setting up** list of what's still undone. Each item comes from
+the current state, so it goes away once done and comes back if it's undone
+again, such as a new server without backups; **Dismiss** hides an item for every
+administrator for good. Members never see it, and when nothing is left the list
+isn't shown.
+
+- **Get alerts:** no [notification](#notifications) destination is on. Opens
+  the notification settings.
+- **Back up your servers:** backup storage is set up, and some servers with
+  data folders have no recurring schedule that backs them up. **Back up every
+  night** asks first, then adds an ordinary daily backup schedule for each, in
+  your browser's time zone and owned by you: the first at 04:00, the rest 15
+  minutes apart, skipping times other backup schedules use. Each backup stops
+  its server for a few minutes. Change or remove them on each server's
+  **Schedules** tab.
+- **Check the address players use:** no server address is saved, and the one
+  in your browser's address bar, which players are shown, is a loopback or
+  private address or a local name such as `nas.local`. Opens
+  [Server address](#addresses); dismiss it if everyone plays on your network.
+- **Add the servers Ludock didn't find:** a container Ludock doesn't manage
+  looks like a game, by its image, name, or ports, and no administrator has
+  added or removed it. Opens **Missing a server?**
+- **Protect your sign-in:** your account doesn't use
+  [two-factor sign-in](#two-factor-sign-in). Optional.
+
 ## Adding servers
 
 Servers on [supported game images](#supported-games) appear by themselves. For

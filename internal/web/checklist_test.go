@@ -1,0 +1,164 @@
+package web
+
+import (
+	"context"
+	"net/http"
+	"net/url"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Crunging/Ludock/internal/auth"
+	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/schedtime"
+	"github.com/Crunging/Ludock/internal/web/views"
+)
+
+type postingAs struct {
+	session *auth.Principal
+	csrf    string
+}
+
+func checklistKeysOf(items []views.ChecklistItem) []string {
+	var keys []string
+	for _, item := range items {
+		keys = append(keys, item.Key)
+	}
+	return keys
+}
+
+// Each item shows exactly while its condition holds and it isn't
+// dismissed, in the order a newcomer needs them.
+func TestChecklistItemConditions(t *testing.T) {
+	t.Parallel()
+	fresh := checklistState{Unbacked: []string{"a"}, LocalHost: "127.0.0.1", Unmanaged: []string{"b"}}
+	if keys := checklistKeysOf(checklistItems(fresh)); !slices.Equal(keys, checklistKeys) {
+		t.Fatal(keys)
+	}
+	done := checklistState{AlertsOn: true, TwoFactor: true}
+	if items := checklistItems(done); len(items) != 0 {
+		t.Fatal(items)
+	}
+	fresh.Dismissed = []string{views.ChecklistAddress, views.ChecklistTwoFactor}
+	if keys := checklistKeysOf(checklistItems(fresh)); !slices.Equal(keys, []string{views.ChecklistAlerts, views.ChecklistBackups, views.ChecklistServers}) {
+		t.Fatal(keys)
+	}
+	address := checklistItems(checklistState{AlertsOn: true, TwoFactor: true, LocalHost: "192.168.1.20"})
+	if len(address) != 1 || address[0].Host != "192.168.1.20" || address[0].Loopback {
+		t.Fatal(address)
+	}
+}
+
+// Players can't reach loopback, private, or link-local addresses, nor names
+// only a local network resolves, from elsewhere.
+func TestLocalHost(t *testing.T) {
+	t.Parallel()
+	for _, host := range []string{"127.0.0.1", "::1", "localhost", "panel.localhost", "10.0.0.5", "172.16.3.4", "192.168.1.20",
+		"fd00::1", "fe80::1", "169.254.1.1", "::ffff:192.168.1.2", "0.0.0.0", "nas", "nas.local", "box.lan", "server.home.arpa",
+		"NAS.LOCAL."} {
+		if !localHost(host) {
+			t.Error("not local:", host)
+		}
+	}
+	for _, host := range []string{"203.0.113.10", "2001:db8::1", "play.example.com", "100.100.1.1", ""} {
+		if localHost(host) {
+			t.Error("local:", host)
+		}
+	}
+	if !loopbackHost("127.0.0.1") || !loopbackHost("localhost") || loopbackHost("192.168.1.20") {
+		t.Fatal("loopback")
+	}
+}
+
+// Nightly backups start at 04:00 a quarter hour apart, skip times other
+// backups use, and keep running every night and stay apart across
+// daylight-saving changes.
+func TestBackupTimesStaggerAcrossDaylightSaving(t *testing.T) {
+	t.Parallel()
+	if times := backupTimes(nil, 3); !slices.Equal(times, []string{"04:00", "04:15", "04:30"}) {
+		t.Fatal(times)
+	}
+	if times := backupTimes([]string{"04:00", "04:30"}, 3); !slices.Equal(times, []string{"04:15", "04:45", "05:00"}) {
+		t.Fatal(times)
+	}
+	if times := backupTimes(nil, 9); times[8] != "04:05" {
+		t.Fatal(times)
+	}
+	if times := backupTimes(nil, 30); len(times) != 30 || times[24] != "04:00" {
+		t.Fatal(times)
+	}
+	times := backupTimes(nil, 8)
+	for _, zone := range []string{"America/New_York", "Europe/Berlin", "Australia/Sydney", "Australia/Lord_Howe", "America/Santiago",
+		"America/Havana", "Asia/Beirut", "Africa/Casablanca", "Pacific/Auckland", "America/St_Johns"} {
+		location, _ := schedtime.Location(zone)
+		for day := 0; day < 366; day++ {
+			// 03:00 exists on every day in these zones; midnight doesn't in Santiago.
+			before := time.Date(2026, 1, 1+day, 3, 0, 0, 0, location)
+			date := before.Format("2006-01-02 ")
+			var previous int64
+			for index, at := range times {
+				input := schedtime.Input{Kind: "recurring", Enabled: true, Time: at, Timezone: zone, Days: []int{0, 1, 2, 3, 4, 5, 6}}
+				next, ok := schedtime.NextRun(input, before.UnixMilli(), "")
+				if run := time.UnixMilli(next).In(location); !ok || run.Format("2006-01-02 15:04") != date+at {
+					t.Fatalf("%s %s%s: %v %v", zone, date, at, run, ok)
+				}
+				if index > 0 && next-previous != 15*60_000 {
+					t.Fatalf("%s %s%s is %d ms after the one before", zone, date, at, next-previous)
+				}
+				previous = next
+			}
+		}
+	}
+}
+
+// Requests the list never sends: a member's, one without the session's
+// CSRF token, an unknown item, and a missing time zone change nothing.
+func TestChecklistRefusesForgedRequests(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	ctx := context.Background()
+	member := p.user("u-member", "member", db.RoleMember)
+	post := func(target string, principal *postingAs, values url.Values) int {
+		values.Set("_csrf", principal.csrf)
+		return p.do("POST", target, principal.session, strings.NewReader(values.Encode()), map[string]string{"HX-Request": "true"}).Code
+	}
+	asMember := &postingAs{member, CSRFToken(member.Token)}
+	forged := &postingAs{p.admin, "not-a-token"}
+	asAdmin := &postingAs{p.admin, CSRFToken(p.admin.Token)}
+	for _, attempt := range []struct {
+		as     *postingAs
+		target string
+		values url.Values
+		status int
+	}{
+		{asMember, "/checklist/backups", url.Values{"timezone": {"UTC"}}, http.StatusForbidden},
+		{forged, "/checklist/backups", url.Values{"timezone": {"UTC"}}, http.StatusForbidden},
+		{asAdmin, "/checklist/backups", url.Values{"timezone": {"Mars/Olympus"}}, http.StatusBadRequest},
+		{asMember, "/checklist/address/dismiss", url.Values{}, http.StatusForbidden},
+		{forged, "/checklist/address/dismiss", url.Values{}, http.StatusForbidden},
+		{asAdmin, "/checklist/everything/dismiss", url.Values{}, http.StatusNotFound},
+	} {
+		if status := post(attempt.target, attempt.as, attempt.values); status != attempt.status {
+			t.Fatal(attempt.target, attempt.values, status)
+		}
+	}
+	if dismissed := p.web.checklistDismissed(ctx); len(dismissed) != 0 {
+		t.Fatal(dismissed)
+	}
+	if list, err := p.app.Schedules.List(ctx, &p.admin.User, p.server); err != nil || len(list) != 0 {
+		t.Fatal(list, err)
+	}
+	if response := p.do("GET", "/fragments/checklist", member, nil, map[string]string{"HX-Request": "true"}); response.Code != http.StatusForbidden {
+		t.Fatal(response.Code)
+	}
+	// The administrator's own dismissal is remembered once and audited.
+	for range 2 {
+		if status := post("/checklist/address/dismiss", asAdmin, url.Values{}); status != http.StatusOK {
+			t.Fatal(status)
+		}
+	}
+	if dismissed := p.web.checklistDismissed(ctx); !slices.Equal(dismissed, []string{views.ChecklistAddress}) {
+		t.Fatal(dismissed)
+	}
+}

@@ -47,6 +47,8 @@ type ServerList struct {
 	// ShowPlayers: some server in the list can list its players.
 	ShowPlayers          bool
 	DiscoveryUnavailable bool
+	// AddOpen opens "Missing a server?", as the setup list's link asks.
+	AddOpen bool
 }
 
 // Pip is a small state marker for a tone: ok, idle, active, attention, or
@@ -183,6 +185,9 @@ templ Dashboard(page Page, list ServerList) {
 					<p class="muted" aria-live="polite">Checking for issues…</p>
 				</section>
 			</div>
+			if page.Admin {
+				<div id="checklist" hx-get="/fragments/checklist" hx-trigger="load, servers-changed from:document delay:500ms" hx-swap="innerHTML"></div>
+			}
 			@serverFilters(list)
 			// Refreshes carry the current filters, which stay outside the swap
 			// so typing is never interrupted. Outside requests queue behind the
@@ -193,7 +198,7 @@ templ Dashboard(page Page, list ServerList) {
 			</div>
 			if page.Admin {
 				<div class="dashboard-help">
-					<details open?={ list.Total == 0 }>
+					<details id="missing-server" open?={ list.Total == 0 || list.AddOpen }>
 						<summary class="text-link">Missing a server?</summary>
 						@addServersLoader()
 					</details>

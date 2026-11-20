@@ -1,0 +1,152 @@
+package views
+
+import (
+	"strconv"
+	"strings"
+)
+
+const (
+	ChecklistAlerts    = "alerts"
+	ChecklistBackups   = "backups"
+	ChecklistAddress   = "address"
+	ChecklistServers   = "servers"
+	ChecklistTwoFactor = "two-factor"
+)
+
+// ChecklistItem is one thing left to set up.
+type ChecklistItem struct {
+	Key string
+	// Names are the servers or containers the item is about.
+	Names []string
+	// Host is the address players are shown; Loopback when only this
+	// computer can use it.
+	Host     string
+	Loopback bool
+}
+
+type ChecklistView struct {
+	Items         []ChecklistItem
+	Notice, Error string
+}
+
+// nameList joins up to three names: "A, B, and 2 others".
+func nameList(names []string) string {
+	shown := names
+	if len(names) > 3 {
+		shown = names[:2]
+	}
+	text := strings.Join(shown, ", ")
+	switch rest := len(names) - len(shown); {
+	case rest > 0:
+		text += ", and " + strconv.Itoa(rest) + " others"
+	case len(shown) == 2:
+		text = shown[0] + " and " + shown[1]
+	case len(shown) == 3:
+		text = shown[0] + ", " + shown[1] + ", and " + shown[2]
+	}
+	return text
+}
+
+func checklistTitle(key string) string {
+	return map[string]string{
+		ChecklistAlerts:    "Get alerts",
+		ChecklistBackups:   "Back up your servers",
+		ChecklistAddress:   "Check the address players use",
+		ChecklistServers:   "Add the servers Ludock didn’t find",
+		ChecklistTwoFactor: "Protect your sign-in",
+	}[key]
+}
+
+func backupConfirm(count int) templ.Attributes {
+	question, spacing := "Back up "+strconv.Itoa(count)+" servers every night?", ", 15 minutes apart"
+	if count == 1 {
+		question, spacing = "Back up this server every night?", ""
+	}
+	return templ.Attributes{
+		"hx-confirm": question,
+		"data-confirm-detail": "Each backup stops its server for a few minutes, disconnecting anyone playing, then starts it again. " +
+			"Backups start at 04:00 your time" + spacing + ". Change or remove them on each server’s Schedules tab.",
+		"data-confirm-action": "Back up every night",
+	}
+}
+
+// Checklist is the "Finish setting up" list; it renders nothing once every
+// item is done or dismissed.
+templ Checklist(v ChecklistView) {
+	if len(v.Items) > 0 || v.Notice != "" || v.Error != "" {
+		<section class="checklist" aria-labelledby="checklist-title">
+			<h2 id="checklist-title" class="checklist__title">Finish setting up</h2>
+			if v.Notice != "" {
+				@Alert("success", v.Notice)
+			}
+			if v.Error != "" {
+				@Alert("error", v.Error)
+			}
+			if len(v.Items) > 0 {
+				<ul class="checklist__list">
+					for _, item := range v.Items {
+						<li class={ "checklist__item", templ.KV("checklist__item--quiet", item.Key == ChecklistTwoFactor) }>
+							<div class="checklist__text">
+								<strong>{ checklistTitle(item.Key) }</strong>
+								<span class="muted">
+									@checklistDetail(item)
+								</span>
+							</div>
+							<div class="checklist__actions">
+								@checklistAction(item)
+								<button type="button" class="text-link checklist__dismiss" hx-post={ "/checklist/" + item.Key + "/dismiss" } hx-target="#checklist" aria-label={ "Dismiss: " + checklistTitle(item.Key) }>Dismiss</button>
+							</div>
+						</li>
+					}
+				</ul>
+			}
+		</section>
+	}
+}
+
+templ checklistDetail(item ChecklistItem) {
+	switch item.Key {
+		case ChecklistAlerts:
+			Ludock already watches for crashes, games that stop answering, and full disks, but no notification is on, so no one hears about them.
+		case ChecklistBackups:
+			{ nameList(item.Names) }
+			if len(item.Names) == 1 {
+				has no scheduled backup.
+			} else {
+				have no scheduled backups.
+			}
+		case ChecklistAddress:
+			Players are shown <code>{ item.Host }</code>, which
+			if item.Loopback {
+				only works on this computer.
+			} else {
+				only works on your own network.
+			}
+			Friends elsewhere need your public address or domain.
+		case ChecklistServers:
+			{ nameList(item.Names) }
+			if len(item.Names) == 1 {
+				looks like a game server, but Ludock isn’t managing it.
+			} else {
+				look like game servers, but Ludock isn’t managing them.
+			}
+		case ChecklistTwoFactor:
+			Optional: ask for a code from an authenticator app when you sign in.
+	}
+}
+
+templ checklistAction(item ChecklistItem) {
+	switch item.Key {
+		case ChecklistAlerts:
+			<a class="secondary-btn" href="/settings#notification-settings-title">Set up notifications</a>
+		case ChecklistBackups:
+			<input type="hidden" id="checklist-timezone" name="timezone" data-default-local-timezone/>
+			<button class="secondary-btn" type="button" hx-post="/checklist/backups" hx-include="#checklist-timezone" hx-target="#checklist" data-busy-label="Scheduling…" { backupConfirm(len(item.Names))... }>Back up every night</button>
+		case ChecklistAddress:
+			<a class="secondary-btn" href="/settings#connection-settings-title">Set the address</a>
+		case ChecklistServers:
+			<a class="secondary-btn" href="/?add=1#missing-server">Review containers</a>
+		case ChecklistTwoFactor:
+			<a class="secondary-btn" href="/account#two-factor">Set up two-factor</a>
+	}
+}
