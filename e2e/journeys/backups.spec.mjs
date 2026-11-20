@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded, signIn, createUser, shareServer } from "./fixtures.mjs";
 
@@ -222,6 +222,32 @@ test("keeping a backup with a note, seeing it outlast retention, and releasing i
   await expect(rows).toHaveCount(3);
 });
 
+// savesIn lists the saved copies of Ludock's own data in folder.
+const savesIn = (folder) => readdirSync(folder).filter((name) => /^ludock-data-\d{8}-\d{6}\.tar$/.test(name));
+
+test("Ludock saving its own data beside the backups without being asked", async ({ page }) => {
+  const backupFolder = join(process.env.LUDOCK_E2E_DIR, "backups");
+  await page.goto("/settings");
+  const storage = page.locator("#backup-storage");
+  const line = storage.locator("#ludock-data-save");
+  await expect(line).toContainText("Ludock’s own data");
+  // The first save follows backup storage turning itself on.
+  await expect(async () => {
+    await storage.getByRole("button", { name: "Refresh" }).click();
+    await expect(line).toContainText(/Saved (just now|\d+ minutes? ago)/, { timeout: 1_000 });
+  }).toPass({ timeout: 45_000 });
+  await expect(storage.locator(".backup-storage__issues")).toHaveCount(0);
+
+  // It is one owner-only file in the backup folder, and no server lists it.
+  const saves = savesIn(backupFolder);
+  expect(saves.length).toBeGreaterThan(0);
+  expect(statSync(join(backupFolder, saves[0])).mode & 0o777).toBe(0o600);
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Backups" }).click();
+  await expect(page.locator("#backup-list")).toBeVisible();
+  await expect(page.locator("main")).not.toContainText("ludock-data");
+});
+
 test("keeping a second copy of every backup and restoring from it", async ({ page }) => {
   const backupFolder = join(process.env.LUDOCK_E2E_DIR, "backups");
   const copyFolder = join(process.env.LUDOCK_E2E_DIR, "copies");
@@ -235,6 +261,10 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
   };
   await chooseCopy(copyFolder);
   await expect(settings.locator("#backup-storage")).toContainText(`Second copy in${copyFolder}`);
+  // Ludock's own data goes there too, the newest save first.
+  await expect.poll(() => savesIn(copyFolder).length, { timeout: 45_000 }).toBeGreaterThan(0);
+  const saved = savesIn(copyFolder).at(-1);
+  expect(readFileSync(join(copyFolder, saved))).toEqual(readFileSync(join(backupFolder, saved)));
 
   // Each backup is copied there once its server is back.
   await openServer(page, "Survival");

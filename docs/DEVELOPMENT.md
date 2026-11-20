@@ -71,8 +71,8 @@ cd e2e && LUDOCK_DOCKER_E2E=disposable-daemon npx playwright test -c docker.conf
 ## CI and releases
 
 The image cross-compiles a static binary (`CGO_ENABLED=0`) and copies it into
-Alpine. The binary's subcommands are
-`serve` (the default), `recover <username>`, `healthcheck`, `helper …` (run
+Alpine. The binary's subcommands are `serve` (the default),
+`recover <username>`, `restore-data <file>`, `healthcheck`, `helper …` (run
 inside helper containers), and `version`.
 
 - **CI** runs on every PR and every push to `main` that changes more than

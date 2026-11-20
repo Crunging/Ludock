@@ -32,6 +32,12 @@ trusted Docker host, and use an HTTPS reverse proxy for remote access.
   with them, with the access chosen on each server's Sharing tab.
 - Approve narrow backup folders, and keep registry and webhook credentials out
   of game file folders.
+- Ludock saves its own data, including password hashes, two-factor secrets,
+  sessions, notification tokens, and the identity key that protects them, as
+  `ludock-data-*.tar` files in the backup folder and the second folder.
+  Anyone who can read either folder can read Ludock's data: keep them as
+  private as Ludock's data volume. The panel never lists or offers these
+  files.
 - Behind a reverse proxy, trust only the proxy's own address in
   **Settings → Advanced**: a trusted address can claim to be any visitor.
 

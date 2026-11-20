@@ -41,6 +41,8 @@ func main() {
 		code = serve()
 	case "recover":
 		code = recoverAccount(args)
+	case "restore-data":
+		code = restoreData(args)
 	case "healthcheck":
 		code = healthcheck()
 	case "helper":
@@ -48,7 +50,7 @@ func main() {
 	case "version", "--version":
 		fmt.Println(version)
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: ludock [serve|recover <username>|healthcheck|helper …|version]\n")
+		fmt.Fprintf(os.Stderr, "Usage: ludock [serve|recover <username>|restore-data <file>|healthcheck|helper …|version]\n")
 		code = 2
 	}
 	os.Exit(code)
@@ -181,6 +183,26 @@ func recoverAccount(args []string) int {
 		return 0
 	}
 	fmt.Printf("Password reset for %q. All existing sessions were revoked.\n", user.Username)
+	return 0
+}
+
+// restoreData restores a saved copy of Ludock's data into an empty data
+// folder, after checking that the copy is whole and its key matches.
+func restoreData(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "Usage: ludock restore-data <ludock-data-….tar>")
+		return 2
+	}
+	cfg, ok := loadConfig()
+	if !ok {
+		return 2
+	}
+	savedAt, err := db.RestoreSnapshot(args[0], cfg.DBPath())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, startupError(err, "Could not restore Ludock's data. Check that the file can be read and the data folder is writable."))
+		return 1
+	}
+	fmt.Printf("Restored Ludock's data as it was saved at %s. Start Ludock to use it.\n", savedAt.Local().Format("2006-01-02 15:04 MST"))
 	return 0
 }
 
