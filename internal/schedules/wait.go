@@ -194,7 +194,7 @@ func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, tokenHa
 	if actor.Role == db.RoleAdmin {
 		within = func(fn func(*sql.Tx) error) error { return s.DB.AdminMutation(ctx, actor.ID, tokenHash, db.Now(), fn) }
 	}
-	var counted bool
+	var heard int64
 	err = within(func(tx *sql.Tx) error {
 		now := db.Now()
 		result, err := tx.ExecContext(ctx, "UPDATE schedules SET last_result=?,last_run_at=? WHERE id=? AND revision=? AND last_slot=?"+stillWaitingSQL,
@@ -207,7 +207,7 @@ func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, tokenHa
 		} else if changed == 0 {
 			return errWaitOver
 		}
-		if counted, err = callOff(ctx, tx, r.id, slot); err != nil {
+		if heard, err = callOff(ctx, tx, r.id, slot); err != nil {
 			return err
 		}
 		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: actor.ID, Action: "schedule.wait.cancelled", TargetType: "server",
@@ -219,8 +219,8 @@ func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, tokenHa
 	if err := s.DB.PruneAuditIfNeeded(ctx); err != nil {
 		log.Warn("Audit retention cleanup failed after cancelling a schedule run; it will be retried")
 	}
-	if counted {
-		s.sayCalledOff(serverID, data.Action)
+	if heard != 0 {
+		s.sayCalledOff(serverID, data.Action, heard)
 	}
 	return nil
 }

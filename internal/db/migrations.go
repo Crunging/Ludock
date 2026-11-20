@@ -349,6 +349,12 @@ var Migrations = []Migration{
 		Version: 11,
 		SQL:     `ALTER TABLE backups ADD COLUMN game_type TEXT NOT NULL DEFAULT '';`,
 	},
+	{
+		// The binding revision a countdown warning was delivered on; NULL
+		// while it is only claimed, or when it never reached players.
+		Version: 12,
+		SQL:     `ALTER TABLE schedule_announcements ADD COLUMN heard_binding INTEGER;`,
+	},
 }
 
 func LatestVersion() int { return Migrations[len(Migrations)-1].Version }

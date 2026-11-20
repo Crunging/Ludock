@@ -95,22 +95,28 @@ func (j *Jobs) Cancel(ctx context.Context, user *db.SessionUser, tokenHash, serv
 	}
 	// A warning sent and saved before the cancel is answered here; one still
 	// going out is answered by the operation itself.
-	if before.Recovery.WarnSent || j.countedDown(ctx, before) {
-		j.sayCalledOff(context.WithoutCancel(ctx), before)
+	if before.Recovery.WarnSent {
+		j.sayCalledOff(context.WithoutCancel(ctx), before, before.BindingRevision)
+	} else if heard := j.countedDown(ctx, before); heard != 0 {
+		j.sayCalledOff(context.WithoutCancel(ctx), before, heard)
 	}
 	return nil
 }
 
 // countedDown spends the countdown a schedule sent for the run that queued
-// job, reporting whether there was one; schedules record their warnings by
-// run, not on the operation. Whichever call-off spends it tells players.
-func (j *Jobs) countedDown(ctx context.Context, job *ops.Job) bool {
+// job, reporting the binding revision players heard it on, or 0; schedules
+// record their warnings by run, not on the operation. Whichever call-off
+// spends it tells players.
+func (j *Jobs) countedDown(ctx context.Context, job *ops.Job) int64 {
 	scheduleID, scheduled := job.Input["scheduleId"].(string)
 	if !scheduled {
-		return false
+		return 0
 	}
-	counted, err := schedules.CallOffQueued(ctx, j.DB, scheduleID, job.ID)
-	return err == nil && counted
+	heard, err := schedules.CallOffQueued(ctx, j.DB, scheduleID, job.ID)
+	if err != nil {
+		return 0
+	}
+	return heard
 }
 
 // registrar registers handlers so that players counted down to a scheduled
@@ -128,8 +134,10 @@ func (r registrar) Register(kind string, handler ops.Handler) {
 			// A refusal is final: the handler never runs after players hear
 			// it's off, even if access returns meanwhile.
 			if err := r.refusal(ctx, job); err != nil {
-				if _, public := apperr.As(err); public && r.jobs.countedDown(ctx, job.Job) {
-					r.jobs.sayCalledOff(ctx, job.Job)
+				if _, public := apperr.As(err); public {
+					if heard := r.jobs.countedDown(ctx, job.Job); heard != 0 {
+						r.jobs.sayCalledOff(ctx, job.Job, heard)
+					}
 				}
 				return nil, err
 			}
@@ -154,18 +162,19 @@ func (r registrar) refusal(ctx context.Context, job *ops.Context) error {
 	return nil
 }
 
-// sayCalledOff tells players a warned operation is off, best effort, on the
-// binding it warned on. Like the warning, it runs on Ludock's own authority:
-// the operation's owner may be the one who lost access.
-func (j *Jobs) sayCalledOff(ctx context.Context, job *ops.Job) {
+// sayCalledOff tells players a warned operation is off, best effort, on
+// binding, the revision they were warned on. Like the warning, it runs on
+// Ludock's own authority: the operation's owner may be the one who lost
+// access.
+func (j *Jobs) sayCalledOff(ctx context.Context, job *ops.Job, binding int64) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	server, err := j.Servers.ResolveChecked(ctx, job.ServerID, job.BindingRevision, func(context.Context) error { return nil })
+	server, err := j.Servers.ResolveChecked(ctx, job.ServerID, binding, func(context.Context) error { return nil })
 	if err != nil || server.Container.State != "running" {
 		return
 	}
 	assertAccess := func() error {
-		_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, server.Observation, job.BindingRevision)
+		_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, server.Observation, binding)
 		return err
 	}
 	if err := j.broadcast(ctx, server, schedules.CalledOffMessage(job.Kind), nil, assertAccess, false); err != nil {

@@ -57,43 +57,57 @@ func countdown(ctx context.Context, q queryer, r *row, data Input, now int64) (s
 	return slot, runAt, false, nil
 }
 
-type execer interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
+type querier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
-// callOff spends the countdown claims of one run, reporting whether players
-// had been counted down to it. Only the write that removes the claims tells
-// them, so they hear it once; a later countdown to the same run starts over.
-func callOff(ctx context.Context, q execer, scheduleID, slot string) (bool, error) {
+// callOff spends the countdown claims of one run and reports the binding
+// revision its latest delivered warning reached players on, or 0 when none
+// did. Only the write that removes the claims tells players, so they hear
+// it once; a later countdown to the same run starts over.
+func callOff(ctx context.Context, q querier, scheduleID, slot string) (int64, error) {
 	if slot == "" {
-		return false, nil
+		return 0, nil
 	}
-	result, err := q.ExecContext(ctx, "DELETE FROM schedule_announcements WHERE schedule_id=? AND slot=?", scheduleID, slot)
-	if err != nil {
-		return false, err
-	}
-	removed, err := result.RowsAffected()
-	return removed > 0, err
+	return spend(ctx, q, "DELETE FROM schedule_announcements WHERE schedule_id=? AND slot=? RETURNING lead_minutes,heard_binding",
+		scheduleID, slot)
 }
 
-// CallOffQueued spends the countdown claims of the run that queued
-// operationID, reporting whether players had been counted down to it.
-func CallOffQueued(ctx context.Context, q execer, scheduleID, operationID string) (bool, error) {
-	result, err := q.ExecContext(ctx, `DELETE FROM schedule_announcements WHERE schedule_id=?
-    AND slot=(SELECT last_slot FROM schedules WHERE id=? AND last_operation_id=?)`, scheduleID, scheduleID, operationID)
-	if err != nil {
-		return false, err
-	}
-	removed, err := result.RowsAffected()
-	return removed > 0, err
+// CallOffQueued is callOff for the run that queued operationID.
+func CallOffQueued(ctx context.Context, q querier, scheduleID, operationID string) (int64, error) {
+	return spend(ctx, q, `DELETE FROM schedule_announcements WHERE schedule_id=?
+    AND slot=(SELECT last_slot FROM schedules WHERE id=? AND last_operation_id=?) RETURNING lead_minutes,heard_binding`,
+		scheduleID, scheduleID, operationID)
 }
 
-// sayCalledOff tells players on serverID that a countdown to action is off,
-// best effort and in the background, so the change that called it off never
-// waits on a busy server or its console.
-func (s *Service) sayCalledOff(serverID, action string) {
+func spend(ctx context.Context, q querier, query string, args ...any) (int64, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	binding, latest := int64(0), 0
+	for rows.Next() {
+		var lead int
+		var heard sql.NullInt64
+		if err := rows.Scan(&lead, &heard); err != nil {
+			return 0, err
+		}
+		// The shortest lead is the most recent warning.
+		if heard.Valid && heard.Int64 != 0 && (binding == 0 || lead < latest) {
+			binding, latest = heard.Int64, lead
+		}
+	}
+	return binding, rows.Err()
+}
+
+// sayCalledOff tells players on serverID, at the binding revision they
+// were warned on, that a countdown to action is off, best effort and in the
+// background, so the change that called it off never waits on a busy server
+// or its console.
+func (s *Service) sayCalledOff(serverID, action string, binding int64) {
 	if s.calledOff != nil {
-		s.calledOff(serverID, action)
+		s.calledOff(serverID, action, binding)
 		return
 	}
 	if s.Console == nil || s.Servers == nil {
@@ -104,7 +118,7 @@ func (s *Service) sayCalledOff(serverID, action string) {
 		defer s.warnings.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := s.tellCalledOff(ctx, serverID, action); err != nil {
+		if err := s.tellCalledOff(ctx, serverID, action, binding); err != nil {
 			log.Debug("Could not tell players a scheduled run is off", logging.F("serverId", serverID))
 		}
 	}()
@@ -112,10 +126,11 @@ func (s *Service) sayCalledOff(serverID, action string) {
 
 // tellCalledOff runs on Ludock's own authority, like a warning's own
 // call-off: it only takes back what Ludock told the players, in fixed words,
-// and the schedule's owner may be the one who lost access.
-func (s *Service) tellCalledOff(ctx context.Context, serverID, action string) error {
+// and the schedule's owner may be the one who lost access. A server rebound
+// since the warning is not the one players heard it on, so it is refused.
+func (s *Service) tellCalledOff(ctx context.Context, serverID, action string, binding int64) error {
 	allowed := func(context.Context) error { return nil }
-	initial, err := s.Servers.ResolveChecked(ctx, serverID, -1, allowed)
+	initial, err := s.Servers.ResolveChecked(ctx, serverID, binding, allowed)
 	if err != nil {
 		return err
 	}
@@ -124,7 +139,7 @@ func (s *Service) tellCalledOff(ctx context.Context, serverID, action string) er
 		return err
 	}
 	defer release()
-	current, err := s.Servers.ResolveChecked(ctx, serverID, initial.Logical.BindingRevision, allowed)
+	current, err := s.Servers.ResolveChecked(ctx, serverID, binding, allowed)
 	if err != nil {
 		return err
 	}
@@ -139,7 +154,7 @@ func (s *Service) tellCalledOff(ctx context.Context, serverID, action string) er
 		return nil
 	}
 	return s.Console.Broadcast(ctx, current, strings.ReplaceAll(template, "{message}", CalledOffMessage(action)), func() error {
-		_, err := s.Identity.AssertObservedBinding(ctx, serverID, current.Observation, current.Logical.BindingRevision)
+		_, err := s.Identity.AssertObservedBinding(ctx, serverID, current.Observation, binding)
 		return err
 	})
 }
