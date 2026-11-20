@@ -37,6 +37,8 @@ type Moderation struct {
 	// Accounts, when set, lists online account names; a kick or ban is sent
 	// only after its reply confirms the target is one.
 	Accounts *PlayerQuery
+	// form, when set, writes a valid target as the game's commands take it.
+	form func(target string) string
 }
 
 // Online reports whether an action targets a player in the online list.
@@ -62,6 +64,9 @@ func (m *Moderation) Command(action PlayerAction, target string) (string, bool) 
 	parts, ok := m.commands[action]
 	if !ok || !m.Valid(target) {
 		return "", false
+	}
+	if m.form != nil {
+		target = m.form(target)
 	}
 	command := parts[0] + target + parts[1]
 	// The forms already exclude these; a mistake in one must not send more.
@@ -228,10 +233,24 @@ func factorioOutcome(action PlayerAction, reply string) Outcome {
 	return OutcomeUnknown
 }
 
-// Palworld takes the Steam ID its ShowPlayers gives.
+// Palworld takes the Steam ID its ShowPlayers gives. Palworld 1.0 refuses a
+// bare one as an invalid ID format and takes it as steam_<ID>.
 var palworldModeration = &Moderation{
 	target:   regexp.MustCompile(`^(?:steam_)?[0-9]{17}$`),
 	commands: map[PlayerAction][2]string{Kick: {"KickPlayer ", ""}, Ban: {"BanPlayer ", ""}},
+	form:     func(id string) string { return "steam_" + strings.TrimPrefix(id, "steam_") },
+	outcome:  palworldOutcome,
+}
+
+// palworldOutcome reads Palworld 1.0's replies, which name the ID.
+func palworldOutcome(action PlayerAction, reply string) Outcome {
+	switch {
+	case action == Kick && strings.HasPrefix(reply, "Failed to Kick: "):
+		return NoPlayer
+	case action == Ban && strings.HasPrefix(reply, "Baned: "):
+		return Done
+	}
+	return OutcomeUnknown
 }
 
 // ARK takes a Survival Evolved Steam ID or a Survival Ascended EOS ID.

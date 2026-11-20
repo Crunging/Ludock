@@ -289,7 +289,8 @@ func SourceRCON(ctx context.Context, host string, port int, password, command st
 					}
 					continue
 				}
-				if !commandSent || packet.ID != commandID {
+				// Palworld answers every command with ID 0; request IDs never are.
+				if !commandSent || (packet.ID != commandID && (packet.ID != 0 || packet.Type != 0)) {
 					continue
 				}
 				received = true

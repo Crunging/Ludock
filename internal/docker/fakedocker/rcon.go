@@ -10,6 +10,16 @@ import (
 // the process ends. respond answers each command after the password is
 // accepted. It returns the port.
 func ServeRCON(password string, respond func(command string) string) (int, error) {
+	return serve(password, respond, false)
+}
+
+// ServePalworldRCON is ServeRCON answering every command with ID 0, as
+// Palworld does.
+func ServePalworldRCON(password string, respond func(command string) string) (int, error) {
+	return serve(password, respond, true)
+}
+
+func serve(password string, respond func(command string) string, zeroIDs bool) (int, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, err
@@ -20,13 +30,13 @@ func ServeRCON(password string, respond func(command string) string) (int, error
 			if err != nil {
 				return
 			}
-			go serveRCON(conn, password, respond)
+			go serveRCON(conn, password, respond, zeroIDs)
 		}
 	}()
 	return listener.Addr().(*net.TCPAddr).Port, nil
 }
 
-func serveRCON(conn net.Conn, password string, respond func(string) string) {
+func serveRCON(conn net.Conn, password string, respond func(string) string, zeroIDs bool) {
 	defer conn.Close()
 	var buffer []byte
 	authenticated := false
@@ -51,6 +61,8 @@ func serveRCON(conn net.Conn, password string, respond func(string) string) {
 				reply, _ = netconsole.EncodeRCON(packet.ID, 2, "")
 			case !authenticated:
 				return
+			case zeroIDs:
+				reply, _ = netconsole.EncodeRCON(0, 0, respond(string(packet.Body)))
 			default:
 				reply, _ = netconsole.EncodeRCON(packet.ID, 0, respond(string(packet.Body)))
 			}

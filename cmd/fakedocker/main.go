@@ -256,7 +256,8 @@ func (g *fakeGame) publishLists() {
 // palworldRCON serves a Palworld RCON console and returns its port. Each
 // player keeps the Steam ID they first joined with.
 func palworldRCON(password string) string {
-	game := &fakeGame{}
+	// Like Palworld 1.0, it answers with ID 0 and takes IDs only as steam_<ID>.
+	game := &fakeGame{zeroIDs: true}
 	steamID := func(name string) string {
 		index := slices.Index(game.seen, name)
 		if index < 0 {
@@ -275,15 +276,16 @@ func palworldRCON(password string) string {
 			return "", false
 		}
 		for _, name := range game.online {
-			if steamID(name) == id {
+			if "steam_"+steamID(name) == id {
 				game.online = slices.DeleteFunc(game.online, func(listed string) bool { return listed == name })
 				if verb == "BanPlayer" {
 					game.banned = append(game.banned, name)
+					return "Baned: " + id, true
 				}
-				return map[string]string{"KickPlayer": "Kicked: ", "BanPlayer": "Banned: "}[verb] + name, true
+				return "Kicked: " + name, true
 			}
 		}
-		return "Failed: no player with that ID", true
+		return map[string]string{"KickPlayer": "Failed to Kick: ", "BanPlayer": "Failed to Ban: "}[verb] + id, true
 	})
 }
 
@@ -388,6 +390,8 @@ type fakeGame struct {
 	allowlistOn bool
 	// publish writes files into the game's container.
 	publish func(files map[string]string)
+	// zeroIDs answers every console command with ID 0.
+	zeroIDs bool
 }
 
 func (g *fakeGame) status() (int, int, bool) {
@@ -406,7 +410,11 @@ func (g *fakeGame) status() (int, int, bool) {
 // game that hangs while its container runs.
 func (g *fakeGame) rcon(password, list string, format func(online []string) string,
 	commands func(verb, argument string) (string, bool)) string {
-	port, err := fakedocker.ServeRCON(password, func(command string) string {
+	serve := fakedocker.ServeRCON
+	if g.zeroIDs {
+		serve = fakedocker.ServePalworldRCON
+	}
+	port, err := serve(password, func(command string) string {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		verb, argument, _ := strings.Cut(command, " ")
@@ -526,7 +534,7 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 		Labels: map[string]string{"ludock.query.port": fmt.Sprint(valheimQuery)},
 		Mounts: []docker.MountPoint{{Type: "bind", Source: valheim, Destination: valheim, RW: true},
 			{Type: "bind", Source: valheimServer, Destination: "/opt/valheim", RW: true}},
-		Ports:  map[string][]docker.PortBinding{"2456/udp": {{HostIP: "0.0.0.0", HostPort: "2456"}}}})
+		Ports: map[string][]docker.PortBinding{"2456/udp": {{HostIP: "0.0.0.0", HostPort: "2456"}}}})
 	valheimID.Store(valheimContainer)
 	// 1 GiB of a 2 GiB limit; journeys change the use with POST /fake/stats.
 	engine.Update(valheimContainer, func(c *fakedocker.Container) {

@@ -21,7 +21,8 @@ func TestModerationCommands(t *testing.T) {
 		"minecraft": {Kick: {"Ada_2", "kick Ada_2"}, Ban: {"Ada_2", "ban Ada_2"}, Unban: {"Ada_2", "pardon Ada_2"},
 			Allow: {"Ada_2", "whitelist add Ada_2"}, Disallow: {"Ada_2", "whitelist remove Ada_2"}},
 		"factorio": {Kick: {"Ada.B-2", "/kick Ada.B-2 Kicked by an admin"}, Ban: {"Ada.B-2", "/ban Ada.B-2 Banned by an admin"}},
-		"palworld": {Kick: {"76561198000000000", "KickPlayer 76561198000000000"},
+		// Palworld 1.0 refuses a bare Steam ID.
+		"palworld": {Kick: {"76561198000000000", "KickPlayer steam_76561198000000000"},
 			Ban: {"steam_76561198000000000", "BanPlayer steam_76561198000000000"}},
 		"ark-survival-evolved":  {Kick: {"76561198000000000", "KickPlayer 76561198000000000"}, Ban: {"76561198000000000", "BanPlayer 76561198000000000"}},
 		"ark-survival-ascended": {Kick: {"0002a1b2c3d4e5f60718293a4b5c6d7e", "KickPlayer 0002a1b2c3d4e5f60718293a4b5c6d7e"}},
@@ -129,6 +130,22 @@ func TestMinecraftOutcome(t *testing.T) {
 		{"allow", "Added Ada"}:                                        OutcomeUnknown,
 		{"ban", "Unknown or incomplete command, see below for error"}: OutcomeUnknown,
 		{"ban", ""}: OutcomeUnknown,
+	} {
+		if got := moderation.Outcome(PlayerAction(reply[0]), reply[1]); got != want {
+			t.Errorf("%v: %v", reply, got)
+		}
+	}
+}
+
+// Palworld 1.0.5's replies, captured from thijsvanloef/palworld-server-docker
+// with nobody online; a kick that went through was never seen.
+func TestPalworldOutcome(t *testing.T) {
+	moderation := moderationOf(t, "palworld")
+	for reply, want := range map[[2]string]Outcome{
+		{"kick", "Failed to Kick: steam_76561198000000000\n"}: NoPlayer,
+		{"ban", "Baned: steam_76561198000000000\n"}:           Done,
+		{"ban", "Failed to Ban: steam_76561198000000000\n"}:   OutcomeUnknown,
+		{"kick", "Baned: steam_76561198000000000\n"}:          OutcomeUnknown,
 	} {
 		if got := moderation.Outcome(PlayerAction(reply[0]), reply[1]); got != want {
 			t.Errorf("%v: %v", reply, got)
