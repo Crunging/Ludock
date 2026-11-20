@@ -836,6 +836,53 @@ func TestStalledBackupFolderIsGivenUp(t *testing.T) {
 	}
 }
 
+// A folder that answers the look before a removal and then freezes holds the
+// deletion, and the locks it has, only for copyStall. The removal given up
+// on changes nothing when it finally runs: the backup stays, and deleting it
+// again works.
+func TestStalledRemovalIsGivenUp(t *testing.T) {
+	f := newCopyFixture(t)
+	backup := f.add(t, "world data", 60_000)
+	defer func(stall time.Duration) { copyStall = stall }(copyStall)
+	copyStall = 50 * time.Millisecond
+	release := make(chan struct{})
+	var looks atomic.Int32
+	testHook = func(point string) {
+		if point == "reaching" && looks.Add(1) == 2 {
+			<-release
+		}
+	}
+	defer func() { testHook = nil }()
+	allowed := func() error { return nil }
+	if _, err := f.s.Delete(ctx, f.serverID, backup.ID, false, allowed); !errors.Is(err, errFolderStalled) {
+		t.Fatal(err)
+	}
+	close(release)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		f.s.copies.mu.Lock()
+		hung := f.s.copies.hung[f.main]
+		f.s.copies.mu.Unlock()
+		if hung == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the stalled removal never returned")
+		}
+	}
+	if found, _ := f.s.Exists(ctx, backup.ID, true); !found {
+		t.Fatal("a removal given up on marked the backup")
+	}
+	if _, err := os.Stat(filepath.Join(f.main, backup.ID+".tar")); err != nil {
+		t.Fatal("a removal given up on removed the archive", err)
+	}
+	if left, err := f.s.Delete(ctx, f.serverID, backup.ID, false, allowed); err != nil || left {
+		t.Fatal(left, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.main, backup.ID+".tar")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+}
+
 // A folder that answers a look and then freezes while its archive is read
 // fails the read after copyStall instead of holding it forever, as for a
 // restore that already stopped the server, a browse, or a download; an

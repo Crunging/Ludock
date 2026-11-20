@@ -248,7 +248,29 @@ func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func(
 		check = nil
 	}
 	if !forget {
-		if err := s.Storage.Remove(backup.destination, backup.ID, check); err != nil {
+		// The folder can stop responding after the look above. A removal
+		// given up on must not mark the backup once this has returned and
+		// its locks are released; one already marked is an interrupted
+		// removal, finished by Delete or Prune.
+		var gate sync.Mutex
+		givenUp := false
+		guarded := check
+		if check != nil {
+			guarded = func() error {
+				gate.Lock()
+				defer gate.Unlock()
+				if givenUp {
+					return errFolderStalled
+				}
+				return check()
+			}
+		}
+		if err := s.reach(backup.destination, errFolderStalled, copyStall, func(func()) error {
+			return s.Storage.Remove(backup.destination, backup.ID, guarded)
+		}); err != nil {
+			gate.Lock()
+			givenUp = true
+			gate.Unlock()
 			return err
 		}
 		// Remove checks only when the archive exists.
@@ -258,7 +280,9 @@ func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func(
 			}
 		}
 		// A backup that failed before it was recorded may have left a partial file.
-		if err := s.Storage.RemovePartial(backup.destination, backup.ID); err != nil {
+		if err := s.reach(backup.destination, errFolderStalled, copyStall, func(func()) error {
+			return s.Storage.RemovePartial(backup.destination, backup.ID)
+		}); err != nil {
 			return err
 		}
 	}
