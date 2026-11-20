@@ -171,6 +171,15 @@ func SaveDetail(result map[string]any) string {
 	return ""
 }
 
+// MovedDetail notes a restore of a backup taken before the server's data
+// moved to other host storage.
+func MovedDetail(result map[string]any) string {
+	if result["dataMoved"] == true {
+		return "The backup was taken before the server’s data moved."
+	}
+	return ""
+}
+
 // ConnectAddress is the address players type. An unset host uses the host
 // the browser used to reach Ludock.
 func ConnectAddress(connection *servers.Connection, pageHost string) string {

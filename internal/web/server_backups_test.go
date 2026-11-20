@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -54,8 +55,7 @@ func TestCreateBackupNeedsTheGrant(t *testing.T) {
 func TestRestoreChecksConfirmationAndBackup(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	p.app.DB.Exec(`INSERT INTO backups (id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
-    VALUES ('11111111-1111-4111-8111-111111111111',?,'f','/backups','[]',10,'c',1,'complete')`, p.server)
+	p.backup(t, "11111111-1111-4111-8111-111111111111", p.server, "")
 	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView, authz.BackupsCreate)
 	restore := func(principal *auth.Principal, backup, confirmation string) *http.Response {
@@ -79,6 +79,81 @@ func TestRestoreChecksConfirmationAndBackup(t *testing.T) {
 	page := p.do("GET", "/servers/"+p.server+"?tab=backups&restore=11111111-1111-4111-8111-111111111111", p.admin, nil, nil).Body.String()
 	if !strings.Contains(page, "Restore game data") || !strings.Contains(page, "/backups/11111111-1111-4111-8111-111111111111/download") {
 		t.Fatal(page)
+	}
+}
+
+// backup records a complete backup of server taken from the binding it has
+// now, or from fingerprint when one is given; the game is valheim.
+func (p *pages) backup(t *testing.T, id, server, fingerprint string) {
+	t.Helper()
+	if _, err := p.app.DB.Exec(`INSERT INTO backups (id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,game_type)
+    SELECT ?,id,COALESCE(NULLIF(?,''),binding_fingerprint),'/backups','[]',10,'c',1,'complete','valheim' FROM logical_servers WHERE id=?`,
+		id, fingerprint, server); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A backup taken before the server's data moved to other host storage
+// restores only with the confirmation the page sends; a forged request
+// without it is refused before anything is queued.
+func TestRestoreAfterDataMovedNeedsConfirmation(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	const moved = "11111111-1111-4111-8111-111111111111"
+	p.backup(t, moved, p.server, "an-earlier-binding")
+	values := url.Values{"backupId": {moved}, "confirmation": {"valheim"}}
+	if response := p.action("/servers/"+p.server+"/restores", p.admin, values); response.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(readBody(t, response), "lived somewhere else") {
+		t.Fatal(response.StatusCode)
+	}
+	if kind, _ := p.queued(t); kind != "" {
+		t.Fatal("queued", kind)
+	}
+	page := p.do("GET", "/servers/"+p.server+"?tab=backups&restore="+moved, p.admin, nil, nil).Body.String()
+	if !strings.Contains(page, "Taken when the server’s data lived somewhere else") || !strings.Contains(page, `name="dataMoved" value="true"`) {
+		t.Fatal(page)
+	}
+	values.Set("dataMoved", "true")
+	if response := p.action("/servers/"+p.server+"/restores", p.admin, values); response.StatusCode != http.StatusOK {
+		t.Fatal(response.StatusCode, readBody(t, response))
+	}
+	if kind, input := p.queued(t); kind != "restore" || !strings.Contains(input, `"dataMoved":true`) {
+		t.Fatal(kind, input)
+	}
+}
+
+// A backup of another game is refused with the reason, and the page offers
+// no restore for it; a backup of another server can't be restored here even
+// when its folders match.
+func TestRestoreRefusesOtherGamesAndServers(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	const otherGame, otherServer = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+	p.backup(t, otherGame, p.server, "an-earlier-binding")
+	p.app.DB.Exec("UPDATE backups SET game_type='minecraft' WHERE id=?", otherGame)
+	values := url.Values{"backupId": {otherGame}, "confirmation": {"valheim"}, "dataMoved": {"true"}}
+	if response := p.action("/servers/"+p.server+"/restores", p.admin, values); response.StatusCode != http.StatusConflict ||
+		!strings.Contains(readBody(t, response), "holds Minecraft data, but the server now runs Valheim") {
+		t.Fatal(response.StatusCode)
+	}
+	page := p.do("GET", "/servers/"+p.server+"?tab=backups&restore="+otherGame, p.admin, nil, nil).Body.String()
+	if !strings.Contains(page, "Can’t be restored here.") || strings.Contains(page, "Restore game data") || strings.Contains(page, "restore="+otherGame) {
+		t.Fatal(page)
+	}
+	p.engine.AddContainer(fakedocker.GameOptions{Name: "valheim-two", Image: "lloesche/valheim-server"})
+	if _, err := p.app.Servers.RefreshNow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var other string
+	p.app.DB.QueryRow("SELECT id FROM logical_servers WHERE id<>?", p.server).Scan(&other)
+	p.backup(t, otherServer, other, "")
+	values.Set("backupId", otherServer)
+	if response := p.action("/servers/"+p.server+"/restores", p.admin, values); response.StatusCode != http.StatusConflict ||
+		!strings.Contains(readBody(t, response), "Backup not found") {
+		t.Fatal(response.StatusCode)
+	}
+	if kind, _ := p.queued(t); kind != "" {
+		t.Fatal("queued", kind)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -321,13 +322,10 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		// Compose or Portainer would: POST /fake/recreate?container=NAME
 		// with any number of env=KEY=VALUE and label=KEY=VALUE; a KEY alone
 		// removes it. image=REF changes the image reference it was created
-		// from, keeping the image it runs.
+		// from, keeping the image it runs. mount=DESTINATION=SOURCE moves the
+		// bind mount at DESTINATION to another host folder.
 		query := r.URL.Query()
-		e.mu.Lock()
-		if c := e.find(query.Get("container")); c != nil {
-			e.recreateLocked(c, query.Get("image"), query["env"], query["label"])
-		}
-		e.mu.Unlock()
+		e.Recreate(query.Get("container"), query)
 		w.WriteHeader(204)
 		return
 	case "/fake/stats":
@@ -749,9 +747,30 @@ func (c *Container) inspection() map[string]any {
 	return result
 }
 
-func (e *Engine) recreateLocked(c *Container, image string, env, labels []string) {
+// Recreate applies the /fake/recreate control to a container and returns
+// its new ID, or "" when there is no such container.
+func (e *Engine) Recreate(reference string, query url.Values) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	c := e.find(reference)
+	if c == nil {
+		return ""
+	}
+	return e.recreateLocked(c, query.Get("image"), query["env"], query["label"], query["mount"])
+}
+
+func (e *Engine) recreateLocked(c *Container, image string, env, labels, mounts []string) string {
 	replacement := *c
 	replacement.ID = newID()
+	replacement.Mounts = slices.Clone(c.Mounts)
+	for _, entry := range mounts {
+		destination, source, _ := strings.Cut(entry, "=")
+		for index := range replacement.Mounts {
+			if mount := &replacement.Mounts[index]; mount.Type == "bind" && mount.Destination == destination {
+				mount.Source = source
+			}
+		}
+	}
 	if image != "" {
 		replacement.Config.Image = image
 	}
@@ -776,6 +795,7 @@ func (e *Engine) recreateLocked(c *Container, image string, env, labels []string
 	e.containers[replacement.ID] = &replacement
 	e.order = slices.Insert(e.order, index, replacement.ID)
 	e.emitLocked("create", replacement.ID)
+	return replacement.ID
 }
 
 func (e *Engine) find(reference string) *Container {

@@ -25,9 +25,11 @@ import (
 )
 
 type Backup struct {
-	ID        string
-	ServerID  string
-	Roots     []Root
+	ID       string
+	ServerID string
+	Roots    []Root
+	// GameType is the game the server ran when the backup was taken.
+	GameType  string
 	Size      int64
 	Checksum  string
 	CreatedAt int64
@@ -104,7 +106,7 @@ var (
 )
 
 const backupColumns = "id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,COALESCE(kept_at,0),note,reason," +
-	"copy_destination,copy_state,copy_error,copy_attempts,copy_previous"
+	"copy_destination,copy_state,copy_error,copy_attempts,copy_previous,game_type"
 
 func scanBackup(s interface{ Scan(...any) error }) (*Backup, error) {
 	var backup Backup
@@ -112,7 +114,7 @@ func scanBackup(s interface{ Scan(...any) error }) (*Backup, error) {
 	if err := s.Scan(&backup.ID, &backup.ServerID, &backup.fingerprint, &backup.destination, &roots, &backup.Size,
 		&backup.Checksum, &backup.CreatedAt, &backup.State, &backup.KeptAt, &backup.Note, &backup.Reason,
 		&backup.copyDestination, &backup.CopyState, &backup.CopyError, &backup.copyAttempts,
-		&backup.copyPrevious); err != nil {
+		&backup.copyPrevious, &backup.GameType); err != nil {
 		return nil, err
 	}
 	json.Unmarshal([]byte(roots), &backup.Roots)
@@ -764,10 +766,10 @@ func (s *Service) Record(ctx context.Context, backup Backup, fingerprint, destin
 	roots, _ := json.Marshal(backup.Roots)
 	_, err := s.DB.ExecContext(ctx, `WITH setting(folder) AS (
       SELECT COALESCE((SELECT json_extract(value_json,'$.copyTo') FROM settings WHERE key='backups'),''))
-    INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,reason,copy_destination,copy_state)
-    SELECT ?,?,?,?,?,?,?,?,'complete',?, CASE WHEN folder=? THEN '' ELSE folder END, CASE WHEN folder IN ('',?) THEN '' ELSE 'pending' END
+    INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,reason,copy_destination,copy_state,game_type)
+    SELECT ?,?,?,?,?,?,?,?,'complete',?, CASE WHEN folder=? THEN '' ELSE folder END, CASE WHEN folder IN ('',?) THEN '' ELSE 'pending' END, ?
     FROM setting`, backup.ID, backup.ServerID, fingerprint, destination, string(roots), backup.Size, backup.Checksum,
-		backup.CreatedAt, backup.Reason, destination, destination)
+		backup.CreatedAt, backup.Reason, destination, destination, backup.GameType)
 	return err
 }
 

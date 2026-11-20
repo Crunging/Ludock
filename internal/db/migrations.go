@@ -343,6 +343,12 @@ var Migrations = []Migration{
       CREATE INDEX backups_copy_idx ON backups(copy_next_at, created_at, id) WHERE copy_state IN ('pending', 'failed');
     `,
 	},
+	{
+		// The game a backup holds, so it can restore onto the same folders
+		// after they move to other host storage.
+		Version: 11,
+		SQL:     `ALTER TABLE backups ADD COLUMN game_type TEXT NOT NULL DEFAULT '';`,
+	},
 }
 
 func LatestVersion() int { return Migrations[len(Migrations)-1].Version }

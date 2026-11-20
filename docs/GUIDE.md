@@ -135,9 +135,15 @@ Restoring needs an administrator.
   only that item, and puts the current copy back if anything fails.
 
 **Browse files** also downloads single files from a backup without changing
-anything. Ludock restores a backup only onto the same game and the same data
-folders it was taken from: the same container paths on the same volumes or host
-folders. Otherwise it can still be browsed and downloaded, or
+anything.
+
+A backup restores onto the same game with the same data folders inside the
+server, such as `/data`. If you moved that data to another volume or host
+folder, or rebuilt the host, older backups say **Taken when the server's data
+lived somewhere else**. They restore the same way, and the confirmation says
+the data goes where the server keeps it now. A backup of another game, or of
+folders the server no longer has, says why it can't be restored; it can still
+be browsed and downloaded, or
 [restored by hand](REFERENCE.md#restore-a-backup-without-ludock).
 
 ### Update a server

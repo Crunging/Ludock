@@ -27,6 +27,9 @@ type BackupsView struct {
 	Backups      []backups.Backup
 	HistoryError string
 	Restore      *backups.Backup
+	// Fits says, for each backup, whether it restores onto the server as it
+	// is now; nil while that is unknown.
+	Fits map[string]backups.Fit
 	// Keep is the backup whose keep form is open.
 	Keep *backups.Backup
 	// Browse, when set, replaces the tab with one folder of a backup.
@@ -252,6 +255,14 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 			if kept && backup.Note != "" {
 				<small class="table-detail backup-note">{ backup.Note }</small>
 			}
+			if complete {
+				{{ fit := b.Fits[backup.ID] }}
+				if fit.Moved {
+					<small class="table-detail backup-moved">Taken when the server’s data lived somewhere else</small>
+				} else if fit.Refusal != "" {
+					<small class="table-detail backup-unfit">Can’t be restored here. { fit.Refusal }</small>
+				}
+			}
 		</td>
 		<td>{ FormatBytes(backup.Size) }</td>
 		<td>
@@ -272,7 +283,7 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 		</td>
 		<td>
 			<div class="inline-actions backup-row__actions">
-				if complete && b.CanRestore {
+				if complete && b.CanRestore && b.Fits[backup.ID].Refusal == "" {
 					if !b.Blocked && !b.Active {
 						<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups&restore="+backup.ID) } { inPage()... }>Restore…</a>
 					} else {
@@ -355,8 +366,13 @@ templ KeepForm(b BackupsView) {
 }
 
 templ RestoreForm(b BackupsView) {
+	{{ moved := b.Fits[b.Restore.ID].Moved }}
 	<form class="danger-panel stack-form" hx-post={ "/servers/" + b.ServerID + "/restores" } hx-target="#restore-status">
 		<h3>Restore backup from @Time(b.Restore.CreatedAt, "", "")</h3>
+		if moved {
+			<p class="restore-moved"><strong>This backup was taken when the server’s data lived somewhere else.</strong> Restoring it replaces the game data in { rootList(b.Restore.Roots) } where the server keeps it now.</p>
+			<input type="hidden" name="dataMoved" value="true"/>
+		}
 		<p>This replaces the server’s current game data. Ludock stops the server and takes a safety backup first; if that fails, nothing is replaced.</p>
 		if b.Restore.FromCopy {
 			@Alert("warning", "This backup is missing from the backup folder, so Ludock restores it from the second copy.")
@@ -390,6 +406,20 @@ type BackupBrowser struct {
 	Total, Limit int
 	Error        string
 	CanRestore   bool
+	// Fit is whether the backup restores onto the server as it is now.
+	Fit backups.Fit
+}
+
+// rootList names data folders in a sentence.
+func rootList(roots []backups.Root) string {
+	paths := make([]string, len(roots))
+	for index, root := range roots {
+		paths[index] = root.Path
+	}
+	if len(paths) < 2 {
+		return strings.Join(paths, "")
+	}
+	return strings.Join(paths[:len(paths)-1], ", ") + " and " + paths[len(paths)-1]
 }
 
 func (b BackupBrowser) values(path string) url.Values {
@@ -458,6 +488,11 @@ templ BackupBrowserView(b BackupBrowser) {
 		<p class="section-lede">Download a file, or put one file or folder back the way it was in this backup.</p>
 		if b.Backup.FromCopy {
 			@Alert("warning", "This backup is missing from the backup folder, so Ludock is reading the second copy.")
+		}
+		if b.Fit.Moved {
+			@Alert("info", "This backup was taken when the server’s data lived somewhere else. Restoring from it puts files where the server keeps its data now.")
+		} else if b.Fit.Refusal != "" {
+			@Alert("info", "This backup can’t be restored onto the server as it is now. "+b.Fit.Refusal+" You can still download its files.")
 		}
 		if b.Error != "" {
 			<p class="alert alert--error" role="alert">Unable to open this backup: { b.Error }</p>
@@ -575,6 +610,9 @@ templ BackupFolder(b BackupBrowser) {
 // restoreItemDetail says what restoring one item replaces.
 func (b BackupBrowser) restoreItemDetail(item backups.ArchiveEntry) string {
 	detail := "The backup’s copy (" + FormatBytes(item.Size)
+	if b.Fit.Moved {
+		detail = "This backup was taken when the server’s data lived somewhere else. Its copy (" + FormatBytes(item.Size)
+	}
 	if item.Type == "directory" {
 		detail += " in " + ItemCount(item.Items)
 	}
@@ -602,6 +640,9 @@ templ restoreItem(b BackupBrowser, item backups.ArchiveEntry) {
 		<input type="hidden" name="backupId" value={ b.Backup.ID }/>
 		<input type="hidden" name="root" value={ b.Root.ID }/>
 		<input type="hidden" name="item" value={ b.child(item.Name) }/>
+		if b.Fit.Moved {
+			<input type="hidden" name="dataMoved" value="true"/>
+		}
 		<button class="action-menu__action action-menu__action--danger" type="submit">Restore…</button>
 	</form>
 }
