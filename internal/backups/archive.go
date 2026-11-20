@@ -164,15 +164,20 @@ func validateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func(
 }
 
 // Validate checks a published archive and its checksum, and returns the
-// bytes each root's restore stages.
-func (s *Storage) Validate(directory, id string, roots []Root, maxBytes int64, checksum string) (map[string]int64, error) {
+// bytes each root's restore stages. progress, if set, runs as it reads.
+func (s *Storage) Validate(directory, id string, roots []Root, maxBytes int64, checksum string, progress func()) (map[string]int64, error) {
 	file, err := s.Open(directory, id)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 	hash := sha256.New()
-	staged, err := ValidateStream(file, roots, maxBytes, func(chunk []byte) { hash.Write(chunk) })
+	staged, err := ValidateStream(file, roots, maxBytes, func(chunk []byte) {
+		hash.Write(chunk)
+		if progress != nil {
+			progress()
+		}
+	})
 	if err != nil {
 		return nil, err
 	}

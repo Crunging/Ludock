@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -59,6 +60,46 @@ func TestWarnedRestartResumesAfterLudockRestarts(t *testing.T) {
 	}
 	if job.Recovery.WarnUntil != until || job.UpdatedAt < until {
 		t.Fatal("warned again, or restarted before the time players were given", job.Recovery.WarnUntil, job.UpdatedAt-until)
+	}
+}
+
+// Ludock stopping while a warned restart waits out its minute ends the wait
+// at once and leaves the restart running with the time players were given,
+// which the next start resumes.
+func TestStoppingDuringAWarningLeavesItToResume(t *testing.T) {
+	f := setup(t)
+	f.jobs.WarningLead = time.Minute
+	f.runner.Stop()
+	running, cancel := context.WithCancel(ctx)
+	runner := &ops.Runner{DB: f.jobs.DB, Locks: f.jobs.Locks}
+	f.jobs.Register(runner)
+	if err := runner.Start(running, nil); err != nil {
+		t.Fatal(err)
+	}
+	before := f.startedAt()
+	server, _ := f.jobs.Identity.Get(ctx, f.serverID)
+	job, err := runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: "restart",
+		BindingRevision: server.BindingRevision, Input: map[string]any{WarnInput: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if current, _ := runner.Get(ctx, job.ID); current.Recovery.WarnUntil != 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the warning never started")
+		}
+	}
+	cancel()
+	stopping := time.Now()
+	runner.Stop()
+	if waited := time.Since(stopping); waited > 2*time.Second {
+		t.Fatal("stopping waited", waited)
+	}
+	current, _ := runner.Get(ctx, job.ID)
+	if current.Status != ops.Running || current.Phase != "warning" || current.Recovery.WarnUntil == 0 || f.startedAt() != before {
+		t.Fatalf("%+v", current)
 	}
 }
 

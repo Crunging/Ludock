@@ -318,15 +318,17 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			}
 			// A restore reads the second copy when the archive is missing
 			// from its own folder.
-			folder := j.Backups.ArchiveFolder(row)
-			var staged map[string]int64
-			if item == "" {
-				staged, err = j.Backups.Storage.Validate(folder, row.ID, row.Roots, row.Size, row.Checksum)
-			} else {
-				var bytes int64
-				bytes, err = j.Backups.Storage.ValidateItem(folder, row.ID, row.Roots, row.Size, row.Checksum, roots[0].ID, item)
-				staged = map[string]int64{roots[0].ID: bytes}
+			// A folder that stops responding fails the restore, which releases
+			// its locks, before the server stops.
+			folder, err := j.Backups.ArchiveFolder(row)
+			if err != nil {
+				return nil, err
 			}
+			rootID := ""
+			if item != "" {
+				rootID = roots[0].ID
+			}
+			staged, err := j.Backups.Validate(row, folder, rootID, item)
 			if err != nil {
 				return nil, err
 			}

@@ -270,6 +270,15 @@ the original before it's named `<id>.tar`.
   downloading, browsing, and restoring read the copy. If the backup disk is
   lost, choose the second folder as the backup folder. If the whole host is
   lost, [restore Ludock's data](#restore-ludocks-data) from it first.
+- **A folder that's away:** retention never removes or hides a backup whose
+  folder can't be reached, since a disk may only be unmounted for now. The
+  **Backups** tab marks it, and deleting it asks first, then removes it from
+  Ludock with its second copy and leaves the old folder as it is. A folder
+  that stops responding, such as a stuck network share, is given up on after a
+  few seconds: the tab says so, and a restore fails before stopping the server.
+  One that freezes while an archive is being read is given up on after two
+  minutes without an answer; a restore then fails and leaves the game data as
+  it was.
 - **Changing the folder:** a new second folder gets a copy of every backup;
   until then a backup shows **Second copy waiting**. Old copies stay where they
   were, and Ludock no longer tracks them.
@@ -514,3 +523,8 @@ was in progress instead of sending it again, finishes or rolls back an
 interrupted restore from its journal, and removes unpacking leftovers. Work it
 can't safely finish is marked interrupted, never repeated, and scheduled runs
 missed by more than five minutes are recorded as missed.
+
+Asked to stop, Ludock gives running work about six seconds to finish, inside
+the ten Docker waits before killing it. Work still running then, such as a
+backup or a warned restart's minute, is left as a crash would leave it and is
+resumed or checked on the next start.

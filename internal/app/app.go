@@ -398,21 +398,32 @@ func (a *App) record(ctx context.Context, current map[string]servers.Container, 
 	}()
 }
 
-// Stop ends background work. Locks and cleanup of console commands and file
-// streams settle before the database closes.
-func (a *App) Stop() {
+// Stop ends background work and waits until deadline for running work,
+// cleanup of console commands and file streams, and locks to settle. False
+// means some was still running; it is left as a crash would leave it, and
+// startup recovery resumes or reconciles it.
+func (a *App) Stop(deadline time.Time) bool {
 	close(a.stop)
-	a.Events.Stop()
-	a.Runner.Stop()
-	a.background.Wait()
-	a.Schedules.Wait()
-	a.Players.Stop()
+	settled := make(chan struct{})
+	go func() {
+		defer close(settled)
+		// A delivery may be waiting on discovery, which outlasts its caller.
+		a.Events.Stop()
+		a.Runner.Stop()
+		a.background.Wait()
+		a.Schedules.Wait()
+		a.Players.Stop()
+		<-a.Locks.Drained()
+		a.Files.Close()
+		// Last: operations finishing above may still queue notifications.
+		a.Notify.Stop()
+	}()
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
 	select {
-	case <-a.Locks.Drained():
-	case <-time.After(5 * time.Minute):
-		log.Error("Failed to shut down cleanly")
+	case <-settled:
+		return true
+	case <-timer.C:
+		return false
 	}
-	a.Files.Close()
-	// Last: operations finishing above may still queue notifications.
-	a.Notify.Stop()
 }

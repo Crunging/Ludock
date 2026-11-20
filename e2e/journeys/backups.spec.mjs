@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded, signIn, createUser, shareServer } from "./fixtures.mjs";
 
@@ -349,4 +349,47 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
 
   await chooseCopy("No second copy");
   await expect(page.locator("#backup-storage")).not.toContainText("Second copy in");
+});
+
+test("removing a backup whose folder was lost", async ({ page }) => {
+  const backupFolder = join(process.env.LUDOCK_E2E_DIR, "backups");
+  const oldFolder = join(process.env.LUDOCK_E2E_DIR, "copies");
+  const lost = oldFolder + "-lost";
+  const settings = page.locator("#backup-settings-form");
+  const saveIn = async (folder) => {
+    await page.goto("/settings");
+    await page.locator("#advanced-settings > summary").click();
+    await settings.getByLabel("Backup folder").fill(folder);
+    await settings.getByRole("button", { name: "Save backup settings" }).click();
+    await expect(settings.locator(".alert--success")).toContainText("Backup settings saved.");
+  };
+  // A backup saved in a folder on a disk that is later lost.
+  await saveIn(oldFolder);
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Backups" }).click();
+  await expect(page.locator("#create-backup")).toBeEnabled({ timeout: 45_000 });
+  await page.getByRole("button", { name: "Create backup" }).click();
+  await page.getByRole("dialog", { name: "Back up Survival?" }).getByRole("button", { name: "Create backup" }).click();
+  await expectOperationSucceeded(page);
+  const href = await page.locator("#backup-list tbody tr").first().getByRole("link", { name: "Download", includeHidden: true }).getAttribute("href");
+  const id = href.split("/")[4];
+  await saveIn(backupFolder);
+  renameSync(oldFolder, lost);
+  try {
+    await openServer(page, "Survival");
+    await page.getByRole("tab", { name: "Backups" }).click();
+    const row = page.locator("#backup-list tbody tr", { has: page.locator(`a[href="${href}"]`) });
+    await expect(row).toContainText("Its backup folder can’t be reached");
+    await (await menuItem(row, "button", "Delete")).click();
+    const dialog = page.getByRole("dialog", { name: "Remove this backup from Ludock?" });
+    await expect(dialog).toContainText("its archive may still be there");
+    await dialog.getByRole("button", { name: "Remove backup" }).click();
+    await expect(page.locator("#detail-status")).toContainText("Backup removed from Ludock.");
+    await expect(row).toHaveCount(0);
+    expect(existsSync(join(lost, `${id}.tar`))).toBe(true);
+  } finally {
+    renameSync(lost, oldFolder);
+    // Later journeys expect only their own files in that folder.
+    for (const name of readdirSync(oldFolder)) rmSync(join(oldFolder, name), { force: true });
+  }
 });

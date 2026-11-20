@@ -45,6 +45,10 @@ type Backup struct {
 	// "complete", or "failed" (still retried); CopyError says why the last
 	// attempt failed.
 	CopyState, CopyError string
+	// FolderAway is set by ArchiveFolder and Locate when the folder the
+	// backup was saved in can't be opened or isn't responding.
+	FolderAway bool
+
 	// FromCopy is set by ArchiveFolder when the archive is read from the
 	// second copy, and Copying by Locate while the copy is being made.
 	FromCopy, Copying bool
@@ -150,46 +154,74 @@ func (s *Service) Open(ctx context.Context, serverID, id string) (io.ReadCloser,
 	if err != nil {
 		return nil, err
 	}
-	return s.Storage.Open(s.ArchiveFolder(backup), backup.ID)
+	folder, err := s.ArchiveFolder(backup)
+	if err != nil {
+		return nil, err
+	}
+	return s.Storage.Open(folder, backup.ID)
 }
 
+// errDeleteAway refuses a deletion that would leave its archive behind
+// without the person saying so.
+var errDeleteAway = fail("BACKUP_FOLDER_AWAY", "The folder this backup was saved in can’t be reached. Reload the page to remove the backup from Ludock anyway.")
+
 // Delete removes a backup under the server and storage locks. It also
-// finishes an interrupted deletion.
-func (s *Service) Delete(ctx context.Context, serverID, id string, assertAccess func() error) error {
+// finishes an interrupted deletion. With forget, a backup whose folder can't
+// be reached is removed from Ludock with its second copies, leaving its
+// archive wherever it is; left reports that.
+func (s *Service) Delete(ctx context.Context, serverID, id string, forget bool, assertAccess func() error) (left bool, err error) {
 	backup, err := scanBackup(s.DB.QueryRowContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE server_id=? AND id=? AND state IN ('complete','deleting')",
 		serverID, id))
 	if errors.Is(err, sql.ErrNoRows) {
-		return errNotFound
+		return false, errNotFound
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	release, err := s.Locks.AcquirePreempting(ctx, []string{"server:" + serverID, "backups:storage"}, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer release()
 	// Retention may have removed it while this waited for the locks.
 	if exists, err := s.Exists(ctx, id, false); err != nil || !exists {
-		return cmp.Or(err, error(errNotFound))
+		return false, cmp.Or(err, error(errNotFound))
 	}
 	if assertAccess != nil {
 		if err := assertAccess(); err != nil {
-			return err
+			return false, err
 		}
 	}
-	// The archive is gone; its copy goes once the second folder is back.
-	if err := s.remove(ctx, backup, assertAccess); !errors.Is(err, errCopyPending) {
-		return err
+	err = s.remove(ctx, backup, assertAccess, false)
+	if errors.Is(err, errFolderAway) || errors.Is(err, errFolderStalled) {
+		if !forget {
+			if errors.Is(err, errFolderAway) {
+				err = errDeleteAway
+			}
+			return false, err
+		}
+		left, err = true, s.remove(ctx, backup, assertAccess, true)
 	}
-	return nil
+	// The archive is gone; its copy goes once the second folder is back.
+	if errors.Is(err, errCopyPending) {
+		err = nil
+	}
+	return left && err == nil, err
 }
 
 // remove marks a backup deleting before unlinking its archive, so an
 // interrupted removal leaves a row that is never offered and is retried by
 // Delete or Prune. If assertAccess refuses right before marking, the backup is
-// left as it was.
-func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func() error) error {
+// left as it was. A folder that can't be reached leaves it as it was too,
+// unless forget, which removes the row without touching the folder.
+func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func() error, forget bool) error {
+	if !forget {
+		if err := s.reach(backup.destination, errFolderStalled, measureWait, func(func()) error {
+			return s.Storage.reachable(backup.destination)
+		}); err != nil {
+			return err
+		}
+	}
 	marked := false
 	mark := func() error {
 		if assertAccess != nil {
@@ -209,24 +241,50 @@ func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func(
 		return nil
 	}
 	check := mark
-	if assertAccess == nil {
+	if assertAccess == nil || forget {
 		if err := mark(); err != nil {
 			return err
 		}
 		check = nil
 	}
-	if err := s.Storage.Remove(backup.destination, backup.ID, check); err != nil {
-		return err
-	}
-	// Remove checks only when the archive exists.
-	if !marked {
-		if err := mark(); err != nil {
+	if !forget {
+		// The folder can stop responding after the look above. A removal
+		// given up on must not mark the backup once this has returned and
+		// its locks are released; one already marked is an interrupted
+		// removal, finished by Delete or Prune.
+		var gate sync.Mutex
+		givenUp := false
+		guarded := check
+		if check != nil {
+			guarded = func() error {
+				gate.Lock()
+				defer gate.Unlock()
+				if givenUp {
+					return errFolderStalled
+				}
+				return check()
+			}
+		}
+		if err := s.reach(backup.destination, errFolderStalled, copyStall, func(func()) error {
+			return s.Storage.Remove(backup.destination, backup.ID, guarded)
+		}); err != nil {
+			gate.Lock()
+			givenUp = true
+			gate.Unlock()
 			return err
 		}
-	}
-	// A backup that failed before it was recorded may have left a partial file.
-	if err := s.Storage.RemovePartial(backup.destination, backup.ID); err != nil {
-		return err
+		// Remove checks only when the archive exists.
+		if !marked {
+			if err := mark(); err != nil {
+				return err
+			}
+		}
+		// A backup that failed before it was recorded may have left a partial file.
+		if err := s.reach(backup.destination, errFolderStalled, copyStall, func(func()) error {
+			return s.Storage.RemovePartial(backup.destination, backup.ID)
+		}); err != nil {
+			return err
+		}
 	}
 	if handed, err := s.markCopyRemoval(ctx, backup.ID); err != nil || handed {
 		return cmp.Or(err, errCopyPending)
@@ -811,7 +869,8 @@ func (s *Service) FinishDeletions(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
-		if err := s.finishDeletion(ctx, backup.ID); err != nil && !errors.Is(err, errCopyPending) && failed == nil {
+		// A folder that is away keeps its deletions until it is back.
+		if err := s.finishDeletion(ctx, backup.ID); err != nil && !errors.Is(err, errCopyPending) && !errors.Is(err, errFolderAway) && failed == nil {
 			failed = err
 		}
 		release()
@@ -830,7 +889,7 @@ func (s *Service) finishDeletion(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	return s.remove(ctx, backup, nil)
+	return s.remove(ctx, backup, nil, false)
 }
 
 // testHook, set only by tests, runs at named points so a test can force an
@@ -877,7 +936,7 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 	}
 	for _, backup := range list {
 		if backup.State == "deleting" && backup.CopyState != "removing" {
-			if err := s.remove(ctx, &backup, nil); failed(backup, err) {
+			if err := s.remove(ctx, &backup, nil, false); failed(backup, err) {
 				return err
 			}
 		}
@@ -907,14 +966,19 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 }
 
 // removeIdle removes a backup for retention unless it is being read or was
-// kept since it was listed.
+// kept since it was listed. One whose archive isn't in its folder stays: an
+// unmounted disk can leave its folder empty, and the second copy may then be
+// the only one.
 func (s *Service) removeIdle(ctx context.Context, backup Backup) error {
 	release, idle := s.Storage.claimIdle(backup.ID)
 	if !idle {
 		return nil
 	}
 	defer release()
-	if err := s.remove(ctx, &backup, nil); !errors.Is(err, errKept) {
+	if found, err := s.look(backup.destination, backup.ID, errFolderStalled); err != nil || !found {
+		return err
+	}
+	if err := s.remove(ctx, &backup, nil, false); !errors.Is(err, errKept) {
 		return err
 	}
 	return nil

@@ -74,9 +74,11 @@ func (s *Server) readBackups(r *http.Request, b *views.BackupsView) {
 	if err != nil {
 		b.HistoryError = publicMessage(err)
 	}
-	s.App.Backups.Locate(list)
 	// A removed backup that waits only for its second copy to go is gone.
 	b.Backups = slices.DeleteFunc(list, func(backup backups.Backup) bool { return backup.CopyState == "removing" })
+	if err := s.App.Backups.Locate(b.Backups); err != nil {
+		b.FolderIssue = publicMessage(err)
+	}
 }
 
 // backupFits compares each backup with the server as discovery last saw it,
@@ -270,7 +272,9 @@ func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request, request *R
 		s.fail(w, r, request, err)
 		return
 	}
-	err := s.App.Backups.Delete(r.Context(), id, backupID, func() error {
+	// The page asks for this only after saying the archive may stay behind.
+	forget := r.URL.Query().Get("folderAway") == "1"
+	left, err := s.App.Backups.Delete(r.Context(), id, backupID, forget, func() error {
 		current, err := s.App.Auth.Recheck(context.WithoutCancel(r.Context()), request.Principal)
 		if err == nil {
 			_, err = s.App.Authz.Assert(context.WithoutCancel(r.Context()), &current.User, id, authz.BackupsDelete)
@@ -281,9 +285,15 @@ func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request, request *R
 		s.fail(w, r, request, err)
 		return
 	}
-	s.audit(r, request, "backup.deleted", id, map[string]any{"backupId": backupID})
+	details := map[string]any{"backupId": backupID}
+	message := "Backup deleted."
+	if left {
+		details["archiveLeft"] = true
+		message = "Backup removed from Ludock. Its archive may still be in the folder it was saved in."
+	}
+	s.audit(r, request, "backup.deleted", id, details)
 	w.Header().Set("HX-Trigger", "backups-changed, servers-changed")
-	render(w, r, http.StatusOK, views.Alert("success", "Backup deleted."))
+	render(w, r, http.StatusOK, views.Alert("success", message))
 }
 
 // keepBackup and releaseBackup let an administrator who can read a server's
