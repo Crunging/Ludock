@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"time"
 
@@ -544,8 +545,19 @@ func publicFirst(err error) error {
 	return err
 }
 
-func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) error {
-	return j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
+func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	// What recovery leaves the data as, for Activity: a committed restore is
+	// finished, one that began replacing is undone.
+	outcome := "Nothing was restored: the server’s data is as it was."
+	if state, _ := restoreState(job); state != nil {
+		switch state.Status {
+		case "committed", "cleaned":
+			outcome = "The restore had finished: what it restored is in place."
+		case "replacing", "rolling_back", "rolled_back":
+			outcome = "The restore was undone: the server’s data is as it was."
+		}
+	}
+	err := j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
 		entries, err := journals(job)
 		if err != nil {
 			return err
@@ -589,4 +601,13 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) error {
 		}
 		return j.restoreInitialState(ctx, server, job)
 	})
+	if err != nil {
+		return nil, err
+	}
+	result := maps.Clone(job.Job.Result)
+	if result == nil {
+		result = map[string]any{}
+	}
+	result["guidance"] = outcome
+	return result, nil
 }

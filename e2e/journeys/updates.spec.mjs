@@ -116,6 +116,8 @@ async function webhook(page) {
 // once, and updating
 // clears it.
 test("finding a newer image, being told once, and updating to it", async ({ page }) => {
+  // Manual checks are 10 seconds apart, and this one waits that out twice.
+  test.slow();
   const hook = await webhook(page);
   try {
     await registry({ id: "sha256:" + "3".repeat(64) });

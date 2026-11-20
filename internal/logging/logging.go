@@ -3,6 +3,7 @@ package logging
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -52,6 +53,21 @@ type Field struct {
 }
 
 func F(key string, value any) Field { return Field{key, value} }
+
+// Cause describes an unexpected error by its types and, when not zero, the
+// Docker status it carries. Messages can name host paths, so they are never
+// logged.
+func Cause(err error, dockerStatus int) []Field {
+	var kinds []string
+	for current := err; current != nil && len(kinds) < 8; current = errors.Unwrap(current) {
+		kinds = append(kinds, fmt.Sprintf("%T", current))
+	}
+	fields := []Field{F("errorTypes", strings.Join(kinds, " > "))}
+	if dockerStatus != 0 {
+		fields = append(fields, F("dockerStatus", dockerStatus))
+	}
+	return fields
+}
 
 type sink struct {
 	mu     sync.Mutex

@@ -335,6 +335,13 @@ func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess fun
 			return errBackupTimeout
 		}
 		result, err := h.Docker.InspectExec(context.WithoutCancel(ctx), execID)
+		if docker.Unavailable(err) {
+			return err
+		}
+		// An exec Docker no longer knows was lost with a restart of Docker.
+		if docker.IsNotFound(err) {
+			return docker.ErrRequestFailed
+		}
 		if err != nil || result.Running || result.ExitCode == nil || *result.ExitCode != 0 {
 			return fail("UNSAFE_ARCHIVE", "Archive reading failed. Backups require regular files and directories without symbolic links, hard links, special files, or inaccessible paths.")
 		}
@@ -497,14 +504,14 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 			}
 			return nil
 		}, nil)
-		// A stream cut off at the time limit fails as a broken archive; the
-		// limit is the reason.
-		if completeErr := complete(); err == nil || errors.Is(completeErr, errBackupTimeout) {
+		// A stream cut off at the time limit or by Docker going away fails as
+		// a broken archive; the limit or Docker is the reason.
+		if completeErr := complete(); err == nil || errors.Is(completeErr, errBackupTimeout) || docker.Unavailable(completeErr) {
 			err = completeErr
 		}
 		input.Close()
 		if err != nil {
-			if _, ok := apperr.As(err); !ok {
+			if _, ok := apperr.As(err); !ok && !docker.Unavailable(err) {
 				err = fail("UNSAFE_ARCHIVE", "Archive reading failed. Backups require regular files and directories without symbolic links, hard links, special files, or inaccessible paths.")
 			}
 			return 0, "", err

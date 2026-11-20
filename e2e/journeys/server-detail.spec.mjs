@@ -296,3 +296,22 @@ test("tabs clicked faster than they open end on the last one", async ({ page }) 
     await expect(page.locator("#overview-live")).toBeVisible();
   }
 });
+
+test("a tab clicked the moment the last one appears stays in the page", async ({ page }) => {
+  await openServer(page, "Survival");
+  await page.evaluate(() => {
+    window.samePage = true;
+    // The click lands as soon as the Activity tab's content is in the page,
+    // before anything else gets a turn.
+    let clicked = false;
+    document.addEventListener("htmx:before:settle", (event) => {
+      if (clicked || event.detail.task?.target?.id !== "detail-body") return;
+      clicked = true;
+      setTimeout(() => document.getElementById("tab-schedules").click(), 0);
+    });
+  });
+  await page.getByRole("tab", { name: "Activity" }).click();
+  await expect(page.getByRole("tab", { name: "Schedules" })).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/\?tab=schedules$/);
+  expect(await page.evaluate(() => window.samePage)).toBe(true);
+});

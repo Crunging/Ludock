@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"mime"
 	"net/http"
 	"net/url"
@@ -214,6 +213,9 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, request *Request, 
 		log.Error("Unhandled request error", append([]logging.Field{logging.F("method", r.Method), logging.F("path", loggedPath(r))},
 			causeFields(err)...)...)
 		public = apperr.New("INTERNAL", 500, "Internal server error")
+		if docker.Unavailable(err) {
+			public = dockerUnavailable
+		}
 	}
 	if public.RetryAfterMs > 0 {
 		w.Header().Set("Retry-After", itoa(max(1, (public.RetryAfterMs+999)/1000)))
@@ -249,21 +251,15 @@ func publicMessage(err error) string {
 	if !errors.Is(err, context.Canceled) {
 		log.Error("Unhandled request error", causeFields(err)...)
 	}
+	if docker.Unavailable(err) {
+		return dockerUnavailable.Message
+	}
 	return "Internal server error"
 }
 
-// causeFields describe an unexpected error by its types and any Docker
-// status. Their messages can name host paths, so they are never logged.
-func causeFields(err error) []logging.Field {
-	var kinds []string
-	for current := err; current != nil && len(kinds) < 8; current = errors.Unwrap(current) {
-		kinds = append(kinds, fmt.Sprintf("%T", current))
-	}
-	fields := []logging.Field{logging.F("errorTypes", strings.Join(kinds, " > "))}
-	if status := docker.StatusCode(err); status != 0 {
-		fields = append(fields, logging.F("dockerStatus", status))
-	}
-	return fields
-}
+var dockerUnavailable = apperr.New("DOCKER_UNAVAILABLE", http.StatusServiceUnavailable, "Ludock can’t reach Docker right now. Try again once it can.")
+
+// causeFields describe an unexpected error without its message.
+func causeFields(err error) []logging.Field { return logging.Cause(err, docker.StatusCode(err)) }
 
 func itoa(value int64) string { return strconv.FormatInt(value, 10) }

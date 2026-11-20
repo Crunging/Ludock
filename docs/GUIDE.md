@@ -373,7 +373,7 @@ sockets. To limit access to some folders, set
 If a restore fails, leave the server stopped and check **Activity**. Don't
 delete `.ludock-restore-*` folders: they may be needed to recover the previous
 data. An interrupted restore is finished or rolled back when Ludock starts
-again.
+again, and its entry in **Activity** says which.
 
 ### Schedules
 

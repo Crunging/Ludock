@@ -29,7 +29,9 @@ templ Document(title, csrf string, scripts, styles []string) {
 			<meta name="description" content="Manage your existing Docker game servers with Ludock."/>
 			// Back and forward reload the page rather than restoring it in place.
 			// The CSP allows no evaluated script, so no attribute uses js: or hx-on.
-			<meta name="htmx-config" content='{"history":"reload","includeIndicatorCSS":false,"extensions":"sse,preload,ludock","defaultTimeout":120000}'/>
+			// No settle delay: htmx wires up swapped-in links and forms only after
+			// it, so a click in between would navigate the whole page.
+			<meta name="htmx-config" content='{"history":"reload","includeIndicatorCSS":false,"extensions":"sse,preload,ludock","defaultTimeout":120000,"defaultSettleDelay":0}'/>
 			if csrf != "" {
 				<meta name="csrf-token" content={ csrf }/>
 			}

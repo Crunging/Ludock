@@ -122,7 +122,7 @@ func TestRestoreItemRefusesUnsafePaths(t *testing.T) {
 
 // A selective restore interrupted after its swap, with the replaced copy
 // still staged, is rolled back on startup: the current copy returns, the
-// stage is removed, and the server starts again.
+// stage is removed, the server starts again, and Activity says it was undone.
 func TestRestoreItemInterrupted(t *testing.T) {
 	f := setup(t)
 	backupID, rootID := f.itemBackup(t)
@@ -160,11 +160,43 @@ func TestRestoreItemInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 	recovered, _ := f.runner.Get(ctx, job.ID)
-	if recovered.Status != ops.Interrupted || !strings.Contains(recovered.Error, "restarted") {
+	if recovered.Status != ops.Interrupted || !strings.Contains(recovered.Error, "restarted") ||
+		recovered.Result["guidance"] != "The restore was undone: the server’s data is as it was." {
 		t.Fatalf("%+v", recovered)
 	}
 	if read(t, filepath.Join(f.data, "world", "level.dat")) != "newer" || read(t, filepath.Join(f.data, "world", "today.dat")) != "today" ||
 		f.staged() || !f.running() {
 		t.Fatal("recovery did not return the current copy", read(t, filepath.Join(f.data, "world", "level.dat")), f.staged(), f.running())
+	}
+}
+
+// A restore interrupted after its cleanup finished says it had finished.
+func TestRestoreInterruptedAfterCleanup(t *testing.T) {
+	f := setup(t)
+	backupID, rootID := f.itemBackup(t)
+	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
+	f.runner.Stop()
+	job, err := f.runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: "restore",
+		BindingRevision: logical.BindingRevision, Input: map[string]any{"backupId": backupID, "confirmation": "mc", "root": rootID, "item": "world/level.dat"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.jobs.Docker.Stop(ctx, f.game, nil); err != nil {
+		t.Fatal(err)
+	}
+	stopped, _ := f.jobs.Docker.Inspect(ctx, f.game)
+	running := true
+	recovery, _ := json.Marshal(ops.Recovery{ContainerID: logical.ContainerID, Fingerprint: logical.BindingFingerprint,
+		LockKeys: []string{"server:" + f.serverID}, InitialRunning: &running, StopStarted: true, StopSettled: true,
+		StoppedStartedAt: stopped.State.StartedAt, Restore: json.RawMessage(`{"status":"cleaned"}`)})
+	if _, err := f.jobs.DB.Exec("UPDATE operations SET status='running',phase='restore_cleaned',recovery_json=? WHERE id=?", string(recovery), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runner.Start(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	recovered, _ := f.runner.Get(ctx, job.ID)
+	if recovered.Status != ops.Interrupted || recovered.Result["guidance"] != "The restore had finished: what it restored is in place." || !f.running() {
+		t.Fatalf("%+v", recovered)
 	}
 }

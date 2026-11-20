@@ -593,3 +593,58 @@ func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 		t.Fatal("reported", err, "before the stop's deadline")
 	}
 }
+
+// Compose replaces a container to change it. A backup whose stopped server
+// is replaced meanwhile says something outside Ludock changed it, rather
+// than that something went wrong.
+func TestBackupOfReplacedServer(t *testing.T) {
+	f := setup(t)
+	validate := f.engine.OnStart
+	f.engine.OnStart = func(c *fakedocker.Container) {
+		validate(c)
+		if c.CreateRequest.Labels["ludock.internal"] == "backup-helper" {
+			f.engine.RemoveContainer(f.game)
+		}
+	}
+	job := f.run(t, "backup", nil)
+	if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Something outside Ludock started or changed the server") {
+		t.Fatalf("%+v", job)
+	}
+}
+
+// Docker stops answering right after a restart stopped the server. The
+// restart fails and the server stays stopped; Ludock keeps running.
+func TestRestartWhenDockerGoesAway(t *testing.T) {
+	f := setup(t)
+	f.engine.OnStop = func(c *fakedocker.Container) {
+		if c.ID == f.game {
+			f.engine.AddFault(`^GET .*/containers/`, 500, false, 0)
+		}
+	}
+	job := f.run(t, "restart", nil)
+	f.engine.ClearFaults()
+	if job.Status != ops.Failed || f.running() || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") {
+		t.Fatalf("%+v", job)
+	}
+}
+
+// Docker fails just as a backup's archive is read, or comes back from a
+// restart without the archive's exec. The backup blames Docker, not the
+// server's files.
+func TestBackupWhenDockerGoesAway(t *testing.T) {
+	for _, status := range []int{500, 404} {
+		f := setup(t)
+		exec := f.engine.Exec
+		f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+			if strings.Contains(strings.Join(cmd, " "), `"operation":"backup"`) {
+				f.engine.AddFault(`/exec/`, status, false, 0)
+			}
+			return exec(c, cmd, stdin, stdout, stderr)
+		}
+		job := f.run(t, "backup", nil)
+		f.engine.ClearFaults()
+		if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") {
+			t.Fatalf("%d: %+v", status, job)
+		}
+	}
+}
