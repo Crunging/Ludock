@@ -1,7 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db/dbtest"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/events"
+	"github.com/Crunging/Ludock/internal/logging"
 )
 
 // A page read just before the background tick does not stand in for the
@@ -234,12 +238,69 @@ func TestStartRemovesLeftoverConsoleHelpers(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("startup recovery never finished", err)
+			t.Fatal("startup recovery never finished")
 		}
 	}
 	if engine.Container(leftover) != nil {
 		t.Fatal("left the console helper")
 	}
+}
+
+// Startup recovery that can't reach Docker retries, and its log says
+// Docker is unreachable so the owner knows where to look. Once Docker
+// answers, recovery finishes and work can take servers.
+func TestStartupRetrySaysDockerIsUnreachable(t *testing.T) {
+	var logged lockedBuffer
+	logging.SetOutput(&logged, &logged)
+	defer logging.SetOutput(os.Stdout, os.Stderr)
+	socket := filepath.Join(t.TempDir(), "docker.sock")
+	a, err := New(config.Config{DockerSocket: socket}, dbtest.Open(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a.Start(ctx)
+	defer a.Stop(time.Now().Add(time.Minute))
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(logged.String(), "Could not recover interrupted operations"); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("startup recovery never retried", logged.String())
+		}
+	}
+	if !strings.Contains(logged.String(), `"docker":"unreachable"`) {
+		t.Fatal(logged.String())
+	}
+	engine, err := fakedocker.StartSocket(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if release, err := a.Locks.Acquire([]string{"server:x"}, nil); err == nil {
+			release()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("startup recovery never finished")
+		}
+	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // Docker kills a container ten seconds after asking it to stop. Work that

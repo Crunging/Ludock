@@ -532,6 +532,40 @@ func TestUnexpectedFailureIsLogged(t *testing.T) {
 	}
 }
 
+// Work cancelled while it warns players returns ErrCancelled, which is
+// expected and not logged as an unexpected failure.
+func TestCancelledWorkIsNotLoggedAsFailure(t *testing.T) {
+	r, servers := setup(t, 1)
+	warning := make(chan struct{})
+	r.Register("backup", Handler{Run: func(_ context.Context, job *Context) (map[string]any, error) {
+		if err := job.Progress(PhaseWarning, nil, nil); err != nil {
+			return nil, err
+		}
+		close(warning)
+		<-job.Cancelled()
+		return nil, ErrCancelled
+	}})
+	var stdout, stderr bytes.Buffer
+	logging.SetOutput(&stdout, &stderr)
+	defer logging.SetOutput(os.Stdout, os.Stderr)
+	job, err := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "backup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-warning
+	if _, err := r.Cancel(ctx, job.ID, "admin", nil); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, r, job.ID, Cancelled)
+	r.Stop()
+	if logged := stdout.String() + stderr.String(); strings.Contains(logged, "failed unexpectedly") {
+		t.Fatal(logged)
+	}
+}
+
 // Work that fails because Docker stopped answering, or answered with its own
 // error, says which.
 func TestDockerFailureSaysSo(t *testing.T) {

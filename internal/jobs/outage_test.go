@@ -2,6 +2,8 @@ package jobs
 
 import (
 	"bufio"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -129,6 +131,65 @@ func TestBackupCopyRidesOutDockerRestart(t *testing.T) {
 	}
 	if backups, err := f.jobs.Backups.List(ctx, f.serverID); err != nil || len(backups) != 1 {
 		t.Fatal(backups, err)
+	}
+}
+
+// The connection to Docker drops while a backup copies, as when a proxy in
+// front of its socket restarts: Docker keeps the copy's exec, which exits
+// with an error once its stream is cut. The backup copies again once Docker
+// answers and finishes, instead of blaming the server's files.
+func TestBackupCopyRidesOutDroppedConnection(t *testing.T) {
+	f := setup(t)
+	var once sync.Once
+	exec := f.engine.Exec
+	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+		if strings.Contains(strings.Join(cmd, " "), `"operation":"backup"`) {
+			cut := false
+			once.Do(func() { cut = true })
+			if cut {
+				go f.engine.Disconnect(2 * time.Second)
+				time.Sleep(200 * time.Millisecond)
+				return 1
+			}
+		}
+		return exec(c, cmd, stdin, stdout, stderr)
+	}
+	job := f.run(t, "backup", nil)
+	if job.Status != ops.Succeeded || job.Result["waitedForDocker"] != true || !f.running() {
+		t.Fatalf("%+v", job)
+	}
+	if backups, err := f.jobs.Backups.List(ctx, f.serverID); err != nil || len(backups) != 1 {
+		t.Fatal(backups, err)
+	}
+}
+
+// The connection to Docker drops while a restore unpacks the backup. The
+// restore is rolled back and says Ludock couldn't reach Docker, not that the
+// backup is damaged.
+func TestRestoreUnpackCutByDroppedConnection(t *testing.T) {
+	f := setup(t)
+	if err := os.WriteFile(filepath.Join(f.data, "large.dat"), make([]byte, 16<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backup := f.run(t, "backup", nil)
+	input := map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc"}
+	var once sync.Once
+	exec := f.engine.Exec
+	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+		if strings.Contains(strings.Join(cmd, " "), "restore-extract") {
+			cut := false
+			once.Do(func() { cut = true })
+			if cut {
+				go f.engine.Disconnect(2 * time.Second)
+				time.Sleep(200 * time.Millisecond)
+				return 1
+			}
+		}
+		return exec(c, cmd, stdin, stdout, stderr)
+	}
+	job := f.run(t, "restore", input)
+	if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") || !f.running() || f.staged() {
+		t.Fatalf("%+v", job)
 	}
 }
 

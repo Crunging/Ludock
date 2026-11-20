@@ -98,9 +98,28 @@ export default async function setup() {
 
   return async () => {
     if (process.env.LUDOCK_E2E_LOGS) console.log(docker(...ludock, "logs", "ludock"));
+    // An update hands the unnamed /state volume over by name, so down -v
+    // leaves it behind.
+    let volumes = [];
+    try {
+      const containers = docker(...game, "ps", "--all", "--quiet").split("\n").filter(Boolean);
+      if (containers.length) {
+        volumes = docker("inspect", "--format", "{{range .Mounts}}{{if eq .Type \"volume\"}}{{.Name}} {{end}}{{end}}",
+          ...containers).split(/\s+/).filter(Boolean);
+      }
+    } catch (error) {
+      console.error(String(error));
+    }
     for (const project of [ludock, game]) {
       try {
         docker(...project, "down", "--volumes", "--remove-orphans", "--timeout", "5");
+      } catch (error) {
+        console.error(String(error));
+      }
+    }
+    if (volumes.length) {
+      try {
+        docker("volume", "rm", "--force", ...volumes);
       } catch (error) {
         console.error(String(error));
       }
