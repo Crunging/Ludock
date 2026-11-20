@@ -102,7 +102,7 @@ templ PlayersCell(p PlayersView) {
 // capacity drawn as one block per player slot, and the names.
 templ PlayersFact(p PlayersView) {
 	<div class="overview-players">
-		<dt>Players</dt>
+		<dt>Online now</dt>
 		<dd>
 			switch {
 				case !p.Listed:
@@ -295,9 +295,12 @@ type PlayerListsView struct {
 	Alert      PlayerAlert
 }
 
-// PlayerListsDisclosure reads the lists the first time it opens.
+// PlayerListsDisclosure reads the lists the first time it opens. The live
+// overview's morph leaves it in place (hx-morph-skip), focus and all.
 templ PlayerListsDisclosure(serverID string) {
 	<details
+		id="player-lists"
+		hx-morph-skip
 		class="disclosure player-lists"
 		hx-get={ "/fragments/servers/" + serverID + "/player-lists" }
 		hx-trigger="toggle once, player-lists-changed from:document, servers-changed from:document"

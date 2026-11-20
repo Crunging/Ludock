@@ -78,7 +78,7 @@ func (s *Server) backupFolder(w http.ResponseWriter, r *http.Request, request *R
 	}
 	browser := s.backupBrowser(r, id, r.PathValue("backup"), s.archiveAccess(r.Context(), request, id))
 	browser.CanRestore = restoreOffered(snapshot.Server, snapshot.DiscoveryUnavailable)
-	browser.Warn = warnOffer(snapshot.Server.Container)
+	browser.Warn, browser.Running = warnOffer(snapshot.Server.Container), snapshot.Server.Container.State == "running"
 	s.fitBrowser(r.Context(), snapshot.Server, browser)
 	render(w, r, http.StatusOK, views.BackupFolder(*browser))
 }

@@ -1,4 +1,4 @@
-import { test, expect, asAdmin, serverRow, openServer, gameCommand, expectOperationSucceeded, withGame } from "./fixtures.mjs";
+import { test, expect, asAdmin, serverRow, openServer, gameCommand, expectOperationSucceeded, restoreServer, withGame } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -18,6 +18,39 @@ test("Valheim's files and backups leave out the server its image downloads", asy
   const disks = page.locator(".overview-disks > li");
   await expect(disks).toHaveCount(1);
   await expect(disks).toContainText("/data/valheim");
+});
+
+test("taking Valheim down says who is on, though the game can't be warned", async ({ page }) => {
+  // Valheim's status check counts two players; it has no console to message them.
+  await openServer(page, "valheim");
+  try {
+    await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
+    await expect(page.locator(".overview-players")).toContainText(/2\s*of 10 online/, { timeout: 45_000 });
+    // The header's dialog text follows its own refresh.
+    const online = "2 players are online and will be disconnected.";
+    await expect(async () => {
+      await page.locator(".detail-actions").getByRole("button", { name: "Stop" }).click();
+      const dialog = page.getByRole("dialog", { name: "Stop valheim?" });
+      try {
+        await expect(dialog).toContainText(online, { timeout: 1000 });
+      } finally {
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+      }
+    }).toPass({ timeout: 30_000 });
+    await page.locator(".detail-actions").getByRole("button", { name: "Restart" }).click();
+    await expect(page.getByRole("dialog", { name: "Restart valheim?" })).toContainText(online);
+    await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+
+    await page.getByRole("tab", { name: "Backups" }).click();
+    await page.locator("#create-backup:not([disabled])").click();
+    const backup = page.getByRole("dialog", { name: "Back up valheim?" });
+    // The Backups tab doesn't follow the player count, so it gives no number.
+    await expect(backup).toContainText("The server stops for the whole copy, then returns to how it was. Connected players will be disconnected.");
+    await expect(backup.getByRole("checkbox")).toHaveCount(0);
+    await backup.getByRole("button", { name: "Cancel" }).click();
+  } finally {
+    await restoreServer(page, "valheim");
+  }
 });
 
 test("Terraria quits with its own exit command, so it stops saved and a backup succeeds", async ({ page }) => {

@@ -18,6 +18,32 @@ function candidate(panel, name) {
   return panel.locator(".add-servers__item", { has: panel.page().locator(".add-servers__name").getByText(name, { exact: true }) });
 }
 
+// The journeys below build on the first one's satisfactory and the fourth's
+// friend1, but each sets them up itself when it runs alone.
+
+/** Adds satisfactory and starts it, unless an earlier journey did. */
+async function runningSatisfactory(page) {
+  await page.goto("/");
+  if (!(await serverRow(page, "satisfactory").count())) {
+    const panel = await openAddServers(page);
+    await candidate(panel, "satisfactory").getByRole("button", { name: "Add satisfactory" }).click();
+    await expect(panel.getByRole("status")).toContainText("Added satisfactory.");
+  }
+  const row = serverRow(page, "satisfactory");
+  const start = row.getByRole("button", { name: "Start" });
+  if (await start.count()) await start.click();
+  await expect(row).toContainText("Running");
+}
+
+/** Creates friend1 with satisfactory shared, unless an earlier journey did. */
+async function friendWithSatisfactory(page) {
+  await runningSatisfactory(page);
+  await page.goto("/users");
+  if (await page.locator(".user-row", { hasText: "friend1" }).count()) return;
+  await createUser(page, "friend1", "friend password one");
+  await shareServer(page, "satisfactory", "friend1", "Can see it");
+}
+
 test("adding a server Ludock doesn't recognize, from the server list", async ({ session }) => {
   const page = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
   const panel = await openAddServers(page);
@@ -71,18 +97,20 @@ test("a container its owner labeled ludock.enable: \"false\" can't be added", as
   const page = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
   const panel = await openAddServers(page);
   await expect(candidate(panel, "valheim-old")).toHaveCount(0);
+  const servers = await page.locator(".server-row").count();
   // Not even by a request the page never sends.
   const csrf = await page.locator('meta[name="csrf-token"]').getAttribute("content");
   const response = await page.request.post("/servers/add", { form: { _csrf: csrf, container: "valheim-old" },
     headers: { "HX-Request": "true" } });
   expect(await response.text()).toContain("This container can’t be added.");
   await page.reload();
-  await expect(page.locator(".server-row")).toHaveCount(5);
+  await expect(page.locator(".server-row")).toHaveCount(servers);
   await expect(serverRow(page, "valheim-old")).toHaveCount(0);
 });
 
 test("a non-administrator sees no containers and can't add or remove servers", async ({ session }) => {
   const admin = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
+  await runningSatisfactory(admin);
   await createUser(admin, "friend1", "friend password one");
   const friend = await session();
   await signIn(friend, "friend1", "friend password one");
@@ -106,6 +134,7 @@ test("a non-administrator sees no containers and can't add or remove servers", a
 
 test("removing servers and adding them back keeps their sharing", async ({ session }) => {
   const page = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
+  await friendWithSatisfactory(page);
   const friend = await session();
   await signIn(friend, "friend1", "friend password one");
   await expect(serverRow(friend, "satisfactory")).toBeVisible();

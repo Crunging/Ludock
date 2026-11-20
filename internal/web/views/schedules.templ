@@ -22,7 +22,7 @@ type SchedulesView struct {
 	// CanCancelWait, those whose waiting run the viewer may cancel.
 	CanResume     map[string]bool
 	CanCancelWait map[string]bool
-	Blocked   bool
+	Blocked       bool
 	// ShowReplies shows command replies, which are console output.
 	ShowReplies bool
 	Message     string
@@ -221,14 +221,21 @@ func LeadText(minutes []int) string {
 	return strings.Join(parts, ", ")
 }
 
+// finished: a one-time schedule that ran and has nothing left to pause.
+func finished(item schedules.Schedule) bool {
+	return item.CompletedAt != 0 && !(item.Enabled && item.LastOperation != nil && item.LastOperation.Status == "queued")
+}
+
 func toggleDisabled(v SchedulesView, item schedules.Schedule) bool {
-	if v.Editing != "" {
-		return true
+	return v.Editing != "" || !item.Enabled && (v.Blocked || !v.CanResume[item.ID])
+}
+
+// lockedText stands in for the controls of a schedule the viewer can't change.
+func lockedText(item schedules.Schedule) string {
+	if item.OwnerName == "" {
+		return "Only an administrator can change this."
 	}
-	if item.CompletedAt != 0 && !(item.Enabled && item.LastOperation != nil && item.LastOperation.Status == "queued") {
-		return true
-	}
-	return !v.Editable(item) || (!item.Enabled && (v.Blocked || !v.CanResume[item.ID]))
+	return "Only " + item.OwnerName + " or an administrator can change this."
 }
 
 templ SchedulesTab(v SchedulesView) {
@@ -362,40 +369,46 @@ templ ScheduleList(v SchedulesView) {
 							}
 						</td>
 						<td>
-							<div class="schedule-row-actions">
-								if v.Editing == "" && !v.Blocked && len(v.Form.Actions) > 0 && v.Editable(item) {
-									<a class="secondary-btn" id={ "schedule-edit-" + item.ID } href={ detailURL(v.ServerID, "tab=schedules&edit="+item.ID) }>Edit</a>
-								} else {
-									<button type="button" class="secondary-btn" disabled>Edit</button>
-								}
-								<button
-									type="button"
-									class="secondary-btn"
-									disabled?={ toggleDisabled(v, item) }
-									hx-post={ "/servers/" + v.ServerID + "/schedules/" + item.ID + "/toggle?" + scheduleListQuery(v) }
-									hx-vals={ toggleValues(item) }
-									hx-target="#detail-status"
-									data-busy-label="Working…"
-								>
-									if item.Enabled {
-										Pause
+							if !v.Editable(item) {
+								<p class="table-detail schedule-row-note">{ lockedText(item) }</p>
+							} else {
+								<div class="schedule-row-actions">
+									if v.Editing == "" && !v.Blocked && len(v.Form.Actions) > 0 {
+										<a class="secondary-btn" id={ "schedule-edit-" + item.ID } href={ detailURL(v.ServerID, "tab=schedules&edit="+item.ID) }>Edit</a>
 									} else {
-										Resume
+										<button type="button" class="secondary-btn" disabled>Edit</button>
 									}
-								</button>
-								<button
-									type="button"
-									class="secondary-btn secondary-btn--danger"
-									disabled?={ v.Editing != "" || !v.Editable(item) }
-									hx-post={ "/servers/" + v.ServerID + "/schedules/" + item.ID + "/delete?" + scheduleListQuery(v) }
-									hx-target="#detail-status"
-									hx-confirm="Delete this schedule?"
-									data-confirm-detail="It won’t run again. This can’t be undone."
-									data-confirm-action="Delete schedule"
-									data-confirm-danger
-									data-busy-label="Deleting…"
-								>Delete</button>
-							</div>
+									if !finished(item) {
+										<button
+											type="button"
+											class="secondary-btn"
+											disabled?={ toggleDisabled(v, item) }
+											hx-post={ "/servers/" + v.ServerID + "/schedules/" + item.ID + "/toggle?" + scheduleListQuery(v) }
+											hx-vals={ toggleValues(item) }
+											hx-target="#detail-status"
+											data-busy-label="Working…"
+										>
+											if item.Enabled {
+												Pause
+											} else {
+												Resume
+											}
+										</button>
+									}
+									<button
+										type="button"
+										class="secondary-btn secondary-btn--danger"
+										disabled?={ v.Editing != "" }
+										hx-post={ "/servers/" + v.ServerID + "/schedules/" + item.ID + "/delete?" + scheduleListQuery(v) }
+										hx-target="#detail-status"
+										hx-confirm="Delete this schedule?"
+										data-confirm-detail="It won’t run again. This can’t be undone."
+										data-confirm-action="Delete schedule"
+										data-confirm-danger
+										data-busy-label="Deleting…"
+									>Delete</button>
+								</div>
+							}
 						</td>
 					</tr>
 				}

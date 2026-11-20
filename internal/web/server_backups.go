@@ -31,7 +31,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		CanRestore: can(view, authz.BackupsRestore), CanDelete: can(view, authz.BackupsDelete),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
 		LatestBackup: view.LatestBackup, NoData: view.NoDataFolders, BindingRevision: view.BindingRevision,
-		Warn: warnOffer(view.Container)}
+		Warn: warnOffer(view.Container), Running: view.Container.State == "running"}
 	// The tab follows any running work, so readiness and paused controls come
 	// back when it ends.
 	b.Operation = views.ActivityView{ServerID: view.ID, Admin: d.Admin, Tab: "backups", SelectedID: r.URL.Query().Get("operation"),
@@ -51,7 +51,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		if id := r.URL.Query().Get("browse"); id != "" {
 			b.Browse = s.backupBrowser(r, view.ID, id, s.archiveAccess(r.Context(), request, view.ID))
 			b.Browse.ServerName, b.Browse.CanRestore = view.DisplayName, restoreOffered(view, d.DiscoveryUnavailable)
-			b.Browse.Warn = b.Warn
+			b.Browse.Warn, b.Browse.Running = b.Warn, b.Running
 			s.fitBrowser(r.Context(), view, b.Browse)
 			return b
 		}
@@ -154,6 +154,7 @@ func (s *Server) backupPreflight(w http.ResponseWriter, r *http.Request, request
 	view := views.ReadinessView{ServerID: id, Admin: request.User().Role == db.RoleAdmin}
 	if err == nil {
 		view.ServerName, view.Warn = resolved.Container.DisplayName, warnOffer(resolved.Container)
+		view.Running = resolved.Container.State == "running"
 		preflight := s.App.Backups.Preflight(r.Context(), resolved)
 		if _, err = s.App.Authz.Assert(r.Context(), user, id, authz.BackupsCreate); err == nil {
 			view.Preflight = &preflight
@@ -395,7 +396,7 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 	view := &d.Row.Server
 	u := views.UpdateView{ServerID: id, ServerName: view.DisplayName, CanBackup: can(view, authz.BackupsCreate),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
-		Recreate: r.URL.Query().Get("recreate") == "1", Warn: warnOffer(view.Container)}
+		Recreate: r.URL.Query().Get("recreate") == "1", Warn: warnOffer(view.Container), Running: view.Container.State == "running"}
 	resolved, _, err := s.resolveFresh(r, request, id, capability)
 	if err == nil {
 		result := s.App.Updates.Capability(r.Context(), resolved, func() bool {

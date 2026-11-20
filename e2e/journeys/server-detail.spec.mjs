@@ -1,34 +1,77 @@
-import { test, expect, asAdmin, openServer, expectOperationSucceeded, fake } from "./fixtures.mjs";
+import { test, expect, asAdmin, openServer, expectOperationSucceeded, fake, monitoringSettings } from "./fixtures.mjs";
 
 asAdmin();
 // Each journey here passes on its own, so they spread across workers.
 test.describe.configure({ mode: "parallel" });
 
-test("reviewing a server, tuning its monitoring, and following a restart", async ({ page }) => {
+test("the overview leads with what a server is doing and who is on, with Docker's facts folded away", async ({ page }) => {
   await openServer(page, "Survival");
-  const facts = page.locator(".overview-facts");
-  await expect(facts).toContainText("itzg/minecraft-server:java21");
-  await expect(facts).toContainText("25565/tcp");
-  // Watched without anyone turning it on; the levels wait behind a disclosure.
-  await expect(page.getByLabel("Monitor this server")).toBeChecked();
-  // An earlier journey's restart can still hold alerts back for a moment.
-  await expect(page.locator("#availability-title + p")).toHaveText(/^(No outage detected|Paused briefly after a restart or stop)\.$/);
+  const facts = page.locator(".overview-facts").first();
+  await expect(facts.locator("dt")).toHaveText(["State", "Game", "Connect", "Last backup", "Next scheduled"]);
+  // Who is on, and the lists that go with them, have a section of their own.
+  const players = page.getByRole("region", { name: "Players" });
+  await expect(players.locator(".overview-players")).toContainText(/of 10 online/);
+  await expect(players.getByText("Allowlist and bans", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Resources" }).locator("dt")).toHaveText(["CPU", "Memory", "Disk"]);
+
+  // Docker's facts wait behind Details, which a refresh leaves open.
+  const details = page.locator("#overview-details");
+  await expect(details.getByText("itzg/minecraft-server:java21")).toBeHidden();
+  await details.getByText("Details", { exact: true }).click();
+  await expect(details.getByText("itzg/minecraft-server:java21")).toBeVisible();
+  await expect(details).toContainText("25565/tcp");
+  await expect(details).toContainText("100% is one core.");
+  await expect(details).toContainText("Health check");
+  const refreshed = page.waitForResponse(/\/fragments\/servers\/[^/]+\/overview$/);
+  await page.evaluate(() => document.body.dispatchEvent(new Event("availability-changed")));
+  await refreshed;
+  await expect(details.getByText("itzg/minecraft-server:java21")).toBeVisible();
+  for (const docker of ["Ports", "Image", "Health check", "one core"]) await expect(facts).not.toContainText(docker);
+
+  // Monitoring says how it is, keeps automatic restart in sight, and folds
+  // its settings away while it's on.
+  await expect(page.locator("#availability-title + p")).toBeVisible();
+  await expect(page.getByLabel("Restart it if the game stops answering")).toBeVisible();
+  await expect(page.getByLabel("Monitor this server")).toBeHidden();
+});
+
+test("on a phone, a server's players come right after its main facts", async ({ session }) => {
+  const page = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE, viewport: { width: 390, height: 844 } });
+  await openServer(page, "Survival");
+  const players = page.getByRole("heading", { level: 2, name: "Players" });
+  // Five short facts above it, and nothing Docker-facing between.
+  const above = await page.locator(".overview-facts").first().evaluate((list) => list.getBoundingClientRect().bottom);
+  const heading = await players.evaluate((element) => element.getBoundingClientRect().top);
+  expect(heading).toBeGreaterThan(above);
+  expect(heading - above).toBeLessThan(80);
+  await expect(page.locator("#overview-details")).not.toHaveAttribute("open");
+  await expect(page.locator(".overview-players")).toContainText(/of 10 online/);
+  // Nothing on the page scrolls sideways.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test("tuning a server's monitoring and following a restart", async ({ page, ownServer }) => {
+  await openServer(page, ownServer.name);
+  // Watched without anyone turning it on; the settings wait behind a disclosure.
+  await expect(page.locator("#availability-title + p")).toHaveText(/^(No outage detected|Paused briefly after a restart or stop|Checking it for the first time)\.$/);
   await expect(page.getByLabel("Wait before alerting (seconds)")).toBeHidden();
-  await expect(page.getByRole("link", { name: "Settings → Notifications" })).toHaveAttribute("href", "/settings#notification-settings-title");
+  const settings = await monitoringSettings(page);
+  await expect(page.getByLabel("Monitor this server")).toBeChecked();
+  await expect(settings.getByRole("link", { name: "Settings → Notifications" })).toHaveAttribute("href", "/settings#notification-settings-title");
 
   // Monitoring settings save as they change.
-  await page.getByText("Alert levels").click();
   await page.getByLabel("Wait before alerting (seconds)").fill("180");
   await page.getByLabel("Wait before alerting (seconds)").press("Tab");
   await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
   await page.reload();
-  await page.getByText("Alert levels").click();
+  await monitoringSettings(page);
   await expect(page.getByLabel("Wait before alerting (seconds)")).toHaveValue("180");
 
-  // Turning monitoring off sticks.
+  // Turning monitoring off sticks, and leaves its settings open to turn it back on.
   await page.getByLabel("Monitor this server").uncheck();
   await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
   await page.reload();
+  await expect(page.locator("#monitoring-settings")).toHaveAttribute("open");
   await expect(page.getByLabel("Monitor this server")).not.toBeChecked();
   await expect(page.locator("#availability-title + p")).toHaveText("Monitoring is off.");
   await page.getByLabel("Monitor this server").check();
@@ -39,9 +82,9 @@ test("reviewing a server, tuning its monitoring, and following a restart", async
   await expectOperationSucceeded(page);
   await expect(page.locator("#activity-list")).toContainText("Save command sent before stopping.");
 
-  await page.getByLabel("Result").selectOption("failed");
-  await expect(page.locator(".activity-filter-count")).toHaveText(/^Showing 0 of \d+\.$/);
-  await expect(page).toHaveURL(/status=failed/);
+  await page.getByLabel("Result").selectOption("succeeded");
+  await expect(page.locator(".activity-filter-count")).toHaveText(/^Showing 1 of 1\.$/);
+  await expect(page).toHaveURL(/status=succeeded/);
 });
 
 test("a restart rides out Docker restarting under it and says it waited", async ({ page }) => {
@@ -60,7 +103,7 @@ test("reading a server's resource history over an hour and a day", async ({ page
   await openServer(page, "Survival");
   // Ludock sampled the running server as it started.
   const history = page.locator("#resource-history");
-  await expect(history.getByRole("heading", { name: "Resource history" })).toBeVisible();
+  await expect(history.getByRole("heading", { name: "History" })).toBeVisible();
   const cpu = history.getByRole("img", { name: "CPU over the last hour: average 25.0%, peak 25.0%." });
   const memory = history.getByRole("img", { name: "Memory over the last hour: average 1.5 GiB, peak 1.5 GiB." });
   await expect(cpu).toBeVisible();

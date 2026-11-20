@@ -44,10 +44,14 @@ test("sharing a server with someone new by invite link, and what they can see", 
   // Their menu and the server's page hold only what they can use: no
   // Docker details, and nothing that says to ask an administrator.
   await expect(pal.getByRole("navigation", { name: "Primary navigation" }).getByRole("link")).toHaveText(["Servers", "Activity"]);
-  const facts = pal.locator(".overview-facts dt");
+  const facts = pal.locator(".overview-facts dt, .overview-details dt");
   await expect(facts.first()).toBeVisible();
-  for (const docker of ["Ports", "In Docker", "Image"]) await expect(facts.filter({ hasText: docker })).toHaveCount(0);
+  for (const docker of ["Ports", "Container", "Image"]) await expect(facts.filter({ hasText: docker })).toHaveCount(0);
   await expect(pal.locator(".detail-header code")).toHaveCount(0);
+  // Activity offers only results that can apply to them: no updates.
+  await pal.getByRole("tab", { name: "Activity" }).click();
+  await expect(pal.getByLabel("Result").locator("option")).toHaveText(["Any result", "Queued", "Running", "Succeeded", "Skipped", "Failed", "Interrupted", "Cancelled"]);
+  await pal.getByRole("tab", { name: "Overview" }).click();
   await expect(pal.getByText("administrator", { exact: false })).toHaveCount(0);
 
   // Requests the page doesn't offer are refused.

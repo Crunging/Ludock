@@ -26,6 +26,9 @@ test("inviting a user who chooses their own password, once", async ({ page, sess
   await form.getByRole("button", { name: "Create user" }).click();
   const link = await shownLink(admin, "Invite link for dana");
   expect(link).toMatch(new RegExp(`^${new URL(admin.url()).origin}/link/[\\w-]{43}$`));
+  // Journeys open Ludock at 127.0.0.1, which friends elsewhere can't reach.
+  await expect(admin.getByRole("region", { name: "Invite link for dana" }).getByRole("note")).toHaveText(
+    "This link opens only on this computer, because you’re using Ludock at 127.0.0.1. To send it to dana, open Ludock at an address they can reach, then make a new link.");
   await expect(userRow(admin, "dana")).toContainText("Invite link waiting to be used.");
 
   // The account can't sign in before the invite is used.

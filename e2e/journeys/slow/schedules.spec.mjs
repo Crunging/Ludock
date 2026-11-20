@@ -93,7 +93,7 @@ test("a scheduled restart waits for players to leave", async ({ page, ownServer 
     await page.getByRole("tab", { name: "Activity" }).click();
     await expect(page.locator(".activity-waiting")).toContainText("A scheduled restart is waiting for players to leave, until");
     await page.getByRole("tab", { name: "Overview" }).click();
-    await expect(page.locator(".overview-facts")).toContainText("Restart waiting for players to leave, until");
+    await expect(page.locator(".overview-facts").first()).toContainText("Restart waiting for players to leave, until");
   } finally {
     await gameCommand(console, "fake-leave Mara", ownServer.name);
   }

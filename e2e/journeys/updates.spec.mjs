@@ -60,7 +60,7 @@ test("updating a server's image, then finding it current", async ({ page, ownSer
   // Cancelling the confirmation starts nothing.
   await form.getByRole("button", { name: "Update server" }).click();
   const confirm = page.getByRole("dialog", { name: `Update ${ownServer.name}?` });
-  await expect(confirm).toContainText("Connected players are disconnected");
+  await expect(confirm).toContainText("Connected players will be disconnected. Ludock replaces the server with the newest image.");
   await confirm.getByRole("button", { name: "Cancel" }).click();
   await expect(page).not.toHaveURL(/[?&]operation=/);
   await update(page, ownServer.name);

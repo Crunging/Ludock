@@ -35,6 +35,8 @@ type ServerRow struct {
 	Down bool
 	// Warn: stopping offers to warn players first.
 	Warn bool
+	// Online is how many players are on, when Ludock knows.
+	Online int
 }
 
 // Status is the row's state, naming a server its alert calls down the same way.
@@ -502,7 +504,7 @@ templ ServerCard(row ServerRow) {
 				<button class="secondary-btn secondary-btn--accent" type="button" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/start" } hx-target="#action-error" data-busy-label="Working…">Start</button>
 			}
 			if row.CanStop {
-				<button class="secondary-btn secondary-btn--danger" type="button" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/stop" } hx-target="#action-error" data-busy-label="Working…" { LifecycleConfirm("stop", server.DisplayName, false, row.Warn)... }>Stop</button>
+				<button class="secondary-btn secondary-btn--danger" type="button" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/stop" } hx-target="#action-error" data-busy-label="Working…" { LifecycleConfirm("stop", server.DisplayName, false, row.Warn, row.Online)... }>Stop</button>
 			}
 			if row.CanFiles || row.CanRestart {
 				<div class="action-menu" data-action-menu>
@@ -515,7 +517,7 @@ templ ServerCard(row ServerRow) {
 							<a class="action-menu__action" href={ templ.SafeURL("/files/" + server.ID) }>Files</a>
 						}
 						if row.CanRestart {
-							<button type="button" class="action-menu__action" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/restart" } hx-target="#action-error" { LifecycleConfirm("restart", server.DisplayName, row.CanBackup, row.Warn)... }>Restart…</button>
+							<button type="button" class="action-menu__action" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/restart" } hx-target="#action-error" { LifecycleConfirm("restart", server.DisplayName, row.CanBackup, row.Warn, row.Online)... }>Restart…</button>
 						}
 					</div>
 				</div>
@@ -524,12 +526,37 @@ templ ServerCard(row ServerRow) {
 	</article>
 }
 
+// OnlineNote says how many players taking a server down disconnects, or ""
+// when Ludock knows of none.
+func OnlineNote(online int) string {
+	switch {
+	case online == 1:
+		return "1 player is online and will be disconnected."
+	case online > 1:
+		return strconv.Itoa(online) + " players are online and will be disconnected."
+	}
+	return ""
+}
+
+// DisconnectNote says taking a running server down disconnects whoever is
+// on, without a number: for tabs that don't follow the player count, where
+// one would go stale.
+func DisconnectNote(running bool) string {
+	if running {
+		return "Connected players will be disconnected."
+	}
+	return ""
+}
+
 // LifecycleConfirm asks in the page's confirmation dialog before a stop or
 // restart. It can offer to warn players first, and a restart to take a
 // backup first.
-func LifecycleConfirm(action, serverName string, backupOption, warn bool) templ.Attributes {
+func LifecycleConfirm(action, serverName string, backupOption, warn bool, online int) templ.Attributes {
 	label := map[string]string{"stop": "Stop", "restart": "Restart"}[action]
-	detail := "Connected players will be disconnected."
+	detail := OnlineNote(online)
+	if detail == "" {
+		detail = "Connected players will be disconnected."
+	}
 	if action == "stop" {
 		detail += " The server will remain stopped until started again."
 	}
