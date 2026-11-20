@@ -180,28 +180,29 @@ func (o *Observer) listContainers(ctx context.Context) ([]docker.ContainerSummar
 	known := o.images
 	o.mu.Unlock()
 	images := map[string]string{}
-	for index := range containers {
-		container := &containers[index]
-		if !isImageID(container.Image) {
-			continue
-		}
-		reference, ok := known[container.ID]
-		if !ok {
-			info, err := o.Docker.Inspect(ctx, container.ID)
-			if status := docker.StatusCode(err); status == http.StatusNotFound || status == http.StatusForbidden {
-				continue
+	listed := containers[:0]
+	for _, container := range containers {
+		if isImageID(container.Image) {
+			reference, ok := known[container.ID]
+			if !ok {
+				info, err := o.Docker.Inspect(ctx, container.ID)
+				// Discovery leaves out containers that vanished or it may not inspect.
+				if status := docker.StatusCode(err); status == http.StatusNotFound || status == http.StatusForbidden {
+					continue
+				}
+				if err != nil {
+					return nil, err
+				}
+				reference = info.Config.Image
 			}
-			if err != nil {
-				return nil, err
-			}
-			reference = info.Config.Image
+			images[container.ID], container.Image = reference, reference
 		}
-		images[container.ID], container.Image = reference, reference
+		listed = append(listed, container)
 	}
 	o.mu.Lock()
 	o.images = images
 	o.mu.Unlock()
-	return containers, nil
+	return listed, nil
 }
 
 func isImageID(image string) bool {

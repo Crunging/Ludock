@@ -6,7 +6,7 @@
 //   node real/rig.mjs bot NAME  join the Java server as NAME and log what the player sees
 //   node real/rig.mjs down      remove every container, volume, and network the rig made
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { admin } from "../journeys/fixtures.mjs";
@@ -18,6 +18,7 @@ const javaImage = process.env.LUDOCK_RIG_JAVA_IMAGE || "itzg/minecraft-server:ja
 // Mineflayer supports this release; the bot can't join a newer one.
 const version = process.env.LUDOCK_RIG_MINECRAFT_VERSION || "1.21.11";
 const setupCode = "real-rig-setup-code-0123456789abcdef0123";
+const marker = ".ludock-real-rig";
 const projects = {
   ludock: ["compose", "--project-name", "ludocktest-ludock", "-f", join(root, "compose.yaml"), "-f", join(dir, "ludock.override.yaml")],
   java: ["compose", "--project-name", "ludocktest-minecraft", "--project-directory", join(dir, "java"), "-f", join(dir, "java", "compose.yaml")],
@@ -45,6 +46,8 @@ async function up() {
     throw new Error("Set MINECRAFT_EULA=TRUE to accept the Minecraft EULA (https://aka.ms/MinecraftEULA) for the test servers.");
   }
   for (const folder of ["java/data", "backups-copy"]) mkdirSync(join(dir, folder), { recursive: true });
+  // down removes only a folder that up made.
+  writeFileSync(join(dir, marker), "");
   // Every port is published on loopback only.
   writeFileSync(join(dir, "ludock.override.yaml"), `services:
   ludock:
@@ -106,17 +109,14 @@ async function bot() {
 
 function down() {
   confirmDaemon();
-  for (const project of Object.values(projects)) {
-    try {
-      docker(...project, "down", "--volumes", "--remove-orphans", "--timeout", "30");
-    } catch {
-      // Not started.
-    }
-  }
+  if (!existsSync(join(dir, marker))) throw new Error(`${dir} wasn't made by real/rig.mjs up; leaving it alone.`);
+  // A failed teardown stops here, before any game data is removed.
+  for (const project of Object.values(projects)) docker(...project, "down", "--volumes", "--remove-orphans", "--timeout", "30");
   // Game data written by the containers belongs to their users, so a
   // container removes what the rig made, and nothing else in its folder.
   const made = ["java", "backups-copy", "bot", "ludock.override.yaml"].filter((name) => existsSync(join(dir, name)));
   if (made.length) docker("run", "--rm", "--volume", `${dir}:/rig`, "alpine:3", "rm", "-rf", ...made.map((name) => `/rig/${name}`));
+  rmSync(join(dir, marker));
   try {
     rmdirSync(dir);
   } catch {
