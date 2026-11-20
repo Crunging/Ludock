@@ -231,7 +231,6 @@ test("a failing webhook is called out until a delivery gets through", async ({ p
     await expect(page.locator("#notification-deliveries .alert--success")).toContainText("Notification queued for retry.");
     await expect(row).toContainText("Delivered", { timeout: 30_000 });
     expect(http.requests.filter((request) => request.url === "/status/503")).toHaveLength(2);
-    await page.reload();
     await expect(page.locator("#notification-webhook-card > summary")).toContainText("On");
     await expect(page.locator("#notification-webhook-card .notification-destination__health")).toBeEmpty();
     await page.goto("/");

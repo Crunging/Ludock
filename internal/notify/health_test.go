@@ -3,6 +3,7 @@ package notify
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 )
 
@@ -108,6 +109,9 @@ func TestCleanupKeepsNewestDelivery(t *testing.T) {
 	s.Notify(ServerProblems, "a", "first")
 	s.Notify(ServerProblems, "b", "second")
 	s.Deliver(ctx)
+	// A destination that never delivered doesn't stop the others' cleanup.
+	s.DB.Exec(`INSERT INTO notification_deliveries (id,event_key,destination,message,next_attempt_at,created_at,state,failure_code)
+		VALUES ('w','w','webhook','never',0,1,'failed','network')`)
 	s.DB.Exec("UPDATE notification_deliveries SET delivered_at=1, created_at=1 WHERE message='first'")
 	s.DB.Exec("UPDATE notification_deliveries SET delivered_at=2, created_at=2 WHERE message='second'")
 	s.Deliver(ctx)
@@ -119,7 +123,7 @@ func TestCleanupKeepsNewestDelivery(t *testing.T) {
 		messages = append(messages, m)
 	}
 	rows.Close()
-	if len(messages) != 1 || messages[0] != "second" {
+	if len(messages) != 2 || !slices.Contains(messages, "second") || !slices.Contains(messages, "never") {
 		t.Fatal(messages)
 	}
 	if h, _ := s.Health(ctx); !h[Discord].Delivered {

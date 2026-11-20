@@ -721,17 +721,29 @@ templ NotificationTestResult(n NotificationDestinationView) {
 	</div>
 }
 
+// NotificationTestSent is a test's button and result; a test can settle
+// before the response, so the destination's state comes too.
+templ NotificationTestSent(n NotificationDestinationView) {
+	@NotificationTest(n)
+	@destinationHealthUpdate(n)
+}
+
 // NotificationTestUpdate is a test's result and, once it is settled, the
 // destination's state it may have changed.
 templ NotificationTestUpdate(n NotificationDestinationView) {
 	@NotificationTestResult(n)
 	if !testSending(n.Test) {
-		@Partial("#"+destinationID(n.Destination, "state"), "outerHTML") {
-			@destinationStateLabel(n)
-		}
-		@Partial("#"+destinationID(n.Destination, "health"), "outerHTML") {
-			@destinationHealth(n)
-		}
+		@destinationHealthUpdate(n)
+	}
+}
+
+// destinationHealthUpdate refreshes a card's state and failure warning.
+templ destinationHealthUpdate(n NotificationDestinationView) {
+	@Partial("#"+destinationID(n.Destination, "state"), "outerHTML") {
+		@destinationStateLabel(n)
+	}
+	@Partial("#"+destinationID(n.Destination, "health"), "outerHTML") {
+		@destinationHealth(n)
 	}
 }
 
@@ -849,7 +861,9 @@ templ destinationFields(n NotificationDestinationView) {
 }
 
 type DeliveriesView struct {
-	Deliveries    []notify.Delivery
+	Deliveries []notify.Delivery
+	// Destinations refresh the cards above, which a delivery may change.
+	Destinations  []NotificationDestinationView
 	Error, Notice string
 }
 
@@ -965,4 +979,7 @@ templ Deliveries(d DeliveriesView) {
 			</table>
 		</div>
 	</div>
+	for _, n := range d.Destinations {
+		@destinationHealthUpdate(n)
+	}
 }

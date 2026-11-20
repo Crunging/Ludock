@@ -665,8 +665,8 @@ func (s *Service) Deliver(ctx context.Context) error {
 	}
 	// Each destination's newest delivery stays, so Health knows it once worked.
 	_, err = s.DB.ExecContext(ctx, `DELETE FROM notification_deliveries WHERE state='delivered' AND COALESCE(delivered_at,created_at)<?
-    AND id NOT IN (SELECT (SELECT id FROM notification_deliveries x WHERE x.destination=d.destination AND x.state='delivered'
-      ORDER BY x.delivered_at DESC, x.rowid DESC LIMIT 1) FROM (SELECT DISTINCT destination FROM notification_deliveries) d)`,
+    AND id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY destination ORDER BY delivered_at DESC, rowid DESC) n
+      FROM notification_deliveries WHERE state='delivered') WHERE n=1)`,
 		db.Now()-30*86400_000)
 	return err
 }

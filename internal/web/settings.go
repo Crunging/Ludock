@@ -412,6 +412,10 @@ func (s *Server) deliveriesView(r *http.Request) views.DeliveriesView {
 		d.Error = publicMessage(err)
 	}
 	d.Deliveries = deliveries
+	healths := s.notificationHealth(r.Context())
+	for _, c := range s.App.Notify.Configurations(r.Context()) {
+		d.Destinations = append(d.Destinations, views.NotificationDestinationView{Configuration: c, Health: healths[c.Destination]})
+	}
 	return d
 }
 
@@ -438,7 +442,7 @@ func (s *Server) testNotification(w http.ResponseWriter, r *http.Request, reques
 		n.Test = delivery
 		w.Header().Set("HX-Trigger", "notifications-changed")
 	}
-	render(w, r, http.StatusOK, views.NotificationTest(n))
+	render(w, r, http.StatusOK, views.NotificationTestSent(n))
 }
 
 // testResult follows a test sent from a destination's card.
