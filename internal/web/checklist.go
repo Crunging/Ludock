@@ -266,11 +266,7 @@ func (s *Server) checklistView(r *http.Request, request *Request) views.Checklis
 func (s *Server) checklistFragment(w http.ResponseWriter, r *http.Request, request *Request) {
 	v := s.checklistView(r, request)
 	// Reading Docker takes a moment; the account may have changed meanwhile.
-	if err := s.recheckAdmin(r.Context(), request); err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	render(w, r, http.StatusOK, views.Checklist(v))
+	s.renderAdmin(w, r, request, http.StatusOK, views.Checklist(v))
 }
 
 // One click backs up each server once, even when clicked twice.
@@ -335,11 +331,7 @@ func (s *Server) scheduleNightlyBackups(w http.ResponseWriter, r *http.Request, 
 		v.Error = "Some backups couldn’t be scheduled: " + publicMessage(failure)
 	}
 	w.Header().Set("HX-Trigger", "schedules-changed")
-	if err := s.recheckAdmin(ctx, request); err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	render(w, r, http.StatusOK, views.Checklist(v))
+	s.renderAdmin(w, r, request, http.StatusOK, views.Checklist(v))
 }
 
 // enableRecovery turns on automatic restart for each server the
@@ -377,11 +369,7 @@ func (s *Server) enableRecovery(w http.ResponseWriter, r *http.Request, request 
 		v.Notice = "Automatic restart is on for " + views.NameList(enabled) + "."
 	}
 	w.Header().Set("HX-Trigger", "availability-changed")
-	if err := s.recheckAdmin(ctx, request); err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	render(w, r, http.StatusOK, views.Checklist(v))
+	s.renderAdmin(w, r, request, http.StatusOK, views.Checklist(v))
 }
 
 // dismissChecklistItem remembers that administrators don't want an item.
@@ -417,9 +405,5 @@ func (s *Server) dismissChecklistItem(w http.ResponseWriter, r *http.Request, re
 		return
 	}
 	v := s.checklistView(r, request)
-	if err := s.recheckAdmin(r.Context(), request); err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	render(w, r, http.StatusOK, views.Checklist(v))
+	s.renderAdmin(w, r, request, http.StatusOK, views.Checklist(v))
 }

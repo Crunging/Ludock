@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/a-h/templ"
+
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -366,6 +368,16 @@ func (s *Server) confirmChange(w http.ResponseWriter, r *http.Request, request *
 	s.audit(r, request, "server.change.confirmed", id, nil)
 	w.Header().Set("HX-Refresh", "true")
 	render(w, r, http.StatusOK, views.Alert("success", "Confirmed. Everyone you shared this server with can use it again."))
+}
+
+// renderAdmin renders an admin-only view once the session is confirmed to
+// still be an administrator's, since building the view may have waited.
+func (s *Server) renderAdmin(w http.ResponseWriter, r *http.Request, request *Request, status int, components ...templ.Component) {
+	if err := s.recheckAdmin(r.Context(), request); err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	render(w, r, status, components...)
 }
 
 // recheckAdmin confirms the session still belongs to an active administrator.
