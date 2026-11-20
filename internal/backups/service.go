@@ -50,6 +50,9 @@ type Backup struct {
 	destination       string
 	copyDestination   string
 	copyAttempts      int
+	// copyPrevious holds a verified copy made before the second folder
+	// changed, until the new folder has one.
+	copyPrevious string
 }
 
 // Fingerprint is the binding fingerprint the backup was made from.
@@ -96,14 +99,15 @@ var (
 )
 
 const backupColumns = "id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,COALESCE(kept_at,0),note,reason," +
-	"copy_destination,copy_state,copy_error,copy_attempts"
+	"copy_destination,copy_state,copy_error,copy_attempts,copy_previous"
 
 func scanBackup(s interface{ Scan(...any) error }) (*Backup, error) {
 	var backup Backup
 	var roots string
 	if err := s.Scan(&backup.ID, &backup.ServerID, &backup.fingerprint, &backup.destination, &roots, &backup.Size,
 		&backup.Checksum, &backup.CreatedAt, &backup.State, &backup.KeptAt, &backup.Note, &backup.Reason,
-		&backup.copyDestination, &backup.CopyState, &backup.CopyError, &backup.copyAttempts); err != nil {
+		&backup.copyDestination, &backup.CopyState, &backup.CopyError, &backup.copyAttempts,
+		&backup.copyPrevious); err != nil {
 		return nil, err
 	}
 	json.Unmarshal([]byte(roots), &backup.Roots)
@@ -450,10 +454,22 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 	}
 	status.Destination, status.MaxBytes, status.ReserveBytes = settings.Destination, settings.MaxBytes, settings.ReserveBytes
 	if status.CopyTo = settings.CopyTo; status.CopyTo != "" {
-		if available, err := s.Storage.AvailableBytes(settings.CopyTo); err != nil {
-			status.CopyIssue = errCopyMissing.Message
-		} else {
-			status.CopyAvailableBytes = available
+		// A share that stops responding mustn't hold up the page.
+		measured := make(chan int64, 1)
+		go func() {
+			available, err := s.Storage.AvailableBytes(settings.CopyTo)
+			if err != nil {
+				available = -1
+			}
+			measured <- available
+		}()
+		select {
+		case available := <-measured:
+			if status.CopyAvailableBytes = available; available < 0 {
+				status.CopyIssue = errCopyMissing.Message
+			}
+		case <-time.After(5 * time.Second):
+			status.CopyIssue = errCopyStalled.Message
 		}
 	}
 	if _, err := Remaining(*settings, status.ArchiveBytes, kept); err != nil {

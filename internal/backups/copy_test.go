@@ -6,9 +6,12 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -23,14 +26,15 @@ import (
 type copyFixture struct {
 	s                 *Service
 	main, copies      string
+	other             string // a third approved folder
 	serverID, binding string
 	settings          Settings
 	failures          []string
 	engine            *fakedocker.Engine
 }
 
-// newCopyFixture has a backup folder and a second folder, both mounted into
-// Ludock's container, with settings that copy to the second one.
+// newCopyFixture has a backup folder and two other folders, all mounted into
+// Ludock's container, with settings that copy to the first of the others.
 func newCopyFixture(t *testing.T) *copyFixture {
 	t.Helper()
 	d := dbtest.Open(t)
@@ -40,10 +44,11 @@ func newCopyFixture(t *testing.T) *copyFixture {
 		t.Fatal(err)
 	}
 	base := t.TempDir()
-	f := &copyFixture{main: filepath.Join(base, "backups"), copies: filepath.Join(base, "copies"), serverID: list[0].ID,
-		binding: list[0].BindingFingerprint}
-	os.Mkdir(f.main, 0o755)
-	os.Mkdir(f.copies, 0o755)
+	f := &copyFixture{main: filepath.Join(base, "backups"), copies: filepath.Join(base, "copies"), other: filepath.Join(base, "other"),
+		serverID: list[0].ID, binding: list[0].BindingFingerprint}
+	for _, folder := range []string{f.main, f.copies, f.other} {
+		os.Mkdir(folder, 0o755)
+	}
 	engine, err := fakedocker.Start(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -51,9 +56,10 @@ func newCopyFixture(t *testing.T) *copyFixture {
 	t.Cleanup(func() { engine.Close() })
 	f.engine = engine
 	engine.AddContainer(fakedocker.GameOptions{ID: "ludock", Name: "ludock", Image: image, Running: true, Mounts: []docker.MountPoint{
-		{Type: "bind", Source: f.main, Destination: f.main, RW: true}, {Type: "bind", Source: f.copies, Destination: f.copies, RW: true}}})
+		{Type: "bind", Source: f.main, Destination: f.main, RW: true}, {Type: "bind", Source: f.copies, Destination: f.copies, RW: true},
+		{Type: "bind", Source: f.other, Destination: f.other, RW: true}}})
 	client := docker.New(engine.Socket)
-	f.s = &Service{DB: d, Docker: client, Storage: &Storage{Docker: client, Roots: f.main + ":" + f.copies, Self: "ludock"}, Locks: locks.New()}
+	f.s = &Service{DB: d, Docker: client, Storage: &Storage{Docker: client, Roots: f.main + ":" + f.copies + ":" + f.other, Self: "ludock"}, Locks: locks.New()}
 	f.s.CopyFailed = func(_ context.Context, _ *sql.Tx, _, _, problem string) error {
 		f.failures = append(f.failures, problem)
 		return nil
@@ -403,4 +409,173 @@ func mustGet(t *testing.T, f *copyFixture, id string) *Backup {
 		t.Fatal(err)
 	}
 	return backup
+}
+
+// The administrator moves the second copy to another folder. Backups already
+// copied to the old one are copied again, and until then the page doesn't
+// call them saved; the old copy still stands in for a missing archive and is
+// the source of the new one. Once the new copy is made the old file is left
+// where it is, untracked. Turning the copy off keeps the copy tracked, so it
+// is still removed with its backup.
+func TestChangingTheSecondFolderCopiesAgain(t *testing.T) {
+	f := newCopyFixture(t)
+	backup := f.add(t, "world data", 1)
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.DB.Tx(ctx, func(tx *sql.Tx) error { return retarget(ctx, tx, f.other) }); err != nil {
+		t.Fatal(err)
+	}
+	if state, attempts, _, _ := f.row(t, backup.ID); state != "pending" || attempts != 0 {
+		t.Fatal("still counted as saved in the old folder", state, attempts)
+	}
+	os.Remove(filepath.Join(f.main, backup.ID+".tar"))
+	missing := mustGet(t, f, backup.ID)
+	if folder := f.s.ArchiveFolder(missing); folder != f.copies || !missing.FromCopy {
+		t.Fatal("the old copy no longer stands in", folder)
+	}
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	moved, _ := os.ReadFile(filepath.Join(f.other, backup.ID+".tar"))
+	if state, _, _, problem := f.row(t, backup.ID); state != "complete" || string(moved) != "world data" {
+		t.Fatal(state, problem, string(moved))
+	}
+	old := filepath.Join(f.copies, backup.ID+".tar")
+	if !exists(old) {
+		t.Fatal("removed the copy in the old folder")
+	}
+
+	if err := f.s.DB.Tx(ctx, func(tx *sql.Tx) error { return retarget(ctx, tx, "") }); err != nil {
+		t.Fatal(err)
+	}
+	if state, _, _, _ := f.row(t, backup.ID); state != "" {
+		t.Fatal("still counted as saved with no folder chosen", state)
+	}
+	if err := f.s.Delete(ctx, f.serverID, backup.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if found, _ := f.s.Exists(ctx, backup.ID, false); found || exists(filepath.Join(f.other, backup.ID+".tar")) || !exists(old) {
+		t.Fatal("the tracked copy wasn't removed with its backup, or the untracked one was", found)
+	}
+}
+
+// A second folder stops responding mid-write, with the write blocked where
+// cancellation can't reach it. The copier gives the attempt up, records it,
+// and returns, as does a shutdown; nothing else is started in that folder
+// until the stuck write returns. The abandoned attempt then neither
+// publishes nor leaves its partial file, and the next attempt succeeds.
+func TestStuckSecondFolderIsAbandoned(t *testing.T) {
+	f := newCopyFixture(t)
+	backup := f.add(t, "world data", 1)
+	previous := copyStall
+	copyStall = 100 * time.Millisecond
+	t.Cleanup(func() { copyStall = previous })
+	release := make(chan struct{})
+	var blocked atomic.Int32
+	testHook = func(point string) {
+		if point == "writing" && blocked.Add(1) <= 2 {
+			<-release
+		}
+	}
+	t.Cleanup(func() { testHook = nil })
+	within := func(what string, run func() error) {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() { done <- run() }()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Fatal(what, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal(what, "waited on a stuck write")
+		}
+	}
+	stuck := func() bool {
+		f.s.copies.mu.Lock()
+		defer f.s.copies.mu.Unlock()
+		return f.s.copies.stuck[f.copies]
+	}
+
+	within("copying", func() error { return f.s.CopyDue(ctx) })
+	if state, attempts, _, problem := f.row(t, backup.ID); state != "pending" || attempts != 1 || problem != errCopyStalled.Message {
+		t.Fatal(state, attempts, problem)
+	}
+	f.due(t)
+	within("retrying", func() error { return f.s.CopyDue(ctx) })
+	if _, attempts, _, problem := f.row(t, backup.ID); attempts != 2 || problem != errCopyStalled.Message || blocked.Load() != 1 {
+		t.Fatal("started more I/O in a stuck folder", attempts, problem, blocked.Load())
+	}
+	close(release)
+	for deadline := time.Now().Add(5 * time.Second); stuck(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the abandoned write never finished")
+		}
+	}
+	if entries, _ := os.ReadDir(f.copies); len(entries) != 0 {
+		t.Fatal("the abandoned attempt left files", entries)
+	}
+
+	// A shutdown doesn't wait for a stuck write either.
+	release = make(chan struct{})
+	f.due(t)
+	stopping, stop := context.WithCancel(ctx)
+	time.AfterFunc(20*time.Millisecond, stop)
+	short := copyStall
+	copyStall = time.Hour
+	within("stopping", func() error { return f.s.CopyDue(stopping) })
+	copyStall = short
+	close(release)
+	for deadline := time.Now().Add(5 * time.Second); stuck(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the abandoned write never finished")
+		}
+	}
+	f.due(t)
+	within("copying again", func() error { return f.s.CopyDue(ctx) })
+	if state, _, _, _ := f.row(t, backup.ID); state != "complete" {
+		t.Fatal(state)
+	}
+}
+
+// Publishing keeps a valid copy already in place, as an attempt waking after
+// a newer one finds, and replaces an invalid one.
+func TestPublishNeverReplacesAValidCopy(t *testing.T) {
+	f := newCopyFixture(t)
+	dir, err := f.s.Storage.pin(f.copies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.close()
+	sum := sha256.Sum256([]byte("world data"))
+	checksum := hex.EncodeToString(sum[:])
+	final := filepath.Join(f.copies, "copy.tar")
+	inode := func() uint64 {
+		info, err := os.Stat(final)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.Sys().(*syscall.Stat_t).Ino
+	}
+	os.WriteFile(final, []byte("world data"), 0o600)
+	kept := inode()
+	os.WriteFile(filepath.Join(f.copies, "copy.tar.a.partial"), []byte("world data"), 0o600)
+	if err := publish(ctx, dir, "copy.tar.a.partial", "copy.tar", 10, checksum); err != nil || inode() != kept {
+		t.Fatal("replaced a valid copy", err)
+	}
+	os.WriteFile(final, []byte("WORLD DATA"), 0o600)
+	os.WriteFile(filepath.Join(f.copies, "copy.tar.b.partial"), []byte("world data"), 0o600)
+	if err := publish(ctx, dir, "copy.tar.b.partial", "copy.tar", 10, checksum); err != nil {
+		t.Fatal(err)
+	}
+	if content, _ := os.ReadFile(final); string(content) != "world data" {
+		t.Fatal("kept an invalid copy", string(content))
+	}
+	if entries, _ := os.ReadDir(f.copies); len(entries) != 1 {
+		t.Fatal("left partial files", entries)
+	}
 }

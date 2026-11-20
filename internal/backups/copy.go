@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/identity"
 )
 
 // Second copies: a complete backup recorded while Settings.CopyTo is set
@@ -28,7 +29,13 @@ import (
 // attempts it is 'failed', reported once, and still retried. Each attempt is
 // counted before it starts, so an attempt interrupted by a restart waits its
 // backoff like a failure. A copy counts only once its row says 'complete':
-// it is written as <name>.partial, read back and checked, then renamed.
+// it is written under a name of its own attempt, read back and checked, then
+// published under its final name.
+//
+// Every file operation in the second folder, which is often a network share,
+// runs on a goroutine of its own (isolate). The copier gives up on one that
+// stops making progress and moves on; until it returns, nothing else starts
+// in that folder.
 
 const copyAttemptsBeforeAlert = 3
 
@@ -56,10 +63,11 @@ var (
 var fileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
 
 // CopyFile copies source, which must be size bytes with the SHA-256
-// checksum, to name in directory. The source is checked as it is read, the
-// copy is written as name.partial, synced, read back from disk and checked,
-// and only then renamed to name. It leaves the reserve free and stops when
-// ctx ends; progress is called after each write.
+// checksum, to name in directory. The source is checked as it is read; the
+// copy is written under a name of this attempt's own, synced, read back from
+// disk and checked, then published as name without replacing a valid file
+// already there. It leaves the reserve free, and once ctx ends it stops and
+// never publishes; progress is called after each write.
 func (s *Storage) CopyFile(ctx context.Context, source io.Reader, directory, name string, size int64, checksum string,
 	reserve int64, progress func()) error {
 	if !fileName.MatchString(name) || strings.HasSuffix(name, ".partial") {
@@ -73,15 +81,16 @@ func (s *Storage) CopyFile(ctx context.Context, source io.Reader, directory, nam
 	if unix.Faccessat(dir.fd, ".", unix.W_OK|unix.X_OK, 0) != nil {
 		return errCopyReadOnly
 	}
-	// A partial file left by an interrupted attempt doesn't count against
-	// the space this one needs.
-	partial := name + ".partial"
-	if err := unix.Unlinkat(dir.fd, partial, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+	// Partial files of interrupted attempts don't count against the space
+	// this one needs. No earlier attempt is still writing: isolate starts no
+	// I/O in a folder where one hasn't returned.
+	if err := removePartials(dir, name); err != nil {
 		return errCopyFailed
 	}
 	if _, err := budget(dir, reserve, size); err != nil {
 		return errCopySpace
 	}
+	partial := name + "." + identity.NewUUID()[:8] + ".partial"
 	fd, err := unix.Openat(dir.fd, partial, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
 		if errors.Is(err, unix.EROFS) || errors.Is(err, unix.EACCES) {
@@ -90,13 +99,16 @@ func (s *Storage) CopyFile(ctx context.Context, source io.Reader, directory, nam
 		return errCopyFailed
 	}
 	file := os.NewFile(uintptr(fd), partial)
-	renamed := false
+	published := false
 	defer func() {
 		file.Close()
-		if !renamed {
+		if !published {
 			unix.Unlinkat(dir.fd, partial, 0)
 		}
 	}()
+	if testHook != nil {
+		testHook("writing")
+	}
 	written, sum, err := copyChecked(ctx, file, source, func(written int64) error {
 		if _, err := budget(dir, reserve, 0); err != nil {
 			return errCopySpace
@@ -120,18 +132,94 @@ func (s *Storage) CopyFile(ctx context.Context, source io.Reader, directory, nam
 	if err := verifyFile(ctx, dir, partial, size, checksum); err != nil {
 		return err
 	}
-	if unix.Renameat(dir.fd, partial, dir.fd, name) != nil {
-		return errCopyFailed
+	if ctx.Err() != nil {
+		return errCopyStalled
 	}
-	renamed = true
+	if err := publish(ctx, dir, partial, name, size, checksum); err != nil {
+		return err
+	}
+	published = true
 	if unix.Fsync(dir.fd) != nil {
 		return errCopyFailed
 	}
 	return nil
 }
 
+// publish gives a verified partial file its final name. A valid file
+// already there is kept, so an attempt that wakes after a newer one never
+// replaces its file; an invalid one is replaced.
+func publish(ctx context.Context, dir pinned, partial, name string, size int64, checksum string) error {
+	err := unix.Renameat2(dir.fd, partial, dir.fd, name, unix.RENAME_NOREPLACE)
+	if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOSYS) {
+		// Network filesystems often lack RENAME_NOREPLACE; a hard link never
+		// replaces either.
+		if err = unix.Linkat(dir.fd, partial, dir.fd, name, 0); err == nil {
+			unix.Unlinkat(dir.fd, partial, 0)
+		}
+	}
+	if errors.Is(err, unix.EEXIST) {
+		if verifyFile(ctx, dir, name, size, checksum) == nil {
+			unix.Unlinkat(dir.fd, partial, 0)
+			return nil
+		}
+		if ctx.Err() != nil {
+			return errCopyStalled
+		}
+		err = unix.Renameat(dir.fd, partial, dir.fd, name)
+	} else if err != nil && !errors.Is(err, unix.ENOENT) {
+		// No exclusive way to publish here: rename only onto nothing.
+		var stat unix.Stat_t
+		if unix.Fstatat(dir.fd, name, &stat, unix.AT_SYMLINK_NOFOLLOW) != nil && ctx.Err() == nil {
+			err = unix.Renameat(dir.fd, partial, dir.fd, name)
+		}
+	}
+	if err != nil {
+		return errCopyFailed
+	}
+	return nil
+}
+
+// removePartials removes the partial files of name's earlier attempts.
+func removePartials(dir pinned, name string) error {
+	listing, err := unix.Dup(dir.fd)
+	if err != nil {
+		return err
+	}
+	folder := os.NewFile(uintptr(listing), ".")
+	defer folder.Close()
+	names, err := folder.Readdirnames(-1)
+	if err != nil {
+		return err
+	}
+	for _, entry := range names {
+		if strings.HasPrefix(entry, name+".") && strings.HasSuffix(entry, ".partial") {
+			if err := unix.Unlinkat(dir.fd, entry, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// RemoveCopy removes a copy named name from directory, with the partial
+// files of its attempts. Only a regular file is removed.
+func (s *Storage) RemoveCopy(directory, name string) error {
+	if !fileName.MatchString(name) || strings.HasSuffix(name, ".partial") {
+		return fail("INVALID_REQUEST", "Invalid file name.")
+	}
+	if err := s.removeFile(directory, name, nil); err != nil {
+		return err
+	}
+	dir, err := s.pin(directory)
+	if err != nil {
+		return err
+	}
+	defer dir.close()
+	return removePartials(dir, name)
+}
+
 // HasCopy reports whether name in directory is already a complete copy:
-// one renamed into place by an attempt interrupted before it was recorded.
+// one published by an attempt interrupted before it was recorded.
 func (s *Storage) HasCopy(ctx context.Context, directory, name string, size int64, checksum string) bool {
 	if !fileName.MatchString(name) {
 		return false
@@ -292,11 +380,13 @@ func (s *Service) ValidateCopyFolder(ctx context.Context, settings Settings) err
 	return s.assertCopyFolder(ctx, settings.CopyTo, settings.Destination)
 }
 
-// copies is the copier's in-memory state: the backup being copied, and a
-// request to look for due copies now.
+// copies is the copier's in-memory state: the backup being copied, folders
+// whose abandoned I/O hasn't returned, and a request to look for due copies
+// now.
 type copies struct {
 	mu      sync.Mutex
 	current string
+	stuck   map[string]bool
 	wake    chan struct{}
 }
 
@@ -313,6 +403,60 @@ func (c *copies) set(id string) {
 	c.mu.Lock()
 	c.current = id
 	c.mu.Unlock()
+}
+
+// enter claims a folder for I/O; false while earlier I/O there is stuck.
+func (c *copies) enter(folder string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stuck[folder] {
+		return false
+	}
+	if c.stuck == nil {
+		c.stuck = map[string]bool{}
+	}
+	c.stuck[folder] = true
+	return true
+}
+
+func (c *copies) leave(folder string) {
+	c.mu.Lock()
+	delete(c.stuck, folder)
+	c.mu.Unlock()
+}
+
+// isolate runs fn, file I/O in folder, on a goroutine of its own. It gives
+// fn up when ctx ends (returning ctx's error) or when fn makes no progress
+// for copyStall (errCopyStalled), and cancels fn's context either way. A
+// call blocked in the kernel can't see that, so until fn returns the folder
+// stays claimed and later calls fail at once with errCopyStalled.
+func (s *Service) isolate(ctx context.Context, folder string, fn func(ctx context.Context, progress func()) error) error {
+	if !s.copies.enter(folder) {
+		return errCopyStalled
+	}
+	work, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var last atomic.Int64
+	last.Store(time.Now().UnixNano())
+	done := make(chan error, 1)
+	go func() {
+		defer s.copies.leave(folder)
+		done <- fn(work, func() { last.Store(time.Now().UnixNano()) })
+	}()
+	ticker := time.NewTicker(copyStall / 4)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if time.Since(time.Unix(0, last.Load())) > copyStall {
+				return errCopyStalled
+			}
+		}
+	}
 }
 
 // Copying reports whether a backup's second copy is being made.
@@ -405,26 +549,26 @@ func (s *Service) copyOne(ctx context.Context, backup *Backup, reserve int64) er
 	if changed, err := result.RowsAffected(); err != nil || changed == 0 {
 		return err
 	}
-	copyCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	s.copies.set(backup.ID)
 	defer s.copies.set("")
-	var stalled atomic.Bool
-	err = s.makeCopy(copyCtx, backup, reserve, func() { stalled.Store(true); cancel() })
+	err = s.makeCopy(ctx, backup, reserve)
 	if err == nil {
-		result, err := s.DB.ExecContext(ctx, `UPDATE backups SET copy_state='complete', copy_error=''
+		result, err := s.DB.ExecContext(ctx, `UPDATE backups SET copy_state='complete', copy_error='', copy_previous=''
       WHERE id=? AND state='complete' AND copy_destination=?`, backup.ID, backup.copyDestination)
 		if err != nil {
 			return err
 		}
 		// Removed or sent elsewhere while copying: the copy isn't wanted.
 		if changed, _ := result.RowsAffected(); changed == 0 {
-			s.Storage.Remove(backup.copyDestination, backup.ID, nil)
+			s.isolate(ctx, backup.copyDestination, func(context.Context, func()) error {
+				return s.Storage.RemoveCopy(backup.copyDestination, backup.ID+".tar")
+			})
 		}
 		return nil
 	}
-	if copyCtx.Err() != nil && !stalled.Load() {
-		// Stopped for a removal or shutdown; nothing failed.
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		// Shutdown, or the backup was removed or sent elsewhere; nothing
+		// failed.
 		return nil
 	}
 	problem := errCopyFailed
@@ -458,9 +602,9 @@ func (s *Service) copyOne(ctx context.Context, backup *Backup, reserve int64) er
 	return err
 }
 
-func (s *Service) makeCopy(ctx context.Context, backup *Backup, reserve int64, stall func()) error {
-	// A removal marks the row deleting before it stops copies, so a copy
-	// registered after that sees it here.
+func (s *Service) makeCopy(ctx context.Context, backup *Backup, reserve int64) error {
+	// A removal marks the row deleting before the copier next looks, so a
+	// copy starting after that sees it here.
 	var state, destination string
 	err := s.DB.QueryRowContext(ctx, "SELECT state,copy_destination FROM backups WHERE id=?", backup.ID).Scan(&state, &destination)
 	if err != nil || state != "complete" || destination != backup.copyDestination {
@@ -469,52 +613,38 @@ func (s *Service) makeCopy(ctx context.Context, backup *Backup, reserve int64, s
 	if testHook != nil {
 		testHook("copying")
 	}
-	if err := s.assertCopyFolder(ctx, backup.copyDestination, backup.destination); err != nil {
-		if apperr.Is(err, "BACKUP_DESTINATION") {
-			if _, missing := s.Storage.ApprovedDirectory(backup.copyDestination); missing != nil {
-				return errCopyMissing
-			}
-			return errCopyReadOnly
-		}
-		return err
-	}
-	if s.Storage.HasCopy(ctx, backup.copyDestination, backup.ID+".tar", backup.Size, backup.Checksum) {
-		return nil
-	}
-	source, err := s.Storage.Open(backup.destination, backup.ID)
-	if err != nil {
-		return errCopySource
-	}
-	defer source.Close()
-	var last atomic.Int64
-	last.Store(time.Now().UnixNano())
-	watched := make(chan struct{})
-	defer close(watched)
-	go func() {
-		ticker := time.NewTicker(copyStall / 4)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-watched:
-				return
-			case <-ticker.C:
-				if time.Since(time.Unix(0, last.Load())) > copyStall {
-					stall()
-					return
+	return s.isolate(ctx, backup.copyDestination, func(ctx context.Context, progress func()) error {
+		if err := s.assertCopyFolder(ctx, backup.copyDestination, backup.destination); err != nil {
+			if apperr.Is(err, "BACKUP_DESTINATION") {
+				if _, missing := s.Storage.ApprovedDirectory(backup.copyDestination); missing != nil {
+					return errCopyMissing
 				}
+				return errCopyReadOnly
 			}
+			return err
 		}
-	}()
-	return s.Storage.CopyFile(ctx, source, backup.copyDestination, backup.ID+".tar", backup.Size, backup.Checksum, reserve,
-		func() { last.Store(time.Now().UnixNano()) })
+		progress()
+		if s.Storage.HasCopy(ctx, backup.copyDestination, backup.ID+".tar", backup.Size, backup.Checksum) {
+			return nil
+		}
+		// The previous second copy stands in for an archive missing from the
+		// backup folder; CopyFile checks it against the original's checksum.
+		source, err := s.Storage.Open(s.ArchiveFolder(backup), backup.ID)
+		if err != nil {
+			return errCopySource
+		}
+		defer source.Close()
+		return s.Storage.CopyFile(ctx, source, backup.copyDestination, backup.ID+".tar", backup.Size, backup.Checksum, reserve, progress)
+	})
 }
 
-// markCopyRemoval hands a removed backup's second copy to the copier, which
-// removes it without holding up the removal; false means it has none. A copy
-// never attempted wrote nothing, and one starting now finds no row.
+// markCopyRemoval hands a removed backup's second copies to the copier,
+// which removes them without holding up the removal; false means it has
+// none. A copy never attempted wrote nothing, and one starting now finds no
+// row.
 func (s *Service) markCopyRemoval(ctx context.Context, id string) (bool, error) {
 	result, err := s.DB.ExecContext(ctx, `UPDATE backups SET copy_state='removing'
-    WHERE id=? AND copy_destination<>'' AND (copy_attempts>0 OR copy_state IN ('complete','removing'))`, id)
+    WHERE id=? AND (copy_state='removing' OR copy_previous<>'' OR (copy_destination<>'' AND (copy_attempts>0 OR copy_state='complete')))`, id)
 	if err != nil {
 		return false, err
 	}
@@ -526,21 +656,20 @@ func (s *Service) markCopyRemoval(ctx context.Context, id string) (bool, error) 
 }
 
 // finishCopyRemovals removes the second copies of removed backups, then
-// their rows. It runs on the copier, so no attempt of the same copy is still
-// writing, and a folder that is away is tried again on the next pass.
+// their rows. A folder that is away or stuck is tried again on the next pass.
 func (s *Service) finishCopyRemovals(ctx context.Context) error {
 	// All of them each pass: removals stuck on a folder that is away must not
 	// hold back the rest.
-	rows, err := s.DB.QueryContext(ctx, `SELECT id,copy_destination FROM backups WHERE state='deleting' AND copy_state='removing'
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,copy_destination,copy_previous FROM backups WHERE state='deleting' AND copy_state='removing'
     ORDER BY created_at,id`)
 	if err != nil {
 		return err
 	}
-	type removal struct{ id, folder string }
+	type removal struct{ id, folder, previous string }
 	var pending []removal
 	for rows.Next() {
 		var r removal
-		if err := rows.Scan(&r.id, &r.folder); err != nil {
+		if err := rows.Scan(&r.id, &r.folder, &r.previous); err != nil {
 			rows.Close()
 			return err
 		}
@@ -551,7 +680,19 @@ func (s *Service) finishCopyRemovals(ctx context.Context) error {
 		return err
 	}
 	for _, r := range pending {
-		if s.Storage.Remove(r.folder, r.id, nil) != nil || s.Storage.RemovePartial(r.folder, r.id) != nil {
+		removed := true
+		for _, folder := range []string{r.folder, r.previous} {
+			if folder == "" || !removed {
+				continue
+			}
+			removed = s.isolate(ctx, folder, func(context.Context, func()) error {
+				return s.Storage.RemoveCopy(folder, r.id+".tar")
+			}) == nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !removed {
 			continue
 		}
 		if _, err := s.DB.ExecContext(ctx, "DELETE FROM backups WHERE id=? AND state='deleting' AND copy_state='removing'", r.id); err != nil {
@@ -562,12 +703,19 @@ func (s *Service) finishCopyRemovals(ctx context.Context) error {
 }
 
 // ArchiveFolder is where a backup's archive is read from: its own folder,
-// or its second copy when the archive is missing there. It sets FromCopy.
+// or a second copy when the archive is missing there, preferring the one in
+// the chosen folder. It sets FromCopy.
 func (s *Service) ArchiveFolder(backup *Backup) string {
-	if backup.CopyState == "complete" && !s.Storage.present(backup.destination, backup.ID) &&
-		s.Storage.present(backup.copyDestination, backup.ID) {
+	if backup.CopyState != "complete" && backup.copyPrevious == "" || s.Storage.present(backup.destination, backup.ID) {
+		return backup.destination
+	}
+	if backup.CopyState == "complete" && s.Storage.present(backup.copyDestination, backup.ID) {
 		backup.FromCopy = true
 		return backup.copyDestination
+	}
+	if backup.copyPrevious != "" && s.Storage.present(backup.copyPrevious, backup.ID) {
+		backup.FromCopy = true
+		return backup.copyPrevious
 	}
 	return backup.destination
 }
@@ -582,9 +730,15 @@ func (s *Service) Locate(list []Backup) {
 	}
 }
 
-// retarget points copies not made yet at the newly saved folder, and queues
-// a copy of every backup that has none.
+// retarget points every copy not in the newly saved folder at it. A copy
+// made in another folder stays tracked as the previous copy, for reading and
+// for removal with its backup, until the new folder has one; then it is left
+// where it is, untracked. With no folder saved, previous copies stay tracked.
 func retarget(ctx context.Context, tx *sql.Tx, copyTo string) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE backups SET copy_previous=copy_destination, copy_destination='', copy_state='', copy_attempts=0,
+    copy_next_at=0, copy_error='' WHERE state='complete' AND copy_state='complete' AND copy_destination<>?`, copyTo); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE backups SET copy_destination='', copy_state='', copy_attempts=0, copy_next_at=0, copy_error=''
     WHERE state='complete' AND copy_state IN ('pending','failed') AND copy_destination<>?`, copyTo); err != nil {
 		return err

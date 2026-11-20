@@ -437,10 +437,18 @@ such as `LUDOCK_BACKUP_ROOTS=/backups:/mnt/usb`, can be chosen the same way.
   fails the backup. Ludock tries again after 1, 5, and 30 minutes and then
   every 6 hours, shows **Second copy failed** and the reason on the backup,
   and sends one *Failed backups and schedules* notification if the third try
-  fails. Saving the backup settings again tries at once.
+  fails. Saving the backup settings again tries at once. A copy to a share that
+  hangs is given up after 2 minutes without progress, and nothing else is
+  written there until the hung request returns.
 - **Removal:** the second folder needs no limits of its own. When retention or
   an administrator removes a backup, its copy is removed too, and kept backups
   keep theirs. A copy in a folder that is away is removed once it is back.
+- **Changing the folder:** choosing another second folder copies every backup
+  there again; until its copy is made, a backup shows **Second copy waiting**,
+  and the copy in the old folder still stands in for a missing archive. Once
+  the new copy is made, the old one is left where it is and Ludock no longer
+  tracks or removes it. Turning the second copy off keeps existing copies
+  tracked, so they are still used and removed with their backups.
 - **Using the copy:** if a backup's archive is missing from the backup folder,
   downloading, browsing, and restoring read the copy, after the same checks,
   and **Backups** says so. If the backup disk is lost, choose the second folder
