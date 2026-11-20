@@ -29,6 +29,12 @@ type HistoryView struct {
 	Error      string
 	Operations []history.Operation
 	Entries    []history.AuditEntry
+	// Cancellable are the waiting operations the viewer may cancel.
+	Cancellable map[string]bool
+}
+
+func (h HistoryView) active() bool {
+	return slices.ContainsFunc(h.Operations, func(operation history.Operation) bool { return ActiveStatus(operation.Status) })
 }
 
 func (h HistoryView) filtered() bool {
@@ -181,15 +187,31 @@ templ ActivityPage(page Page, h HistoryView) {
 			if h.NamesError {
 				<p class="section-note">Server names can’t be read right now.</p>
 			}
-			if h.Error != "" {
+			if h.Error != "" && h.Everything {
 				@Alert("error", h.Error)
 			}
 			if h.Everything {
 				@auditList(h)
-			} else if h.Error == "" {
-				@OperationList(h.Operations, map[bool]string{true: "Nothing matches these filters.", false: "Nothing has happened yet."}[h.filtered()], true, h.Names, nil)
+				@historyPagination(h)
+			} else {
+				<div id="activity-status" aria-live="polite"></div>
+				// The rows and their pages follow new and running work, and
+				// refresh after a cancel; a morph keeps focus on a row's button.
+				<div
+					id="activity-list"
+					hx-get={ string(h.pageURL(h.Cursor)) }
+					hx-select="#activity-list"
+					hx-swap="outerMorph"
+					hx-trigger={ "servers-changed from:document, " + map[bool]string{true: "every 2s", false: "every 10s"}[h.active()] }
+				>
+					if h.Error != "" {
+						@Alert("error", h.Error)
+					} else {
+						@OperationList(h.Operations, map[bool]string{true: "Nothing matches these filters.", false: "Nothing has happened yet."}[h.filtered()], true, h.Names, h.Cancellable)
+					}
+					@historyPagination(h)
+				</div>
 			}
-			@historyPagination(h)
 		</div>
 	}
 }
@@ -227,13 +249,13 @@ var auditLabels = map[string]string{
 	"auth.login":                         "Signed in",
 	"auth.login.failed":                  "Sign-in failed",
 	"auth.logout":                        "Signed out",
-	"auth.link.used":                     "Signed in with a sign-in link",
-	"auth.link.failed":                   "Sign-in link refused",
+	"auth.link.used":                     "Used an invite or reset link",
+	"auth.link.failed":                   "Invite or reset link refused",
 	"auth.password.changed":              "Changed their password",
 	"auth.session.revoked":               "Signed out another session",
 	"auth.setup.completed":               "Set up Ludock",
-	"auth.two-factor.enabled":            "Turned on two-factor",
-	"auth.two-factor.disabled":           "Turned off two-factor",
+	"auth.two-factor.enabled":            "Turned on two-factor sign-in",
+	"auth.two-factor.disabled":           "Turned off two-factor sign-in",
 	"auth.login.code-failed":             "Wrong two-factor code",
 	"auth.password.change-failed":        "Password change refused",
 	"authorization.denied":               "Was refused",
@@ -291,11 +313,11 @@ var auditLabels = map[string]string{
 	"user.access.updated":                "Changed a user’s access",
 	"user.created":                       "Added a user",
 	"user.deleted":                       "Deleted a user",
-	"user.link.created":                  "Made a sign-in link",
-	"user.link.revoked":                  "Cancelled a sign-in link",
+	"user.link.created":                  "Made an invite or reset link",
+	"user.link.revoked":                  "Revoked an invite or reset link",
 	"user.password.recovered":            "Reset a password from the command line",
 	"user.password.reset":                "Reset a user’s password",
-	"user.two-factor.reset":              "Reset a user’s two-factor",
+	"user.two-factor.reset":              "Turned off a user’s two-factor sign-in",
 }
 
 // AuditKeys are the recorded actions whose names contain text, so a search
@@ -502,12 +524,14 @@ templ OperationSummary(o OperationDetailView) {
 			</dd>
 			<dt>By</dt>
 			<dd>{ ActorLabel(o.Actor) }</dd>
-			<dt>Asked for</dt>
+			<dt>When</dt>
 			<dd>@Time(operation.CreatedAt, "", "")</dd>
 			<dt>Last updated</dt>
 			<dd>@Time(operation.UpdatedAt, "", "")</dd>
-			<dt>Progress</dt>
-			<dd>{ OperationLabel(operation.Status, operation.Phase) }</dd>
+			if ActiveStatus(operation.Status) {
+				<dt>Progress</dt>
+				<dd>{ OperationLabel(operation.Status, operation.Phase) }</dd>
+			}
 		</dl>
 		if o.CanCancel {
 			<p class="inline-actions">

@@ -77,10 +77,10 @@ func checklistTitle(key string) string {
 func backupConfirm(item ChecklistItem) templ.Attributes {
 	count := len(item.Names)
 	question, when := "Back up "+strconv.Itoa(count)+" servers every night?", "between 04:00 and 06:00 your time, a few minutes apart so they don’t stop together"
-	offline := "Each server goes offline for a few minutes during its backup, then starts again."
+	offline := "Each running server goes offline for a few minutes during its backup, then goes back to how it was."
 	if count == 1 {
 		question, when = "Back up this server every night?", "between 04:00 and 06:00 your time"
-		offline = "The server goes offline for a few minutes during the backup, then starts again."
+		offline = "If it’s running, the server goes offline for a few minutes during the backup, then goes back to how it was."
 	}
 	players := "Each backup waits up to " + strconv.Itoa(schedules.DefaultWaitMinutes) + " minutes for everyone to leave where Ludock can see who is online, " +
 		"and warns anyone still playing where the game allows."
@@ -172,9 +172,9 @@ templ checklistDetail(item ChecklistItem) {
 		case ChecklistRecovery:
 			{ NameList(item.Names) }
 			if len(item.Names) == 1 {
-				stays down if its game stops answering, until someone restarts it.
+				waits for someone to restart it if its game stops answering while it runs.
 			} else {
-				stay down if their game stops answering, until someone restarts them.
+				wait for someone to restart them if their game stops answering while they run.
 			}
 		case ChecklistServers:
 			{ NameList(item.Names) }

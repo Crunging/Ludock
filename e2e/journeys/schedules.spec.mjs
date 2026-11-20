@@ -38,7 +38,7 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   // Other journeys leave their own schedules on this server.
   const row = page.locator("#schedule-list tbody tr", { hasText: "weekdays" });
   await expect(row).toContainText("05:30, weekdays");
-  await expect(row).toContainText("Warnings: 5, 1 min before");
+  await expect(row).toContainText("Warns players 5 and 1 minutes before");
 
   // Editing keeps its warnings, said in one line.
   await row.getByRole("link", { name: "Edit" }).click();
@@ -131,8 +131,8 @@ test("a new schedule opens on a daily restart that backs up first", async ({ pag
   await expect(page).toHaveURL(/saved=created/);
   const row = page.locator("#schedule-list tbody tr", { hasText: "08:00, every day" });
   await expect(row).toContainText("Backup before restart");
-  await expect(row).toContainText("Waits up to 30 min for an empty server, then goes ahead");
-  await expect(row).toContainText("Warnings: 5, 1 min before");
+  await expect(row).toContainText("Waits up to 30 minutes for everyone to leave, then goes ahead");
+  await expect(row).toContainText("Warns players 5 and 1 minutes before");
   await expect(row.locator("td").nth(2)).toHaveText("Enabled");
   await row.getByRole("button", { name: "Delete" }).click();
   await page.getByRole("dialog", { name: "Delete this schedule?" }).getByRole("button", { name: "Delete schedule" }).click();
@@ -184,6 +184,8 @@ test("a member sees the owner's schedules read-only", async ({ page, session, ow
     await member.getByRole("tab", { name: "Schedules" }).click();
     const row = member.locator("#schedule-list tbody tr", { hasText: "03:10, every day" });
     await expect(row).toContainText("Set up by admin");
+    // Usernames show as typed: no style capitalizes them.
+    expect(await row.locator(".schedule-owner").innerText()).toBe("Set up by admin");
     await expect(row.getByRole("button", { name: "Edit" })).toBeDisabled();
     await expect(row.getByRole("button", { name: "Pause" })).toBeDisabled();
     await expect(row.getByRole("button", { name: "Delete" })).toBeDisabled();

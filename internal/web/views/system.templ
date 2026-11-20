@@ -13,16 +13,28 @@ type SystemView struct {
 	Diagnostics     []servers.Diagnostic
 }
 
-func consoleName(integration games.Integration) string {
-	if adapter := games.ResolveAdapter(integration.GameType, nil); adapter != nil {
-		return adapter.Name
+func dashIfEmpty(text string) string {
+	if text == "" {
+		return "—"
 	}
-	return "—"
+	return text
 }
 
-func queryName(integration games.Integration) string {
-	if query := integration.Query; query != nil {
-		return query.Name() + ", port " + strconv.Itoa(query.Port)
+func consoleText(f games.Features) string {
+	if f.AnnouncePort != 0 {
+		return f.Console + ", with warnings over its REST API"
+	}
+	return dashIfEmpty(f.Console)
+}
+
+// statusCheckText names the status check; without one, a health check the
+// image has stands in, which the images Ludock knows are listed as having.
+func statusCheckText(f games.Features) string {
+	switch {
+	case f.StatusCheck != "":
+		return f.StatusCheck + ", port " + strconv.Itoa(f.StatusPort)
+	case f.ImageHealthCheck:
+		return "The image’s health check"
 	}
 	return "The image’s health check, if it has one"
 }
@@ -113,7 +125,7 @@ templ SystemPage(page Page, d SystemView) {
 			</section>
 			<section class="settings-section">
 				<h2>Supported games</h2>
-				<p class="section-note">Ludock adds servers made from these images by itself, with the console and status check listed, unless the container can control the host: Missing a server? on the server list says which. To add another container, choose it under Missing a server? on the server list, or label it <code>ludock.enable=true</code>.</p>
+				<p class="section-note">Ludock adds servers on these images by itself, unless the container can control the host. To add another container, choose it under <strong>Missing a server?</strong> on the server list, or label it <code>ludock.enable: "true"</code>.</p>
 				<div class="table-scroll">
 					<table class="data-table">
 						<thead>
@@ -122,20 +134,30 @@ templ SystemPage(page Page, d SystemView) {
 								<th>Images</th>
 								<th>Console</th>
 								<th>Status check</th>
+								<th>Who’s online</th>
+								<th>Kick and ban</th>
+								<th>Warnings to players</th>
+								<th>Restart updates the game</th>
 							</tr>
 						</thead>
 						<tbody>
 							for _, game := range games.Integrations {
+								{{ f := game.Features() }}
 								<tr>
 									<td>{ game.Name }</td>
 									<td>{ strings.Join(game.Repositories, ", ") }</td>
-									<td>{ consoleName(game) }</td>
-									<td>{ queryName(game) }</td>
+									<td>{ consoleText(f) }</td>
+									<td>{ statusCheckText(f) }</td>
+									<td>{ dashIfEmpty(f.Players) }</td>
+									<td>{ dashIfEmpty(f.Moderation) }</td>
+									<td>{ map[bool]string{true: "Yes", false: "—"}[f.Warnings] }</td>
+									<td>{ map[bool]string{true: "Yes", false: "—"}[f.RestartUpdates] }</td>
 								</tr>
 							}
 						</tbody>
 					</table>
 				</div>
+				<p class="section-note">Names need the console’s password; a count comes from the status check. Restart updates the game unless the image’s own settings pin a version or skip updates.</p>
 			</section>
 		</div>
 	}

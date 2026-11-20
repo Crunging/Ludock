@@ -180,7 +180,6 @@ button { cursor: pointer; }
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
 .muted { color: var(--ink-3); }
-.capitalize { text-transform: capitalize; }
 .skip-link {
   position: absolute; left: 12px; top: -56px; z-index: 50;
   padding: 9px 14px; border-radius: var(--radius);
@@ -515,7 +514,6 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 .needs-attention__action { flex: none; white-space: nowrap; }
 .needs-attention__actions { flex: none; display: flex; gap: 10px; align-items: center; white-space: nowrap; }
 .needs-attention__warning, .needs-attention__error { margin-bottom: 10px; color: var(--ink-2); font-size: 15px; }
-.needs-attention__note { margin-top: 10px; font-size: 13px; }
 .needs-attention__expand { margin-top: 12px; }
 .checklist { margin-bottom: 22px; padding: 16px 18px; border-radius: var(--radius-lg); background: var(--block); border: 1px solid var(--line); }
 .checklist__title { font-family: var(--font); font-size: 16px; font-weight: 700; margin-bottom: 10px; }
@@ -841,8 +839,8 @@ td > .cancel-form { display: block; margin-top: 6px; }
 .server-detail .danger-panel .disclosure { margin: 0; }
 
 .schedules-table td { font-size: 14.5px; }
-.schedules-table td:first-child:not([colspan]) { font-weight: 700; text-transform: capitalize; }
-.schedules-table .schedule-command { font-weight: 400; text-transform: none; overflow-wrap: anywhere; }
+.schedules-table td:first-child:not([colspan]) { font-weight: 700; }
+.schedules-table .schedule-command { font-weight: 400; overflow-wrap: anywhere; }
 .schedules-table .schedule-reply { overflow-wrap: anywhere; }
 .schedule-row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .schedule-activity-link { display: inline-block; margin-top: 4px; font-size: 13px; }
@@ -1034,7 +1032,7 @@ td > .cancel-form { display: block; margin-top: 6px; }
 .history-search .section-note { margin: 0; font-size: 13px; }
 .history-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
 .history-pagination .section-note { margin: 0; font-size: 13px; }
-.history-page .data-table td:first-child:not([colspan]) { font-weight: 700; text-transform: capitalize; }
+.history-page .data-table td:first-child:not([colspan]) { font-weight: 700; }
 .operation-detail-summary { max-width: 760px; padding: 20px 22px; border-radius: var(--radius-lg); background: var(--block); }
 .operation-detail-actions { margin-top: 20px; }
 .history-entry-links { display: flex; gap: 14px; flex-wrap: wrap; }

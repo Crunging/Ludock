@@ -608,7 +608,7 @@ templ destinationHealth(n NotificationDestinationView) {
 	<div class="notification-destination__health" id={ destinationID(n.Destination, "health") }>
 		if n.failing() {
 			<div class="alert alert--error" role="alert">
-				Alerts aren’t reaching { n.Destination.Label() }. Failing since @Time(n.Health.Since, "", "")<span>:</span> { n.Health.Reason } Fix the settings below, then send a test.
+				Alerts aren’t reaching { n.Destination.Label() }. Last tried @Time(n.Health.LastTried, "", "")<span>:</span> { n.Health.Reason } Fix the settings below, then send a test.
 			</div>
 		}
 	</div>
@@ -952,7 +952,7 @@ templ Deliveries(d DeliveriesView) {
 								if delivery.DeliveredAt != 0 {
 									<span class="table-detail">Delivered @Time(delivery.DeliveredAt, "", "")</span>
 								} else if delivery.LastAttemptAt != 0 {
-									<span class="table-detail">Last attempt @Time(delivery.LastAttemptAt, "", "")</span>
+									<span class="table-detail">Last tried @Time(delivery.LastAttemptAt, "", "")</span>
 								}
 								if delivery.NextAttemptAt != 0 && !delivery.Paused {
 									<span class="table-detail">

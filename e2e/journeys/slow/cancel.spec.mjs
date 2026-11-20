@@ -26,14 +26,36 @@ test.describe("cancelling a warned restart", () => {
 
   // Once the minute is up and the restart begins, Cancel goes away: the
   // restart finishes.
+  // Activity, left open, follows it to its result, named as the details
+  // name it, and the details drop their progress line.
   test("goes away once the restart begins", async ({ page, ownServer }) => {
     test.setTimeout(150_000);
     await warnedRestart(page, ownServer.name);
+    const activity = await page.context().newPage();
+    await activity.goto("/activity");
+    const row = activity.locator("#activity-list tbody tr", { hasText: ownServer.name }).filter({ hasText: "Restart" }).first();
+    await expect(row).toContainText("Giving players 1 minute");
     const cancel = page.locator("#selected-operation").getByRole("button", { name: "Cancel restart" });
     await expect(cancel).toBeVisible();
     await expect(cancel).toHaveCount(0, { timeout: 90_000 });
-    await expect(page.locator("#selected-operation")).toContainText("Succeeded", { timeout: 45_000 });
-    await expect(page.locator("#selected-operation")).not.toContainText("Cancelled");
+    const details = page.locator("#selected-operation");
+    await expect(details).toContainText("Succeeded", { timeout: 45_000 });
+    await expect(details).not.toContainText("Cancelled");
+    await expect(details).not.toContainText("Progress");
+    await expect(row).toContainText("Succeeded", { timeout: 10_000 });
+    await expect(row.getByRole("button", { name: "Cancel restart" })).toHaveCount(0);
+    await activity.close();
+  });
+
+  // The guide promises a waiting run can be cancelled from Activity too.
+  test("can be cancelled from Activity", async ({ page, ownServer }) => {
+    await warnedRestart(page, ownServer.name);
+    await page.goto("/activity");
+    const row = page.locator("#activity-list tbody tr", { hasText: ownServer.name }).filter({ hasText: "Restart" }).first();
+    await row.getByRole("button", { name: "Cancel restart" }).click();
+    await expect(page.locator("#activity-status")).toHaveText("Cancelled. Nothing was changed.");
+    await expect(row).toContainText("Cancelled by admin before it changed anything.");
+    await expect(row.getByRole("button", { name: "Cancel restart" })).toHaveCount(0);
   });
 
   // Someone who sees the warning go out on the wrong server cancels it: the

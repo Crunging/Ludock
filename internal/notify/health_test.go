@@ -11,12 +11,12 @@ import (
 
 // One alert that fails once or twice and is still retrying isn't failing
 // yet; its third failure, or any failed test, is. Failures before the last
-// delivery don't count, and a failing destination says when its failures
-// began, never before the last delivery, and why.
+// delivery don't count, and a failing destination says when it was last
+// tried and why.
 func TestHealthFailingRule(t *testing.T) {
 	t.Parallel()
-	event := func(attempts int, created int64) failure {
-		return failure{kind: "event", attempts: attempts, createdAt: created, code: "network"}
+	event := func(attempts int, tried int64) failure {
+		return failure{kind: "event", attempts: attempts, triedAt: tried, code: "network"}
 	}
 	for _, c := range []struct {
 		name          string
@@ -27,17 +27,17 @@ func TestHealthFailingRule(t *testing.T) {
 		{"nothing yet", 0, nil, Health{}},
 		{"delivered", 50, nil, Health{Delivered: true}},
 		{"one slow retry", 50, []failure{event(2, 100)},
-			Health{Delivered: true, Failed: true, Since: 100, Reason: "Unable to reach ntfy. Check network access and try again."}},
+			Health{Delivered: true, Failed: true, LastTried: 100, Reason: "Unable to reach ntfy. Check network access and try again."}},
 		{"third failure", 0, []failure{event(3, 100)},
-			Health{Failing: true, Failed: true, Since: 100, Reason: "Unable to reach ntfy. Check network access and try again."}},
-		{"failed test", 0, []failure{{kind: "test", attempts: 1, createdAt: 200, code: "unauthorized"}},
-			Health{Failing: true, Failed: true, Since: 200, Reason: "Delivery to ntfy was refused. Replace the saved credentials."}},
+			Health{Failing: true, Failed: true, LastTried: 100, Reason: "Unable to reach ntfy. Check network access and try again."}},
+		{"failed test", 0, []failure{{kind: "test", attempts: 1, triedAt: 200, code: "unauthorized"}},
+			Health{Failing: true, Failed: true, LastTried: 200, Reason: "Delivery to ntfy was refused. Replace the saved credentials."}},
 		{"many alerts failing once each", 0, []failure{event(1, 300), event(1, 200), event(1, 100)},
-			Health{Failed: true, Since: 100, Reason: "Unable to reach ntfy. Check network access and try again."}},
+			Health{Failed: true, LastTried: 300, Reason: "Unable to reach ntfy. Check network access and try again."}},
 		{"since the last delivery", 150, []failure{event(1, 400), event(5, 100)},
-			Health{Failing: true, Failed: true, Delivered: true, Since: 150, Reason: "Unable to reach ntfy. Check network access and try again."}},
-		{"unknown failure", 0, []failure{{kind: "test", attempts: 1, createdAt: 10, code: "gone"}},
-			Health{Failing: true, Failed: true, Since: 10, Reason: "Failure details are unavailable."}},
+			Health{Failing: true, Failed: true, Delivered: true, LastTried: 400, Reason: "Unable to reach ntfy. Check network access and try again."}},
+		{"unknown failure", 0, []failure{{kind: "test", attempts: 1, triedAt: 10, code: "gone"}},
+			Health{Failing: true, Failed: true, LastTried: 10, Reason: "Failure details are unavailable."}},
 	} {
 		if got := health(Ntfy, c.lastDelivered, c.failures); got != c.want {
 			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)

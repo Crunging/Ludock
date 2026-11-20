@@ -67,6 +67,9 @@ type Integration struct {
 	// SavesOnStop: the game saves its world when Docker stops it, so a stop
 	// without a save command loses nothing.
 	SavesOnStop bool
+	// HealthCheck: the listed images ship a Docker health check, which
+	// stands in for a status check. Only what the reference claims.
+	HealthCheck bool
 	// Saves are folders inside ServerFiles where the game keeps its worlds,
 	// offered in place of a server-files mount that holds them.
 	Saves []string
@@ -78,7 +81,7 @@ var Integrations = []Integration{
 	{GameType: "minecraft", Name: "Minecraft", GamePort: &Port{25565, "tcp"}, Repositories: []string{"itzg/minecraft-server"},
 		UpdatesOnStart: true, Console: &ConsolePreset{Adapter: MinecraftRCON, BroadcastTemplate: "say {message}", Moderation: minecraftModeration},
 		Query: &StatusQuery{Protocol: gamequery.MinecraftPing, Port: 25565, PortEnv: []string{"SERVER_PORT"}}},
-	{GameType: "factorio", Name: "Factorio", GamePort: &Port{34197, "udp"}, Repositories: []string{"factoriotools/factorio"},
+	{GameType: "factorio", Name: "Factorio", HealthCheck: true, GamePort: &Port{34197, "udp"}, Repositories: []string{"factoriotools/factorio"},
 		// The image generates the password and passes it on the command line.
 		// Text that isn't a command is chat from <server>.
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Factorio RCON", DefaultPort: 27015,
@@ -86,7 +89,7 @@ var Integrations = []Integration{
 			Placeholder: "/players, /server-save, /config get",
 			Commands:    []QuickCommand{{"List players", "/players online"}, {"Save world", "/server-save"}},
 			Players:     &PlayerQuery{Command: "/players online", Parse: ParseFactorioPlayers}, Moderation: factorioModeration}},
-	{GameType: "palworld", Name: "Palworld", GamePort: &Port{8211, "udp"},
+	{GameType: "palworld", Name: "Palworld", HealthCheck: true, GamePort: &Port{8211, "udp"},
 		Repositories:       []string{"thijsvanloef/palworld-server-docker", "jammsen/palworld-dedicated-server"},
 		StopTimeoutSeconds: 180, UpdatesOnStart: true,
 		// Both images download the server into /palworld and keep the world
@@ -128,7 +131,7 @@ var Integrations = []Integration{
 		Repositories: []string{"indifferentbroccoli/conan-exiles-enhanced-server-docker"}, UpdatesOnStart: true,
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Conan Exiles RCON", BroadcastTemplate: "Broadcast {message}",
 			DefaultPort: 25575, Commands: []QuickCommand{{"List players", "ListPlayers"}, {"Message players", "Broadcast "}},
-			Players: &PlayerQuery{Command: "ListPlayers", Parse: ParseConanPlayers}},
+			Players: &PlayerQuery{Command: "ListPlayers", Parse: ParseConanPlayers, Characters: true}},
 		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 27015, PortEnv: []string{"QUERY_PORT"}}},
 	{GameType: "v-rising", Name: "V Rising", GamePort: &Port{9876, "udp"}, Repositories: []string{"trueosiris/vrising"},
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "V Rising RCON", DefaultPort: 25575,
@@ -158,7 +161,7 @@ var Integrations = []Integration{
 			Players:  &PlayerQuery{Command: "playing", Parse: ParseTerrariaPlaying}, Moderation: terrariaModeration}},
 	// From Bedrock 1.26.50 the default NetherNet transport connects over TCP
 	// first, then plays on UDP ports the image leaves unset.
-	{GameType: "minecraft-bedrock", Name: "Minecraft: Bedrock Edition", GamePort: &Port{19132, "tcp"},
+	{GameType: "minecraft-bedrock", Name: "Minecraft: Bedrock Edition", HealthCheck: true, GamePort: &Port{19132, "tcp"},
 		Repositories: []string{"itzg/minecraft-bedrock-server"}, UpdatesOnStart: true, SavesOnStop: true, Aliases: []string{"bedrock"},
 		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Bedrock console", BroadcastTemplate: "say {message}",
 			Placeholder: "list, gamerule dofiretick false, say Hello",
@@ -176,7 +179,7 @@ var Integrations = []Integration{
 	// connections only on a port the image leaves unset.
 	{GameType: "core-keeper", Name: "Core Keeper", Repositories: []string{"escaping/core-keeper-dedicated"},
 		UpdatesOnStart: true, Aliases: []string{"corekeeper"}},
-	{GameType: "vintage-story", Name: "Vintage Story", GamePort: &Port{42420, "tcp"},
+	{GameType: "vintage-story", Name: "Vintage Story", HealthCheck: true, GamePort: &Port{42420, "tcp"},
 		Repositories: []string{"zsuatem/vintagestory", "devidian/vintagestory"}, Aliases: []string{"vintagestory"},
 		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Vintage Story console", BroadcastTemplate: "/announce {message}",
 			Placeholder: "/list clients, /autosavenow, /announce Hello",

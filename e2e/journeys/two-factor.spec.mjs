@@ -127,5 +127,5 @@ test("an administrator turns off two-factor sign-in for a user who lost their ph
   await expect(page.getByRole("heading", { name: "Servers", exact: true })).toBeVisible();
 
   await admin.goto("/activity?show=everything");
-  await expect(admin.getByText("Reset a user’s two-factor").first()).toBeVisible();
+  await expect(admin.getByText("Turned off a user’s two-factor sign-in").first()).toBeVisible();
 });

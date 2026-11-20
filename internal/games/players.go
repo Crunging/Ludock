@@ -24,6 +24,8 @@ type PlayerQuery struct {
 	// one. A parser never guesses: a reply it doesn't recognize is false,
 	// not zero players.
 	Parse func(response string) (Players, bool)
+	// Characters: the list names players' characters, not their accounts.
+	Characters bool
 }
 
 // Name limits keep a hostile or broken response from filling a page.

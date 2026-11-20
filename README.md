@@ -38,7 +38,7 @@ You need Docker with Compose, on Linux (AMD64 or ARM64).
 ![The Finish setting up list above the server list](./docs/screenshots/setup.png)
 
 Servers on [supported game images](./docs/REFERENCE.md#supported-games) appear
-by themselves. For any other container, choose **Missing a server?** under the
+by themselves; several were [checked on real servers](./docs/REFERENCE.md#checked-on-real-servers). For any other container, choose **Missing a server?** under the
 server list.
 
 ## What it does
@@ -50,16 +50,22 @@ server list.
 - **Backups** as plain tar archives, on a schedule, with weeks to months kept
   and an optional second copy on another disk. Restore a whole backup or one
   file.
-- **Schedules** for restarts, backups, and console commands, which wait until
-  no one is online and warn players with a countdown, unless you say otherwise.
-  Restart, Stop, and Update offer to warn players a minute ahead too.
+- **Schedules** for starts, stops, restarts, backups, and console commands.
+  Scheduled stops, restarts, and backups wait a while for players to leave
+  where Ludock can tell who is online, and warn anyone still on with a
+  countdown where the game allows, unless you say otherwise.
+  Restart, Stop, backups, restores, and updates offer to warn whoever is online
+  when the work starts, a minute ahead, and can be cancelled until then; players
+  hear when it's off.
 - **Alerts** to Discord, ntfy, Gotify, Telegram, email, or a webhook when a
   server goes down, its game stops answering, or a disk fills up, and an
-  automatic restart when a game hangs.
+  automatic restart when a game hangs. If alerts stop getting through, Ludock
+  says so.
 - **Image updates**, with a backup first and the old container put back if the
   new one fails.
 - **Sharing** a server with a friend by invite link, letting them see it, run
-  it, or manage it fully.
+  it, or also change its files and make backups. Restoring and updates stay
+  with administrators.
 
 <details>
 <summary>More screenshots</summary>

@@ -540,7 +540,7 @@ func LifecycleConfirm(action, serverName string, backupOption, warn bool) templ.
 		options = append(options, WarnOption)
 	}
 	if backupOption {
-		options = append(options, ConfirmOption{Name: "createBackup", Label: "Take a backup first",
+		options = append(options, ConfirmOption{Name: "createBackup", Label: "Back up first",
 			Help: "The server stays stopped while the backup runs, then starts again. If the backup fails, it stays stopped."})
 	}
 	if len(options) > 0 {
@@ -576,7 +576,7 @@ func describeAttention(item attention.Item) attentionText {
 	case "operation":
 		title := Capitalize(item.OperationKind) + " " + item.Status
 		if item.ForceStopped {
-			title = "Force-stopped, recent progress may not have been saved."
+			title = "Force-stopped; recent progress may be lost"
 		}
 		return attentionText{title, path + "?tab=activity&operation=" + item.OperationID, "Review activity"}
 	case "schedule":
@@ -614,9 +614,14 @@ func attentionSubject(item attention.Item) string {
 templ attentionDetail(item attention.Item) {
 	switch item.Kind {
 		case "notifications":
-			<span class="muted">Failing since @Time(item.Since, "", "")<span>.</span> { item.Reason }</span>
+			<span class="muted">Last tried @Time(item.Since, "", "")<span>.</span> { item.Reason }</span>
 		case "operation":
-			@Time(item.UpdatedAt, "", "muted")
+			<span class="muted">
+				@Time(item.UpdatedAt, "", "")
+				if item.Recovery {
+					<span>· By { RecoveryActorLabel }</span>
+				}
+			</span>
 		case "schedule":
 			<span class="muted">{ scheduleReasons[item.Reason] }</span>
 		case "disk":
@@ -696,18 +701,6 @@ templ needsAttention(view AttentionView) {
 					</li>
 				}
 			</ul>
-			if hasOperation(view.Items) {
-				<p class="muted needs-attention__note">Includes issues from each server’s most recent 100 operations.</p>
-			}
 		}
 	</section>
-}
-
-func hasOperation(items []attention.Item) bool {
-	for _, item := range items {
-		if item.Kind == "operation" {
-			return true
-		}
-	}
-	return false
 }

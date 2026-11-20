@@ -56,7 +56,7 @@ test("updating a server's image, then finding it current", async ({ page, ownSer
   await form.getByText("What gets replaced").click();
   await expect(form.locator(".disclosure").first()).toContainText("including unnamed ones");
   await expect(form.getByLabel("Back up first")).toBeChecked();
-  await expect(form.getByLabel("Update even if the image is already current")).toBeHidden();
+  await expect(form.getByLabel("Update even if the image is already up to date")).toBeHidden();
   // Cancelling the confirmation starts nothing.
   await form.getByRole("button", { name: "Update server" }).click();
   const confirm = page.getByRole("dialog", { name: `Update ${ownServer.name}?` });
@@ -69,9 +69,9 @@ test("updating a server's image, then finding it current", async ({ page, ownSer
   // The replacement is the same server, now running the pulled image.
   await page.getByRole("tab", { name: "Update" }).click();
   await startUpdate(page, ownServer.name);
-  await expect(page.locator("#selected-operation")).toContainText("Already current", { timeout: 45_000 });
+  await expect(page.locator("#selected-operation")).toContainText("Already up to date", { timeout: 45_000 });
   await page.getByRole("link", { name: "Update anyway" }).click();
-  await expect(form.getByLabel("Update even if the image is already current")).toBeChecked();
+  await expect(form.getByLabel("Update even if the image is already up to date")).toBeChecked();
 });
 
 // A webhook records the alerts Ludock sends.

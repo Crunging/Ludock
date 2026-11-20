@@ -15,28 +15,28 @@ image doesn't verify where it came from.
 | Minecraft | `itzg/minecraft-server` | Minecraft RCON (25575) | Server List Ping (25565, `SERVER_PORT`) |
 | Factorio | `factoriotools/factorio` | Factorio RCON (27015) | Health check |
 | Palworld | `thijsvanloef/palworld-server-docker`, `jammsen/palworld-dedicated-server` | Palworld RCON (25575), REST API (8212) for warnings | Health check |
-| ARK: Survival Evolved | `hermsi/ark-server`, `hermsi1337/ark-server`, `indifferentbroccoli/ark-server-docker` | ARK RCON (27020) | Steam (27015, `SERVER_LIST_PORT`, `QUERY_PORT`) |
+| ARK: Survival Evolved | `hermsi/ark-server`, `hermsi1337/ark-server`, `indifferentbroccoli/ark-server-docker` | ARK RCON (27020) | Steam server query (27015, `SERVER_LIST_PORT`, `QUERY_PORT`) |
 | ARK: Survival Ascended | `sknnr/ark-ascended-server`, `mschnitzer/asa-linux-server` | ARK RCON (27020) | — |
-| Counter-Strike 2 | `joedwards32/cs2` | Source RCON (27015) | Steam (27015, `CS2_PORT`) |
+| Counter-Strike 2 | `joedwards32/cs2` | Source RCON (27015) | Steam server query (27015, `CS2_PORT`) |
 | Project Zomboid | `renegademaster/zomboid-dedicated-server`, `renegade-master/zomboid-dedicated-server`, `renegade_master/zomboid-dedicated-server` | Project Zomboid RCON (27015) | — |
-| Conan Exiles | `indifferentbroccoli/conan-exiles-enhanced-server-docker` | Conan Exiles RCON (25575) | Steam (27015, `QUERY_PORT`) |
+| Conan Exiles | `indifferentbroccoli/conan-exiles-enhanced-server-docker` | Conan Exiles RCON (25575) | Steam server query (27015, `QUERY_PORT`) |
 | V Rising | `trueosiris/vrising` | V Rising RCON (25575) | — |
 | Rust | `didstopia/rust-server` | Rust WebRCON (28016) | — |
-| 7 Days to Die | `vinanrra/7dtd-server` | Telnet (8081) | — |
-| Valheim | `community-valheim-tools/valheim-server`, `lloesche/valheim-server` | — | Steam (2457) |
-| Terraria | `hexlo/terraria-server-docker`, `beardedio/terraria`, `ryshe/terraria` | Server input | — |
-| Minecraft: Bedrock Edition | `itzg/minecraft-bedrock-server` | Server input | Health check |
+| 7 Days to Die | `vinanrra/7dtd-server` | 7 Days to Die Telnet (8081) | — |
+| Valheim | `community-valheim-tools/valheim-server`, `lloesche/valheim-server` | — | Steam server query (2457) |
+| Terraria | `hexlo/terraria-server-docker`, `beardedio/terraria`, `ryshe/terraria` | Terraria console (server input) | — |
+| Minecraft: Bedrock Edition | `itzg/minecraft-bedrock-server` | Bedrock console (server input) | Health check |
 | Satisfactory | `robtme/satisfactory-server`, `wolveix/satisfactory-server` | — | — |
-| Enshrouded | `sknnr/enshrouded-dedicated-server`, `mornedhels/enshrouded-server` | — | Steam (15637, `SERVER_QUERYPORT`, `PORT`) |
+| Enshrouded | `sknnr/enshrouded-dedicated-server`, `mornedhels/enshrouded-server` | — | Steam server query (15637, `SERVER_QUERYPORT`, `PORT`) |
 | Don't Starve Together | `jamesits/dst-server` | — | — |
 | Core Keeper | `escaping/core-keeper-dedicated` | — | — |
-| Vintage Story | `zsuatem/vintagestory`, `devidian/vintagestory` | Server input | Health check |
+| Vintage Story | `zsuatem/vintagestory`, `devidian/vintagestory` | Vintage Story console (server input) | Health check |
 
 The console port is where Ludock sends commands, inside the container. The
 status check asks the game whether it answers; when the image documents a
 variable for its port, listed after the port, that variable's value wins.
-Steam is Valve's A2S server query, which Valheim answers only when the server
-is public: with `SERVER_PUBLIC` off, the server's page says the check is off.
+The Steam server query is Valve's A2S, which Valheim answers only when the
+server is public: with `SERVER_PUBLIC` off, the server's page says the check is off.
 If your server answers one that isn't listed, set `ludock.query: a2s` and
 `ludock.query.port`.
 
@@ -199,7 +199,8 @@ Variables whose names look like credentials, such as `RCON_PASSWORD`,
    that mount a Docker, Podman, containerd, or CRI-O socket, or bind `/`,
    `/run`, `/var/run`, the container runtime's storage, or a folder holding
    them. The panel can't add them, and a `ludock.enable` label their image
-   sets doesn't count: it must be set where the container is defined.
+   sets doesn't count: it must be set where the container is defined. The
+   [guide](GUIDE.md#servers-that-can-control-the-host) says why and what to do.
 3. Compose one-off containers (`docker compose run`) are left out.
 4. A container added in the panel is managed; one removed there is left out.
 5. Containers on supported images are managed; others are left out.
@@ -280,7 +281,7 @@ container:
   For a new server, naming the volume in the Compose file avoids this. An
   existing server's data stays in its unnamed volume, so copy it into a named
   one before switching, or the server starts with an empty one.
-- **Advanced → Update even if the image is already current** recreates the
+- **Advanced → Update even if the image is already up to date** recreates the
   container anyway, such as to pick up a game update that installs on startup.
 
 Not supported: images pinned by digest or ID, containers Docker removes when
@@ -414,7 +415,7 @@ an administrator's change. Nothing stops while it saves.
   with one, and removes older ones only after a newer save is checked.
 - With a second copy chosen, the newest save is copied there too, and that
   folder keeps saves by the same rule.
-- **Settings → Backup storage** shows when Ludock's data was last saved, or why
+- **Settings → Backups** shows when Ludock's data was last saved, or why
   saving is failing. Failures retry like second copies and alert once.
 
 A save holds password hashes, two-factor secrets, sessions, notification
@@ -618,13 +619,15 @@ Each piece of work in **Activity** shows one result:
 | Queued | Waiting for other work on the server, or on the backup folder, to finish |
 | Running | Under way; work asked to warn players first shows **Checking who is online**, then **Giving players 1 minute** if anyone is |
 | Succeeded | Done |
-| Already current | An update found nothing newer |
+| Already up to date | An update found nothing newer |
 | Skipped | Decided not to act, such as a scheduled command for a stopped server |
 | Failed | Stopped with the reason shown; Ludock left the server as safe as it could |
 | Interrupted | Ludock restarted while it acted; check the server |
 | Cancelled | Called off while it was queued or warning players, before it changed anything, by the person named |
 
-Only queued work and work warning players can be cancelled, by an
+An automatic restart is listed as by "Ludock, because the game stopped
+answering". Only queued work and work warning players can be cancelled, from
+its row in **Activity** or on the server's page, by an
 administrator or anyone who may start that action on the server; a cancelled
 run doesn't pause its schedule. **Show → Everything** also records cancelling
 a scheduled run that waited for players to leave.

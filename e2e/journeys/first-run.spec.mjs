@@ -83,7 +83,7 @@ test("a new install lists what's left to set up, and does it in a click", async 
     await item(page, "Back up your servers").getByRole("button", { name: "Back up every night" }).click();
     const dialog = page.getByRole("dialog", { name: "Back up 2 servers every night?" });
     await expect(dialog).toContainText("for everyone to leave");
-    await expect(dialog).toContainText("Each server goes offline for a few minutes during its backup, then starts again.");
+    await expect(dialog).toContainText("Each running server goes offline for a few minutes during its backup, then goes back to how it was.");
     await dialog.getByRole("button", { name: "Back up every night" }).click();
     await expect(checklist.locator(".alert--success")).toHaveText(
       "Nightly backups scheduled: Survival at 04:00, valheim at 04:15 (Europe/Berlin).");
@@ -96,14 +96,14 @@ test("a new install lists what's left to set up, and does it in a click", async 
     await expect(schedule).toContainText("04:00, every day");
     await expect(schedule).toContainText("Europe/Berlin");
     // As considerate as a schedule made by hand.
-    await expect(schedule).toContainText("Waits up to 30 min for an empty server, then goes ahead");
-    await expect(schedule).toContainText("Warnings: 5, 1 min before");
+    await expect(schedule).toContainText("Waits up to 30 minutes for everyone to leave, then goes ahead");
+    await expect(schedule).toContainText("Warns players 5 and 1 minutes before");
 
     // Automatic restart: one click, after saying what it does, turns it on
     // for each monitored server whose game can answer.
     await page.goto("/");
     const restarts = item(page, "Restart servers that stop answering");
-    await expect(restarts).toContainText("enshrouded, Survival, and valheim stay down if their game stops answering");
+    await expect(restarts).toContainText("enshrouded, Survival, and valheim wait for someone to restart them if their game stops answering while they run");
     await restarts.getByRole("button", { name: "Restart automatically" }).click();
     const confirm = page.getByRole("dialog", { name: /^Restart these \d servers if their game stops answering\?$/ });
     await expect(confirm).toContainText("Ludock restarts it the way the Restart button does, at most 3 times in 6 hours.");

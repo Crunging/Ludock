@@ -6,11 +6,12 @@ import "context"
 type Health struct {
 	// Failing: alerts aren't reaching the destination.
 	Failing bool
-	// Failed: an attempt has failed since the last delivery. Since is when
-	// those failures began and Reason says why in plain words.
-	Failed bool
-	Since  int64
-	Reason string
+	// Failed: an attempt has failed since the last delivery. LastTried is
+	// when the newest of those attempts ran and Reason says why it failed,
+	// in plain words.
+	Failed    bool
+	LastTried int64
+	Reason    string
 	// Delivered: something has reached the destination. Cleanup keeps each
 	// destination's newest delivered row, so this outlasts retention.
 	Delivered bool
@@ -25,10 +26,10 @@ const failingAttempts = 3
 // destination's last delivery. attempts counts those since it was queued or
 // an administrator last retried it.
 type failure struct {
-	kind      string
-	attempts  int
-	createdAt int64
-	code      string
+	kind     string
+	attempts int
+	triedAt  int64
+	code     string
 }
 
 // health decides a destination's health from its last delivery and the
@@ -38,12 +39,10 @@ func health(d Destination, lastDelivered int64, failures []failure) Health {
 	if !h.Failed {
 		return h
 	}
-	h.Since = failures[0].createdAt
+	h.LastTried = failures[0].triedAt
 	for _, f := range failures {
 		h.Failing = h.Failing || f.kind == "test" || f.attempts >= failingAttempts
-		h.Since = min(h.Since, f.createdAt)
 	}
-	h.Since = max(h.Since, lastDelivered)
 	h.Reason = "Failure details are unavailable."
 	if message, ok := failureMessage(d, failures[0].code); ok {
 		h.Reason = message
@@ -73,7 +72,7 @@ func (s *Service) Health(ctx context.Context) (map[Destination]Health, error) {
 		return nil, err
 	}
 	failures := map[Destination][]failure{}
-	rows, err = s.DB.QueryContext(ctx, `SELECT d.destination, d.kind, d.retry_attempts, d.created_at, d.failure_code
+	rows, err = s.DB.QueryContext(ctx, `SELECT d.destination, d.kind, d.retry_attempts, d.last_attempt_at, d.failure_code
     FROM notification_deliveries d WHERE d.state!='delivered' AND d.failure_code IS NOT NULL AND d.last_attempt_at >=
       COALESCE((SELECT MAX(x.delivered_at) FROM notification_deliveries x WHERE x.destination=d.destination AND x.state='delivered'), -1)
     ORDER BY d.last_attempt_at DESC, d.rowid DESC`)
@@ -83,7 +82,7 @@ func (s *Service) Health(ctx context.Context) (map[Destination]Health, error) {
 	for rows.Next() {
 		var d string
 		var f failure
-		if err := rows.Scan(&d, &f.kind, &f.attempts, &f.createdAt, &f.code); err != nil {
+		if err := rows.Scan(&d, &f.kind, &f.attempts, &f.triedAt, &f.code); err != nil {
 			rows.Close()
 			return nil, err
 		}

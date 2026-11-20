@@ -78,6 +78,9 @@ try {
   };
   const backUp = async () => {
     await page.locator("#create-backup").click();
+    // Demo players are online; the screenshots needn't wait out their warning.
+    const warn = page.getByRole("dialog").getByLabel("Warn players and wait 1 minute");
+    if (await warn.count()) await warn.uncheck();
     await page.getByRole("dialog").getByRole("button", { name: "Create backup" }).click();
     await page.locator("#selected-operation").getByText("Succeeded").waitFor({ timeout: 45_000 });
     await page.getByRole("link", { name: "Dismiss" }).click();
@@ -93,7 +96,9 @@ try {
     await backUp();
     await page.locator("#backup-list tbody tr").nth(i).waitFor();
   }
-  await page.locator("#backup-list tbody tr").last().getByRole("link", { name: "Keep…" }).click();
+  const oldest = page.locator("#backup-list tbody tr").last();
+  await oldest.getByRole("button", { name: /^More actions for the backup/ }).click();
+  await oldest.getByRole("link", { name: "Keep…" }).click();
   await page.locator("#keep-backup").getByLabel("Note").fill("Before 1.21.5");
   await page.locator("#keep-backup").getByRole("button", { name: "Keep backup" }).click();
   await page.locator("#backup-list").getByText("Before 1.21.5").waitFor();

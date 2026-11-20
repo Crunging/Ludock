@@ -308,7 +308,7 @@ func (s *Storage) validateFolder(ctx context.Context, folder string) (string, er
 		return "", err
 	}
 	if unix.Access(directory, unix.W_OK|unix.X_OK) != nil {
-		return "", fail("BACKUP_DESTINATION", "Ludock cannot write to the backup folder. Check its mount and directory permissions, then save again.")
+		return "", fail("BACKUP_DESTINATION", "Ludock can’t write to the backup folder. Check its mount and directory permissions, then save again.")
 	}
 	if !docker.ContainerIDPattern.MatchString(s.Self) {
 		return "", fail("BACKUP_MOUNT_UNVERIFIED", "Identify Ludock's container with LUDOCK_SELF_CONTAINER before configuring backups.")
@@ -395,7 +395,7 @@ func (s *Storage) resolveDirectory(directory string) (string, error) {
 			return "", err
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return "", fail("BACKUP_DESTINATION", "Backup destination cannot traverse symbolic links.")
+			return "", fail("BACKUP_DESTINATION", "The backup folder’s path can’t go through a symbolic link.")
 		}
 	}
 	for _, path := range []string{root, directory} {

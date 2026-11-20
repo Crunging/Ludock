@@ -153,7 +153,7 @@ test("seeing who is online, as players join and leave", async ({ page, ownServer
   await command(console, "fake-join Mara", ownServer.name);
   await command(console, "fake-outage 20", ownServer.name);
   await openServer(page, ownServer.name);
-  await expect(players).toContainText("Counted by the game’s status query", { timeout: 15_000 });
+  await expect(players).toContainText("Counted by the game’s status check", { timeout: 15_000 });
   await expect(players).toContainText(/1\s*of 10 online/);
   await expect(players.getByRole("list", { name: "Online players" })).toHaveCount(0);
   await command(console, "fake-leave Mara", ownServer.name);

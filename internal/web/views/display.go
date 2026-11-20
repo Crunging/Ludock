@@ -110,21 +110,11 @@ var phaseLabels = map[string]string{"saving_world": "Saving world", "waiting_for
 	"checking_players": "Checking who is online", "warning": "Giving players 1 minute", "warned": "Going ahead", "stopping": "Waiting for server to stop", "verifying_stop": "Checking shutdown", "starting": "Starting server",
 	"sending_command": "Sending command", "pulling": "Downloading the new image", "creating": "Preparing the updated server", "replacing": "Swapping in the updated server"}
 
-// OperationLabel describes an operation's progress.
+// OperationLabel describes an operation's progress, or its result once it
+// has finished.
 func OperationLabel(status, phase string) string {
-	switch status {
-	case "already_current":
-		return "Already up to date"
-	case "skipped":
-		return "Skipped"
-	case "interrupted":
-		return "Interrupted, needs a look"
-	case "failed":
-		return "Failed"
-	case "succeeded":
-		return "Completed"
-	case "cancelled":
-		return "Cancelled"
+	if label, ok := OperationStatusLabels[status]; ok && status != "queued" && status != "running" {
+		return label
 	}
 	if label, ok := phaseLabels[phase]; ok {
 		return label
@@ -143,7 +133,7 @@ func OperationPath(serverID, kind, operationID string) string {
 }
 
 var OperationStatusLabels = map[string]string{"queued": "Queued", "running": "Running", "succeeded": "Succeeded",
-	"already_current": "Already current", "skipped": "Skipped", "failed": "Failed", "interrupted": "Interrupted",
+	"already_current": "Already up to date", "skipped": "Skipped", "failed": "Failed", "interrupted": "Interrupted",
 	"cancelled": "Cancelled"}
 
 var OperationTones = map[string]string{"queued": "active", "running": "active", "succeeded": "ok", "already_current": "ok",

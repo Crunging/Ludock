@@ -14,7 +14,7 @@ test("reviewing a server, tuning its monitoring, and following a restart", async
   // An earlier journey's restart can still hold alerts back for a moment.
   await expect(page.locator("#availability-title + p")).toHaveText(/^(No outage detected|Paused briefly after a restart or stop)\.$/);
   await expect(page.getByLabel("Wait before alerting (seconds)")).toBeHidden();
-  await expect(page.getByRole("link", { name: "Notification settings" })).toHaveAttribute("href", "/settings#notification-settings-title");
+  await expect(page.getByRole("link", { name: "Settings → Notifications" })).toHaveAttribute("href", "/settings#notification-settings-title");
 
   // Monitoring settings save as they change.
   await page.getByText("Alert levels").click();

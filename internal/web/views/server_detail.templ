@@ -45,7 +45,7 @@ type ServerDetail struct {
 	Activity       ActivityView
 	Backups        BackupsView
 	Schedules      SchedulesView
-	// Recreate opens the update tab with "Update even if the image is already current" ticked.
+	// Recreate opens the update tab with "Update even if the image is already up to date" ticked.
 	Recreate bool
 	Sharing  SharingView
 	// Operation is the operation the page shows, if any.
@@ -700,7 +700,7 @@ templ AvailabilityForm(serverID string, policy monitor.Policy, recoveryOffered b
 				</div>
 			</details>
 		</div>
-		<p class="muted">Alerts go to the destinations turned on in <a class="text-link" href="/settings#notification-settings-title">Notification settings</a>.</p>
+		<p class="muted">Alerts go to the destinations turned on in <a class="text-link" href="/settings#notification-settings-title">Settings → Notifications</a>.</p>
 		<div id="availability-result" aria-live="polite"></div>
 	</form>
 }
@@ -823,12 +823,14 @@ templ SelectedOperation(a ActivityView) {
 					@Pip(OperationTones[operation.Status])
 					{ OperationStatusLabels[operation.Status] }
 				</dd>
-				<dt>Asked for</dt>
+				<dt>When</dt>
 				<dd>@Time(operation.CreatedAt, "", "")</dd>
 				<dt>Last updated</dt>
 				<dd>@Time(operation.UpdatedAt, "", "")</dd>
-				<dt>Progress</dt>
-				<dd>{ OperationLabel(operation.Status, operation.Phase) }</dd>
+				if ActiveStatus(operation.Status) {
+					<dt>Progress</dt>
+					<dd>{ OperationLabel(operation.Status, operation.Phase) }</dd>
+				}
 			</dl>
 			if a.Cancellable[operation.ID] {
 				<p class="inline-actions">
@@ -896,11 +898,12 @@ templ OperationList(operations []history.Operation, empty string, showContext bo
 					<tr><td colspan={ map[bool]string{true: "4", false: "3"}[showContext] } class="muted">{ empty }</td></tr>
 				}
 				for _, operation := range operations {
-					<tr>
+					// A stable ID lets a morph keep focus on this row's button.
+					<tr id={ "operation-row-" + operation.ID }>
 						<td>
 							<a class="text-link" href={ templ.SafeURL("/activity/" + operation.ID) }>{ Capitalize(operation.Kind) }</a>
 							if !showContext && operation.Actor != nil && operation.Actor.ID == ops.RecoveryActor {
-								<p class="muted">By Ludock, because the game stopped answering</p>
+								<p class="muted">By { ActorLabel(operation.Actor) }</p>
 							}
 						</td>
 						if showContext {
@@ -926,7 +929,7 @@ templ OperationList(operations []history.Operation, empty string, showContext bo
 								{ OperationLabel(operation.Status, operation.Phase) }
 							</span>
 							if cancellable[operation.ID] {
-								@CancelButton(operation.ServerID, operation.ID, operation.Kind, "#detail-status")
+								@CancelButton(operation.ServerID, operation.ID, operation.Kind, map[bool]string{true: "#activity-status", false: "#detail-status"}[showContext])
 							}
 							if operation.Status == "cancelled" {
 								<p class="muted">{ CancelledNote(operation.CancelledBy) }</p>
@@ -957,12 +960,16 @@ templ OperationList(operations []history.Operation, empty string, showContext bo
 	</div>
 }
 
+// RecoveryActorLabel names who did an automatic restart, and why, wherever
+// Ludock shows who did something.
+const RecoveryActorLabel = "Ludock, because the game stopped answering"
+
 func ActorLabel(actor *history.Actor) string {
 	switch {
 	case actor == nil:
 		return "Not recorded"
 	case actor.ID == ops.RecoveryActor:
-		return "Ludock (automatic restart)"
+		return RecoveryActorLabel
 	case actor.Name != "":
 		return actor.Name
 	case actor.ID != "":

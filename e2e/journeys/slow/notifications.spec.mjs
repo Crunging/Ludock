@@ -192,7 +192,7 @@ test("a failing webhook is called out until a delivery gets through", async ({ p
     await webhook.getByRole("button", { name: "Send test notification" }).click();
     await expect(webhook.locator(".notification-test-result")).toHaveText(`The test didn’t arrive. ${unavailable}`, { timeout: 30_000 });
     await expect(webhook.locator(":scope > summary")).toContainText("Failing");
-    await expect(webhook.locator(".notification-destination__health")).toContainText("Alerts aren’t reaching Webhook. Failing since");
+    await expect(webhook.locator(".notification-destination__health")).toContainText("Alerts aren’t reaching Webhook. Last tried");
     await expect(webhook.locator(".notification-destination__health")).toContainText(unavailable);
 
     await page.goto("/");

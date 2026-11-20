@@ -3,8 +3,9 @@
 Installing is in the [README](../README.md#quick-start); labels, limits, and
 rare setups are in the [reference](REFERENCE.md).
 
-Ludock has four pages: **Servers**, **Activity**, **Users**, and **Settings**.
-Members see only Servers and Activity.
+Ludock has five pages: **Servers**, **Activity**, **Users**, **Settings**, and
+**Account**, where you change your password and two-factor sign-in. Members see
+only Servers, Activity, and Account.
 
 ## Everyday tasks
 
@@ -56,17 +57,21 @@ recreate the container.
 
 Ludock never offers itself, its helpers, or Compose one-off containers.
 
+#### Servers that can control the host
+
 A container that could control the host is never added by itself or from the
 panel, even on a supported game image: a privileged one, or one given a Docker
-or other container engine socket, the host's root, or its system folders.
-Whoever uses its console or files could take over the machine. If it looks
-like a game, **Missing a server?** lists it under **Not added because they can
-control the host**. If it really is a game server, remove the access it doesn't
-need, or add the label `ludock.enable: "true"` where it is defined and recreate
-it. Its **Sharing** tab then warns that sharing it can hand over the host. A
-server that gains such access later, recreated as privileged say, leaves
-Ludock as a relabeled one does, and its sharing, schedules, and backups come
-back when it returns without that access.
+or other container engine socket, the host's root, or its system folders
+([the exact rule](REFERENCE.md#which-containers-ludock-manages)). Whoever uses
+its console or files could take over the machine. If it looks like a game,
+**Missing a server?** lists it under **Not added because they can control the
+host**. If it really is a game server, remove the access it doesn't need, or
+add the label `ludock.enable: "true"` where it is defined and recreate it. Its
+**Sharing** tab then warns that sharing it can hand over the host, so share it
+only as **Can see it**, or with people you would trust with the host. A server
+that gains such access later, recreated as privileged say, leaves Ludock as a
+relabeled one does, and its sharing, schedules, and backups come back when it
+returns without that access.
 
 ### Share a server with a friend
 
@@ -109,7 +114,8 @@ gets; all but **Newer images available** are on by default. Saved tokens,
 topics, passwords, and webhook URLs are never shown again; leave a field blank
 to keep it. What triggers each alert is in [Monitoring](#monitoring).
 
-If alerts stop arriving, the destination reads **Failing** with the reason, and
+If alerts stop arriving, the destination reads **Failing** with when it was
+last tried and why, and
 **Needs attention** on the server list tells administrators, with a link to
 fix it. Both clear once a delivery gets through.
 
@@ -169,7 +175,7 @@ be browsed and downloaded, or
 
 Many game images download the latest game when they start, so **Restart**
 updates the game; the server's **Update** tab says so under **Game updates**.
-To back up first, tick **Take a backup first** in the Restart dialog.
+To back up first, tick **Back up first** in the Restart dialog.
 
 To move to a newer image:
 
@@ -199,7 +205,9 @@ minutes by default), Ludock restarts it the way **Restart** does and sends an
 alert. It leaves alone a server that is stopped, still starting, hasn't
 answered since it last started, or is paused for maintenance. If the game
 doesn't answer again within five times the wait (at most 30 minutes), or after
-3 restarts in 6 hours, Ludock says so and leaves it for that outage. A server
+3 restarts in 6 hours, Ludock says so and leaves it for that outage.
+**Activity** lists each of these restarts as by "Ludock, because the game
+stopped answering". A server
 whose container exits is left to the restart policy set in the tool that runs
 it, such as Compose.
 
@@ -296,15 +304,16 @@ the wait afterwards; if it was down for more than five minutes past the time
 players were given, it leaves the server alone and says so in **Activity**.
 
 Until the minute is up, the server's page, its row on the server list, and its
-**Activity** row show **Cancel restart** (or stop, backup, restore, or
+rows in **Activity** show **Cancel restart** (or stop, backup, restore, or
 update) to anyone who may start it. Cancelling changes nothing on the server
 and tells the players in the game that it's off. Work queued behind other work on the same server
 can be cancelled the same way while it waits. Cancel is there only while
-Ludock waits: once it saves, stops, downloads, or replaces anything, the work
-finishes. If the cancel and the end of the wait happen at once, the page says
+the work is queued or waiting out the minute: once it saves, stops, or replaces
+anything, the work finishes. An update downloads the new image before it warns
+players, so it can still be cancelled during that minute. If the cancel and the end of the wait happen at once, the page says
 which won.
 
-**Take a backup first** in the Restart dialog checks the backup folder, stops
+**Back up first** in the Restart dialog checks the backup folder, stops
 the server, backs it up, and starts it once. If the backup fails, the server
 stays stopped and Ludock sends an alert, since starting may update the game
 with no backup to go back to. If Ludock itself restarts during the backup, the
@@ -312,7 +321,9 @@ server is started again when Ludock is back, without the backup, and
 **Activity** says so.
 
 Every stop, restart, backup, restore, and update is listed in **Activity**,
-with who started it.
+with who started it. If Docker itself restarts for a few seconds while work runs,
+such as for an upgrade, the work waits for it and carries on; the
+[reference](REFERENCE.md#after-an-interruption) has the details.
 
 ### Consoles
 
@@ -484,8 +495,8 @@ never images or host paths. Each alert is tried up to five times, over about
 
 A destination that is on reads **Failing** when its alerts aren't getting
 through: an alert has failed three times in a row (about three minutes after
-it was raised), or a test failed, with nothing delivered since. It says since
-when and why, and **Needs attention** shows it to administrators. It reads
+it was raised), or a test failed, with nothing delivered since. It says when it
+was last tried and why, and **Needs attention** shows it to administrators. It reads
 **On** again once any delivery to it succeeds, and the warning goes once it's
 turned off.
 
@@ -520,7 +531,10 @@ while.
 **Activity** lists work on the servers you can use, newest first, one row for
 each piece of work with its latest result, with filters
 for server, person, action, result, and dates. Each server's **Activity** tab
-lists its own. Administrators can choose **Show → Everything** to add sign-ins,
+lists its own. Work that is queued or warning players shows **Cancel restart**
+(or backup, and so on) on its row in both, to anyone who may cancel it, and
+rows update while work runs. Administrators can choose
+**Show → Everything** to add sign-ins,
 account changes, and settings changes. **Needs attention** on the server list
 shows recent failures until the same kind of work succeeds on that server,
 such as a good backup after a failed one. An interrupted restore, a

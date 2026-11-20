@@ -308,16 +308,15 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 		</td>
 		<td>{ FormatBytes(backup.Size) }</td>
 		<td>
+			// Every listed backup is complete unless it is being removed, so
+			// only a kept or departing one says so.
 			switch {
 				case !complete:
-					@Pip("failed")
-					{ backup.State }
+					@Pip("attention")
+					Being removed
 				case kept:
 					@Pip("ok")
-					kept
-				default:
-					@Pip("ok")
-					complete
+					Kept
 			}
 			if complete {
 				@copyState(backup)
@@ -761,7 +760,7 @@ templ UpdatePanel(u UpdateView) {
 					<p class="muted">
 						Version pins in the image’s settings still apply.
 						if u.CanBackup {
-							To back up first, choose Take a backup first when you restart.
+							To back up first, tick Back up first in the Restart dialog.
 						}
 					</p>
 				</div>
@@ -880,7 +879,7 @@ templ UpdateForm(u UpdateView) {
 			<div class="stack-form">
 				<label class="check-label">
 					<input type="checkbox" name="forceRecreate" value="true" id="update-recreate" checked?={ u.Recreate }/>
-					Update even if the image is already current
+					Update even if the image is already up to date
 				</label>
 				<p class="muted check-help">Picks up a game update that installs on startup.</p>
 			</div>

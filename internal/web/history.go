@@ -76,6 +76,9 @@ func (s *Server) activityPage(w http.ResponseWriter, r *http.Request, request *R
 			}
 		} else {
 			h.Operations, h.Next, err = s.App.History.Operations(r.Context(), request.User(), q)
+			if err == nil {
+				h.Cancellable = s.cancellable(r, request.User(), h.Operations)
+			}
 		}
 	}
 	if h.Everything {
