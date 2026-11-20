@@ -95,10 +95,26 @@ func (j *Jobs) Cancel(ctx context.Context, user *db.SessionUser, tokenHash, serv
 	}
 	// A warning sent and saved before the cancel is answered here; one still
 	// going out is answered by the operation itself.
-	if before.Recovery.WarnSent {
+	if before.Recovery.WarnSent || j.countedDown(ctx, before) {
 		j.sayCalledOff(context.WithoutCancel(ctx), user, before)
 	}
 	return nil
+}
+
+// countedDown reports whether players heard a schedule's countdown to the
+// run that queued job; schedules record their warnings by run, not on the
+// operation.
+func (j *Jobs) countedDown(ctx context.Context, job *ops.Job) bool {
+	scheduleID, scheduled := job.Input["scheduleId"].(string)
+	if !scheduled {
+		return false
+	}
+	var warned bool
+	if err := j.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schedules s JOIN schedule_announcements a ON a.schedule_id=s.id AND a.slot=s.last_slot
+    WHERE s.id=? AND s.last_operation_id=?)`, scheduleID, job.ID).Scan(&warned); err != nil {
+		return false
+	}
+	return warned
 }
 
 // sayCalledOff tells players a warned operation is off, best effort, on the

@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -86,5 +87,47 @@ func TestCancelledStaysCancelledAcrossRestarts(t *testing.T) {
 	}
 	if err := f.jobs.Cancel(ctx, f.admin, token, f.serverID, id); !apperr.Is(err, "OPERATION_ENDED") {
 		t.Fatal(err)
+	}
+}
+
+// A schedule counts players down before its operation exists, so the
+// warning isn't on the operation. A cancelled scheduled run calls it off
+// when its own run was counted down, not when only an earlier run was or
+// nobody was warned.
+func TestCancelFindsAScheduledRunsCountdown(t *testing.T) {
+	f := setup(t)
+	// Nothing runs the queue, as when other work holds it.
+	f.runner.Stop()
+	server, _ := f.jobs.Identity.Get(ctx, f.serverID)
+	for index, test := range []struct {
+		announced string
+		want      bool
+	}{{"", false}, {"2026-01-01T05:00", true}, {"2025-12-31T05:00", false}} {
+		scheduleID := fmt.Sprintf("schedule-%d", index)
+		job, err := f.runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: "restart",
+			BindingRevision: server.BindingRevision, Input: map[string]any{"scheduleId": scheduleID}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.jobs.DB.ExecContext(ctx, `INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,last_slot,created_at,last_operation_id)
+      VALUES(?,?,'admin','{}',?,'2026-01-01T05:00',1,?)`, scheduleID, f.serverID, server.BindingRevision, job.ID); err != nil {
+			t.Fatal(err)
+		}
+		if test.announced != "" {
+			if _, err := f.jobs.DB.ExecContext(ctx, "INSERT INTO schedule_announcements(schedule_id,slot,lead_minutes) VALUES(?,?,1)", scheduleID, test.announced); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := f.jobs.countedDown(ctx, job); got != test.want {
+			t.Fatalf("announced %q: %v", test.announced, got)
+		}
+		earlier := *job
+		earlier.ID = "another-operation"
+		if f.jobs.countedDown(ctx, &earlier) {
+			t.Fatal("an operation the schedule didn't queue last was counted down")
+		}
+		if err := f.jobs.Cancel(ctx, f.admin, f.adminSession, f.serverID, job.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
