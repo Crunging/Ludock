@@ -43,7 +43,9 @@ function start(command, args, env, log) {
 // signs in the setup administrator. Each worker gets its own stack.
 async function startStack(bin, dir, port) {
   const dockerDir = join(dir, "docker");
-  const backups = join(dir, "backups");
+  // Backups go to the first root; the backups journey chooses the second
+  // for second copies.
+  const backups = join(dir, "backups") + ":" + join(dir, "copies");
   const fake = start(join(bin, "fakedocker"), ["-dir", dockerDir, "-backups", backups], {}, "fakedocker");
   const socket = join(dockerDir, "docker.sock");
   await waitFor(() => existsSync(socket), "the fake Docker socket");

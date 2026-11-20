@@ -382,9 +382,9 @@ browsed, or downloaded.
 
 ### Storage
 
-With the example deployment, Ludock turns on backup storage by itself when
-`/backups` is the only approved root, passes the same checks as a manual save,
-and doesn't overlap game data. **Settings → Backup storage** shows where
+With the example deployment, Ludock turns on backup storage by itself in the
+first approved root (`/backups`) when it passes the same checks as a manual
+save and doesn't overlap game data. **Settings → Backup storage** shows where
 backups go, how much space they and kept backups use, and the free space left.
 Once settings are saved, including turning storage off, Ludock never sets them
 up again. Turning on storage doesn't create backups or schedules.
@@ -405,6 +405,55 @@ services:
 
 If a custom container host name stops Ludock from verifying the mount, set
 `LUDOCK_SELF_CONTAINER`.
+
+### Second copy
+
+If the backup disk or the whole host is lost, its backups go with it. To keep
+a second copy of every backup somewhere else, such as a NAS share, a USB disk,
+or a folder another tool syncs to the cloud, mount that folder at
+`/backups-copy`:
+
+```yaml
+services:
+  ludock:
+    volumes:
+      - /mnt/nas/ludock:/backups-copy
+```
+
+Run `docker compose up -d --force-recreate ludock`, then choose
+`/backups-copy` under **Settings → Backup storage → Advanced → Also copy
+backups to**. It must be writable and separate from the backup folder and from
+game data. Choosing it also copies the backups you already have.
+
+Advanced: any other folder listed in `LUDOCK_BACKUP_ROOTS` after the first,
+such as `LUDOCK_BACKUP_ROOTS=/backups:/mnt/usb`, can be chosen the same way.
+
+- **When:** each backup is copied after its server is back as it was, so the
+  copy adds no downtime. The copy is written under a temporary name, read back
+  and checked against the original's size and checksum, and only then named
+  `<id>.tar`, the same plain tar as the original.
+- **Problems:** a copy that can't be made, because the folder is missing,
+  read-only, full down to the free-space minimum, or stops responding, never
+  fails the backup. Ludock tries again after 1, 5, and 30 minutes and then
+  every 6 hours, shows **Second copy failed** and the reason on the backup,
+  and sends one *Failed backups and schedules* notification if the third try
+  fails. Saving the backup settings again tries at once. A copy to a share that
+  hangs is given up after 2 minutes without progress, and nothing else is
+  written there until the hung request returns.
+- **Removal:** the second folder needs no limits of its own. When retention or
+  an administrator removes a backup, its copy is removed too, and kept backups
+  keep theirs. A copy in a folder that is away is removed once it is back.
+- **Changing the folder:** choosing another second folder copies every backup
+  there again; until its copy is made, a backup shows **Second copy waiting**,
+  and the copy in the old folder still stands in for a missing archive. Once
+  the new copy is made, the old one is left where it is and Ludock no longer
+  tracks or removes it. Turning the second copy off keeps existing copies
+  tracked, so they are still used and removed with their backups.
+- **Using the copy:** if a backup's archive is missing from the backup folder,
+  downloading, browsing, and restoring read the copy, after the same checks,
+  and **Backups** says so. If the backup disk is lost, choose the second folder
+  as the backup folder and restore from the copies. Archives Ludock has no
+  record of can't be imported.
 
 ### How backups work
 

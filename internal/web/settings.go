@@ -28,18 +28,18 @@ func pageHost(r *http.Request) string {
 // backupSettingsView shows the saved settings, or defaults with the single
 // approved root, as new settings.
 func (s *Server) backupSettingsView(r *http.Request) views.BackupSettingsView {
-	b := views.BackupSettingsView{Roots: s.App.Config.BackupRoots, ReserveGiB: gibText(backups.DefaultReserve)}
+	b := views.BackupSettingsView{Roots: s.App.Backups.Storage.ApprovedRoots(), ReserveGiB: gibText(backups.DefaultReserve)}
 	saved, _, err := s.App.Backups.SavedSettings(r.Context())
 	if err != nil {
 		b.Error = publicMessage(err)
 	}
 	if saved != nil {
 		b.Configured = true
-		b.Destination, b.ReserveGiB = saved.Destination, gibText(saved.ReserveBytes)
+		b.Destination, b.ReserveGiB, b.CopyTo = saved.Destination, gibText(saved.ReserveBytes), saved.CopyTo
 		if saved.MaxBytes > 0 {
 			b.MaxGiB = gibText(saved.MaxBytes)
 		}
-	} else if len(b.Roots) == 1 {
+	} else if len(b.Roots) > 0 {
 		b.Destination = b.Roots[0]
 	}
 	return b
@@ -119,6 +119,7 @@ func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, requ
 	b := s.backupSettingsView(r)
 	b.Destination = strings.TrimSpace(r.PostFormValue("destination"))
 	b.MaxGiB, b.ReserveGiB = strings.TrimSpace(r.PostFormValue("maxGiB")), strings.TrimSpace(r.PostFormValue("reserveGiB"))
+	b.CopyTo = strings.TrimSpace(r.PostFormValue("copyTo"))
 	invalid := apperr.New("INVALID_REQUEST", 400,
 		"Check the backup settings: choose a folder, a free-space reserve of zero or more, and a total limit above zero or none.")
 	maxGiB, maxErr := 0.0, error(nil)
@@ -127,7 +128,8 @@ func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, requ
 	}
 	reserveGiB, reserveErr := strconv.ParseFloat(b.ReserveGiB, 64)
 	var err error
-	settings := backups.Settings{Destination: b.Destination, MaxBytes: int64(math.Round(maxGiB * gib)), ReserveBytes: int64(math.Round(reserveGiB * gib))}
+	settings := backups.Settings{Destination: b.Destination, MaxBytes: int64(math.Round(maxGiB * gib)), ReserveBytes: int64(math.Round(reserveGiB * gib)),
+		CopyTo: b.CopyTo}
 	if b.Destination == "" || maxErr != nil || reserveErr != nil || (b.MaxGiB != "" && settings.MaxBytes <= 0) ||
 		settings.MaxBytes < 0 || settings.ReserveBytes < 0 || math.IsInf(maxGiB, 0) || math.IsInf(reserveGiB, 0) {
 		err = invalid

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded, signIn, createUser, shareServer } from "./fixtures.mjs";
 
@@ -220,4 +220,66 @@ test("keeping a backup with a note, seeing it outlast retention, and releasing i
   await backUp();
   await expect(page.locator(`#backup-list a[href="${browse}"]`)).toHaveCount(0);
   await expect(rows).toHaveCount(3);
+});
+
+test("keeping a second copy of every backup and restoring from it", async ({ page }) => {
+  const backupFolder = join(process.env.LUDOCK_E2E_DIR, "backups");
+  const copyFolder = join(process.env.LUDOCK_E2E_DIR, "copies");
+  const settings = page.locator("#backup-settings-form");
+  const chooseCopy = async (label) => {
+    await page.goto("/settings");
+    await settings.getByText("Advanced").click();
+    await settings.getByLabel("Also copy backups to").selectOption({ label });
+    await settings.getByRole("button", { name: "Save backup settings" }).click();
+    await expect(settings.locator(".alert--success")).toContainText("Backup settings saved.");
+  };
+  await chooseCopy(copyFolder);
+  await expect(settings.locator("#backup-storage")).toContainText(`Second copy in${copyFolder}`);
+
+  // Each backup is copied there once its server is back.
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Backups" }).click();
+  await expect(page.locator("#create-backup")).toBeEnabled({ timeout: 45_000 });
+  await page.getByRole("button", { name: "Create backup" }).click();
+  await page.getByRole("dialog", { name: "Back up Survival?" }).getByRole("button", { name: "Create backup" }).click();
+  await expectOperationSucceeded(page);
+  await page.getByRole("link", { name: "Dismiss" }).click();
+  const rows = page.locator("#backup-list tbody tr");
+  const href = await rows.first().getByRole("link", { name: "Download" }).getAttribute("href");
+  const id = href.split("/")[4];
+  const row = page.locator("#backup-list tbody tr", { has: page.locator(`a[href="${href}"]`) });
+  await expect(async () => {
+    await page.reload();
+    await expect(row).toContainText("Second copy saved", { timeout: 1_000 });
+  }).toPass({ timeout: 30_000 });
+  const copy = join(copyFolder, `${id}.tar`);
+  expect(readFileSync(copy)).toEqual(readFileSync(join(backupFolder, `${id}.tar`)));
+
+  // With the archive gone from the backup folder, the copy stands in for it.
+  rmSync(join(backupFolder, `${id}.tar`));
+  await page.reload();
+  await expect(row).toContainText("Missing from the backup folder; using the second copy");
+  const [download] = await Promise.all([page.waitForEvent("download"), row.getByRole("link", { name: "Download" }).click()]);
+  expect(readFileSync(await download.path())).toEqual(readFileSync(copy));
+  await row.getByRole("link", { name: "Browse" }).click();
+  await expect(page.locator(".backup-browser .alert--warning")).toContainText("reading the second copy");
+  await page.getByRole("link", { name: "All backups" }).click();
+  await row.getByRole("link", { name: "Restore…" }).click();
+  const restore = page.locator("form.danger-panel");
+  await expect(restore.locator(".alert--warning")).toContainText("restores it from the second copy");
+  await restore.getByLabel(/Type Survival to confirm/).fill("Survival");
+  await restore.getByRole("button", { name: "Restore game data" }).click();
+  await expectOperationSucceeded(page);
+  await page.getByRole("link", { name: "Dismiss" }).click();
+
+  // Deleting the backup deletes its copy too.
+  await row.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("dialog", { name: "Delete this backup?" }).getByRole("button", { name: "Delete backup" }).click();
+  await expect(page.locator("#detail-status")).toHaveText("Backup deleted.");
+  await expect(row).toHaveCount(0);
+  // The copy is removed beside the deletion, so it may take a moment.
+  await expect.poll(() => existsSync(copy)).toBe(false);
+
+  await chooseCopy("No second copy");
+  await expect(settings.locator("#backup-storage")).not.toContainText("Second copy in");
 });

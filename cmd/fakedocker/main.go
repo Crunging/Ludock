@@ -27,7 +27,7 @@ import (
 func main() {
 	directory := flag.String("dir", "", "directory for the socket and server data")
 	self := flag.String("self", "ludock-dev", "name of the fake Ludock container (LUDOCK_SELF_CONTAINER)")
-	backups := flag.String("backups", "", "backup root mounted into the fake Ludock container")
+	backups := flag.String("backups", "", "backup roots mounted into the fake Ludock container, ':'-separated")
 	demo := flag.Bool("demo", false, "seed the servers shown in the README screenshots")
 	flag.Parse()
 	if *directory == "" {
@@ -59,9 +59,11 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 		seedDev(engine, dir)
 	}
 	var selfMounts []docker.MountPoint
-	if backups != "" {
-		os.MkdirAll(backups, 0o755)
-		selfMounts = append(selfMounts, docker.MountPoint{Type: "bind", Source: backups, Destination: backups, RW: true})
+	for _, root := range strings.Split(backups, ":") {
+		if root != "" {
+			os.MkdirAll(root, 0o755)
+			selfMounts = append(selfMounts, docker.MountPoint{Type: "bind", Source: root, Destination: root, RW: true})
+		}
 	}
 	engine.AddContainer(fakedocker.GameOptions{ID: self, Name: self, Image: image, Running: true, Mounts: selfMounts})
 	engine.OnStart = func(c *fakedocker.Container) {

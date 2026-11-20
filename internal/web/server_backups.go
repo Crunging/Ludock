@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/ops"
@@ -66,7 +68,9 @@ func (s *Server) readBackups(r *http.Request, b *views.BackupsView) {
 	if err != nil {
 		b.HistoryError = publicMessage(err)
 	}
-	b.Backups = list
+	s.App.Backups.Locate(list)
+	// A removed backup that waits only for its second copy to go is gone.
+	b.Backups = slices.DeleteFunc(list, func(backup backups.Backup) bool { return backup.CopyState == "removing" })
 }
 
 func (s *Server) backupList(w http.ResponseWriter, r *http.Request, request *Request) {

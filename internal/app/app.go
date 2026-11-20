@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,6 +70,7 @@ type App struct {
 	sampling   sync.Mutex
 	background sync.WaitGroup
 	storage    sync.Mutex
+	copying    sync.Mutex
 	delivering sync.Mutex
 	polling    sync.Mutex
 	checking   sync.Mutex
@@ -102,6 +104,17 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	jobService := &jobs.Jobs{DB: database, Authz: authorization, Identity: store, Servers: serverService, Docker: client, Locks: table,
 		Monitor: monitoring, Notify: notifications.Notify, Console: runtime, Backups: backupService, Updates: updates}
 	checks := &update.Checks{Updates: updates, DB: database, Identity: store, Notify: notifications.Notify}
+	backupService.CopyFailed = func(ctx context.Context, tx *sql.Tx, backupID, serverID, problem string) error {
+		name := "a server"
+		var display string
+		if tx.QueryRowContext(ctx, "SELECT display_name FROM logical_servers WHERE id=?", serverID).Scan(&display) == nil {
+			name = display
+		}
+		_, err := notifications.QueueIn(ctx, tx, notify.FailedWork, "backup-copy-failed:"+backupID,
+			"The second copy of a backup of "+name+" couldn’t be made: "+problem+" Ludock keeps trying; its Backups tab shows which backup.")
+		return err
+	}
+	backupService.Alerted = notifications.Poke
 	jobService.Pulled = checks.Forget
 	jobService.Register(runner)
 	scheduleService := &schedules.Service{DB: database, Authz: authorization, Identity: store, Runner: runner, Servers: serverService,
@@ -206,6 +219,8 @@ func (a *App) Start(ctx context.Context) {
 				case <-a.Notify.Wake():
 					// A notification was just queued; send it now.
 					a.deliver(ctx)
+				case <-a.Backups.CopyWake():
+					a.copyBackups(ctx)
 				}
 			}
 		}
@@ -252,11 +267,28 @@ func (a *App) Tick(ctx context.Context) {
 			}
 		}()
 	}
+	a.copyBackups(ctx)
 	// Player counts are shown only on pages that follow server changes, and a
 	// reading can start a console helper, so nobody watching means no reading
 	// except the status queries of monitored servers.
 	a.pollPlayers(ctx, a.Events.Watched())
 	a.deliver(ctx)
+}
+
+// copyBackups makes due second copies of backups beside other work, once at
+// a time, since a copy can take as long as the archive takes to write.
+func (a *App) copyBackups(ctx context.Context) {
+	if !a.copying.TryLock() {
+		return
+	}
+	a.background.Add(1)
+	go func() {
+		defer a.background.Done()
+		defer a.copying.Unlock()
+		if err := a.Backups.CopyDue(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("Could not make second copies of backups; they will be retried")
+		}
+	}()
 }
 
 // pollPlayers reads players beside other work, once at a time.

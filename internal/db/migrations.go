@@ -326,6 +326,23 @@ var Migrations = []Migration{
       ALTER TABLE users_v9 RENAME TO users;
     `,
 	},
+	{
+		// A backup's second copy in another folder: copy_state is '' (none),
+		// 'pending', 'complete', 'failed', or 'removing' (its backup was
+		// removed), and copy_next_at is when the copier tries again.
+		// copy_previous is a folder that holds a verified copy from before the
+		// second folder changed, kept until the new folder has one.
+		Version: 10,
+		SQL: `
+      ALTER TABLE backups ADD COLUMN copy_destination TEXT NOT NULL DEFAULT '';
+      ALTER TABLE backups ADD COLUMN copy_state TEXT NOT NULL DEFAULT '' CHECK (copy_state IN ('', 'pending', 'complete', 'failed', 'removing'));
+      ALTER TABLE backups ADD COLUMN copy_attempts INTEGER NOT NULL DEFAULT 0 CHECK (copy_attempts >= 0);
+      ALTER TABLE backups ADD COLUMN copy_next_at INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE backups ADD COLUMN copy_error TEXT NOT NULL DEFAULT '';
+      ALTER TABLE backups ADD COLUMN copy_previous TEXT NOT NULL DEFAULT '';
+      CREATE INDEX backups_copy_idx ON backups(copy_next_at, created_at, id) WHERE copy_state IN ('pending', 'failed');
+    `,
+	},
 }
 
 func LatestVersion() int { return Migrations[len(Migrations)-1].Version }
