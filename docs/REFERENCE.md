@@ -276,6 +276,9 @@ the original before it's named `<id>.tar`.
   Ludock with its second copy and leaves the old folder as it is. A folder
   that stops responding, such as a stuck network share, is given up on after a
   few seconds: the tab says so, and a restore fails before stopping the server.
+  One that freezes while an archive is being read is given up on after two
+  minutes without an answer; a restore then fails and leaves the game data as
+  it was.
 - **Changing the folder:** a new second folder gets a copy of every backup;
   until then a backup shows **Second copy waiting**. Old copies stay where they
   were, and Ludock no longer tracks them.

@@ -835,3 +835,54 @@ func TestStalledBackupFolderIsGivenUp(t *testing.T) {
 		}
 	}
 }
+
+// A folder that answers a look and then freezes while its archive is read
+// fails the read after copyStall instead of holding it forever, as for a
+// restore that already stopped the server, a browse, or a download; an
+// archive that keeps answering reads to its end.
+func TestStalledArchiveReadIsGivenUp(t *testing.T) {
+	f := newCopyFixture(t)
+	backup := f.add(t, "world data", 300_000)
+	defer func(stall time.Duration, read func(*os.File, []byte) (int, error)) {
+		copyStall, readArchive = stall, read
+	}(copyStall, readArchive)
+	copyStall = 50 * time.Millisecond
+	release := make(chan struct{})
+	var reads atomic.Int32
+	readArchive = func(file *os.File, p []byte) (int, error) {
+		if reads.Add(1) == 2 {
+			<-release
+		}
+		return file.Read(p)
+	}
+	archive, err := f.s.Storage.Open(f.main, backup.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if _, err := io.Copy(io.Discard, struct{ io.Reader }{archive}); !errors.Is(err, errFolderStalled) {
+		t.Fatal(err)
+	}
+	if _, err := archive.Read(make([]byte, 1)); !errors.Is(err, errFolderStalled) {
+		t.Fatal(err)
+	}
+	archive.Close()
+	if waited := time.Since(started); waited > 5*time.Second {
+		t.Fatal("a stuck read held its reader", waited)
+	}
+	close(release)
+	select {
+	case <-archive.exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stuck read never let go of the file")
+	}
+	whole, err := f.s.Storage.Open(f.main, backup.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer whole.Close()
+	info, _ := os.Stat(filepath.Join(f.main, backup.ID+".tar"))
+	if n, err := io.Copy(io.Discard, struct{ io.Reader }{whole}); err != nil || n != info.Size() || n == 0 {
+		t.Fatal(n, err)
+	}
+}

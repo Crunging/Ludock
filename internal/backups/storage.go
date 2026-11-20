@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -187,16 +188,82 @@ func (s *Storage) endRead(id string) {
 }
 
 // Archive is an open backup archive; retention leaves it alone until it
-// is closed.
+// is closed. A read blocked in the kernel can't be interrupted, so reads run
+// on a goroutine of their own and one that doesn't return within copyStall,
+// as on a network share that stopped responding, fails with errFolderStalled.
+// Read and Close are for one goroutine.
 type Archive struct {
-	*os.File
-	once sync.Once
-	done func()
+	file     *os.File
+	once     sync.Once
+	done     func()
+	requests chan int
+	results  chan archiveRead
+	exited   chan struct{}
+	buffer   []byte
+	stalled  bool
 }
 
+type archiveRead struct {
+	n   int
+	err error
+}
+
+// readArchive is a seam for a read that never returns.
+var readArchive = func(file *os.File, p []byte) (int, error) { return file.Read(p) }
+
+func newArchive(file *os.File, done func()) *Archive {
+	a := &Archive{file: file, done: done, requests: make(chan int), results: make(chan archiveRead, 1), exited: make(chan struct{})}
+	go func() {
+		defer close(a.exited)
+		defer file.Close()
+		for size := range a.requests {
+			if len(a.buffer) < size {
+				a.buffer = make([]byte, size)
+			}
+			n, err := readArchive(file, a.buffer[:size])
+			a.results <- archiveRead{n, err}
+		}
+	}()
+	return a
+}
+
+func (a *Archive) Read(p []byte) (int, error) {
+	if a.stalled {
+		return 0, errFolderStalled
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	a.requests <- min(len(p), 1<<20)
+	timer := time.NewTimer(copyStall)
+	defer timer.Stop()
+	select {
+	case result := <-a.results:
+		return copy(p, a.buffer[:result.n]), result.err
+	case <-timer.C:
+		a.stalled = true
+		return 0, errFolderStalled
+	}
+}
+
+// Seek lets a walk skip bodies it doesn't read. It reads nothing itself.
+func (a *Archive) Seek(offset int64, whence int) (int64, error) {
+	if a.stalled {
+		return 0, errFolderStalled
+	}
+	return a.file.Seek(offset, whence)
+}
+
+// Close leaves a stalled read to close the file whenever it returns.
 func (a *Archive) Close() error {
-	a.once.Do(a.done)
-	return a.File.Close()
+	a.once.Do(func() {
+		a.done()
+		close(a.requests)
+		if !a.stalled {
+			<-a.exited
+		}
+	})
+	return nil
 }
 
 func NewStorage(client *docker.Client, roots []string, self string) *Storage {
@@ -423,7 +490,7 @@ func (s *Storage) Open(directory, id string) (*Archive, error) {
 		}
 		return nil, err
 	}
-	return &Archive{File: file, done: func() { s.endRead(id) }}, nil
+	return newArchive(file, func() { s.endRead(id) }), nil
 }
 
 func (s *Storage) openFile(directory, id string) (*os.File, error) {
