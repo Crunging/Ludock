@@ -59,14 +59,14 @@ func checklistTitle(key string) string {
 }
 
 func backupConfirm(count int) templ.Attributes {
-	question, spacing := "Back up "+strconv.Itoa(count)+" servers every night?", ", 15 minutes apart"
+	question, when := "Back up "+strconv.Itoa(count)+" servers every night?", "between 04:00 and 06:00 your time, a few minutes apart so they don’t stop together"
 	if count == 1 {
-		question, spacing = "Back up this server every night?", ""
+		question, when = "Back up this server every night?", "between 04:00 and 06:00 your time"
 	}
 	return templ.Attributes{
 		"hx-confirm": question,
 		"data-confirm-detail": "Each backup stops its server for a few minutes, disconnecting anyone playing, then starts it again. " +
-			"Backups start at 04:00 your time" + spacing + ". Change or remove them on each server’s Schedules tab.",
+			"Backups run " + when + ". Change or remove them on each server’s Schedules tab.",
 		"data-confirm-action": "Back up every night",
 	}
 }
