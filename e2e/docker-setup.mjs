@@ -70,11 +70,13 @@ export default async function setup() {
   ludock:
     image: ${image}
     pull_policy: never
+    ports: !override
+      - "127.0.0.1:3000:3000"
     environment:
       LUDOCK_SETUP_CODE: ${setupCode}
 `);
-  const ludock = ["compose", "--project-name", "ludock-e2e", "-f", join(root, "compose.yaml"), "-f", override];
-  const game = ["compose", "--project-name", "game", "--project-directory", stack, "-f", join(stack, "compose.yaml")];
+  const ludock = ["compose", "--project-name", "ludocktest-e2e-ludock", "-f", join(root, "compose.yaml"), "-f", override];
+  const game = ["compose", "--project-name", "ludocktest-e2e-game", "--project-directory", stack, "-f", join(stack, "compose.yaml")];
   docker(...game, "up", "-d");
   docker(...ludock, "up", "-d");
   process.env.LUDOCK_DOCKER_LUDOCK = JSON.stringify(ludock);

@@ -41,12 +41,12 @@ test("file helpers from Ludock's image read and change server data", async ({ pa
   await page.getByRole("dialog").getByRole("button", { name: "Delete file" }).click();
   await expect(page.locator("#file-feedback")).toHaveText("Deleted “uploaded.txt”.");
   // Helper containers are gone once the work is done, except the read-only
-  // listing helper and its mount proof, kept for the next listing until they
-  // have been idle for 30 seconds (the files package's tests cover removal).
-  const format = '{{$kind := index .Config.Labels "ludock.internal"}}{{$kind}}{{if eq $kind "file-helper"}} {{range .Mounts}}{{.RW}}{{end}}{{end}}';
-  const helpers = () => docker("ps", "--all", "--quiet", "--filter", "label=ludock.internal").split("\n").filter(Boolean)
-    .map((id) => docker("inspect", "--format", format, id)).sort();
-  await expect.poll(helpers, { timeout: 20_000 }).toEqual(["file-helper false", "mount-validator"]);
+  // listing helper, kept for the next listing until it has been idle for 30
+  // seconds (the files package's tests cover removal). Only helpers with
+  // this game's data count: other games on the daemon get their own.
+  const helpers = () => docker("ps", "--all", "--quiet", "--filter", "label=ludock.internal", "--filter", `volume=${join(stack(), "data")}`)
+    .split("\n").filter(Boolean).map((id) => docker("inspect", "--format", '{{index .Config.Labels "ludock.internal"}} {{range .Mounts}}{{.RW}}{{end}}', id));
+  await expect.poll(helpers, { timeout: 20_000 }).toEqual(["file-helper false"]);
 });
 
 test("a backup restores the server's data and running state", async ({ page }) => {
