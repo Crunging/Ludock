@@ -6,7 +6,7 @@
 //   node real/rig.mjs bot NAME  join the Java server as NAME and log what the player sees
 //   node real/rig.mjs down      remove every container, volume, and network the rig made
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { admin } from "../journeys/fixtures.mjs";
@@ -44,6 +44,9 @@ async function up() {
   confirmDaemon();
   if (process.env.MINECRAFT_EULA !== "TRUE") {
     throw new Error("Set MINECRAFT_EULA=TRUE to accept the Minecraft EULA (https://aka.ms/MinecraftEULA) for the test servers.");
+  }
+  if (existsSync(dir) && !existsSync(join(dir, marker)) && readdirSync(dir).length) {
+    throw new Error(`${dir} isn't empty; set LUDOCK_RIG_DIR to a new folder.`);
   }
   for (const folder of ["java/data", "backups-copy"]) mkdirSync(join(dir, folder), { recursive: true });
   // down removes only a folder that up made.
