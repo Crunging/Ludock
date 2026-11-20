@@ -546,8 +546,17 @@ func publicFirst(err error) error {
 }
 
 func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string]any, error) {
-	// What recovery did with the data, for Activity.
+	// What recovery leaves the data as, for Activity: a committed restore is
+	// finished, one that began replacing is undone.
 	outcome := "Nothing was restored: the server’s files are as they were."
+	if state, _ := restoreState(job); state != nil {
+		switch state.Status {
+		case "committed", "cleaned":
+			outcome = "The restore had finished: the server’s files are the backup’s."
+		case "replacing", "rolling_back", "rolled_back":
+			outcome = "The restore was undone: the server’s files are as they were."
+		}
+	}
 	err := j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
 		entries, err := journals(job)
 		if err != nil {
@@ -582,10 +591,8 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string
 			state, _ := restoreState(job)
 			if state != nil && state.Status == "committed" {
 				err = j.cleanupRestore(ctx, server, job, data)
-				outcome = "The restore had finished: the server’s files are the backup’s."
 			} else {
 				err = j.rollbackRestore(ctx, server, job, data)
-				outcome = "The restore was undone: the server’s files are as they were."
 			}
 			data.Cleanup()
 			if err != nil {

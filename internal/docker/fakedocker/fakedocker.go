@@ -203,12 +203,13 @@ type exec struct {
 }
 
 func Start(dir string) (*Engine, error) {
-	return StartSocket(filepath.Join(dir, "docker.sock"))
+	socket := filepath.Join(dir, "docker.sock")
+	os.Remove(socket)
+	return StartSocket(socket)
 }
 
-// StartSocket serves on the unix socket at path.
+// StartSocket serves on the unix socket at path, which must not exist.
 func StartSocket(socket string) (*Engine, error) {
-	os.Remove(socket)
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		return nil, err

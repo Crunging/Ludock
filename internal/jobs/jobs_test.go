@@ -628,20 +628,23 @@ func TestRestartWhenDockerGoesAway(t *testing.T) {
 	}
 }
 
-// Docker fails just as a backup's archive is read. The backup blames Docker,
-// not the server's files.
+// Docker fails just as a backup's archive is read, or comes back from a
+// restart without the archive's exec. The backup blames Docker, not the
+// server's files.
 func TestBackupWhenDockerGoesAway(t *testing.T) {
-	f := setup(t)
-	exec := f.engine.Exec
-	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
-		if strings.Contains(strings.Join(cmd, " "), `"operation":"backup"`) {
-			f.engine.AddFault(`/exec/`, 500, false, 0)
+	for _, status := range []int{500, 404} {
+		f := setup(t)
+		exec := f.engine.Exec
+		f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+			if strings.Contains(strings.Join(cmd, " "), `"operation":"backup"`) {
+				f.engine.AddFault(`/exec/`, status, false, 0)
+			}
+			return exec(c, cmd, stdin, stdout, stderr)
 		}
-		return exec(c, cmd, stdin, stdout, stderr)
-	}
-	job := f.run(t, "backup", nil)
-	f.engine.ClearFaults()
-	if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") {
-		t.Fatalf("%+v", job)
+		job := f.run(t, "backup", nil)
+		f.engine.ClearFaults()
+		if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") {
+			t.Fatalf("%d: %+v", status, job)
+		}
 	}
 }

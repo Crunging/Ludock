@@ -335,8 +335,9 @@ func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess fun
 			return errBackupTimeout
 		}
 		result, err := h.Docker.InspectExec(context.WithoutCancel(ctx), execID)
-		if docker.Unavailable(err) {
-			return err
+		// An exec Docker no longer knows was lost with a restart of Docker.
+		if docker.Unavailable(err) || docker.IsNotFound(err) {
+			return docker.ErrRequestFailed
 		}
 		if err != nil || result.Running || result.ExitCode == nil || *result.ExitCode != 0 {
 			return fail("UNSAFE_ARCHIVE", "Archive reading failed. Backups require regular files and directories without symbolic links, hard links, special files, or inaccessible paths.")

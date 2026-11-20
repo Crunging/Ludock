@@ -38,10 +38,12 @@ func main() {
 		os.Exit(2)
 	}
 	os.MkdirAll(*directory, 0o755)
+	// A chosen socket path is never removed first, in case it is a real one.
+	start := func() (*fakedocker.Engine, error) { return fakedocker.StartSocket(*socket) }
 	if *socket == "" {
-		*socket = filepath.Join(*directory, "docker.sock")
+		start = func() (*fakedocker.Engine, error) { return fakedocker.Start(*directory) }
 	}
-	engine, err := fakedocker.StartSocket(*socket)
+	engine, err := start()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

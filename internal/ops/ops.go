@@ -623,6 +623,9 @@ func (r *Runner) fill(ctx context.Context) {
 		}
 	}
 	rows.Close()
+	if ctx.Err() != nil {
+		return
+	}
 	if rows.Err() != nil {
 		r.retryFill()
 		return
