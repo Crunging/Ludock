@@ -54,8 +54,8 @@ func recoveryJobs(t *testing.T, s *Service, serverID string) []string {
 // queued in the tests' time, which also resets the outage it acted on.
 func finish(t *testing.T, s *Service, id, status string) {
 	t.Helper()
-	if _, err := s.DB.Exec(`UPDATE operations SET status=?,updated_at=(SELECT json_extract(value_json,'$.restartedAt')+5000 FROM settings
-    WHERE json_extract(value_json,'$.operationId')=?) WHERE id=?`, status, id, id); err != nil {
+	if _, err := s.DB.Exec(`UPDATE operations SET status=?,updated_at=(SELECT json_extract(recovery_json,'$.restartedAt')+5000 FROM availability
+    WHERE json_extract(recovery_json,'$.operationId')=?) WHERE id=?`, status, id, id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB.Exec("UPDATE availability SET outage_started_at=NULL,notified=0"); err != nil {
@@ -274,7 +274,7 @@ func TestRecoveryGivesUpOnAnOutageForGood(t *testing.T) {
 		attempts = append(attempts, int64(index+1)*60_000)
 	}
 	state, _ := json.Marshal(Recovery{Attempts: attempts, RestartedAt: attempts[len(attempts)-1], Last: RecoveryAnswered})
-	if _, err := s.DB.Exec("INSERT INTO settings(key,value_json) VALUES(?,?)", recoveryKey(serverID), string(state)); err != nil {
+	if _, err := s.DB.Exec("UPDATE availability SET recovery_json=? WHERE server_id=?", string(state), serverID); err != nil {
 		t.Fatal(err)
 	}
 	hang(t, s, serverID, game, time.Hour.Milliseconds(), 500)

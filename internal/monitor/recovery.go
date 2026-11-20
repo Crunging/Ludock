@@ -72,13 +72,14 @@ func RecoveryWait(policy Policy) int64 {
 // policy.
 func (p Policy) RecoveryOn() bool { return p.Recover && p.Enabled && !p.Maintenance }
 
-func recoveryKey(serverID string) string { return "monitor.recovery:" + serverID }
-
 // Recovery reads what recovery last did on a server.
 func (s *Service) Recovery(ctx context.Context, serverID string) (Recovery, error) {
 	var state Recovery
-	_, err := loadState(ctx, s.DB, recoveryKey(serverID), &state)
-	return state, err
+	r, err := s.row(ctx, serverID)
+	if err != nil || r == nil {
+		return state, err
+	}
+	return state, decode(r.recovery, &state)
 }
 
 // SetRecovery turns recovery on or off for a server, keeping the rest of its
@@ -87,7 +88,8 @@ func (s *Service) Recovery(ctx context.Context, serverID string) (Recovery, erro
 func (s *Service) SetRecovery(ctx context.Context, adminID, tokenHash, serverID string, on bool) error {
 	return s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
 		var raw string
-		err := tx.QueryRowContext(ctx, "SELECT policy_json FROM availability WHERE server_id=?", serverID).Scan(&raw)
+		var recovery sql.NullString
+		err := tx.QueryRowContext(ctx, "SELECT policy_json,recovery_json FROM availability WHERE server_id=?", serverID).Scan(&raw, &recovery)
 		policy := DefaultPolicy()
 		if err == nil {
 			if policy, err = ParsePolicy([]byte(raw)); err != nil {
@@ -99,40 +101,38 @@ func (s *Service) SetRecovery(ctx context.Context, adminID, tokenHash, serverID 
 		if policy.Recover == on {
 			return nil
 		}
-		if err := resetRecovery(ctx, tx, serverID, policy, Policy{Recover: on}); err != nil {
-			return err
-		}
+		recovery = resetRecovery(recovery, policy, Policy{Recover: on})
 		policy.Recover = on
 		encoded, _ := json.Marshal(policy)
 		_, err = tx.ExecContext(ctx, `INSERT INTO availability(server_id,policy_json,updated_at) VALUES(?,?,?)
-      ON CONFLICT(server_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=excluded.updated_at`, serverID, string(encoded), db.Now())
+      ON CONFLICT(server_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=excluded.updated_at,recovery_json=?`,
+			serverID, string(encoded), db.Now(), recovery)
 		return err
 	})
 }
 
 // resetRecovery forgets a restart's pending outcome when recovery is turned
-// off, so turning it on later doesn't report a stale one.
-func resetRecovery(ctx context.Context, tx *sql.Tx, serverID string, previous, policy Policy) error {
-	if !previous.Recover || policy.Recover {
-		return nil
-	}
+// off, so turning it on later doesn't report a stale one. It returns the
+// state to save with policy.
+func resetRecovery(raw sql.NullString, previous, policy Policy) sql.NullString {
 	var state Recovery
-	raw, err := loadState(ctx, tx, recoveryKey(serverID), &state)
-	if err != nil || raw == "" || !state.Pending {
-		return err
+	if !previous.Recover || policy.Recover || decode(raw, &state) != nil || !state.Pending {
+		return raw
 	}
 	state.Pending = false
-	encoded, _ := json.Marshal(state)
-	_, err = tx.ExecContext(ctx, "UPDATE settings SET value_json=? WHERE key=?", string(encoded), recoveryKey(serverID))
-	return err
+	return encode(state)
 }
 
-// saveRecovery replaces a server's recovery state only if it is still
-// previous and the policy it was judged by is still saved.
-func (s *Service) saveRecovery(ctx context.Context, serverID, policy, previous string, state Recovery) bool {
-	_, changed, err := s.saveState(ctx, monitored{serverID: serverID, raw: policy}, recoveryKey(serverID), previous, state)
+// saveRecovery replaces a server's recovery state only if it is still as r
+// holds it and the policy it was judged by is still saved; r then holds the
+// saved state.
+func (s *Service) saveRecovery(ctx context.Context, serverID string, r *row, state Recovery) bool {
+	saved, changed, err := s.saveState(ctx, serverID, r.policy, recoveryColumn, r.recovery, state)
 	if err != nil {
 		log.Warn("Could not save a server's automatic restart; it will be checked again")
+	}
+	if changed {
+		r.recovery = saved
 	}
 	return changed
 }
@@ -154,15 +154,13 @@ var errRecoveryChanged = errors.New("recovery changed")
 // restarting or by giving up, so the plain outage alert isn't sent as well.
 // Another operation on the server, or the pause after the last restart, makes
 // it wait.
-func (s *Service) recover(ctx context.Context, server identity.Server, container servers.Container, policyRaw string, policy Policy,
-	now int64) bool {
+func (s *Service) recover(ctx context.Context, server identity.Server, container servers.Container, r *row, policy Policy, now int64) bool {
 	// A server awaiting review of a change can't be restarted by recovery.
 	if s.Runner == nil || server.SharingPaused {
 		return false
 	}
 	var state Recovery
-	raw, err := loadState(ctx, s.DB, recoveryKey(server.ID), &state)
-	if err != nil {
+	if err := decode(r.recovery, &state); err != nil {
 		log.Warn("Could not read a server's automatic restarts; it will be checked again")
 		return false
 	}
@@ -196,7 +194,7 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 	state.Attempts = recentAttempts(state.Attempts, now)
 	if len(state.Attempts) >= RecoveryAttempts {
 		state.Last, state.LastAt = RecoveryGaveUp, now
-		if !s.saveRecovery(ctx, server.ID, policyRaw, raw, state) {
+		if !s.saveRecovery(ctx, server.ID, r, state) {
 			return false
 		}
 		s.notify(notify.ServerProblems, "recovery-gave-up:"+server.ID+":"+strconv.FormatInt(state.SilentSince, 10), server.DisplayName+
@@ -205,19 +203,19 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 		return true
 	}
 	var job *ops.Job
-	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
+	var saved sql.NullString
+	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		// The policy and restarts are as judged above, read on this connection.
 		var policyNow string
-		if err := tx.QueryRowContext(ctx, "SELECT policy_json FROM availability WHERE server_id=?", server.ID).Scan(&policyNow); err != nil {
+		var recoveryNow sql.NullString
+		if err := tx.QueryRowContext(ctx, "SELECT policy_json,recovery_json FROM availability WHERE server_id=?", server.ID).
+			Scan(&policyNow, &recoveryNow); err != nil {
 			return err
 		}
-		rawNow, _, err := db.RawSetting(ctx, tx, recoveryKey(server.ID))
-		if err != nil {
-			return err
-		}
-		if policyNow != policyRaw || rawNow != raw {
+		if policyNow != r.policy || recoveryNow != r.recovery {
 			return errRecoveryChanged
 		}
+		var err error
 		// The restart acts only on the container run judged hung.
 		if job, err = s.Runner.Enqueue(ctx, tx, ops.EnqueueOptions{ServerID: server.ID, ActorID: ops.RecoveryActor, Kind: "restart",
 			BindingRevision: server.BindingRevision, Input: map[string]any{"run": container.StateSince, "answered": answered}}); err != nil {
@@ -225,9 +223,8 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 		}
 		state.Attempts = append(state.Attempts, now)
 		state.OperationID, state.RestartedAt, state.Pending, state.Last, state.LastAt = job.ID, now, true, RecoveryRestarted, now
-		encoded, _ := json.Marshal(state)
-		_, err = tx.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
-			recoveryKey(server.ID), string(encoded))
+		saved = encode(state)
+		_, err = tx.ExecContext(ctx, "UPDATE availability SET recovery_json=? WHERE server_id=?", saved, server.ID)
 		return err
 	})
 	if err != nil {
@@ -236,6 +233,7 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 		}
 		return false
 	}
+	r.recovery = saved
 	s.Runner.Wake()
 	s.notify(notify.ServerProblems, "recovery:"+job.ID, server.DisplayName+": the game stopped answering, so Ludock is restarting it.")
 	s.changed(server.ID)
@@ -247,10 +245,9 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 // answered again, or it hasn't within RecoveryWait. A game reported as not
 // answering is followed until it answers or its run ends.
 func (s *Service) trackRecovery(ctx context.Context, server identity.Server, container servers.Container, running bool, game GameAnswer,
-	policyRaw string, policy Policy, now int64) {
+	r *row, policy Policy, now int64) {
 	var state Recovery
-	raw, err := loadState(ctx, s.DB, recoveryKey(server.ID), &state)
-	if err != nil {
+	if err := decode(r.recovery, &state); err != nil {
 		return
 	}
 	next := state
@@ -265,7 +262,7 @@ func (s *Service) trackRecovery(ctx context.Context, server identity.Server, con
 	if state.Pending {
 		var status string
 		var finished int64
-		err = s.DB.QueryRowContext(ctx, "SELECT status,updated_at FROM operations WHERE id=?", state.OperationID).Scan(&status, &finished)
+		err := s.DB.QueryRowContext(ctx, "SELECT status,updated_at FROM operations WHERE id=?", state.OperationID).Scan(&status, &finished)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return
 		}
@@ -321,7 +318,7 @@ func (s *Service) trackRecovery(ctx context.Context, server identity.Server, con
 	if equalRecovery(next, state) {
 		return
 	}
-	if !s.saveRecovery(ctx, server.ID, policyRaw, raw, next) {
+	if !s.saveRecovery(ctx, server.ID, r, next) {
 		return
 	}
 	if message != "" {

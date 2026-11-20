@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/datasize"
-	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/resources"
@@ -161,84 +160,73 @@ func evaluateMemory(state MemoryState, samples []memorySample, minute, limitKiB 
 	return MemoryState{AlertSince: start}
 }
 
-func diskKey(serverID string) string   { return "monitor.disk:" + serverID }
-func memoryKey(serverID string) string { return "monitor.memory:" + serverID }
-
-// loadState reads a saved state and returns its raw value, "" when none.
-func loadState(ctx context.Context, q db.RowQueryer, key string, value any) (string, error) {
-	raw, found, err := db.RawSetting(ctx, q, key)
-	if err != nil || !found {
-		return "", err
+// decode reads a state's JSON, leaving value as it is when there is none.
+func decode(raw sql.NullString, value any) error {
+	if !raw.Valid {
+		return nil
 	}
-	return raw, json.Unmarshal([]byte(raw), value)
+	return json.Unmarshal([]byte(raw.String), value)
 }
 
-// saveState replaces a state only if it is still previous and the policy
-// it was judged by is still saved, so a policy saved meanwhile and its reset
-// are kept. It returns the new raw value.
-func (s *Service) saveState(ctx context.Context, watched monitored, key, previous string, value any) (string, bool, error) {
+func encode(value any) sql.NullString {
 	encoded, _ := json.Marshal(value)
-	const unchanged = "EXISTS (SELECT 1 FROM availability WHERE server_id=? AND policy_json=?)"
-	var result sql.Result
-	var err error
-	if previous == "" {
-		result, err = s.DB.ExecContext(ctx, "INSERT INTO settings(key,value_json) SELECT ?,? WHERE "+unchanged+" ON CONFLICT(key) DO NOTHING",
-			key, string(encoded), watched.serverID, watched.raw)
-	} else {
-		result, err = s.DB.ExecContext(ctx, "UPDATE settings SET value_json=? WHERE key=? AND value_json=? AND "+unchanged,
-			string(encoded), key, previous, watched.serverID, watched.raw)
-	}
+	return sql.NullString{String: string(encoded), Valid: true}
+}
+
+// Columns of the monitor states saveState writes.
+const (
+	diskColumn     = "disk_json"
+	memoryColumn   = "memory_json"
+	recoveryColumn = "recovery_json"
+)
+
+// saveState replaces one of a server's states only if it is still previous
+// and the policy it was judged by is still saved, so a policy saved
+// meanwhile and its reset are kept. It returns the value saved.
+func (s *Service) saveState(ctx context.Context, serverID, policy, column string, previous sql.NullString, value any) (sql.NullString, bool, error) {
+	encoded := encode(value)
+	result, err := s.DB.ExecContext(ctx, "UPDATE availability SET "+column+"=? WHERE server_id=? AND policy_json=? AND "+column+" IS ?",
+		encoded, serverID, policy, previous)
 	if err != nil {
-		return "", false, err
+		return previous, false, err
 	}
 	changed, err := result.RowsAffected()
-	return string(encoded), changed == 1, err
+	return encoded, changed == 1, err
 }
 
-// resetAlerts ends the alerts whose settings changed, without notifying,
-// and makes the next tick measure disks again. It runs in Configure's
-// transaction.
-func resetAlerts(ctx context.Context, tx *sql.Tx, serverID string, previous, policy Policy) error {
-	if !policy.Enabled || !previous.Enabled || previous.DiskAlert != policy.DiskAlert || previous.DiskPercent != policy.DiskPercent {
-		var disk DiskState
-		raw, err := loadState(ctx, tx, diskKey(serverID), &disk)
-		if err != nil {
-			return err
-		}
-		if raw != "" {
-			disk.CheckedAt = 0
-			for index := range disk.Folders {
-				disk.Folders[index].AlertSince, disk.Folders[index].Notified = 0, false
+// resetAlerts ends the disk and memory alerts whose settings changed,
+// without notifying, and makes the next tick measure disks again. It returns
+// the states to save with policy.
+func resetAlerts(disk, memory sql.NullString, previous, policy Policy) (sql.NullString, sql.NullString) {
+	if disk.Valid && (!policy.Enabled || !previous.Enabled || previous.DiskAlert != policy.DiskAlert || previous.DiskPercent != policy.DiskPercent) {
+		var state DiskState
+		if json.Unmarshal([]byte(disk.String), &state) == nil {
+			state.CheckedAt = 0
+			for index := range state.Folders {
+				state.Folders[index].AlertSince, state.Folders[index].Notified = 0, false
 			}
-			encoded, _ := json.Marshal(disk)
-			if _, err := tx.ExecContext(ctx, "UPDATE settings SET value_json=? WHERE key=?", string(encoded), diskKey(serverID)); err != nil {
-				return err
-			}
+			disk = encode(state)
 		}
 	}
-	if !policy.Enabled || previous.MemoryAlert != policy.MemoryAlert || previous.MemoryPercent != policy.MemoryPercent ||
-		previous.MemoryMinutes != policy.MemoryMinutes {
+	if memory.Valid && (!policy.Enabled || previous.MemoryAlert != policy.MemoryAlert || previous.MemoryPercent != policy.MemoryPercent ||
+		previous.MemoryMinutes != policy.MemoryMinutes) {
 		// The binding and its first judged minute outlast the alert.
-		var memory MemoryState
-		raw, err := loadState(ctx, tx, memoryKey(serverID), &memory)
-		if err != nil {
-			return err
-		}
-		if raw != "" {
-			encoded, _ := json.Marshal(MemoryState{Revision: memory.Revision, From: memory.From})
-			if _, err := tx.ExecContext(ctx, "UPDATE settings SET value_json=? WHERE key=?", string(encoded), memoryKey(serverID)); err != nil {
-				return err
-			}
+		var state MemoryState
+		if json.Unmarshal([]byte(memory.String), &state) == nil {
+			memory = encode(MemoryState{Revision: state.Revision, From: state.From})
 		}
 	}
-	return nil
+	return disk, memory
 }
 
 // Disk reads a server's last disk measurements.
 func (s *Service) Disk(ctx context.Context, serverID string) (DiskState, error) {
 	var disk DiskState
-	_, err := loadState(ctx, s.DB, diskKey(serverID), &disk)
-	return disk, err
+	r, err := s.row(ctx, serverID)
+	if err != nil || r == nil {
+		return disk, err
+	}
+	return disk, decode(r.disk, &disk)
 }
 
 // watched reads the servers, the policies of those monitored now, and the
@@ -252,6 +240,9 @@ func (s *Service) watched(ctx context.Context) ([]identity.Server, map[string]mo
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	if testHook != nil {
+		testHook("watched")
+	}
 	active, err := s.active(ctx)
 	if err != nil {
 		return nil, nil, nil, err
@@ -259,16 +250,16 @@ func (s *Service) watched(ctx context.Context) ([]identity.Server, map[string]mo
 	policies := map[string]monitored{}
 	for serverID, r := range rows {
 		if policy, err := ParsePolicy([]byte(r.policy)); err == nil && policy.Enabled && !policy.Maintenance {
-			policies[serverID] = monitored{Policy: policy, serverID: serverID, raw: r.policy}
+			policies[serverID] = monitored{Policy: policy, row: r}
 		}
 	}
 	return logical, policies, active, nil
 }
 
-// monitored is a policy as a check read it.
+// monitored is a policy and its row as a check read them.
 type monitored struct {
 	Policy
-	serverID, raw string
+	row *row
 }
 
 // alertingPaths names the folders that alert, to tell when the set changes.
@@ -305,8 +296,7 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 			continue
 		}
 		var previous DiskState
-		raw, err := loadState(ctx, s.DB, diskKey(server.ID), &previous)
-		if err != nil {
+		if err := decode(policy.row.disk, &previous); err != nil {
 			return err
 		}
 		shown := previous.alertingPaths()
@@ -337,7 +327,7 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 		}
 		next, ended := evaluateDisk(previous, spaces, policy.DiskPercent, now)
 		next.Revision = server.BindingRevision
-		saved, changed, err := s.saveState(ctx, policy, diskKey(server.ID), raw, next)
+		saved, changed, err := s.saveState(ctx, server.ID, policy.row.policy, diskColumn, policy.row.disk, next)
 		if err != nil || !changed {
 			log.Warn("Could not save a server's disk space; it will be measured again")
 			continue
@@ -348,7 +338,7 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 					fmt.Sprintf("%s: the disk under %s has space again (%.0f%% full).", server.DisplayName, folder.Path, folder.Percent()))
 			}
 		}
-		s.raiseDisk(ctx, server, policy, saved, next)
+		s.raiseDisk(ctx, server, policy.row.policy, saved, next)
 		if next.alertingPaths() != shown {
 			s.changed(server.ID)
 		}
@@ -358,7 +348,7 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 
 // raiseDisk sends the alerts saved but not yet sent, then records them as
 // sent. Each is keyed by its saved start, so a retry sends it once.
-func (s *Service) raiseDisk(ctx context.Context, server identity.Server, policy monitored, raw string, state DiskState) {
+func (s *Service) raiseDisk(ctx context.Context, server identity.Server, policy string, saved sql.NullString, state DiskState) {
 	sent := false
 	for index := range state.Folders {
 		folder := &state.Folders[index]
@@ -371,7 +361,7 @@ func (s *Service) raiseDisk(ctx context.Context, server identity.Server, policy 
 		folder.Notified, sent = true, true
 	}
 	if sent {
-		if _, _, err := s.saveState(ctx, policy, diskKey(server.ID), raw, state); err != nil {
+		if _, _, err := s.saveState(ctx, server.ID, policy, diskColumn, saved, state); err != nil {
 			log.Warn("Could not save a server's disk alert; it may be sent again")
 		}
 	}
@@ -395,14 +385,13 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 			continue
 		}
 		var previous MemoryState
-		raw, err := loadState(ctx, s.DB, memoryKey(server.ID), &previous)
-		if err != nil {
+		if err := decode(policy.row.memory, &previous); err != nil {
 			return err
 		}
 		// An accepted replacement starts without the old binding's alert,
 		// and the old container's samples don't count against its limit.
 		judged := MemoryState{Revision: server.BindingRevision, From: previous.From}
-		if raw != "" && previous.Revision != server.BindingRevision {
+		if policy.row.memory.Valid && previous.Revision != server.BindingRevision {
 			judged.From = minute
 		}
 		next := previous
@@ -429,7 +418,7 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 		if next == previous && (next.AlertSince == 0 || next.Notified) {
 			continue
 		}
-		saved, changed, err := s.saveState(ctx, policy, memoryKey(server.ID), raw, next)
+		saved, changed, err := s.saveState(ctx, server.ID, policy.row.policy, memoryColumn, policy.row.memory, next)
 		if err != nil || !changed {
 			log.Warn("Could not save a server's memory alert; it will be checked again")
 			continue
@@ -446,7 +435,7 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 			s.notify(notify.ServerProblems, "memory:"+server.ID+":"+strconv.FormatInt(next.AlertSince, 10),
 				fmt.Sprintf("%s: over %d%% of its memory limit for %s.", server.DisplayName, policy.MemoryPercent, minutes(policy.MemoryMinutes)))
 			next.Notified = true
-			if _, _, err := s.saveState(ctx, policy, memoryKey(server.ID), saved, next); err != nil {
+			if _, _, err := s.saveState(ctx, server.ID, policy.row.policy, memoryColumn, saved, next); err != nil {
 				log.Warn("Could not save a server's memory alert; it may be sent again")
 			}
 			s.changed(server.ID)
@@ -489,38 +478,23 @@ func (s *Service) ResourceProblems(ctx context.Context) (map[string][]Resource, 
 	if err != nil {
 		return nil, err
 	}
-	saved, err := s.DB.SettingsWithPrefix(ctx, "monitor.")
-	if err != nil {
-		return nil, err
-	}
 	problems := map[string][]Resource{}
-	for _, setting := range saved {
-		raw := setting.Value
-		kind, serverID, _ := strings.Cut(setting.Key, ":")
-		r := rows[serverID]
-		if r == nil {
-			continue
-		}
+	for serverID, r := range rows {
 		policy, err := ParsePolicy([]byte(r.policy))
 		if err != nil || !policy.Enabled || policy.Maintenance {
 			continue
 		}
-		switch {
-		case kind == "disk" && policy.DiskAlert:
-			var disk DiskState
-			if json.Unmarshal([]byte(raw), &disk) != nil {
-				continue
-			}
+		var disk DiskState
+		if policy.DiskAlert && decode(r.disk, &disk) == nil {
 			for _, folder := range disk.Folders {
 				if folder.AlertSince != 0 {
 					problems[serverID] = append(problems[serverID], Resource{Kind: "disk", Path: folder.Path, Percent: folder.Percent(), Since: folder.AlertSince})
 				}
 			}
-		case kind == "memory" && policy.MemoryAlert:
-			var memory MemoryState
-			if json.Unmarshal([]byte(raw), &memory) == nil && memory.AlertSince != 0 {
-				problems[serverID] = append(problems[serverID], Resource{Kind: "memory", Percent: float64(policy.MemoryPercent), Since: memory.AlertSince})
-			}
+		}
+		var memory MemoryState
+		if policy.MemoryAlert && decode(r.memory, &memory) == nil && memory.AlertSince != 0 {
+			problems[serverID] = append(problems[serverID], Resource{Kind: "memory", Percent: float64(policy.MemoryPercent), Since: memory.AlertSince})
 		}
 	}
 	return problems, nil

@@ -46,7 +46,7 @@ func TestPruneOperationsKeepsWhatIsStillShown(t *testing.T) {
 	}
 	for _, statement := range []string{
 		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at,last_operation_id) VALUES('a','s','u','{}',1,1,'old-003')`,
-		`INSERT INTO settings(key,value_json) VALUES('monitor.recovery:s','{"operationId":"old-004","pending":true}')`,
+		`INSERT INTO availability(server_id,policy_json,recovery_json,updated_at) VALUES('s','{}','{"operationId":"old-004","pending":true}',1)`,
 		`INSERT INTO audit_log(action,target_type,target_id,details_json,created_at) VALUES('server.backup.succeeded','server','s','{"operationId":"old-005"}',1)`,
 	} {
 		if _, err := d.Exec(statement); err != nil {
