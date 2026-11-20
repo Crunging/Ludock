@@ -16,8 +16,9 @@ const (
 // ChecklistItem is one thing left to set up.
 type ChecklistItem struct {
 	Key string
-	// Names are the servers or containers the item is about.
-	Names []string
+	// Names are the servers or containers the item is about; IDs are the
+	// servers a nightly backup is confirmed for.
+	Names, IDs []string
 	// Host is the address players are shown; Loopback when only this
 	// computer can use it.
 	Host     string
@@ -140,8 +141,13 @@ templ checklistAction(item ChecklistItem) {
 		case ChecklistAlerts:
 			<a class="secondary-btn" href="/settings#notification-settings-title">Set up notifications</a>
 		case ChecklistBackups:
-			<input type="hidden" id="checklist-timezone" name="timezone" data-default-local-timezone/>
-			<button class="secondary-btn" type="button" hx-post="/checklist/backups" hx-include="#checklist-timezone" hx-target="#checklist" data-busy-label="Scheduling…" { backupConfirm(len(item.Names))... }>Back up every night</button>
+			<form id="checklist-backups" hidden>
+				<input type="hidden" name="timezone" data-default-local-timezone/>
+				for _, id := range item.IDs {
+					<input type="hidden" name="server" value={ id }/>
+				}
+			</form>
+			<button class="secondary-btn" type="button" hx-post="/checklist/backups" hx-include="#checklist-backups" hx-target="#checklist" data-busy-label="Scheduling…" { backupConfirm(len(item.Names))... }>Back up every night</button>
 		case ChecklistAddress:
 			<a class="secondary-btn" href="/settings#connection-settings-title">Set the address</a>
 		case ChecklistServers:

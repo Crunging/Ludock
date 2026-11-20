@@ -100,6 +100,7 @@ test("the More menu on the last server opens past the end of the list", async ({
   await serverRow(page, "valheim").getByRole("button", { name: /More actions/ }).click();
   const files = serverRow(page, "valheim").getByRole("link", { name: "Files" });
   // The list must not clip the menu: the browser hits the item near its bottom edge.
+  await files.scrollIntoViewIfNeeded();
   await expect.poll(() => files.evaluate((link) => {
     const box = link.getBoundingClientRect();
     return link.contains(document.elementFromPoint(box.x + box.width / 2, box.bottom - 4));

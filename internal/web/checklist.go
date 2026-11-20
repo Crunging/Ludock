@@ -34,7 +34,7 @@ var checklistKeys = []string{views.ChecklistAlerts, views.ChecklistBackups, view
 type checklistState struct {
 	AlertsOn bool
 	// Unbacked names the servers a nightly backup would cover.
-	Unbacked []string
+	Unbacked, UnbackedIDs []string
 	// LocalHost is the loopback or private host players are shown, or "".
 	LocalHost string
 	// Unmanaged names containers that look like games Ludock doesn't manage.
@@ -54,7 +54,7 @@ func checklistItems(state checklistState) []views.ChecklistItem {
 		add(views.ChecklistItem{Key: views.ChecklistAlerts})
 	}
 	if len(state.Unbacked) > 0 {
-		add(views.ChecklistItem{Key: views.ChecklistBackups, Names: state.Unbacked})
+		add(views.ChecklistItem{Key: views.ChecklistBackups, Names: state.Unbacked, IDs: state.UnbackedIDs})
 	}
 	if state.LocalHost != "" {
 		add(views.ChecklistItem{Key: views.ChecklistAddress, Host: state.LocalHost, Loopback: loopbackHost(state.LocalHost)})
@@ -69,6 +69,7 @@ func checklistItems(state checklistState) []views.ChecklistItem {
 }
 
 func loopbackHost(host string) bool {
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 	if address, err := netip.ParseAddr(host); err == nil {
 		return address.Unmap().IsLoopback()
 	}
@@ -80,6 +81,7 @@ func loopbackHost(host string) bool {
 // network: a loopback, private, or link-local address, or a name that only
 // local networks resolve.
 func localHost(host string) bool {
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 	if address, err := netip.ParseAddr(host); err == nil {
 		address = address.Unmap()
 		return address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsUnspecified()
@@ -140,7 +142,7 @@ func backsUp(schedule schedules.Schedule) bool {
 type backupTarget struct{ ID, Name string }
 
 // backupTargets lists the servers that can be backed up and have no
-// recurring backup, and the times existing backup schedules use.
+// recurring backup, and the times existing recurring backups use.
 func (s *Server) backupTargets(ctx context.Context, user *db.SessionUser, all []servers.View) ([]backupTarget, []string, error) {
 	if settings, _, err := s.App.Backups.SavedSettings(ctx); err != nil || settings == nil {
 		return nil, nil, err
@@ -148,9 +150,6 @@ func (s *Server) backupTargets(ctx context.Context, user *db.SessionUser, all []
 	var targets []backupTarget
 	var taken []string
 	for _, view := range all {
-		if view.BindingStatus != "active" || view.SharingPaused || len(view.FileRoots) == 0 || !view.Can(authz.BackupsCreate) {
-			continue
-		}
 		list, err := s.App.Schedules.List(ctx, user, view.ID)
 		if err != nil {
 			return nil, nil, err
@@ -162,7 +161,7 @@ func (s *Server) backupTargets(ctx context.Context, user *db.SessionUser, all []
 				taken = append(taken, schedule.Time)
 			}
 		}
-		if !covered {
+		if !covered && view.BindingStatus == "active" && len(view.FileRoots) > 0 && view.Can(authz.BackupsCreate) {
 			targets = append(targets, backupTarget{view.ID, view.DisplayName})
 		}
 	}
@@ -188,6 +187,7 @@ func (s *Server) checklistView(r *http.Request, request *Request) views.Checklis
 		if targets, _, err := s.backupTargets(ctx, user, all); err == nil {
 			for _, target := range targets {
 				state.Unbacked = append(state.Unbacked, target.Name)
+				state.UnbackedIDs = append(state.UnbackedIDs, target.ID)
 			}
 		}
 		// Players see the page's host until an address is saved.
@@ -250,12 +250,20 @@ func (s *Server) scheduleNightlyBackups(w http.ResponseWriter, r *http.Request, 
 		s.fail(w, r, request, err)
 		return
 	}
+	// Only the servers the confirmation named, which are still eligible.
+	confirmed := r.PostForm["server"]
+	targets = slices.DeleteFunc(targets, func(target backupTarget) bool { return !slices.Contains(confirmed, target.ID) })
 	var scheduled []string
 	var failure error
 	for index, at := range backupTimes(taken, len(targets)) {
 		input := schedules.Input{Kind: "recurring", Action: "backup", Enabled: true, Time: at, Timezone: timezone,
 			Days: []int{0, 1, 2, 3, 4, 5, 6}}
-		// Create audits each schedule and rechecks the administrator.
+		// Create audits each schedule and rechecks the account; the session
+		// is checked here, as it may end while earlier ones are made.
+		if err := s.recheckAdmin(ctx, request); err != nil {
+			s.fail(w, r, request, err)
+			return
+		}
 		if _, err := s.App.Schedules.Create(ctx, request.User(), targets[index].ID, input); err != nil {
 			if public, ok := apperr.As(err); !ok || public.Status == http.StatusUnauthorized || public.Status == http.StatusForbidden {
 				s.fail(w, r, request, err)

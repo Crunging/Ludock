@@ -56,17 +56,17 @@ func TestLocalHost(t *testing.T) {
 	t.Parallel()
 	for _, host := range []string{"127.0.0.1", "::1", "localhost", "panel.localhost", "10.0.0.5", "172.16.3.4", "192.168.1.20",
 		"fd00::1", "fe80::1", "169.254.1.1", "::ffff:192.168.1.2", "0.0.0.0", "nas", "nas.local", "box.lan", "server.home.arpa",
-		"NAS.LOCAL."} {
+		"NAS.LOCAL.", "[::1]", "[fd00::1]"} {
 		if !localHost(host) {
 			t.Error("not local:", host)
 		}
 	}
-	for _, host := range []string{"203.0.113.10", "2001:db8::1", "play.example.com", "100.100.1.1", ""} {
+	for _, host := range []string{"203.0.113.10", "2001:db8::1", "play.example.com", "100.100.1.1", "[2001:db8::1]", ""} {
 		if localHost(host) {
 			t.Error("local:", host)
 		}
 	}
-	if !loopbackHost("127.0.0.1") || !loopbackHost("localhost") || loopbackHost("192.168.1.20") {
+	if !loopbackHost("127.0.0.1") || !loopbackHost("[::1]") || !loopbackHost("localhost") || loopbackHost("192.168.1.20") {
 		t.Fatal("loopback")
 	}
 }
