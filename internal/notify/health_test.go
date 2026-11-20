@@ -130,3 +130,44 @@ func TestCleanupKeepsNewestDelivery(t *testing.T) {
 		t.Fatal("forgot the destination delivered")
 	}
 }
+
+// While an alert's retry is being sent, its destination's health stays what
+// the last outcomes say: an old failure retried after a later delivery isn't
+// failing, and a destination that is still failing doesn't look fixed.
+func TestHealthWhileRetrySends(t *testing.T) {
+	var sending chan struct{}
+	release := make(chan struct{})
+	s := setup(t, func(*http.Request) (*http.Response, error) {
+		if sending != nil {
+			close(sending)
+			<-release
+		}
+		return respond(204, "")
+	})
+	failingDuringRetry := func() bool {
+		t.Helper()
+		sending, release = make(chan struct{}), make(chan struct{})
+		done := make(chan error, 1)
+		go func() { done <- s.Deliver(ctx) }()
+		<-sending
+		p, err := s.Problems(ctx)
+		close(release)
+		if sent := <-done; err != nil || sent != nil {
+			t.Fatal(err, sent)
+		}
+		sending = nil
+		return len(p) > 0
+	}
+	old := `INSERT INTO notification_deliveries (id,event_key,destination,message,next_attempt_at,created_at,state,attempts,
+		retry_attempts,last_attempt_at,failure_code) VALUES (?,?,'discord','valheim: the server is down.',0,1,'queued',3,3,?,'network')`
+	// Still failing: nothing has been delivered.
+	s.DB.Exec(old, "a", "a", 2)
+	if !failingDuringRetry() {
+		t.Fatal("a failing destination looked fixed while a retry was sent")
+	}
+	// The retry delivered; an older failure retried after it isn't failing.
+	s.DB.Exec(old, "b", "b", 3)
+	if failingDuringRetry() {
+		t.Fatal("an old failure being retried made the destination failing")
+	}
+}

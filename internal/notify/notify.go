@@ -483,15 +483,16 @@ func (s *Service) Retry(ctx context.Context, adminID, tokenHash, id string) (*De
 		return nil, errNotRetryable
 	}
 	// Only the row as read is retried: a send claimed or finished since then
-	// changes last_attempt_at or the counters, and must not be queued again.
+	// changes next_attempt_at, last_attempt_at, or the counters, and must not be
+	// queued again.
 	changed := int64(0)
 	err = s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
 		if err := assertReadyIn(ctx, tx, d); err != nil {
 			return err
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE notification_deliveries SET state='queued',retry_attempts=0,next_attempt_at=?
-      WHERE id=? AND state=? AND attempts=? AND retry_attempts=? AND last_attempt_at IS ?`,
-			db.Now(), id, r.state, r.attempts, r.retries, r.lastAttempt)
+      WHERE id=? AND state=? AND attempts=? AND retry_attempts=? AND last_attempt_at IS ? AND next_attempt_at=?`,
+			db.Now(), id, r.state, r.attempts, r.retries, r.lastAttempt, r.next)
 		if err == nil {
 			changed, err = result.RowsAffected()
 		}
@@ -585,14 +586,17 @@ func (s *Service) Deliver(ctx context.Context) error {
 		backoff := min(int64(3600_000), int64(30_000)<<min(retries, 20))
 		// Mark active first so Retry refuses the row, and claim only the row as
 		// read so a retry that already reset it wins. If the result cannot be
-		// saved, the message is sent again after the backoff.
+		// saved, the message is sent again after the backoff. The claim moves
+		// only next_attempt_at: last_attempt_at dates the last outcome, which
+		// Health compares with the last delivery.
 		s.mu.Lock()
 		s.active, s.activeTo = id, d
 		s.mu.Unlock()
 		claimedAt := db.Now()
-		result, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?
-      WHERE id=? AND state='queued' AND attempts=? AND retry_attempts=? AND last_attempt_at IS ?`,
-			claimedAt, claimedAt+backoff, id, r.attempts, r.retries, r.lastAttempt)
+		claim := claimedAt + backoff
+		result, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET next_attempt_at=?
+      WHERE id=? AND state='queued' AND attempts=? AND retry_attempts=? AND last_attempt_at IS ? AND next_attempt_at=?`,
+			claim, id, r.attempts, r.retries, r.lastAttempt, r.next)
 		claimed := int64(0)
 		if err == nil {
 			claimed, err = result.RowsAffected()
@@ -620,8 +624,8 @@ func (s *Service) Deliver(ctx context.Context) error {
 			cancelSend(nil)
 		}
 		release := func() {
-			if _, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?
-        WHERE id=? AND last_attempt_at=?`, r.lastAttempt, r.next, id, claimedAt); err != nil {
+			if _, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET next_attempt_at=?
+        WHERE id=? AND next_attempt_at=? AND attempts=?`, r.next, id, claim, r.attempts); err != nil {
 				log.Warn("Could not release a notification delivery; it will be retried after its delay")
 			}
 			finishSend()
@@ -650,8 +654,8 @@ func (s *Service) Deliver(ctx context.Context) error {
 		}
 		for try := 1; ; try++ {
 			_, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries
-      SET attempts=?,retry_attempts=?,state=?,next_attempt_at=?,delivered_at=?,failure_code=? WHERE id=?`,
-				attempts, retries, state, finished+backoff, delivered, failureCode, id)
+      SET attempts=?,retry_attempts=?,state=?,last_attempt_at=?,next_attempt_at=?,delivered_at=?,failure_code=? WHERE id=?`,
+				attempts, retries, state, claimedAt, finished+backoff, delivered, failureCode, id)
 			if err == nil {
 				break
 			}
