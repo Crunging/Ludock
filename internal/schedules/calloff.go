@@ -128,7 +128,10 @@ func (s *Service) tellCalledOff(ctx context.Context, serverID, action string) er
 	if err != nil {
 		return err
 	}
-	if current.Container.State != "running" || current.Container.Console == nil || !current.Container.Console.SupportsBroadcast {
+	// A server awaiting review after its game or data folders changed may
+	// not be the one players were warned on.
+	if current.Logical.SharingPaused || current.Container.State != "running" || current.Container.Console == nil ||
+		!current.Container.Console.SupportsBroadcast {
 		return nil
 	}
 	template := broadcastTemplate(current)

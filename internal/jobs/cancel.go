@@ -124,28 +124,34 @@ type registrar struct {
 func (r registrar) Register(kind string, handler ops.Handler) {
 	run := handler.Run
 	handler.Run = func(ctx context.Context, job *ops.Context) (map[string]any, error) {
-		if _, scheduled := job.Job.Input["scheduleId"].(string); scheduled && r.refused(ctx, job) && r.jobs.countedDown(ctx, job.Job) {
-			r.jobs.sayCalledOff(ctx, job.Job)
+		if _, scheduled := job.Job.Input["scheduleId"].(string); scheduled {
+			// A refusal is final: the handler never runs after players hear
+			// it's off, even if access returns meanwhile.
+			if err := r.refusal(ctx, job); err != nil {
+				if _, public := apperr.As(err); public && r.jobs.countedDown(ctx, job.Job) {
+					r.jobs.sayCalledOff(ctx, job.Job)
+				}
+				return nil, err
+			}
 		}
 		return run(ctx, job)
 	}
 	r.runner.Register(kind, handler)
 }
 
-// refused reports whether the handler will refuse job before acting; it
-// then records the refusal itself.
-func (r registrar) refused(ctx context.Context, job *ops.Context) bool {
+// refusal is why the owner of scheduled job can't start it now, if they
+// can't.
+func (r registrar) refusal(ctx context.Context, job *ops.Context) error {
 	actor, err := r.jobs.Actor(ctx, job)
 	if err != nil {
-		_, public := apperr.As(err)
-		return public
+		return err
 	}
 	for _, capability := range StartCapabilities(job.Job) {
-		if ok, err := r.jobs.Authz.Has(ctx, actor, job.Job.ServerID, capability); err == nil && !ok {
-			return true
+		if _, err := r.jobs.Authz.Assert(ctx, actor, job.Job.ServerID, capability); err != nil {
+			return err
 		}
 	}
-	return false
+	return nil
 }
 
 // sayCalledOff tells players a warned operation is off, best effort, on the
