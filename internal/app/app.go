@@ -200,8 +200,16 @@ func (a *App) Start(ctx context.Context) {
 	a.background.Add(1)
 	go func() {
 		defer a.background.Done()
-		for delay := time.Second; recoverStartup() != nil; delay = min(2*delay, time.Minute) {
-			log.Error("Could not recover interrupted operations; retrying")
+		for delay := time.Second; ; delay = min(2*delay, time.Minute) {
+			err := recoverStartup()
+			if err == nil {
+				break
+			}
+			fields := logging.Cause(err, docker.StatusCode(err))
+			if docker.Unavailable(err) && docker.StatusCode(err) == 0 {
+				fields = append(fields, logging.F("docker", "unreachable"))
+			}
+			log.Error("Could not recover interrupted operations; retrying", fields...)
 			select {
 			case <-a.stop:
 				return

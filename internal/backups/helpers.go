@@ -240,7 +240,9 @@ func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess fun
 		if expired.Load() {
 			return errBackupTimeout
 		}
-		result, err := h.Docker.InspectExec(context.WithoutCancel(ctx), execID)
+		// Docker away as the stream ends means it cut the copy short, even if
+		// the exec it kept then exits with an error once Docker is back.
+		result, err := h.Docker.InspectExec(docker.Promptly(context.WithoutCancel(ctx)), execID)
 		if docker.Unavailable(err) {
 			return err
 		}
@@ -484,6 +486,11 @@ type StageTarget struct {
 	Item string
 }
 
+var (
+	errExtractCut = errors.New("restore extraction stream closed")
+	errExtraction = fail("RESTORE_EXTRACTION", "A folder in the server’s data changed, or isn’t safe to write to, while the backup was unpacking, so the restore was stopped.")
+)
+
 // ExtractToStage streams an archive into the helper's restore stage of
 // every target in one pass, each root through its own extraction. The
 // checksum covers the whole archive, so a changed archive is detected before
@@ -563,7 +570,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 			case result != nil && *result.ExitCode == helper.ExtractFullStatus:
 				err = errStagingCapacity
 			case err != nil || result == nil || *result.ExitCode != 0:
-				err = fail("RESTORE_EXTRACTION", "A folder in the server’s data changed, or isn’t safe to write to, while the backup was unpacking, so the restore was stopped.")
+				err = errExtraction
 			}
 			extraction.completed <- err
 		}()
@@ -583,8 +590,10 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 				return err
 			}
 		}
-		_, err := conn.Write(data)
-		return err
+		if _, err := conn.Write(data); err != nil {
+			return errExtractCut
+		}
+		return nil
 	}
 	names := map[string]bool{}
 	hash := sha256.New()
@@ -640,6 +649,14 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 	})
 	if err == nil && hex.EncodeToString(hash.Sum(nil)) != checksum {
 		err = fail("BACKUP_CHECKSUM", "The archive changed while it was being staged. No existing game data was replaced.")
+	}
+	if errors.Is(err, errExtractCut) {
+		// The archive is fine; the stream to the helper broke, such as when
+		// Docker went away.
+		if pingErr := h.Docker.Ping(docker.Promptly(context.WithoutCancel(ctx))); docker.Unavailable(pingErr) {
+			return pingErr
+		}
+		return errExtraction
 	}
 	if err != nil {
 		if _, ok := apperr.As(err); !ok {

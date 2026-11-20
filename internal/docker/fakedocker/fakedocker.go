@@ -174,26 +174,39 @@ func (e *Engine) faultLocked(request string) *fault {
 // is back. Other containers keep their state.
 func (e *Engine) Outage(duration time.Duration) error {
 	e.mu.Lock()
-	for _, events := range e.events {
-		close(events)
-	}
-	e.events = nil
-	// Without live restore, Docker stops every container as it exits; those
-	// created with AutoRemove are gone when it is back.
-	for conn := range e.streams {
-		conn.Close()
-	}
 	// A restarted daemon knows none of its earlier execs.
 	e.execs = map[string]*exec{}
+	// Without live restore, Docker stops every container as it exits; those
+	// created with AutoRemove are gone when it is back.
 	for id, c := range e.containers {
 		if autoRemove, _ := c.HostConfig["AutoRemove"].(bool); autoRemove {
 			e.removeLocked(id)
 		}
 	}
+	e.mu.Unlock()
+	return e.Disconnect(duration)
+}
+
+// Disconnect closes every connection and stream and refuses new ones for
+// duration while the daemon keeps its containers and execs, as when a proxy
+// in front of the socket restarts.
+func (e *Engine) Disconnect(duration time.Duration) error {
+	e.mu.Lock()
+	for _, events := range e.events {
+		close(events)
+	}
+	e.events = nil
 	server := e.server
 	e.mu.Unlock()
+	// Refuse requests before cutting streams, so a client that sees its
+	// stream end can't reach the daemon in between.
 	server.Close()
 	os.Remove(e.Socket)
+	e.mu.Lock()
+	for conn := range e.streams {
+		conn.Close()
+	}
+	e.mu.Unlock()
 	time.Sleep(duration)
 	listener, err := net.Listen("unix", e.Socket)
 	if err != nil {

@@ -716,8 +716,9 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 		} else if docker.Unavailable(err) {
 			message = "Ludock couldn’t reach Docker, so this stopped. Check the server before trying again."
 		}
-		// Work stopped by shutdown is reconciled on the next start, not failed.
-		if _, public := apperr.As(err); !public && ctx.Err() == nil {
+		// Work stopped by shutdown is reconciled on the next start, not
+		// failed, and cancelled work keeps the outcome Cancel recorded.
+		if _, public := apperr.As(err); !public && ctx.Err() == nil && !errors.Is(err, ErrCancelled) {
 			log.Error("Operation failed unexpectedly", append([]logging.Field{logging.F("operation", rw.id), logging.F("kind", rw.kind)},
 				logging.Cause(err, docker.StatusCode(err))...)...)
 		}
