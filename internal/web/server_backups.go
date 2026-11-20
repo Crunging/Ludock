@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,7 +30,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		CanRead: can(view, authz.BackupsRead), CanCreate: can(view, authz.BackupsCreate),
 		CanRestore: can(view, authz.BackupsRestore), CanDelete: can(view, authz.BackupsDelete),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
-		LatestBackup: view.LatestBackup, NoData: view.NoDataFolders}
+		LatestBackup: view.LatestBackup, NoData: view.NoDataFolders, BindingRevision: view.BindingRevision}
 	// The tab follows any running work, so readiness and paused controls come
 	// back when it ends.
 	b.Operation = views.ActivityView{ServerID: view.ID, Admin: d.Admin, Tab: "backups", SelectedID: r.URL.Query().Get("operation"),
@@ -44,16 +45,20 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		if id := r.URL.Query().Get("browse"); id != "" {
 			b.Browse = s.backupBrowser(r, view.ID, id, s.archiveAccess(r.Context(), request, view.ID))
 			b.Browse.ServerName, b.Browse.CanRestore = view.DisplayName, restoreOffered(view, d.DiscoveryUnavailable)
+			s.fitBrowser(r.Context(), view, b.Browse)
 			return b
 		}
 		s.readBackups(r, &b)
+		if !b.Blocked {
+			b.Fits = s.backupFits(r.Context(), view, b.Backups)
+		}
 		restore, keep := r.URL.Query().Get("restore"), r.URL.Query().Get("keep")
 		for index := range b.Backups {
 			backup := &b.Backups[index]
 			if backup.State != "complete" {
 				continue
 			}
-			if backup.ID == restore {
+			if backup.ID == restore && b.Fits[backup.ID].Refusal == "" {
 				b.Restore = backup
 			}
 			if backup.ID == keep && backup.KeptAt == 0 {
@@ -72,6 +77,32 @@ func (s *Server) readBackups(r *http.Request, b *views.BackupsView) {
 	s.App.Backups.Locate(list)
 	// A removed backup that waits only for its second copy to go is gone.
 	b.Backups = slices.DeleteFunc(list, func(backup backups.Backup) bool { return backup.CopyState == "removing" })
+}
+
+// backupFits compares each backup with the server as discovery last saw it,
+// for the page only; a restore compares again with Docker before it runs.
+func (s *Server) backupFits(ctx context.Context, view *servers.View, list []backups.Backup) map[string]backups.Fit {
+	logical, err := s.App.Identity.Get(ctx, view.ID)
+	if err != nil || logical == nil {
+		return nil
+	}
+	roots := backups.CurrentRoots(view.FileRoots)
+	fits := map[string]backups.Fit{}
+	for index := range list {
+		fits[list[index].ID] = backups.CompareFit(&list[index], logical.BindingFingerprint, view.GameType, roots)
+	}
+	return fits
+}
+
+// fitBrowser applies a backup's fit to its browser: a backup that can't be
+// restored offers no restores, and one taken before the data moved says so.
+func (s *Server) fitBrowser(ctx context.Context, view *servers.View, browser *views.BackupBrowser) {
+	if !browser.CanRestore || browser.Backup.ID == "" {
+		return
+	}
+	browser.Fit = s.backupFits(ctx, view, []backups.Backup{browser.Backup})[browser.Backup.ID]
+	browser.BindingRevision = view.BindingRevision
+	browser.CanRestore = browser.Fit.Refusal == ""
 }
 
 func (s *Server) backupList(w http.ResponseWriter, r *http.Request, request *Request) {
@@ -202,6 +233,18 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 		s.fail(w, r, request, err)
 		return
 	}
+	fit := backups.FitFor(backup, resolved)
+	if fit.Refusal != "" {
+		s.fail(w, r, request, apperr.New("BACKUP_FOLDERS_DIFFER", http.StatusConflict, fit.Refusal))
+		return
+	}
+	// The confirmation holds only for the storage the page showed.
+	if fit.Moved && (r.PostFormValue(jobs.MovedInput) != "true" ||
+		r.PostFormValue("bindingRevision") != strconv.FormatInt(resolved.Logical.BindingRevision, 10)) {
+		s.fail(w, r, request, apperr.New("CONFIRMATION_REQUIRED", http.StatusBadRequest,
+			"This backup was taken when the server’s data lived somewhere else. Reload the page and confirm the restore again."))
+		return
+	}
 	// A whole restore is confirmed by typing the server's name; one item, in
 	// the confirmation dialog, which can ask for a backup first.
 	if input == nil {
@@ -215,6 +258,9 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 		input["createBackup"] = true
 	}
 	input["backupId"] = backupID
+	if fit.Moved {
+		input[jobs.MovedInput] = true
+	}
 	s.enqueue(w, r, request, resolved, user, "restore", input)
 }
 

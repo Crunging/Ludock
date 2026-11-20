@@ -123,7 +123,7 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		if err := assertCopy(); err != nil {
 			return nil, err
 		}
-		backup := &backups.Backup{ID: id, ServerID: server.Logical.ID, Roots: data.Roots, Size: size, Checksum: checksum,
+		backup := &backups.Backup{ID: id, ServerID: server.Logical.ID, Roots: data.Roots, GameType: server.Container.GameType, Size: size, Checksum: checksum,
 			CreatedAt: time.Now().UnixMilli(), State: "complete"}
 		if kind := job.Job.Kind; kind == "restore" || kind == "update" {
 			backup.Reason = kind

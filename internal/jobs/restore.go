@@ -252,11 +252,12 @@ func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job 
 	return saveRestore(job, restoreRecovery{Status: "cleaned"}, "")
 }
 
-// rootsEqual ignores order: a root's ID is derived from its path, and
-// Docker or the ludock.files label may list the same roots in a new order.
-func rootsEqual(left []backups.Root, right []backups.Root) bool {
-	return len(left) == len(right) && !slices.ContainsFunc(left, func(root backups.Root) bool { return !slices.Contains(right, root) })
-}
+// MovedInput confirms restoring a backup taken when the server's data lived
+// elsewhere on the host.
+const MovedInput = "dataMoved"
+
+var errMovedConfirmation = fail("RESTORE_MOVED_CONFIRMATION",
+	"This backup was taken when the server’s data lived somewhere else. Confirm restoring it from the server’s backups.")
 
 func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any, error) {
 	server, err := j.resolve(ctx, job, authz.BackupsRestore, true)
@@ -274,15 +275,12 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	if row.Fingerprint() != server.Logical.BindingFingerprint {
-		return nil, fail("BACKUP_BINDING_CHANGED", "This backup belongs to a different server configuration. Review its data roots before restoring.")
+	fit := backups.FitFor(row, server)
+	if fit.Refusal != "" {
+		return nil, fail("BACKUP_FOLDERS_DIFFER", fit.Refusal)
 	}
-	var current []backups.Root
-	for _, root := range server.Container.FileRoots {
-		current = append(current, backups.Root{ID: root.ID, Path: root.Path})
-	}
-	if !rootsEqual(row.Roots, current) {
-		return nil, fail("BACKUP_ROOT_CHANGED", "The current data roots do not match this backup.")
+	if fit.Moved && job.Job.Input[MovedInput] != true {
+		return nil, errMovedConfirmation
 	}
 	// A selective restore replaces one item of one root; a full one, every root.
 	roots := row.Roots
@@ -447,6 +445,9 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				return nil, err
 			}
 			restored = map[string]any{"restoredBackupId": row.ID}
+			if fit.Moved {
+				restored[MovedInput] = true
+			}
 			if safety != nil {
 				restored["safetyBackupId"] = safety.ID
 			}

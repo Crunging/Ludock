@@ -347,9 +347,21 @@ Afterwards, game backups are listed again and read from the backup folder as
 before. Archives made after the save aren't listed, and records of archives
 removed since show them as missing. Game servers recreated with the same
 Compose project and service are recognized with their sharing and schedules.
-If a server's data folders now live on a different volume or host folder,
-Ludock asks to confirm them, and its older backups can no longer be restored
-from the panel; [restore them by hand](#restore-a-backup-without-ludock). If you mounted the
+If a server's data now lives on a different volume or host folder, Ludock asks
+an administrator to confirm the change before people it's shared with can use
+it again. Then, to bring a server's game data back:
+
+1. Open the server's **Backups**. Backups taken on the old host say **Taken
+   when the server's data lived somewhere else**.
+2. Choose **Restore…** on the one you want, type the server's name, and
+   confirm. Ludock stops the server, backs up what is there now, puts the
+   backup's files in the server's data folders where they are now, and returns
+   the server to how it was. Activity notes that the backup was taken before
+   the data moved.
+
+This works when the server runs the same game with the same data folders
+inside the container, such as `/data`. A backup that doesn't match says why;
+[restore it by hand](#restore-a-backup-without-ludock). If you mounted the
 second folder as the backup folder, choose a new second folder in **Settings**.
 
 ### Restore a backup without Ludock
@@ -471,8 +483,10 @@ label, or environment variable keeps its history, sharing, and schedules. A
 change to its game or to the data folders Ludock reads and backs up pauses the
 access of everyone it's shared with, and their schedules, until an
 administrator chooses **Confirm and restore access**, since what they were
-given has changed. Backups taken before the change restore only onto the same
-data folders.
+given has changed. Backups taken before the change still restore when the game
+and the data folders' paths inside the container are the same, after an
+administrator confirms that the data now lives somewhere else; otherwise the
+backup says what differs.
 
 ### Helpers
 
