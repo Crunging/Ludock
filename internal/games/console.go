@@ -48,6 +48,8 @@ type Adapter struct {
 	TrimSlash bool
 	// Players lists who is online, or is nil when Ludock can't.
 	Players *PlayerQuery
+	// Moderation acts on players in that list, or is nil.
+	Moderation *Moderation
 }
 
 var adapters = map[AdapterID]Adapter{
@@ -93,6 +95,10 @@ func ResolveAdapter(gameType string, labels map[string]string) *Adapter {
 			integration.Console.Players != nil {
 			adapter.Players = integration.Console.Players
 		}
+		// Moderation belongs to the game, never to an adapter a label names.
+		if integration != nil && integration.Console != nil && integration.Console.Adapter == adapter.ID {
+			adapter.Moderation = integration.Console.Moderation
+		}
 		return &adapter
 	}
 	if integration == nil || integration.Console == nil {
@@ -103,6 +109,7 @@ func ResolveAdapter(gameType string, labels map[string]string) *Adapter {
 	if preset.Players != nil {
 		adapter.Players = preset.Players
 	}
+	adapter.Moderation = preset.Moderation
 	if preset.Name != "" {
 		adapter.Name = preset.Name
 	}

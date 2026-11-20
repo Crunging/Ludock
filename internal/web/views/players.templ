@@ -1,9 +1,11 @@
 package views
 
 import (
+	"encoding/hex"
 	"strconv"
 	"strings"
 
+	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/players"
 )
 
@@ -19,6 +21,10 @@ type PlayersView struct {
 	Query   string
 	// Reading is nil until the first one after the server started.
 	Reading *players.Reading
+	// Moderation is set when the viewer may act on this server's players
+	// through its console.
+	ServerID   string
+	Moderation *games.Moderation
 }
 
 // Limits on the names a page shows; the rest are counted.
@@ -127,7 +133,13 @@ templ PlayersFact(p PlayersView) {
 					if len(p.Reading.Names) > 0 {
 						<ul class="player-names" aria-label="Online players">
 							for _, name := range someNames(p.Reading, detailNames) {
-								<li>{ name }</li>
+								if players.Actionable(p.Moderation, p.Reading, name) {
+									<li id={ playerID(name, players.OnlineKey(p.Reading, name)) }>
+										@playerMenu(p, name)
+									</li>
+								} else {
+									<li><span class="player-name">{ name }</span></li>
+								}
 							}
 						</ul>
 					}
@@ -181,4 +193,168 @@ templ GameFact(g GameView) {
 			}
 		</dd>
 	</div>
+}
+
+// playerID keys a player's chip by name and account, so a refresh that
+// reorders the list, or gives the name to another account, never leaves an
+// open menu acting on someone else.
+func playerID(name, key string) string {
+	return "player-" + hex.EncodeToString([]byte(name)) + "-" + key
+}
+
+// playerMenu is an online player's name, which opens what can be done to
+// them. Results show in the page's status area, outside the live overview.
+templ playerMenu(p PlayersView, name string) {
+	{{ id := playerID(name, players.OnlineKey(p.Reading, name)) + "-actions" }}
+	<div class="action-menu player-menu" data-action-menu>
+		<button type="button" class="player-menu__trigger" aria-label={ name + ": actions" } aria-expanded="false" aria-controls={ id }>
+			<span class="player-name">{ name }</span>
+			<svg class="chevron" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2.5 4.5 6 8l3.5-3.5"></path></svg>
+		</button>
+		<div class="action-menu__content action-menu__content--start" id={ id } hidden>
+			if p.Moderation.Offers(games.Kick) {
+				<form hx-post={ playerActionURL(p.ServerID, games.Kick) } hx-target="#detail-status">
+					<input type="hidden" name="player" value={ name }/>
+					<input type="hidden" name="key" value={ players.OnlineKey(p.Reading, name) }/>
+					<button type="submit" class="action-menu__action">Kick</button>
+				</form>
+			}
+			if p.Moderation.Offers(games.Ban) {
+				<form
+					hx-post={ playerActionURL(p.ServerID, games.Ban) }
+					hx-target="#detail-status"
+					hx-confirm={ "Ban " + name + "?" }
+					data-confirm-detail={ banDetail(p.Moderation) }
+					data-confirm-action="Ban player"
+					data-confirm-danger
+				>
+					<input type="hidden" name="player" value={ name }/>
+					<input type="hidden" name="key" value={ players.OnlineKey(p.Reading, name) }/>
+					<button type="submit" class="action-menu__action action-menu__action--danger">Ban…</button>
+				</form>
+			}
+		</div>
+	</div>
+}
+
+func playerActionURL(serverID string, action games.PlayerAction) string {
+	return "/servers/" + serverID + "/players/" + string(action)
+}
+
+func banDetail(moderation *games.Moderation) string {
+	detail := "They’re removed from the server and can’t join again until the ban is lifted."
+	if moderation.Offers(games.Unban) {
+		detail += " You can lift it under Allowlist and bans."
+	} else {
+		detail += " Lifting it takes the game’s console."
+	}
+	return detail
+}
+
+// PlayerAlert is the result of a player action. Reply is the game's own
+// words when Ludock doesn't recognize them.
+type PlayerAlert struct {
+	Kind, Message, Reply string
+}
+
+templ PlayerResult(a PlayerAlert) {
+	<div class={ "alert", "alert--" + a.Kind } role={ map[bool]string{true: "alert", false: "status"}[a.Kind == "error"] }>
+		{ a.Message }
+		if a.Reply != "" {
+			<span class="player-result__reply">The game replied: <q>{ a.Reply }</q></span>
+		}
+	</div>
+}
+
+// PlayerListsView is a game's allowlist and ban list.
+type PlayerListsView struct {
+	ServerID   string
+	Moderation *games.Moderation
+	Running    bool
+	Lists      *players.Lists
+	Error      string
+	Alert      PlayerAlert
+}
+
+// PlayerListsDisclosure reads the lists the first time it opens.
+templ PlayerListsDisclosure(serverID string) {
+	<details
+		class="disclosure player-lists"
+		hx-get={ "/fragments/servers/" + serverID + "/player-lists" }
+		hx-trigger="toggle once, player-lists-changed from:document, servers-changed from:document"
+		hx-target="#player-lists-body"
+		hx-swap="outerHTML"
+	>
+		<summary>Allowlist and bans</summary>
+		<div id="player-lists-body" class="player-lists__body">
+			<p class="muted">Reading the server’s lists…</p>
+		</div>
+	</details>
+}
+
+templ PlayerLists(v PlayerListsView) {
+	<div id="player-lists-body" class="player-lists__body">
+		<div aria-live="polite">
+			if v.Alert.Message != "" {
+				@PlayerResult(v.Alert)
+			}
+		</div>
+		if v.Error != "" {
+			<p class="muted">{ v.Error }. They’re read from the server’s data folder.</p>
+		} else if v.Lists != nil {
+			<section class="player-list" aria-labelledby="allowlist-title">
+				<h3 id="allowlist-title">Allowlist</h3>
+				if state := allowlistState(v.Lists); state != "" {
+					<p class="muted">{ state }</p>
+				}
+				@listedPlayers(v, v.Lists.Allowed, games.Disallow, "Remove", "Nobody is on the allowlist.")
+				<form class="player-add" hx-post={ playerActionURL(v.ServerID, games.Allow) } hx-target="#player-lists-body" hx-swap="outerHTML">
+					<label>
+						Player name
+						<input type="text" name="player" required maxlength="16" pattern={ v.Moderation.Pattern() } autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="player-add-help" disabled?={ !v.Running }/>
+					</label>
+					<button type="submit" class="secondary-btn" disabled?={ !v.Running } data-busy-label="Adding…">Add to allowlist</button>
+					<p class="muted" id="player-add-help">Their Minecraft name: letters, digits, and _, up to 16.</p>
+				</form>
+			</section>
+			<section class="player-list" aria-labelledby="banlist-title">
+				<h3 id="banlist-title">Banned</h3>
+				@listedPlayers(v, v.Lists.Banned, games.Unban, "Lift ban", "Nobody is banned.")
+			</section>
+		}
+		if !v.Running {
+			<p class="muted">Start the server to change these lists.</p>
+		}
+	</div>
+}
+
+templ listedPlayers(v PlayerListsView, list games.ListedPlayers, action games.PlayerAction, label, empty string) {
+	if len(list.Names) == 0 && list.Others == 0 {
+		<p class="muted">{ empty }</p>
+	} else {
+		<ul class="player-list__names">
+			for _, name := range list.Names {
+				<li>
+					<span class="player-name">{ name }</span>
+					<form hx-post={ playerActionURL(v.ServerID, action) } hx-target="#player-lists-body" hx-swap="outerHTML">
+						<input type="hidden" name="player" value={ name }/>
+						<button type="submit" class="secondary-btn player-list__action" aria-label={ label + ": " + name } disabled?={ !v.Running } data-busy-label="Working…">{ label }</button>
+					</form>
+				</li>
+			}
+		</ul>
+		if list.Others > 0 {
+			<p class="muted">And { strconv.Itoa(list.Others) } more that Ludock can’t change here.</p>
+		}
+	}
+}
+
+func allowlistState(lists *players.Lists) string {
+	switch {
+	case !lists.AllowlistKnown:
+		return ""
+	case lists.AllowlistOn:
+		return "On: only players on this list, and operators, can join."
+	}
+	return "Off in the server’s settings, so anyone can join. The list takes effect when the server turns it on."
 }

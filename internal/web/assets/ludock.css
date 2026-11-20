@@ -733,6 +733,29 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .overview-meter--players > span { background: var(--go); }
 .player-names { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: var(--gap); flex-basis: 100%; }
 .player-names li { padding: 1px 8px; border-radius: 4px; background: var(--block-2); font-size: 14px; overflow-wrap: anywhere; }
+/* A player someone may act on is a chip that opens their actions. */
+.player-names li:has(.player-menu) { padding: 0; }
+.player-menu__trigger {
+  display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px 1px 8px; border: 0; border-radius: 4px;
+  background: none; color: inherit; font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer;
+}
+.player-menu__trigger:hover, .player-menu__trigger[aria-expanded=true] { background: color-mix(in srgb, var(--ink) 12%, transparent); }
+.player-menu__trigger .chevron { width: 10px; height: 10px; color: var(--ink-3); }
+.action-menu__content--start { left: 0; right: auto; }
+.player-result__reply { display: block; margin-top: 4px; color: var(--ink-2); font-size: 14px; overflow-wrap: anywhere; }
+.player-lists { margin-top: 28px; max-width: var(--measure); }
+.player-lists__body { display: grid; gap: 22px; }
+.player-list { display: grid; gap: 8px; }
+.player-list__names { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+.player-list__names li {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 4px 4px 4px 12px; border-radius: var(--radius); background: var(--block);
+}
+.player-list__names .player-name { overflow-wrap: anywhere; font-weight: 600; }
+.player-list__action { min-height: 30px; padding: 4px 11px; font-size: 14px; }
+.player-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
+.player-add label { flex: 1 1 200px; max-width: 280px; }
+.player-add p { flex-basis: 100%; font-size: 14px; }
 .overview-facts dd > .overview-players__checked { flex-basis: 100%; font-size: 13px; }
 #overview-live > section { margin-top: 36px; }
 

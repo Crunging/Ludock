@@ -28,8 +28,10 @@ type ConsolePreset struct {
 	Commands              []QuickCommand // nil uses the adapter's
 	DefaultPort           int
 	PasswordEnvCandidates []string
-	// Players lists who is online through this preset's adapter.
-	Players *PlayerQuery
+	// Players lists who is online through this preset's adapter, and
+	// Moderation acts on them.
+	Players    *PlayerQuery
+	Moderation *Moderation
 }
 
 type Port struct {
@@ -58,20 +60,20 @@ type Integration struct {
 // registries.
 var Integrations = []Integration{
 	{GameType: "minecraft", Name: "Minecraft", GamePort: &Port{25565, "tcp"}, Repositories: []string{"itzg/minecraft-server"},
-		UpdatesOnStart: true, Console: &ConsolePreset{Adapter: MinecraftRCON, BroadcastTemplate: "say {message}"},
+		UpdatesOnStart: true, Console: &ConsolePreset{Adapter: MinecraftRCON, BroadcastTemplate: "say {message}", Moderation: minecraftModeration},
 		Query: &StatusQuery{Protocol: gamequery.MinecraftPing, Port: 25565, PortEnv: []string{"SERVER_PORT"}}},
 	{GameType: "factorio", Name: "Factorio", GamePort: &Port{34197, "udp"}, Repositories: []string{"factoriotools/factorio"},
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Factorio RCON", DefaultPort: 27015,
 			Placeholder: "/players, /server-save, /config get",
 			Commands:    []QuickCommand{{"List players", "/players online"}, {"Save world", "/server-save"}},
-			Players:     &PlayerQuery{Command: "/players online", Parse: ParseFactorioPlayers}}},
+			Players:     &PlayerQuery{Command: "/players online", Parse: ParseFactorioPlayers}, Moderation: factorioModeration}},
 	{GameType: "palworld", Name: "Palworld", GamePort: &Port{8211, "udp"},
 		Repositories:       []string{"thijsvanloef/palworld-server-docker", "jammsen/palworld-dedicated-server"},
 		StopTimeoutSeconds: 180, UpdatesOnStart: true,
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Palworld RCON", DefaultPort: 25575,
 			Placeholder: "Info, ShowPlayers, Broadcast Hello",
 			Commands:    []QuickCommand{{"List players", "ShowPlayers"}, {"Save world", "Save"}, {"Server info", "Info"}},
-			Players:     &PlayerQuery{Command: "ShowPlayers", Parse: ParsePalworldPlayers}}},
+			Players:     &PlayerQuery{Command: "ShowPlayers", Parse: ParsePalworldPlayers}, Moderation: palworldModeration}},
 	{GameType: "ark-survival-evolved", Name: "ARK: Survival Evolved", GamePort: &Port{7777, "udp"},
 		Repositories:       []string{"hermsi/ark-server", "hermsi1337/ark-server", "indifferentbroccoli/ark-server-docker"},
 		StopTimeoutSeconds: 180, Aliases: []string{"ark"}, Console: arkConsole(),
@@ -111,7 +113,7 @@ var Integrations = []Integration{
 		Console: &ConsolePreset{Adapter: TelnetConsole, Name: "7 Days to Die Telnet", BroadcastTemplate: `say "{message}"`,
 			DefaultPort: 8081, Placeholder: "listplayers, saveworld, say Hello",
 			Commands: []QuickCommand{{"List players", "listplayers"}, {"Save world", "saveworld"}, {"Message players", "say "}},
-			Players:  &PlayerQuery{Command: "listplayers", Parse: Parse7DaysPlayers}}},
+			Players:  &PlayerQuery{Command: "listplayers", Parse: Parse7DaysPlayers}, Moderation: sevenDaysModeration}},
 	{GameType: "valheim", StopTimeoutSeconds: 180, Name: "Valheim", GamePort: &Port{2456, "udp"},
 		Repositories: []string{"community-valheim-tools/valheim-server", "lloesche/valheim-server"}, UpdatesOnStart: true,
 		// Valheim answers on its game port plus one, and only when public.
@@ -152,7 +154,7 @@ func arkConsole() *ConsolePreset {
 	return &ConsolePreset{Adapter: SourceRCON, Name: "ARK RCON", BroadcastTemplate: "Broadcast {message}", DefaultPort: 27020,
 		Placeholder: "ListPlayers, SaveWorld, Broadcast Hello",
 		Commands:    []QuickCommand{{"List players", "ListPlayers"}, {"Save world", "SaveWorld"}, {"Message players", "Broadcast "}},
-		Players:     &PlayerQuery{Command: "ListPlayers", Parse: ParseARKPlayers}}
+		Players:     &PlayerQuery{Command: "ListPlayers", Parse: ParseARKPlayers}, Moderation: arkModeration}
 }
 
 // StopTimeout is the integration's stop grace period in seconds.

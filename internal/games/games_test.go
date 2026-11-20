@@ -94,14 +94,14 @@ func TestComposeIdentity(t *testing.T) {
 // anything else is not a player list.
 func TestParseMinecraftList(t *testing.T) {
 	for response, want := range map[string]Players{
-		"There are 0 of a max of 20 players online: ":           {0, 20, nil},
-		"There are 2 of a max of 20 players online: Mara, Theo": {2, 20, []string{"Mara", "Theo"}},
-		"There are 1/10 players online:Steve":                   {1, 10, []string{"Steve"}},
-		"There are 2/10 players online:\nAlex, Steve\n":         {2, 10, []string{"Alex", "Steve"}},
-		"§6There are §c3§6 out of maximum §c50§6 players online.\n§6Admins§r: §fMara\n§6Default§r: Theo, Juno": {3, 50,
-			[]string{"Mara", "Theo", "Juno"}},
+		"There are 0 of a max of 20 players online: ":           {Online: 0, Max: 20, Names: nil},
+		"There are 2 of a max of 20 players online: Mara, Theo": {Online: 2, Max: 20, Names: []string{"Mara", "Theo"}},
+		"There are 1/10 players online:Steve":                   {Online: 1, Max: 10, Names: []string{"Steve"}},
+		"There are 2/10 players online:\nAlex, Steve\n":         {Online: 2, Max: 10, Names: []string{"Alex", "Steve"}},
+		"§6There are §c3§6 out of maximum §c50§6 players online.\n§6Admins§r: §fMara\n§6Default§r: Theo, Juno": {Online: 3, Max: 50,
+			Names: []string{"Mara", "Theo", "Juno"}},
 		// Some servers hide names; the count still stands.
-		"There are 4 of a max of 8 players online:": {4, 8, nil},
+		"There are 4 of a max of 8 players online:": {Online: 4, Max: 8, Names: nil},
 	} {
 		got, ok := ParseMinecraftList(response)
 		if !ok || got.Online != want.Online || got.Max != want.Max || strings.Join(got.Names, "|") != strings.Join(want.Names, "|") {

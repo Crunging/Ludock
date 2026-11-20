@@ -12,6 +12,9 @@ type Players struct {
 	Max    int // 0 when the game doesn't say
 	// Names may be fewer than Online when the game hides or truncates them.
 	Names []string
+	// IDs are the ID each name's row gave, or "", for games whose commands
+	// take one. They are never shown.
+	IDs []string
 }
 
 // PlayerQuery is a console command that lists who is online, and its parser.
@@ -29,7 +32,9 @@ const (
 	MaxNameRunes   = 64
 )
 
-func (p *Players) add(name string) {
+func (p *Players) add(name string) { p.addWithID(name, "") }
+
+func (p *Players) addWithID(name, id string) {
 	name = strings.TrimSpace(name)
 	if name == "" || len(p.Names) == maxPlayerNames {
 		return
@@ -38,6 +43,23 @@ func (p *Players) add(name string) {
 		name = string([]rune(name)[:MaxNameRunes])
 	}
 	p.Names = append(p.Names, name)
+	p.IDs = append(p.IDs, id)
+}
+
+// ID is the ID of the one player listed as name, or false when none or
+// several are.
+func (p *Players) ID(name string) (string, bool) {
+	id, found := "", false
+	for index, listed := range p.Names {
+		if listed != name {
+			continue
+		}
+		if found || index >= len(p.IDs) || p.IDs[index] == "" {
+			return "", false
+		}
+		id, found = p.IDs[index], true
+	}
+	return id, found
 }
 
 // replyLines splits a reply into trimmed, non-blank lines, or reports false
@@ -83,12 +105,20 @@ func ParseMinecraftList(response string) (Players, bool) {
 	if online == 0 {
 		return players, true
 	}
+	// Only the vanilla reply, unformatted on one line, lists account names;
+	// plugins' lists show nicknames and prefixes, so they give no IDs.
+	vanilla := strings.HasPrefix(response, "There are ") && strings.Contains(response, " of a max of ") &&
+		!strings.Contains(response, "§") && !strings.ContainsAny(strings.TrimRight(match[3], " \r\n"), "\n:")
 	for _, line := range strings.Split(match[3], "\n") {
 		if group := strings.LastIndex(line, ": "); group >= 0 {
 			line = line[group+2:]
 		}
 		for _, name := range strings.Split(line, ",") {
-			players.add(name)
+			if vanilla {
+				players.addWithID(name, strings.TrimSpace(name))
+			} else {
+				players.add(name)
+			}
 		}
 	}
 	return players, true
@@ -131,7 +161,8 @@ func ParseFactorioPlayers(response string) (Players, bool) {
 			}
 			seen[name] = true
 			players.Online++
-			players.add(name)
+			// Factorio lists account names, which its commands take.
+			players.addWithID(name, name)
 		case factorioLog.MatchString(line):
 		default:
 			return Players{}, false
@@ -165,7 +196,7 @@ func ParsePalworldPlayers(response string) (Players, bool) {
 			return Players{}, false
 		}
 		players.Online++
-		players.add(strings.Join(fields[:len(fields)-2], ","))
+		players.addWithID(strings.Join(fields[:len(fields)-2], ","), fields[len(fields)-1])
 	}
 	return players, true
 }
@@ -193,7 +224,7 @@ func ParseARKPlayers(response string) (Players, bool) {
 			return Players{}, false
 		}
 		players.Online++
-		players.add(match[2])
+		players.addWithID(match[2], match[3])
 	}
 	return players, players.Online > 0
 }
@@ -272,7 +303,7 @@ func ParseConanPlayers(response string) (Players, bool) {
 const sevenDaysVector = `-?\d+(?:\.\d+)?, -?\d+(?:\.\d+)?, -?\d+(?:\.\d+)?`
 
 var (
-	sevenDaysPlayer = regexp.MustCompile(`^\d+\. id=\d+, (.*?), pos=\(` + sevenDaysVector + `\), rot=\(` + sevenDaysVector +
+	sevenDaysPlayer = regexp.MustCompile(`^\d+\. id=(\d+), (.*?), pos=\(` + sevenDaysVector + `\), rot=\(` + sevenDaysVector +
 		`\), remote=(?:True|False), health=\d+, deaths=\d+, zombies=\d+, players=\d+, score=-?\d+, level=\d+, .*, ping=-?\d+$`)
 	sevenDaysTotal = regexp.MustCompile(`^Total of (\d+) in the game$`)
 	// Log lines the Telnet console streams, such as
@@ -296,7 +327,7 @@ func Parse7DaysPlayers(response string) (Players, bool) {
 		case sevenDaysLog.MatchString(line):
 		case match != nil && total < 0:
 			players.Online++
-			players.add(match[1])
+			players.addWithID(match[2], match[1])
 		case sevenDaysTotal.MatchString(line) && total < 0:
 			total, _ = strconv.Atoi(sevenDaysTotal.FindStringSubmatch(line)[1])
 		default:

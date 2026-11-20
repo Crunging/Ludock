@@ -74,7 +74,8 @@ const (
 
 func (r *Reading) same(other *Reading) bool {
 	return other != nil && r.ContainerID == other.ContainerID && r.StartedAt == other.StartedAt && r.Failed == other.Failed &&
-		r.Online == other.Online && r.Max == other.Max && slices.Equal(r.Names, other.Names) && r.Via == other.Via &&
+		r.Online == other.Online && r.Max == other.Max && slices.Equal(r.Names, other.Names) && slices.Equal(r.IDs, other.IDs) &&
+		r.Via == other.Via &&
 		r.Answer == other.Answer && (r.AnsweredAt == 0) == (other.AnsweredAt == 0)
 }
 

@@ -120,6 +120,44 @@ func TestSecretInsidePlayerID(t *testing.T) {
 	if reading.Online != 3 || strings.Join(reading.Names, ",") != "Ada,x[redacted]y,"+strings.Repeat("a", 63) {
 		t.Fatal(reading.Players)
 	}
+	// Kick and ban still reach the player by their ID.
+	if id, ok := reading.ID("x[redacted]y"); id != "76561198000000002" || !ok {
+		t.Fatal(id, ok)
+	}
+}
+
+// A Minecraft name holding the console password is shown redacted and is no
+// longer an account name that kick or ban can take.
+func TestSecretInsideAccountName(t *testing.T) {
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	port, err := fakedocker.ServeRCON("4242", func(string) string {
+		return "There are 2 of a max of 10 players online: Ada, x4242y"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
+		Labels: map[string]string{"ludock.console.host": "127.0.0.1", "ludock.console.port": fmt.Sprint(port), "ludock.query": "disabled"},
+		Env:    []string{"RCON_PASSWORD=4242"}})
+	players, server := gameService(t, engine)
+	identified, err := players.Identity.Get(context.Background(), server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reading, err := players.Source.Read(context.Background(), *identified)
+	if err != nil || reading == nil || reading.Failed || strings.Join(reading.Names, ",") != "Ada,x[redacted]y" {
+		t.Fatal(reading, err)
+	}
+	if id, ok := reading.ID("Ada"); id != "Ada" || !ok {
+		t.Fatal(id, ok)
+	}
+	if id, ok := reading.ID("x[redacted]y"); ok {
+		t.Fatal(id)
+	}
 }
 
 // Other packages ask how many players a server has. Only a recent, readable
