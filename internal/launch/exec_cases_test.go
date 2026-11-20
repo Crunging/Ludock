@@ -93,6 +93,22 @@ func TestExecCases(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("exit recorded after the stream ends", func(t *testing.T) {
+		previous := ExitWait
+		ExitWait = 300 * time.Millisecond
+		t.Cleanup(func() { ExitWait = previous })
+		engine, client, id := setup(t)
+		scripted(t, engine)
+		engine.ExitDelay = 150 * time.Millisecond
+		if out, err := Exec(ctx, client, id, ExecOptions{Cmd: []string{"ok"}}); err != nil || string(out) != "hello" {
+			t.Fatal(string(out), err)
+		}
+		// Still running once the wait is over is uncertain.
+		engine.ExitDelay = time.Second
+		if _, err := Exec(ctx, client, id, ExecOptions{Cmd: []string{"ok"}}); !errors.Is(err, ErrUnsafe) {
+			t.Fatal(err)
+		}
+	})
 	t.Run("output over the limit returns without waiting", func(t *testing.T) {
 		_, s, _, err := run(t, []string{"big"}, ExecOptions{})
 		if !errors.Is(err, ErrOutputLimit) || !s.unfinished() {

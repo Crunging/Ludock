@@ -92,6 +92,9 @@ type Engine struct {
 	// HangExecStarts makes the next N exec starts accept the request and never
 	// answer, as a stalled daemon can. The exec ends when the client hangs up.
 	HangExecStarts int
+	// ExitDelay records each exec's exit this long after its stream closes,
+	// as Docker sometimes does.
+	ExitDelay time.Duration
 	// LoseUploads makes the next N file-helper uploads finish and then fail
 	// their exec inspection, as a daemon that loses the result can.
 	LoseUploads int
@@ -1364,6 +1367,13 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 		code := 0
 		if handler != nil && c != nil {
 			code = handler(c, instance.options.Cmd, reader, write(1), write(2))
+		}
+		e.mu.Lock()
+		delay := e.ExitDelay
+		e.mu.Unlock()
+		if delay > 0 {
+			conn.Close()
+			time.Sleep(delay)
 		}
 		e.mu.Lock()
 		instance.running = false

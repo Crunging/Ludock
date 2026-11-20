@@ -322,7 +322,7 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		return nil, errs.Failed
 	}
 	if !options.Settle {
-		if info, err = client.InspectExec(context.WithoutCancel(ctx), execID); err != nil {
+		if info, err = awaitExit(ctx, deadline, client, execID); err != nil {
 			return nil, err
 		}
 	}
@@ -330,6 +330,29 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		return nil, err
 	}
 	return stdout.buffer.Bytes(), nil
+}
+
+// ExitWait bounds how long a file command whose stream ended waits for
+// Docker to record its exit; tests shorten it.
+var ExitWait = 5 * time.Second
+
+// awaitExit inspects a command whose stream ended. Docker can close the
+// stream a moment before it records the exit, so a command still shown as
+// running is inspected again for up to ExitWait.
+func awaitExit(ctx, deadline context.Context, client *docker.Client, execID string) (*docker.ExecInspect, error) {
+	wait, cancel := context.WithTimeout(deadline, ExitWait)
+	defer cancel()
+	for {
+		info, err := client.InspectExec(context.WithoutCancel(ctx), execID)
+		if err != nil || (!info.Running && info.ExitCode != nil) {
+			return info, err
+		}
+		select {
+		case <-wait.Done():
+			return info, nil
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // Start starts an exec in a helper. A start that may have reached Docker
