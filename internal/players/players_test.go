@@ -175,12 +175,13 @@ func TestOnlineNeedsFreshReading(t *testing.T) {
 		online  int
 		known   bool
 	}{
-		"none":      {nil, 0, false},
-		"current":   {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now, Players: games.Players{Online: 2}}, 2, true},
-		"empty":     {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now}, 0, true},
-		"failed":    {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now, Failed: true}, 0, false},
-		"stale":     {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now - Fresh.Milliseconds() - 1}, 0, false},
-		"restarted": {&Reading{ContainerID: "c1", StartedAt: 50, CheckedAt: now, Players: games.Players{Online: 2}}, 0, false},
+		"none":       {nil, 0, false},
+		"current":    {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now, Players: games.Players{Online: 2}}, 2, true},
+		"empty":      {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now}, 0, true},
+		"failed":     {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now, Failed: true}, 0, false},
+		"stale":      {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now - Fresh.Milliseconds() - 1}, 0, false},
+		"restarted":  {&Reading{ContainerID: "c1", StartedAt: 50, CheckedAt: now, Players: games.Players{Online: 2}}, 0, false},
+		"query-only": {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now, Via: ViaQuery, partial: true}, 0, false},
 	} {
 		service := &Service{readings: map[string]*Reading{}}
 		if c.reading != nil {

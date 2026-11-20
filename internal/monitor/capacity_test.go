@@ -352,9 +352,15 @@ func TestStoppedDiskMeasuredOnceUnwatched(t *testing.T) {
 	if measured != 4 {
 		t.Fatal("measurements after a failed one:", measured)
 	}
-	started := map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: 5*DiskIdleInterval + 5000}}
-	s.CheckDisk(ctx, started, 6*DiskIdleInterval+4000, false)
+	// A change that resets the schedule, such as a new binding, measures it.
+	s.DB.Exec(`UPDATE logical_servers SET binding_revision=binding_revision+1`)
+	s.CheckDisk(ctx, restopped, 5*DiskIdleInterval+4100, false)
 	if measured != 5 {
+		t.Fatal("a stopped server's new binding wasn't measured:", measured)
+	}
+	started := map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: 5*DiskIdleInterval + 5000}}
+	s.CheckDisk(ctx, started, 6*DiskIdleInterval+4100, false)
+	if measured != 6 {
 		t.Fatal("a started server wasn't measured:", measured)
 	}
 }

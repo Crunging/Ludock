@@ -346,7 +346,7 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 		// starts again. An alerting disk is still measured, so its recovery
 		// is heard.
 		if container := current[server.ContainerID]; !watched && !previous.alerting() && container.State != "running" &&
-			previous.measuredSince(container.StateSince) {
+			previous.CheckedAt != 0 && previous.measuredSince(container.StateSince) {
 			continue
 		}
 		spaces, err := s.MeasureDisk(ctx, server)

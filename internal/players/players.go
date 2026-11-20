@@ -178,8 +178,10 @@ func (s *Service) Get(serverID string, container servers.Container) *Reading {
 }
 
 // Online is how many players a server's current container run has, and
-// whether that is known: false until a reading succeeds, after one fails, or
-// once the latest is older than Fresh.
+// whether that is known: false until a reading succeeds, after one fails,
+// once the latest is older than Fresh, or while it is a query-only count the
+// console could have listed, which a schedule waiting for an empty server
+// mustn't take over its own console checks.
 func (s *Service) Online(serverID string, container servers.Container) (int, bool) {
 	online, _, known := s.OnlineAt(serverID, container)
 	return online, known
@@ -188,7 +190,7 @@ func (s *Service) Online(serverID string, container servers.Container) (int, boo
 // OnlineAt is Online with when that reading was taken, in Unix milliseconds.
 func (s *Service) OnlineAt(serverID string, container servers.Container) (int, int64, bool) {
 	reading := s.Get(serverID, container)
-	if reading == nil || reading.Failed || time.Since(time.UnixMilli(reading.CheckedAt)) > Fresh {
+	if reading == nil || reading.Failed || reading.partial || time.Since(time.UnixMilli(reading.CheckedAt)) > Fresh {
 		return 0, 0, false
 	}
 	return reading.Online, reading.CheckedAt, true
