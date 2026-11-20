@@ -69,6 +69,9 @@ type Service struct {
 	// several attempts, inside the transaction that records it; problem is
 	// public text. Alerted runs after that transaction commits.
 	CopyFailed func(ctx context.Context, tx *sql.Tx, backupID, serverID, problem string) error
+	// DataFailed queues the alert for saving Ludock's own data, or its
+	// second copy, failing again and again; message is public text.
+	DataFailed func(ctx context.Context, tx *sql.Tx, key, message string) error
 	Alerted    func()
 
 	copies copies
@@ -434,6 +437,10 @@ type StorageStatus struct {
 	CopyTo             string
 	CopyAvailableBytes int64 // -1 when unknown
 	CopyIssue          string
+	// DataSavedAt is when Ludock last saved its own data, 0 if not yet, and
+	// DataProblem why that or its second copy is failing.
+	DataSavedAt int64
+	DataProblem string
 }
 
 func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
@@ -453,6 +460,7 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 		return status, nil
 	}
 	status.Destination, status.MaxBytes, status.ReserveBytes = settings.Destination, settings.MaxBytes, settings.ReserveBytes
+	status.DataSavedAt, status.DataProblem = s.dataStatus(ctx, *settings)
 	if status.CopyTo = settings.CopyTo; status.CopyTo != "" {
 		// A share that stops responding mustn't hold up the page, and each
 		// folder has one reading waiting on it at most.

@@ -441,14 +441,29 @@ templ BackupStorage(status backups.StorageStatus) {
 					<div><dt>Free there</dt><dd>{ FormatBytes(status.CopyAvailableBytes) }</dd></div>
 				}
 			}
+			if status.Destination != "" {
+				<div class="backup-storage__folder" id="ludock-data-save">
+					<dt>Ludock’s own data</dt>
+					<dd>
+						if status.DataSavedAt > 0 {
+							Saved @Time(status.DataSavedAt, "plain", "")
+						} else {
+							Saved here every day and after changes, starting shortly
+						}
+					</dd>
+				</div>
+			}
 		</dl>
-		if len(status.Issues) > 0 || status.CopyIssue != "" {
+		if len(status.Issues) > 0 || status.CopyIssue != "" || status.DataProblem != "" {
 			<ul class="backup-storage__issues">
 				for _, issue := range status.Issues {
 					<li>{ issue.Message }</li>
 				}
 				if status.CopyIssue != "" {
 					<li>{ status.CopyIssue }</li>
+				}
+				if status.DataProblem != "" {
+					<li>{ status.DataProblem }</li>
 				}
 			</ul>
 		}

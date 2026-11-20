@@ -73,6 +73,7 @@ type App struct {
 	background sync.WaitGroup
 	storage    sync.Mutex
 	copying    sync.Mutex
+	saving     sync.Mutex
 	delivering sync.Mutex
 	polling    sync.Mutex
 	checking   sync.Mutex
@@ -113,6 +114,10 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 		}
 		_, err := notifications.QueueIn(ctx, tx, notify.FailedWork, "backup-copy-failed:"+backupID,
 			"The second copy of a backup of "+name+" couldn’t be made: "+problem+" Ludock keeps trying; its Backups tab shows which backup.")
+		return err
+	}
+	backupService.DataFailed = func(ctx context.Context, tx *sql.Tx, key, message string) error {
+		_, err := notifications.QueueIn(ctx, tx, notify.FailedWork, key, message)
 		return err
 	}
 	backupService.Alerted = notifications.Poke
@@ -240,8 +245,9 @@ func (a *App) Start(ctx context.Context) {
 }
 
 // Tick runs discovery, schedules, and monitoring once. Resource samples,
-// backup storage setup, notification delivery, and player readings can each
-// wait on Docker, the network, or a game console, so they run beside it.
+// backup storage setup, saving Ludock's data, notification delivery, and
+// player readings can each wait on Docker, the network, or a game console,
+// so they run beside it.
 func (a *App) Tick(ctx context.Context) {
 	if a.tick.TryLock() {
 		a.background.Add(1)
@@ -280,6 +286,7 @@ func (a *App) Tick(ctx context.Context) {
 		}()
 	}
 	a.copyBackups(ctx)
+	a.saveData(ctx)
 	// Player counts are shown only on pages that follow server changes, and a
 	// reading can start a console helper, so nobody watching means no reading
 	// except the status queries of monitored servers.
@@ -299,6 +306,25 @@ func (a *App) copyBackups(ctx context.Context) {
 		defer a.copying.Unlock()
 		if err := a.Backups.CopyDue(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("Could not make second copies of backups; they will be retried")
+		}
+		if err := a.Backups.CopyData(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("Could not record the second copy of Ludock's own data; it will be retried")
+		}
+	}()
+}
+
+// saveData saves Ludock's own data into the backup folder when due, once at
+// a time, so a slow folder never piles saves up.
+func (a *App) saveData(ctx context.Context) {
+	if !a.saving.TryLock() {
+		return
+	}
+	a.background.Add(1)
+	go func() {
+		defer a.background.Done()
+		defer a.saving.Unlock()
+		if err := a.Backups.SaveData(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("Could not record a save of Ludock's own data; it will be retried")
 		}
 	}()
 }

@@ -406,16 +406,20 @@ func (s *Storage) Open(directory, id string) (*Archive, error) {
 }
 
 func (s *Storage) openFile(directory, id string) (*os.File, error) {
+	return s.openNamed(directory, id+".tar")
+}
+
+func (s *Storage) openNamed(directory, name string) (*os.File, error) {
 	dir, err := s.pin(directory)
 	if err != nil {
 		return nil, err
 	}
 	defer dir.close()
-	fd, err := unix.Openat(dir.fd, id+".tar", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	fd, err := unix.Openat(dir.fd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, fail("INVALID_BACKUP", "The backup archive is missing or unreadable.")
 	}
-	file := os.NewFile(uintptr(fd), id+".tar")
+	file := os.NewFile(uintptr(fd), name)
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		file.Close()

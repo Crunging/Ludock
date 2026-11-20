@@ -484,8 +484,9 @@ such as `LUDOCK_BACKUP_ROOTS=/backups:/mnt/usb`, can be chosen the same way.
 - **Using the copy:** if a backup's archive is missing from the backup folder,
   downloading, browsing, and restoring read the copy, after the same checks,
   and **Backups** says so. If the backup disk is lost, choose the second folder
-  as the backup folder and restore from the copies. Archives Ludock has no
-  record of can't be imported.
+  as the backup folder and restore from the copies. If the whole host is lost,
+  [restore Ludock's data](#restore-ludocks-data) from the second folder first.
+  Archives Ludock has no record of can't be imported.
 
 ### How backups work
 
@@ -507,9 +508,9 @@ such as `LUDOCK_BACKUP_ROOTS=/backups:/mnt/usb`, can be chosen the same way.
   rejected. Archives hold up to 100,000 entries and 64 folder levels; use
   `ludock.files` to pick smaller folders. Permissions, owners, and modification
   times are kept; ACLs, extended attributes, and sparse files aren't.
-- **Records:** each archive's record lives in Ludock's database, so back up
-  archives and the database together. Importing other archives isn't
-  supported.
+- **Records:** each archive's record lives in Ludock's database, which Ludock
+  saves into the backup folder by itself (see [Back up Ludock](#back-up-ludock)).
+  Importing other archives isn't supported.
 - **Browsing:** administrators choose **Browse** on a backup to look through
   it folder by folder, with sizes and modification times, and download single
   files from it. Browsing reads the archive and changes nothing. Archives can
@@ -906,17 +907,80 @@ stays readable and controls are disabled.
 
 ### Back up Ludock
 
-Stop Ludock and copy all of `/data`, including the identity key folder beside
-the database (`/data/ludock.db.identity-key/`). Restore the database and key
-together; a missing or mismatched key prevents startup, so recover a lost key
-from a backup rather than creating a new one. Copying `/data` doesn't back up
-game worlds.
+Ludock backs itself up. Whenever backup storage is on, it saves its own data
+(accounts, sharing, schedules, settings, notifications, and the records of
+every game backup) into the backup folder: once a day, and within about 10
+minutes of a new game backup or an administrator's change. Nothing stops
+while it saves, and there is nothing to set up.
+
+- **The file:** each save is `ludock-data-<date>-<time>.tar` (in UTC), a plain
+  tar of the database and its identity key, owner-only. It isn't a game backup:
+  it never appears in a server's **Backups** and doesn't count toward the
+  total limit.
+- **Kept:** the 3 newest saves and the newest of each of the last 7 days.
+  Older ones are removed only after a newer one is saved and checked.
+- **Second copy:** with a [second copy](#second-copy) chosen, each save is
+  copied there too, checked the same way, and the second folder keeps the
+  same saves. If the host is lost, that copy is the one you restore from.
+- **Problems:** **Settings → Backup storage** shows when Ludock's data was last
+  saved, or why saving is failing, such as a missing or full backup folder.
+  Ludock tries again after 1, 5, and 30 minutes and then every 6 hours, and
+  sends one *Failed backups and schedules* notification after the third
+  failure. Game backups carry on either way.
+
+> [!WARNING]
+> A save holds password hashes, two-factor secrets, sessions, notification
+> tokens, and the key that protects them. Anyone who can read the backup
+> folder or the second folder can read Ludock's data, so keep both as private
+> as Ludock's own data volume.
+
+#### Restore Ludock's data
+
+Restore into a data folder that has no database yet, then start Ludock. If
+the data volume was lost, list the saves and restore the newest:
 
 ```bash
 docker compose stop ludock
-docker cp "$(docker compose ps --all --quiet ludock):/data/." ./ludock-data.backup
+docker compose run --rm --entrypoint ls ludock /backups
+docker compose run --rm ludock restore-data /backups/ludock-data-20261120-031500.tar
 docker compose start ludock
 ```
+
+`restore-data` checks that the file is complete and that its key matches the
+database before it puts anything in place, and it refuses a data folder that
+already has a database. To replace data that still exists, move it aside
+first:
+`docker compose run --rm --entrypoint sh ludock -c 'mkdir /data/replaced && mv /data/ludock.db* /data/replaced/'`.
+
+If the whole host was lost and you have the second folder:
+
+1. Set up Docker and Ludock's Compose file on the new host, but don't start
+   Ludock yet.
+2. Mount the second folder as the backup folder, for example
+   `- /mnt/usb/ludock-backups:/backups`, or copy its files into the new backup
+   folder.
+3. Run the `ls` and `restore-data` commands above, then
+   `docker compose up -d`.
+
+The plain-tar way works too, with no Ludock command:
+`docker compose run --rm --entrypoint tar ludock -xpf /backups/ludock-data-20261120-031500.tar -C /data`,
+or `tar -xpf` the file into an empty data folder anywhere, as the user Ludock
+runs as.
+
+Afterwards:
+
+- **Game backups** are listed again, because their records are back; the
+  archives are read from the backup folder as before. Archives made after
+  the save aren't listed, though they're still plain tar files in the folder,
+  and records of archives removed since show the archive as missing and can
+  be deleted.
+- **Game servers** recreated with the same Compose project and service names
+  are recognized with their sharing and schedules. If their data folders
+  moved, Ludock asks to confirm them (see [Server identity](#server-identity)).
+- **The second folder:** if you mounted it as the backup folder, choose a new
+  second folder in **Settings** when you can.
+
+A save doesn't include game worlds; those are the game backups.
 
 ### Update Ludock
 
