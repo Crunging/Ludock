@@ -239,6 +239,12 @@ func TestMountProofDockerFailure(t *testing.T) {
 	if err := AssertMountIdentities(ctx, client, helperID, map[string]helper.MountIdentity{"/data": {Dev: "1", Ino: "1"}}); !errors.Is(err, ErrHelperFailed) {
 		t.Fatal(err)
 	}
+	// A refusing validator Docker already removed is still a refusal.
+	engine.ClearFaults()
+	engine.AddFault("^GET .*/containers/[^/]+/logs", 404, false, 0)
+	if _, err := MountProof(ctx, client, images, bind, ""); !errors.Is(err, ErrUnverifiedMount) {
+		t.Fatal(err)
+	}
 	engine.ClearFaults()
 	if err := HelperFailed(docker.ErrRequestFailed); !errors.Is(err, docker.ErrRequestFailed) {
 		t.Fatal(err)

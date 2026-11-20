@@ -20,12 +20,12 @@ import (
 )
 
 var ErrUnverifiedMount = apperr.New("UNVERIFIED_DATA_MOUNT", 409,
-	"Ludock couldn’t check one of the server’s data folders, so it stopped before reading or changing them. Each must be a real folder rather than a link to one, and a Docker volume must be a plain local one.")
+	"Ludock couldn’t check one of the server’s data folders, so it went no further. Each must be a real folder rather than a link to one, and a Docker volume must be a plain local one.")
 
 // ErrHelperFailed is Docker answering with an error while Ludock creates,
 // starts or reads one of its helpers.
 var ErrHelperFailed = apperr.New("DOCKER_HELPER_FAILED", 502,
-	"Docker reported an error when Ludock started its helper for the server’s files, so Ludock stopped before reading or changing them. Try again in a moment; if it keeps happening, check Docker.")
+	"Docker reported an error when Ludock started its helper for the server’s files, so Ludock went no further. Try again in a moment; if it keeps happening, check Docker.")
 
 // HelperFailed reports a Docker call made for a helper: a public error stays
 // as it is, a request Docker never answered stays a Docker error so callers
@@ -166,6 +166,10 @@ func readProof(ctx context.Context, client *docker.Client, id string, sources []
 	deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	logs, err := client.Logs(deadline, id, docker.LogsOptions{Follow: true, Stdout: true, Tail: 10})
+	// A validator that refuses exits at once, and Docker may remove it first.
+	if docker.IsNotFound(err) {
+		return nil, ErrUnverifiedMount
+	}
 	if err != nil {
 		return nil, HelperFailed(err)
 	}
@@ -174,6 +178,12 @@ func readProof(ctx context.Context, client *docker.Client, id string, sources []
 	defer stdout.Close()
 	reader := bufio.NewReaderSize(stdout, 16384)
 	line, err := reader.ReadSlice('\n')
+	if err != nil && deadline.Err() != nil && ctx.Err() == nil {
+		return nil, ErrDockerTimeout
+	}
+	if err != nil && docker.Unavailable(err) {
+		return nil, err
+	}
 	if err != nil {
 		return nil, ErrUnverifiedMount
 	}
@@ -205,8 +215,9 @@ func AssertMountIdentities(ctx context.Context, client *docker.Client, container
 	return HelperFailed(err)
 }
 
-// identityErrors keep a mismatch, the only nonzero exit, a mount refusal.
-var identityErrors = &ExecErrors{Timeout: ErrDockerTimeout, Failed: ErrHelperFailed, Unsafe: ErrUnverifiedMount, OutputLimit: ErrUnverifiedMount}
+// identityErrors keep a mismatch, exit 1, a mount refusal.
+var identityErrors = &ExecErrors{Timeout: ErrDockerTimeout, Failed: ErrHelperFailed, Unsafe: ErrHelperFailed, OutputLimit: ErrHelperFailed,
+	Exits: map[int]*apperr.Error{1: ErrUnverifiedMount}}
 
 // createLimit bounds a validator's create; tests shorten it.
 var createLimit = 2 * time.Minute

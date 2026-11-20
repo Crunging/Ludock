@@ -648,11 +648,18 @@ func TestRestartWhenDockerGoesAway(t *testing.T) {
 	}
 }
 
-// Docker refuses to create a backup's helpers. The backup blames Docker, not
-// the server's data folders, and the server runs again.
+// Docker refuses to create a backup's data helper once its mounts are
+// proven. The backup blames Docker, not the server's data folders, and the
+// server runs again.
 func TestBackupHelperCreateFails(t *testing.T) {
 	f := setup(t)
-	f.engine.AddFault(`^POST .*/containers/create`, 500, false, 0)
+	validate := f.engine.OnStart
+	f.engine.OnStart = func(c *fakedocker.Container) {
+		validate(c)
+		if c.CreateRequest.Labels["ludock.internal"] == "mount-validator" {
+			f.engine.AddFault(`^POST .*/containers/create`, 500, false, 0)
+		}
+	}
 	job := f.run(t, "backup", nil)
 	f.engine.ClearFaults()
 	if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Docker reported an error when Ludock started its helper") || !f.running() {

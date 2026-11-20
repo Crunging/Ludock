@@ -81,7 +81,7 @@ func ValidateEntry(header *tarstream.Header, roots []Root) error {
 		return fail("UNSAFE_ARCHIVE", "The archive contains a path outside its recorded roots.")
 	}
 	if header.Type != "file" && header.Type != "directory" {
-		return fail("UNSAFE_ARCHIVE", "The server’s data holds something other than ordinary files and folders, such as a symbolic link, a hard link, or a device file. Remove it, or leave its folder out with the ludock.files label, then try again.")
+		return fail("UNSAFE_ARCHIVE", "Ludock backs up and restores only ordinary files and folders, and found something else, such as a symbolic link, a hard link, or a device file.")
 	}
 	if slices.ContainsFunc(parts, func(part string) bool { return strings.HasPrefix(part, helper.StagePrefix) }) {
 		return fail("RESTORE_RECOVERY_REQUIRED", "An interrupted restore left files waiting in one of the server’s data folders. Let Ludock finish recovering that restore before making a backup.")
