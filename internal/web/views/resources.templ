@@ -166,7 +166,7 @@ func resourcesURL(serverID, key string) string {
 templ ResourceHistory(h resources.History) {
 	<section id="resource-history" class="resource-history" aria-labelledby="resource-history-title" hx-get={ resourcesURL(h.ServerID, h.Range.Key) } hx-trigger="every 60s" hx-swap="outerHTML">
 		<div class="section-heading">
-			<h2 id="resource-history-title">Resource history</h2>
+			<h3 id="resource-history-title">History</h3>
 			<nav class="range-switch" aria-label="History range">
 				for _, item := range resources.Ranges {
 					<a href={ detailURL(h.ServerID, "range="+item.Key) } hx-get={ resourcesURL(h.ServerID, item.Key) } hx-target="#resource-history" hx-swap="outerHTML" hx-push-url={ string(detailURL(h.ServerID, "range="+item.Key)) } hx-indicator="#resource-history" aria-current={ map[bool]string{true: "true"}[item.Key == h.Range.Key] }>{ item.Label }</a>

@@ -121,7 +121,7 @@ test("a backup and a restore warn the players online first", async ({ page, ownS
   await expect(page.locator("#create-backup")).toBeEnabled();
   await page.getByRole("button", { name: "Create backup" }).click();
   const backup = page.getByRole("dialog", { name: `Back up ${server}?` });
-  await expect(backup).toContainText("Connected players will be disconnected.");
+  await expect(backup).toContainText("1 player is online and will be disconnected.");
   await expect(backup.getByLabel("Warn players and wait 1 minute")).toBeChecked();
   await backup.getByRole("button", { name: "Create backup" }).click();
   const details = page.locator("#selected-operation");

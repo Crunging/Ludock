@@ -43,12 +43,14 @@
   });
 
   // Morphing a live region keeps what only the page knows: a server's open
-  // menu, and times already written in local form.
+  // menu, a disclosure opened in it (data-keep-open), and times already
+  // written in local form.
   if (window.htmx) {
     htmx.registerExtension("ludock", {
       htmx_before_morph_attr: function (elt, detail) {
         if (detail.attrName === "hidden" && elt.matches(".server-row .action-menu__content, .player-menu .action-menu__content")) return false;
         if (detail.attrName === "aria-expanded" && elt.matches(".server-row [data-action-menu] > button, .player-menu > button")) return false;
+        if (detail.attrName === "open" && elt.matches("details[data-keep-open]")) return false;
       },
       htmx_before_morph_node: function (elt, detail) {
         var incoming = detail.newNode;

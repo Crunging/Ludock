@@ -42,6 +42,8 @@ type BackupsView struct {
 	Browse *BackupBrowser
 	// Warn offers to warn players before a backup or restore.
 	Warn bool
+	// Online is how many players are on, when Ludock knows.
+	Online int
 	// LastFailed is the newest backup attempt when it failed or was
 	// interrupted.
 	LastFailed *ops.Job
@@ -95,7 +97,7 @@ templ backupsTabBody(b BackupsView) {
 	<div class="section-heading">
 		<h2>Backups</h2>
 		if b.CanCreate && !b.NoData {
-			@CreateBackupButton(b.ServerID, b.ServerName, false, b.Warn)
+			@CreateBackupButton(b.ServerID, b.ServerName, false, b.Warn, b.Online)
 		}
 	</div>
 	if b.NoData {
@@ -166,8 +168,19 @@ templ noDataFolders(admin bool) {
 	</div>
 }
 
+func backupDetail(warn bool, online int) string {
+	detail := "The server stops for the whole copy, then returns to how it was."
+	if note := OnlineNote(online); note != "" {
+		return detail + " " + note
+	}
+	if warn {
+		return detail + " Connected players will be disconnected."
+	}
+	return detail
+}
+
 // CreateBackupButton is replaced once readiness is known.
-templ CreateBackupButton(serverID, serverName string, ready, warn bool) {
+templ CreateBackupButton(serverID, serverName string, ready, warn bool, online int) {
 	<button
 		id="create-backup"
 		class="primary-btn"
@@ -176,11 +189,7 @@ templ CreateBackupButton(serverID, serverName string, ready, warn bool) {
 		hx-post={ "/servers/" + serverID + "/backups" }
 		hx-target="#detail-status"
 		hx-confirm={ "Back up " + serverName + "?" }
-		if warn {
-			data-confirm-detail="The server stops for the whole copy, then returns to how it was. Connected players will be disconnected."
-		} else {
-			data-confirm-detail="The server stops for the whole copy, then returns to how it was."
-		}
+		data-confirm-detail={ backupDetail(warn, online) }
 		data-confirm-action="Create backup"
 		if warn {
 			data-confirm-options={ confirmOptions([]ConfirmOption{WarnOption}) }
@@ -195,6 +204,7 @@ type ReadinessView struct {
 	Preflight            *backups.Preflight
 	Error                string
 	Warn                 bool
+	Online               int
 }
 
 // BackupReadiness shows only what stops a backup; a ready server shows
@@ -228,7 +238,7 @@ templ BackupReadiness(r ReadinessView) {
 		</section>
 	}
 	@Partial("#create-backup", "outerHTML") {
-		@CreateBackupButton(r.ServerID, r.ServerName, ready, r.Warn)
+		@CreateBackupButton(r.ServerID, r.ServerName, ready, r.Warn, r.Online)
 	}
 }
 
@@ -429,6 +439,9 @@ templ RestoreForm(b BackupsView) {
 			<input type="hidden" name="bindingRevision" value={ strconv.FormatInt(b.BindingRevision, 10) }/>
 		}
 		<p>This replaces the server’s current game data. Ludock stops the server and takes a safety backup first; if that fails, nothing is replaced.</p>
+		if note := OnlineNote(b.Online); note != "" {
+			<p>{ note }</p>
+		}
 		if b.Restore.FromCopy {
 			@Alert("warning", "This backup is missing from the backup folder, so Ludock restores it from the second copy.")
 		}
@@ -474,6 +487,7 @@ type BackupBrowser struct {
 	Fit             backups.Fit
 	BindingRevision int64
 	Warn            bool
+	Online          int
 }
 
 // rootList names data folders in a sentence.
@@ -686,7 +700,11 @@ func (b BackupBrowser) restoreItemDetail(item backups.ArchiveEntry) string {
 	if item.Type == "directory" {
 		detail += " Everything now inside that folder is replaced."
 	}
-	return detail + " The server stops while the copies swap, then goes back to how it was. If anything fails, the current copy is put back."
+	detail += " The server stops while the copies swap, then goes back to how it was. If anything fails, the current copy is put back."
+	if note := OnlineNote(b.Online); note != "" {
+		detail += " " + note
+	}
+	return detail
 }
 
 func (b BackupBrowser) restoreItemOptions() []ConfirmOption {
@@ -735,6 +753,8 @@ type UpdateView struct {
 	ChecksOff bool
 	// Warn offers to warn players first.
 	Warn bool
+	// Online is how many players are on, when Ludock knows.
+	Online int
 }
 
 templ UpdateTab(serverID string, recreate bool) {
@@ -834,6 +854,13 @@ templ reloadUpdate(serverID, label string) {
 	<button class="secondary-btn" type="button" hx-get={ "/fragments/servers/" + serverID + "/update" } hx-target="#update-panel" hx-swap="outerHTML" data-busy-label="Checking…">{ label }</button>
 }
 
+func updateDetail(online int) string {
+	if note := OnlineNote(online); note != "" {
+		return note + " Ludock replaces the server with the newest image."
+	}
+	return "Connected players are disconnected while Ludock replaces the server with the newest image."
+}
+
 templ UpdateForm(u UpdateView) {
 	{{ capability := u.Capability }}
 	<form
@@ -841,7 +868,7 @@ templ UpdateForm(u UpdateView) {
 		hx-post={ "/servers/" + u.ServerID + "/updates" }
 		hx-target="#update-status"
 		hx-confirm={ "Update " + u.ServerName + "?" }
-		data-confirm-detail="Connected players are disconnected while Ludock replaces the server with the newest image."
+		data-confirm-detail={ updateDetail(u.Online) }
 		data-confirm-action={ capability.ActionLabel }
 		data-confirm-danger
 	>

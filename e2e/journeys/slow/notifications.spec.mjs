@@ -1,7 +1,7 @@
 import { createServer, request } from "node:http";
 import { createServer as createTCPServer } from "node:net";
 import { join } from "node:path";
-import { test, expect, asAdmin, createUser, dockerAction, expectOperationSucceeded, openServer, signIn } from "../fixtures.mjs";
+import { test, expect, asAdmin, createUser, dockerAction, expectOperationSucceeded, monitoringSettings, openServer, signIn } from "../fixtures.mjs";
 
 asAdmin();
 // Each journey here passes on its own, so they spread across workers.
@@ -353,8 +353,8 @@ test("choosing which types of alert reach a webhook", async ({ page }) => {
     // Enshrouded goes down behind Ludock's back after a start through Ludock.
     await openServer(page, "enshrouded");
     // Watched by default; a short wait makes the alert quick.
+    await monitoringSettings(page);
     await expect(page.getByLabel("Monitor this server")).toBeChecked();
-    await page.getByText("Alert levels").click();
     const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
     await page.getByLabel("Wait before alerting (seconds)").fill("11");
     await page.getByLabel("Wait before alerting (seconds)").press("Tab");

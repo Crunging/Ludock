@@ -24,8 +24,8 @@ type ServerDetail struct {
 	Tabs                 []DetailTab
 	Availability         *monitor.Availability
 	// Recovery is what automatic restarts last did.
-	Recovery             monitor.Recovery
-	Disk                 monitor.DiskState
+	Recovery monitor.Recovery
+	Disk     monitor.DiskState
 	// ResourceAlerts are the server's active disk and memory alerts.
 	ResourceAlerts []monitor.Resource
 	// FolderPaths: the viewer may see data folders' container paths.
@@ -42,9 +42,9 @@ type ServerDetail struct {
 	WaitingSchedule *schedules.Schedule
 	WaitingCancel   bool
 	Now             int64
-	Activity       ActivityView
-	Backups        BackupsView
-	Schedules      SchedulesView
+	Activity        ActivityView
+	Backups         BackupsView
+	Schedules       SchedulesView
 	// Recreate opens the update tab with "Update even if the image is already up to date" ticked.
 	Recreate bool
 	Sharing  SharingView
@@ -53,18 +53,21 @@ type ServerDetail struct {
 }
 
 type ActivityView struct {
-	ServerID      string
-	Total         int
-	Visible       []history.Operation
-	Kinds         []string
-	Status, Kind  string
-	Error         string
-	Admin         bool
-	HiddenActive  bool
-	Active        bool
-	SelectedID    string
-	Selected      *ops.Job
-	SelectedError string
+	ServerID string
+	Total    int
+	Visible  []history.Operation
+	Kinds    []string
+	// AlreadyOffered offers "Already up to date" to a member, whose access
+	// never includes updates, once the server's history has one.
+	AlreadyOffered bool
+	Status, Kind   string
+	Error          string
+	Admin          bool
+	HiddenActive   bool
+	Active         bool
+	SelectedID     string
+	Selected       *ops.Job
+	SelectedError  string
 	// AlreadyCurrent offers recreation after an update found nothing new.
 	AlreadyCurrent bool
 	// Tab is the tab showing the selected operation.
@@ -163,9 +166,6 @@ templ detailBody(d ServerDetail) {
 				@SharingTab(d.Sharing)
 			default:
 				@OverviewLive(d)
-				if moderation := d.Row.Players.Moderation; moderation != nil && moderation.Lists != nil {
-					@PlayerListsDisclosure(server.ID)
-				}
 				if d.Admin && d.Availability != nil {
 					@AvailabilityForm(server.ID, d.Availability.Policy, monitor.RecoveryOffered(server.Container))
 				}
@@ -217,10 +217,10 @@ templ DetailLive(d ServerDetail) {
 								<button type="button" class="primary-btn" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/start" } hx-target="#detail-status" data-busy-label="Working…">Start</button>
 							}
 							if d.Row.CanStop {
-								<button type="button" class="secondary-btn secondary-btn--danger" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/stop" } hx-target="#detail-status" data-busy-label="Working…" { LifecycleConfirm("stop", server.DisplayName, false, d.Row.Warn)... }>Stop</button>
+								<button type="button" class="secondary-btn secondary-btn--danger" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/stop" } hx-target="#detail-status" data-busy-label="Working…" { LifecycleConfirm("stop", server.DisplayName, false, d.Row.Warn, d.Row.Online)... }>Stop</button>
 							}
 							if d.Row.CanRestart {
-								<button type="button" class="secondary-btn" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/restart" } hx-target="#detail-status" data-busy-label="Working…" { LifecycleConfirm("restart", server.DisplayName, d.Row.CanBackup, d.Row.Warn)... }>Restart</button>
+								<button type="button" class="secondary-btn" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/restart" } hx-target="#detail-status" data-busy-label="Working…" { LifecycleConfirm("restart", server.DisplayName, d.Row.CanBackup, d.Row.Warn, d.Row.Online)... }>Restart</button>
 							}
 						</div>
 					}
@@ -282,6 +282,8 @@ func BindingNote(status string) string {
 
 var healthNotes = map[string]string{"starting": "Health check is starting", "healthy": "Health check passing", "unhealthy": "Health check failing"}
 
+var healthStates = map[string]string{"starting": "Starting", "healthy": "Passing", "unhealthy": "Failing"}
+
 func resourcesUnavailable(d ServerDetail) string {
 	if d.DiscoveryUnavailable {
 		return "Shown once Ludock can reach Docker"
@@ -326,7 +328,10 @@ func memoryShare(stats *servers.Stats) string {
 	return fmt.Sprintf("width: %.1f%%", share)
 }
 
-// OverviewLive is the overview facts and monitoring status; it reloads itself.
+// OverviewLive is what an owner or friend opens the page for, then who is
+// on, resources, the Docker-facing details, and monitoring; it reloads
+// itself. Parts that hold their own state (the player lists, the resource
+// history, the details' open state) survive its refreshes.
 templ OverviewLive(d ServerDetail) {
 	{{ server := d.Row.Server }}
 	<div id="overview-live" hx-get={ "/fragments/servers/" + server.ID + "/overview" } hx-trigger={ liveTrigger(server.ID, false) + ", availability-changed from:document" } hx-swap="outerMorph">
@@ -343,7 +348,7 @@ templ OverviewLive(d ServerDetail) {
 							@Time(server.StateSince, "sentence", "overview-since")
 						}
 					}
-					if server.State == "running" && healthNotes[server.Health] != "" {
+					if server.State == "running" && server.Health == "unhealthy" {
 						<span class="muted">{ healthNotes[server.Health] }</span>
 					}
 					if detail := ExitDetail(server.Exit); detail != "" {
@@ -351,92 +356,17 @@ templ OverviewLive(d ServerDetail) {
 					}
 				</dd>
 			</div>
-			if d.Row.ShowPlayers {
-				@PlayersFact(d.Row.Players)
-			}
 			@GameFact(d.Row.Game)
 			<div>
 				<dt>Connect</dt>
 				<dd>
 					if d.Row.Address != "" {
 						@CopyAddress(d.Row.Address, server.DisplayName)
-						if server.Connection.Source == "label" {
-							<span class="muted">Set by the ludock.address label</span>
-						} else if server.Connection.Host == "" {
+						if server.Connection.Source != "label" && server.Connection.Host == "" {
 							<span class="muted">Using this page’s address</span>
 						}
 					} else {
 						No public port
-					}
-				</dd>
-			</div>
-			if d.Admin {
-				<div>
-					<dt>Ports</dt>
-					<dd>
-						if ports := publicPorts(server.Ports); len(ports) > 0 {
-						<ul class="overview-ports">
-							for _, port := range ports {
-								<li>
-									<code>{ strconv.Itoa(port.Public) }/{ port.Type }</code>
-									if port.Private != port.Public {
-										<span class="muted">container port { strconv.Itoa(port.Private) }</span>
-									}
-								</li>
-							}
-						</ul>
-						} else {
-							None published
-						}
-					</dd>
-				</div>
-			}
-			<div>
-				<dt>CPU</dt>
-				<dd>
-					if d.Stats != nil {
-						<span class="overview-figure">{ fmt.Sprintf("%.1f%%", d.Stats.CPUPercent) }</span>
-						<span class="muted">100% is one core</span>
-					} else {
-						<span class="muted">{ resourcesUnavailable(d) }</span>
-					}
-				</dd>
-			</div>
-			<div>
-				<dt>Memory</dt>
-				<dd>
-					if d.Stats != nil {
-						<span class="overview-figure">{ FormatBytes(int64(d.Stats.MemUsageMB*mib + 0.5)) }</span>
-						if d.Stats.MemLimitMB > 0 {
-							<span class="overview-meter" aria-hidden="true"><span style={ memoryShare(d.Stats) }></span></span>
-							<span class="muted">of { FormatBytes(int64(d.Stats.MemLimitMB*mib + 0.5)) }</span>
-						}
-					} else {
-						<span class="muted">{ resourcesUnavailable(d) }</span>
-					}
-				</dd>
-			</div>
-			<div class="overview-disk">
-				<dt>Disk</dt>
-				<dd>
-					if len(d.Disk.Folders) == 0 {
-						<span class="muted">{ diskUnmeasured(d) }</span>
-					} else {
-						<ul class="overview-disks">
-							for _, folder := range d.Disk.Folders {
-								<li>
-									@folderName(d.FolderPaths, folder.Path)
-									if folder.MeasuredAt != 0 {
-										<span class="overview-disks__figure">{ fmt.Sprintf("%.0f%% full", folder.Percent()) }</span>
-										<span class={ "overview-meter", templ.KV("overview-meter--alert", folder.AlertSince != 0) } aria-hidden="true"><span style={ diskShare(folder) }></span></span>
-										<span class="muted">{ FormatBytes(folder.AvailableBytes) } free of { FormatBytes(folder.TotalBytes) }, measured @Time(folder.MeasuredAt, "plain", "")</span>
-									}
-									if folder.Unknown {
-										<span class="muted">Couldn’t be measured just now</span>
-									}
-								</li>
-							}
-						</ul>
 					}
 				</dd>
 			</div>
@@ -476,27 +406,125 @@ templ OverviewLive(d ServerDetail) {
 					</dd>
 				</div>
 			}
-			if d.Admin {
+		</dl>
+		<section class="overview-section" aria-labelledby="players-title">
+			<h2 id="players-title">Players</h2>
+			<dl class="overview-facts overview-facts--wide">
+				@PlayersFact(d.Row.Players)
+			</dl>
+			if moderation := d.Row.Players.Moderation; moderation != nil && moderation.Lists != nil {
+				@PlayerListsDisclosure(server.ID)
+			}
+		</section>
+		<section class="overview-section" aria-labelledby="resources-title">
+			<h2 id="resources-title">Resources</h2>
+			<dl class="overview-facts">
 				<div>
-					<dt>In Docker</dt>
+					<dt>CPU</dt>
 					<dd>
-						<code>{ server.Name }</code>
-						if server.Image != "" {
-							<span class="muted">Image <code>{ server.Image }</code></span>
+						if d.Stats != nil {
+							<span class="overview-figure">{ fmt.Sprintf("%.1f%%", d.Stats.CPUPercent) }</span>
+						} else {
+							<span class="muted">{ resourcesUnavailable(d) }</span>
 						}
 					</dd>
 				</div>
+				<div>
+					<dt>Memory</dt>
+					<dd>
+						if d.Stats != nil {
+							<span class="overview-figure">{ FormatBytes(int64(d.Stats.MemUsageMB*mib + 0.5)) }</span>
+							if d.Stats.MemLimitMB > 0 {
+								<span class="overview-meter" aria-hidden="true"><span style={ memoryShare(d.Stats) }></span></span>
+								<span class="muted">of { FormatBytes(int64(d.Stats.MemLimitMB*mib + 0.5)) }</span>
+							}
+						} else {
+							<span class="muted">{ resourcesUnavailable(d) }</span>
+						}
+					</dd>
+				</div>
+				<div class="overview-disk">
+					<dt>Disk</dt>
+					<dd>
+						if len(d.Disk.Folders) == 0 {
+							<span class="muted">{ diskUnmeasured(d) }</span>
+						} else {
+							<ul class="overview-disks">
+								for _, folder := range d.Disk.Folders {
+									<li>
+										@folderName(d.FolderPaths, folder.Path)
+										if folder.MeasuredAt != 0 {
+											<span class="overview-disks__figure">{ fmt.Sprintf("%.0f%% full", folder.Percent()) }</span>
+											<span class={ "overview-meter", templ.KV("overview-meter--alert", folder.AlertSince != 0) } aria-hidden="true"><span style={ diskShare(folder) }></span></span>
+											<span class="muted">{ FormatBytes(folder.AvailableBytes) } free of { FormatBytes(folder.TotalBytes) }, measured @Time(folder.MeasuredAt, "plain", "")</span>
+										}
+										if folder.Unknown {
+											<span class="muted">Couldn’t be measured just now</span>
+										}
+									</li>
+								}
+							</ul>
+						}
+					</dd>
+				</div>
+			</dl>
+			if d.Resources != nil {
+				@ResourceHistory(*d.Resources)
+			} else {
+				<section id="resource-history" hx-preserve="true"></section>
 			}
-		</dl>
-		if d.Resources != nil {
-			@ResourceHistory(*d.Resources)
-		} else {
-			<section id="resource-history" hx-preserve="true"></section>
-		}
+		</section>
+		@overviewDetails(d)
 		if d.Availability != nil {
 			@AvailabilityStatus(d)
 		}
 	</div>
+}
+
+// overviewDetails holds the Docker-facing facts few people need. It stays
+// open across refreshes once opened (data-keep-open in ludock.js).
+templ overviewDetails(d ServerDetail) {
+	{{ server := d.Row.Server }}
+	<details class="disclosure overview-details" id="overview-details" data-keep-open>
+		<summary>Details</summary>
+		<dl class="metadata-list">
+			if server.State == "running" && healthNotes[server.Health] != "" {
+				<dt>Health check</dt>
+				<dd>{ healthStates[server.Health] }</dd>
+			}
+			if d.Row.Address != "" && server.Connection.Source == "label" {
+				<dt>Address</dt>
+				<dd>Set by the ludock.address label</dd>
+			}
+			if d.Admin {
+				<dt>Ports</dt>
+				<dd>
+					if ports := publicPorts(server.Ports); len(ports) > 0 {
+						<ul class="overview-ports">
+							for _, port := range ports {
+								<li>
+									<code>{ strconv.Itoa(port.Public) }/{ port.Type }</code>
+									if port.Private != port.Public {
+										<span class="muted">container port { strconv.Itoa(port.Private) }</span>
+									}
+								</li>
+							}
+						</ul>
+					} else {
+						None published
+					}
+				</dd>
+				<dt>Container</dt>
+				<dd><code>{ server.Name }</code></dd>
+				if server.Image != "" {
+					<dt>Image</dt>
+					<dd><code>{ server.Image }</code></dd>
+				}
+			}
+			<dt>CPU</dt>
+			<dd>100% is one core.</dd>
+		</dl>
+	</details>
 }
 
 func publicPorts(ports []servers.Port) []servers.Port {
@@ -641,31 +669,35 @@ templ RecoveryStatus(r monitor.Recovery, running bool) {
 	}
 }
 
+// AvailabilityForm keeps automatic restart in sight and the rest of
+// monitoring's settings under a disclosure, open while monitoring is off.
 templ AvailabilityForm(serverID string, policy monitor.Policy, recoveryOffered bool) {
 	// Each change saves right away; the result says so.
-	<form class="stack-form" hx-post={ "/servers/" + serverID + "/availability" } hx-target="#availability-result" hx-trigger="change, submit" hx-sync="this:replace">
-		<label class="check-label">
-			<input type="checkbox" name="enabled" value="true" id="availability-enabled" checked?={ policy.Enabled }/>
-			Monitor this server
-		</label>
-		<p class="muted check-help">Alerts when it goes down, its disk is nearly full, or its memory stays near its limit. Stops made through Ludock don’t alert.</p>
-		<div class="stack-form" data-shown-by="availability-enabled" hidden?={ !policy.Enabled }>
-			<label class="check-label">
-				<input type="checkbox" name="maintenance" value="true" checked?={ policy.Maintenance }/>
-				Pause alerts for maintenance
-			</label>
-			<p class="muted check-help">Until you turn this off. The server and its schedules keep running.</p>
-			if recoveryOffered {
+	<form class="stack-form availability-form" hx-post={ "/servers/" + serverID + "/availability" } hx-target="#availability-result" hx-trigger="change, submit" hx-sync="this:replace">
+		if recoveryOffered {
+			<div class="stack-form" data-shown-by="availability-enabled" hidden?={ !policy.Enabled }>
 				<input type="hidden" name="recoverOffered" value="true"/>
 				<label class="check-label">
 					<input type="checkbox" name="recover" value="true" checked?={ policy.Recover }/>
 					Restart it if the game stops answering
 				</label>
 				<p class="muted check-help">Ludock restarts it the way the Restart button does, at most { strconv.Itoa(monitor.RecoveryAttempts) } times in 6 hours. A server that is stopped or hasn’t answered since it started is left alone.</p>
-			}
-			<details class="disclosure">
-				<summary>Alert levels</summary>
-				<div class="stack-form">
+			</div>
+		}
+		<details class="disclosure" id="monitoring-settings" open?={ !policy.Enabled }>
+			<summary>Monitoring settings</summary>
+			<div class="stack-form">
+				<label class="check-label">
+					<input type="checkbox" name="enabled" value="true" id="availability-enabled" checked?={ policy.Enabled }/>
+					Monitor this server
+				</label>
+				<p class="muted check-help">Alerts when it goes down, its disk is nearly full, or its memory stays near its limit. Stops made through Ludock don’t alert.</p>
+				<div class="stack-form" data-shown-by="availability-enabled" hidden?={ !policy.Enabled }>
+					<label class="check-label">
+						<input type="checkbox" name="maintenance" value="true" checked?={ policy.Maintenance }/>
+						Pause alerts for maintenance
+					</label>
+					<p class="muted check-help">Until you turn this off. The server and its schedules keep running.</p>
 					<label class="narrow-field">
 						Wait before alerting (seconds)
 						<input type="number" name="graceSeconds" min="10" max="86400" inputmode="numeric" aria-describedby="monitoring-grace-help" required value={ strconv.Itoa(policy.GraceSeconds) }/>
@@ -698,9 +730,9 @@ templ AvailabilityForm(serverID string, policy monitor.Policy, recoveryOffered b
 						<p class="muted" id="monitoring-memory-help">Only for a server with a memory limit. Default 90% for 5 minutes.</p>
 					</div>
 				</div>
-			</details>
-		</div>
-		<p class="muted">Alerts go to the destinations turned on in <a class="text-link" href="/settings#notification-settings-title">Settings → Notifications</a>.</p>
+				<p class="muted">Alerts go to the destinations turned on in <a class="text-link" href="/settings#notification-settings-title">Settings → Notifications</a>.</p>
+			</div>
+		</details>
 		<div id="availability-result" aria-live="polite"></div>
 	</form>
 }
@@ -722,7 +754,9 @@ templ ActivityPanel(a ActivityView) {
 			<select name="status">
 				<option value="">Any result</option>
 				for _, status := range operationStatuses {
-					<option value={ status } selected?={ a.Status == status }>{ OperationStatusLabels[status] }</option>
+					if status != "already_current" || a.Admin || a.AlreadyOffered {
+						<option value={ status } selected?={ a.Status == status }>{ OperationStatusLabels[status] }</option>
+					}
 				}
 			</select>
 		</label>

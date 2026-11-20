@@ -83,7 +83,10 @@ returns without that access.
 
 For someone new, Ludock makes the account and shows a one-time invite link.
 Send it to them privately: they open it, choose a password, and land on the
-servers shared with them. The link works once and expires after 24 hours.
+servers shared with them. The link works once and expires after 24 hours. It
+uses the address you opened Ludock at; when that only works on your computer
+or your home network, such as `127.0.0.1`, Ludock says so beside the link, so
+open Ludock at an address your friend can reach and make a new one.
 
 | Access | What they can do |
 | --- | --- |
@@ -198,7 +201,8 @@ A game can freeze while its container keeps running. For servers with a
 stands in for one, Ludock can restart it:
 
 - Use **Restart automatically** in [Finish setting up](#finish-setting-up), or
-- tick **Restart it if the game stops answering** on the server's **Overview**.
+- tick **Restart it if the game stops answering** under **Monitoring** on the
+  server's **Overview**.
 
 When the game stops answering for the **Wait before alerting** time (two
 minutes by default), Ludock restarts it the way **Restart** does and sends an
@@ -213,12 +217,12 @@ it, such as Compose.
 
 ### Manage players
 
-Who is online shows on the server list and the server's **Overview** for
-[games Ludock can read](REFERENCE.md#supported-games).
+Who is online shows on the server list and in the **Players** section of the
+server's **Overview** for [games Ludock can read](REFERENCE.md#supported-games).
 
-- **Kick or ban:** with permission to use the console, click a player's name on
-  the **Overview** and choose **Kick** or **Ban…**.
-- **Allowlist and bans (Minecraft):** below the **Overview**, add or remove
+- **Kick or ban:** with permission to use the console, click a player's name
+  under **Players** and choose **Kick** or **Ban…**.
+- **Allowlist and bans (Minecraft):** under **Players**, add or remove
   allowed players by name and lift bans. Whether the allowlist is on is the
   server's own `white-list` setting, which Ludock shows but never changes.
 
@@ -269,6 +273,12 @@ after an error exit, **Out of memory** when the kernel killed it, and
 recent progress may be lost. A server that stopped without anyone stopping it
 shows **Down** once its alert is due, as the alert says.
 
+A server's **Overview** starts with whether it's up, whether the game answers,
+the address to give friends, its last backup, and what's scheduled next. Then
+come **Players**, **Resources** with their history, and **Monitoring**.
+**Details** holds what few people need: the health check, the ports, the
+container and image (for administrators), and that 100% CPU is one core.
+
 The address players use is the host from **Settings → Server address** (or the
 one in your browser until you set it) with the port the container publishes
 for its game. When that's wrong, such as behind a router's port forwarding, a
@@ -292,7 +302,10 @@ and Don't Starve Together), or the container's own `stop_grace_period` if it
 is longer. Terraria's images never pass Docker's stop signal on to the game,
 so Ludock also types its `exit` command, which saves and quits.
 
-When the server is running and the game can message its players, the Restart,
+These dialogs, a restore, and the **Update** tab say how many players are
+online when Ludock knows, such as "2 players are online and will be
+disconnected.", including for games it can count but not message. When the
+server is running and the game can message its players, the Restart,
 Stop, and **Create backup** dialogs, a restore, and the **Update** tab offer
 **Warn players and wait 1 minute**, ticked. Ludock checks who is online when
 the work starts, not when the page loaded; an update checks once the new image
@@ -410,7 +423,8 @@ again, and its entry in **Activity** says which.
 
 - A schedule runs with its owner's current access. Members with **Full
   access** see every schedule on the server and manage their own;
-  administrators manage all of them.
+  administrators manage all of them. Someone else's schedule says who can
+  change it in place of its buttons.
 - If Ludock can't run a schedule on time, such as while it's restarting, a
   repeating schedule still runs within 15 minutes and otherwise skips that
   time; a one-time schedule runs within five minutes and otherwise is recorded
@@ -456,8 +470,9 @@ plugin's list never targets someone else; on such servers, use the console.
 ### Monitoring
 
 Monitoring watches each server's container, its game, its disks, and its
-memory. An administrator can turn it off, change its levels, or **Pause alerts
-for maintenance** on the server's **Overview**.
+memory. The server's **Overview** shows how monitoring sees it under
+**Monitoring**; there an administrator opens **Monitoring settings** to turn
+it off, change its levels, or **Pause alerts for maintenance**.
 
 | Alert | When |
 | --- | --- |
@@ -532,9 +547,10 @@ while.
 ### Activity
 
 **Activity** lists work on the servers you can use, newest first, one row for
-each piece of work with its latest result, with filters
-for server, person, action, result, and dates. Each server's **Activity** tab
-lists its own. Work that is queued or warning players shows **Cancel restart**
+each piece of work with its latest result. **Filter** opens filters for
+server, person, action, result, and dates; it says how many are on, and a link
+to a filtered page opens with them showing. Each server's **Activity** tab
+lists its own, with filters for the results and kinds of work it has had. Work that is queued or warning players shows **Cancel restart**
 (or backup, and so on) on its row in both, to anyone who may cancel it, and
 rows update while work runs. Administrators can choose
 **Show → Everything** to add sign-ins,

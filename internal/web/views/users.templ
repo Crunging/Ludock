@@ -35,6 +35,21 @@ type LinkResult struct {
 	Username, URL string
 	Purpose       db.LinkPurpose
 	ExpiresAt     int64
+	// Host is the link's host. ThisComputer: it opens only on this computer;
+	// LocalNetwork: only on this computer's network.
+	Host                       string
+	ThisComputer, LocalNetwork bool
+}
+
+// reachNote warns when the person the link is for may not be able to open it.
+func (l LinkResult) reachNote() string {
+	switch {
+	case l.ThisComputer:
+		return "This link opens only on this computer, because you’re using Ludock at " + l.Host + ". To send it to " + l.Username + ", open Ludock at an address they can reach, then make a new link."
+	case l.LocalNetwork:
+		return "This link opens only for people who can reach your network, because you’re using Ludock at " + l.Host + ". If " + l.Username + " can’t, open Ludock at an address they can reach, then make a new link."
+	}
+	return ""
 }
 
 func (l LinkResult) noun() string {
@@ -290,6 +305,9 @@ templ linkResult(link LinkResult) {
 			<input type="text" value={ link.URL } readonly aria-label={ link.noun() + " for " + link.Username } spellcheck="false"/>
 			<button class="primary-btn" type="button" data-copy={ link.URL } data-copied-label="Copied">Copy link</button>
 		</div>
+		if note := link.reachNote(); note != "" {
+			<div class="alert alert--warning link-result__reach" role="note">{ note }</div>
+		}
 	</section>
 }
 

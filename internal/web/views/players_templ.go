@@ -306,7 +306,7 @@ func PlayersFact(p PlayersView) templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "<div class=\"overview-players\"><dt>Players</dt><dd>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "<div class=\"overview-players\"><dt>Online now</dt><dd>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1095,7 +1095,8 @@ type PlayerListsView struct {
 	Alert      PlayerAlert
 }
 
-// PlayerListsDisclosure reads the lists the first time it opens.
+// PlayerListsDisclosure reads the lists the first time it opens. The live
+// overview's morph leaves it in place (hx-morph-skip), focus and all.
 func PlayerListsDisclosure(serverID string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -1113,14 +1114,14 @@ func PlayerListsDisclosure(serverID string) templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 98, "<details class=\"disclosure player-lists\" hx-get=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 98, "<details id=\"player-lists\" hx-morph-skip class=\"disclosure player-lists\" hx-get=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var42 string
 		templ_7745c5c3_Var42, templ_7745c5c3_Err = templruntime.NewAttributeExpression("/fragments/servers/" + serverID + "/player-lists").Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 302, Col: 61}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 305, Col: 61}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var42)
 		if templ_7745c5c3_Err != nil {
@@ -1173,7 +1174,7 @@ func PlayerLists(v PlayerListsView) templ.Component {
 			var templ_7745c5c3_Var44 string
 			templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(v.Error)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 322, Col: 29}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 325, Col: 29}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 			if templ_7745c5c3_Err != nil {
@@ -1196,7 +1197,7 @@ func PlayerLists(v PlayerListsView) templ.Component {
 				var templ_7745c5c3_Var45 string
 				templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.JoinStringErrs(state)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 327, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 330, Col: 29}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var45))
 				if templ_7745c5c3_Err != nil {
@@ -1218,7 +1219,7 @@ func PlayerLists(v PlayerListsView) templ.Component {
 			var templ_7745c5c3_Var46 string
 			templ_7745c5c3_Var46, templ_7745c5c3_Err = templruntime.NewAttributeExpression(playerActionURL(v.ServerID, games.Allow)).Resolve(ctx)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 330, Col: 79}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 333, Col: 79}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var46)
 			if templ_7745c5c3_Err != nil {
@@ -1231,7 +1232,7 @@ func PlayerLists(v PlayerListsView) templ.Component {
 			var templ_7745c5c3_Var47 string
 			templ_7745c5c3_Var47, templ_7745c5c3_Err = templruntime.NewAttributeExpression(v.Moderation.Pattern()).Resolve(ctx)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 333, Col: 95}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 336, Col: 95}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var47)
 			if templ_7745c5c3_Err != nil {
@@ -1309,7 +1310,7 @@ func listedPlayers(v PlayerListsView, list games.ListedPlayers, action games.Pla
 			var templ_7745c5c3_Var49 string
 			templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(empty)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 352, Col: 26}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 355, Col: 26}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 			if templ_7745c5c3_Err != nil {
@@ -1332,7 +1333,7 @@ func listedPlayers(v PlayerListsView, list games.ListedPlayers, action games.Pla
 				var templ_7745c5c3_Var50 string
 				templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 357, Col: 37}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 360, Col: 37}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 				if templ_7745c5c3_Err != nil {
@@ -1345,7 +1346,7 @@ func listedPlayers(v PlayerListsView, list games.ListedPlayers, action games.Pla
 				var templ_7745c5c3_Var51 string
 				templ_7745c5c3_Var51, templ_7745c5c3_Err = templruntime.NewAttributeExpression(playerActionURL(v.ServerID, action)).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 358, Col: 56}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 361, Col: 56}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var51)
 				if templ_7745c5c3_Err != nil {
@@ -1358,7 +1359,7 @@ func listedPlayers(v PlayerListsView, list games.ListedPlayers, action games.Pla
 				var templ_7745c5c3_Var52 string
 				templ_7745c5c3_Var52, templ_7745c5c3_Err = templruntime.NewAttributeExpression(name).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 359, Col: 53}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 362, Col: 53}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var52)
 				if templ_7745c5c3_Err != nil {
@@ -1371,7 +1372,7 @@ func listedPlayers(v PlayerListsView, list games.ListedPlayers, action games.Pla
 				var templ_7745c5c3_Var53 string
 				templ_7745c5c3_Var53, templ_7745c5c3_Err = templruntime.NewAttributeExpression(label + ": " + name).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 360, Col: 102}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 363, Col: 102}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var53)
 				if templ_7745c5c3_Err != nil {
@@ -1394,7 +1395,7 @@ func listedPlayers(v PlayerListsView, list games.ListedPlayers, action games.Pla
 				var templ_7745c5c3_Var54 string
 				templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 360, Col: 166}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 363, Col: 166}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 				if templ_7745c5c3_Err != nil {
@@ -1417,7 +1418,7 @@ func listedPlayers(v PlayerListsView, list games.ListedPlayers, action games.Pla
 				var templ_7745c5c3_Var55 string
 				templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(list.Others))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 366, Col: 51}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 369, Col: 51}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 				if templ_7745c5c3_Err != nil {

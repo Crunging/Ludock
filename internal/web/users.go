@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -77,7 +78,14 @@ var errNoOrigin = apperr.New("ORIGIN_REQUIRED", 400, "Ludock couldn't tell which
 // linkView describes a link that was just made; it is shown only this once.
 func linkView(r *http.Request, username string, link *auth.Link) *views.LinkResult {
 	origin, _ := auth.RequestOrigin(r)
-	return &views.LinkResult{Username: username, URL: origin + "/link/" + link.Token, Purpose: link.Purpose, ExpiresAt: link.ExpiresAt}
+	result := &views.LinkResult{Username: username, URL: origin + "/link/" + link.Token, Purpose: link.Purpose, ExpiresAt: link.ExpiresAt}
+	// The link uses the address the administrator opened Ludock with, which
+	// may be one only they can reach.
+	if parsed, err := url.Parse(origin); err == nil {
+		result.Host = parsed.Hostname()
+		result.ThisComputer, result.LocalNetwork = loopbackHost(result.Host), localHost(result.Host)
+	}
+	return result
 }
 
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request, request *Request) {

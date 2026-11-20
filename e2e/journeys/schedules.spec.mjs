@@ -62,7 +62,7 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await expect(row.locator("td").nth(2)).toHaveText("Enabled");
 
   await page.getByRole("tab", { name: "Overview" }).click();
-  await expect(page.locator(".overview-facts")).toContainText("Restart");
+  await expect(page.locator(".overview-facts").first()).toContainText("Restart");
 
   // Someone else pauses the schedule while it is being edited: saving shows
   // the conflict and keeps the draft, which then saves without resuming it.
@@ -180,15 +180,16 @@ test("a member sees the owner's schedules read-only", async ({ page, session, ow
     const member = await session({ storageState: { cookies: [], origins: [] } });
     await signIn(member, planner, "planner password one");
     await member.getByRole("link", { name: ownServer.name, exact: true }).click();
-    await expect(member.locator(".overview-facts")).not.toContainText("Nothing scheduled");
+    await expect(member.locator(".overview-facts").first()).not.toContainText("Nothing scheduled");
     await member.getByRole("tab", { name: "Schedules" }).click();
     const row = member.locator("#schedule-list tbody tr", { hasText: "03:10, every day" });
     await expect(row).toContainText("Set up by admin");
     // Usernames show as typed: no style capitalizes them.
     expect(await row.locator(".schedule-owner").innerText()).toBe("Set up by admin");
-    await expect(row.getByRole("button", { name: "Edit" })).toBeDisabled();
-    await expect(row.getByRole("button", { name: "Pause" })).toBeDisabled();
-    await expect(row.getByRole("button", { name: "Delete" })).toBeDisabled();
+    // Controls they can't use give way to who can.
+    await expect(row).toContainText("Only admin or an administrator can change this.");
+    await expect(row.getByRole("button")).toHaveCount(0);
+    await expect(row.getByRole("link", { name: "Edit" })).toHaveCount(0);
   } finally {
     await page.goto("/servers");
     await openServer(page, ownServer.name);

@@ -15,9 +15,23 @@ test("searching Activity, with sign-ins under Everything", async ({ page, sessio
   await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   const rows = page.locator(".data-table tbody tr");
   await expect(rows.first()).toContainText("Survival");
+  // The filters wait behind Filter until one is in use.
+  const filter = page.locator("#history-filter");
+  await expect(page.getByLabel("Result")).toBeHidden();
+  await expect(filter.locator("summary")).toHaveText("Filter");
+  await filter.locator("summary").click();
   await page.getByLabel("Result").selectOption("succeeded");
   await page.getByRole("button", { name: "Search" }).click();
   await expect(page).toHaveURL(/\/activity\?status=succeeded$/);
+  // A filtered address opens with them showing and says how many are on.
+  await expect(filter).toHaveAttribute("open");
+  await expect(filter.locator("summary")).toHaveText(/^Filter\s*1 on$/);
+  await expect(page.getByLabel("Result")).toHaveValue("succeeded");
+  await page.getByRole("link", { name: "Clear filters" }).click();
+  await expect(page).toHaveURL(/\/activity$/);
+  await expect(filter).not.toHaveAttribute("open");
+  await expect(page.getByRole("button", { name: "Clear filters" })).toHaveCount(0);
+  await filter.locator("summary").click();
 
   await page.getByLabel("From", { exact: true }).fill("2030-01-01T00:00");
   await page.getByLabel("To", { exact: true }).fill("2020-01-01T00:00");
@@ -41,6 +55,7 @@ test("searching Activity, with sign-ins under Everything", async ({ page, sessio
   await expect(other.getByRole("heading", { name: "Servers", exact: true })).toBeVisible();
   await page.goto("/activity");
   await expect(page.getByText("Signed in")).toHaveCount(0);
+  await page.locator("#history-filter summary").click();
   await page.getByLabel("Show").selectOption("everything");
   await page.getByLabel("What").fill("login");
   await page.getByRole("button", { name: "Search" }).click();

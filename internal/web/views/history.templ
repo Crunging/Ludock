@@ -3,6 +3,7 @@ package views
 import (
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/history"
@@ -37,13 +38,25 @@ func (h HistoryView) active() bool {
 	return slices.ContainsFunc(h.Operations, func(operation history.Operation) bool { return ActiveStatus(operation.Status) })
 }
 
+var historyFilterNames = []string{"serverId", "actor", "action", "status", "from", "to", "operationId"}
+
 func (h HistoryView) filtered() bool {
-	for _, name := range []string{"serverId", "actor", "action", "status", "from", "to", "operationId"} {
+	return slices.ContainsFunc(historyFilterNames, func(name string) bool { return h.Filters.Get(name) != "" })
+}
+
+// filterCount counts the filters in use, Everything among them; the address
+// alone decides them, so the block opens exactly when one is.
+func (h HistoryView) filterCount() int {
+	count := 0
+	if h.Everything {
+		count++
+	}
+	for _, name := range historyFilterNames {
 		if h.Filters.Get(name) != "" {
-			return true
+			count++
 		}
 	}
-	return false
+	return count
 }
 
 func (h HistoryView) pageURL(cursor string) templ.SafeURL {
@@ -79,92 +92,103 @@ func (h HistoryView) hasServer(id string) bool {
 	return false
 }
 
+// historyFilters is closed until a filter is in use; its summary says how
+// many are.
 templ historyFilters(h HistoryView) {
-	<form class="history-search stack-form" method="get" action="/activity" data-compact-query aria-label="Search activity">
-		<div class="history-filters">
-			if h.Admin {
+	<details class="disclosure history-filter" id="history-filter" open?={ h.filterCount() > 0 }>
+		<summary>
+			Filter
+			if count := h.filterCount(); count > 0 {
+				<span class="filter-count">{ strconv.Itoa(count) } on</span>
+			}
+		</summary>
+		<form class="history-search stack-form" method="get" action="/activity" data-compact-query aria-label="Search activity">
+			<div class="history-filters">
+				if h.Admin {
+					<label>
+						<span>Show</span>
+						<select name="show">
+							<option value="">Server activity</option>
+							<option value={ ShowEverything } selected?={ h.Everything }>Everything</option>
+						</select>
+					</label>
+				}
 				<label>
-					<span>Show</span>
-					<select name="show">
-						<option value="">Server activity</option>
-						<option value={ ShowEverything } selected?={ h.Everything }>Everything</option>
+					<span>Server</span>
+					<select name="serverId">
+						<option value="">All servers</option>
+						if id := h.Filters.Get("serverId"); id != "" && !h.hasServer(id) {
+							<option value={ id } selected>A server Ludock no longer has</option>
+						}
+						for _, server := range h.Servers {
+							<option value={ server.ID } selected?={ h.Filters.Get("serverId") == server.ID }>{ server.Name }</option>
+						}
 					</select>
 				</label>
-			}
-			<label>
-				<span>Server</span>
-				<select name="serverId">
-					<option value="">All servers</option>
-					if id := h.Filters.Get("serverId"); id != "" && !h.hasServer(id) {
-						<option value={ id } selected>A server Ludock no longer has</option>
-					}
-					for _, server := range h.Servers {
-						<option value={ server.ID } selected?={ h.Filters.Get("serverId") == server.ID }>{ server.Name }</option>
-					}
-				</select>
-			</label>
-			<label>
-				<span>Who</span>
-				<input type="search" name="actor" value={ h.Filters.Get("actor") } maxlength="200" placeholder="Username"/>
-			</label>
-			<label>
-				<span>What</span>
-				<input type="search" name="action" value={ h.Filters.Get("action") } maxlength="200" placeholder={ map[bool]string{true: "e.g. restart or login", false: "e.g. restart"}[h.Everything] }/>
-			</label>
-			<label>
-				<span>Result</span>
-				<select name="status">
-					<option value="">Any result</option>
-					for _, status := range operationStatuses {
-						<option value={ status } selected?={ h.Filters.Get("status") == status }>{ OperationStatusLabels[status] }</option>
-					}
-				</select>
-			</label>
-			<label>
-				<span>From</span>
-				<input type="datetime-local" data-ms-field="from" aria-describedby="history-filter-help"/>
-				<input type="hidden" name="from" value={ h.Filters.Get("from") }/>
-			</label>
-			<label>
-				<span>To</span>
-				<input type="datetime-local" data-ms-field="to" aria-describedby="history-filter-help"/>
-				<input type="hidden" name="to" value={ h.Filters.Get("to") }/>
-			</label>
-			if id := h.Filters.Get("operationId"); id != "" && h.Everything {
-				<input type="hidden" name="operationId" value={ id }/>
-			}
-		</div>
-		<p class="section-note" id="history-filter-help">
-			Dates use your local time and include both ends.
-			if h.Filters.Get("operationId") != "" && h.Everything {
-				Showing what was recorded about one piece of work.
-			}
-		</p>
-		<div class="inline-actions">
-			<button class="primary-btn" type="submit">Search</button>
-			if h.filtered() {
-				<a class="secondary-btn" href={ h.clearURL() }>Clear filters</a>
-			} else {
-				<button class="secondary-btn" type="button" disabled>Clear filters</button>
-			}
-		</div>
-	</form>
+				<label>
+					<span>Who</span>
+					<input type="search" name="actor" value={ h.Filters.Get("actor") } maxlength="200" placeholder="Username"/>
+				</label>
+				<label>
+					<span>What</span>
+					<input type="search" name="action" value={ h.Filters.Get("action") } maxlength="200" placeholder={ map[bool]string{true: "e.g. restart or login", false: "e.g. restart"}[h.Everything] }/>
+				</label>
+				<label>
+					<span>Result</span>
+					<select name="status">
+						<option value="">Any result</option>
+						for _, status := range operationStatuses {
+							<option value={ status } selected?={ h.Filters.Get("status") == status }>{ OperationStatusLabels[status] }</option>
+						}
+					</select>
+				</label>
+				<label>
+					<span>From</span>
+					<input type="datetime-local" data-ms-field="from" aria-describedby="history-filter-help"/>
+					<input type="hidden" name="from" value={ h.Filters.Get("from") }/>
+				</label>
+				<label>
+					<span>To</span>
+					<input type="datetime-local" data-ms-field="to" aria-describedby="history-filter-help"/>
+					<input type="hidden" name="to" value={ h.Filters.Get("to") }/>
+				</label>
+				if id := h.Filters.Get("operationId"); id != "" && h.Everything {
+					<input type="hidden" name="operationId" value={ id }/>
+				}
+			</div>
+			<p class="section-note" id="history-filter-help">
+				Dates use your local time and include both ends.
+				if h.Filters.Get("operationId") != "" && h.Everything {
+					Showing what was recorded about one piece of work.
+				}
+			</p>
+			<div class="inline-actions">
+				<button class="primary-btn" type="submit">Search</button>
+				if h.filtered() {
+					<a class="secondary-btn" href={ h.clearURL() }>Clear filters</a>
+				}
+			</div>
+		</form>
+	</details>
 }
 
+// historyPagination shows only when there is another page.
 templ historyPagination(h HistoryView) {
-	<nav class="history-pagination" aria-label="Activity pages">
-		if h.Cursor != "" {
-			<a class="secondary-btn" href={ h.pageURL("") }>Newer</a>
-		} else {
-			<button class="secondary-btn" type="button" disabled>Newer</button>
-		}
-		<span class="section-note">Newest first, up to 50 per page</span>
-		if h.Next != "" {
-			<a class="secondary-btn" href={ h.pageURL(h.Next) }>Older</a>
-		} else {
-			<button class="secondary-btn" type="button" disabled>Older</button>
-		}
-	</nav>
+	if h.Cursor != "" || h.Next != "" {
+		<nav class="history-pagination" aria-label="Activity pages">
+			if h.Cursor != "" {
+				<a class="secondary-btn" href={ h.pageURL("") }>Newer</a>
+			} else {
+				<button class="secondary-btn" type="button" disabled>Newer</button>
+			}
+			<span class="section-note">Newest first, up to 50 per page</span>
+			if h.Next != "" {
+				<a class="secondary-btn" href={ h.pageURL(h.Next) }>Older</a>
+			} else {
+				<button class="secondary-btn" type="button" disabled>Older</button>
+			}
+		</nav>
+	}
 }
 
 templ ActivityPage(page Page, h HistoryView) {

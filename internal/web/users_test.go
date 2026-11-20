@@ -232,3 +232,25 @@ func TestLinkFormBelongsToItsLink(t *testing.T) {
 		t.Fatal("first account's password changed")
 	}
 }
+
+// A link made from an address only this computer, or only its network,
+// reaches warns that the person it's for may not be able to open it.
+func TestLinkWarnsOfAnAddressFriendsCantReach(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		host              string
+		computer, network bool
+	}{
+		{"127.0.0.1:3000", true, true}, {"localhost:3000", true, true}, {"[::1]:3000", true, true},
+		{"192.168.1.20:3000", false, true}, {"nas.lan", false, true}, {"nas:3000", false, true},
+		{"ludock.example.com", false, false}, {"203.0.113.7:3000", false, false},
+	} {
+		request := httptest.NewRequest("POST", "http://"+test.host+"/users", nil)
+		request.Header.Set("Origin", "http://"+test.host)
+		request.Header.Set("Sec-Fetch-Site", "same-origin")
+		link := linkView(request, "dana", &auth.Link{Token: "token", Purpose: db.LinkInvite})
+		if link.ThisComputer != test.computer || link.LocalNetwork != test.network {
+			t.Errorf("%s: this computer %v, local network %v", test.host, link.ThisComputer, link.LocalNetwork)
+		}
+	}
+}

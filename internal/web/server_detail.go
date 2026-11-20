@@ -114,8 +114,10 @@ func (s *Server) activity(r *http.Request, request *Request, id string, query ur
 	if a.Kind != "" {
 		kinds[a.Kind] = true
 	}
+	a.AlreadyOffered = a.Status == "already_current"
 	for _, operation := range operations {
 		kinds[operation.Kind] = true
+		a.AlreadyOffered = a.AlreadyOffered || operation.Status == "already_current"
 		active := operation.Status == "queued" || operation.Status == "running"
 		a.Active = a.Active || active
 		if operation.Kind == "update" && operation.Status == "already_current" {

@@ -127,6 +127,13 @@ export async function restoreServer(page, name) {
   expect(response.ok()).toBe(true);
 }
 
+/** Opens the server page's Monitoring settings, unless open, and returns them. */
+export async function monitoringSettings(page) {
+  const settings = page.locator("#monitoring-settings");
+  if (!(await settings.evaluate((details) => details.open))) await settings.locator("summary").click();
+  return settings;
+}
+
 /** Waits for the operation the server's page follows to finish. */
 export async function expectOperationSucceeded(page) {
   await expect(page).toHaveURL(/[?&]operation=/);

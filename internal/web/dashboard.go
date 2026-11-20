@@ -125,7 +125,7 @@ func (s *Server) serverRow(r *http.Request, request *Request, view servers.View,
 		row.Players.Reading = s.App.Players.Get(view.ID, view.Container)
 	}
 	if row.CanStop || row.CanRestart {
-		row.Warn = warnOffer(view.Container)
+		row.Warn, row.Online = warnOffer(view.Container), s.onlineNow(view.ID, view.Container)
 	}
 	row.Game = views.GameView{Running: row.Players.Running, Off: view.QueryOff}
 	switch {
@@ -300,6 +300,19 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 // the page.
 func warnOffer(container servers.Container) bool {
 	return container.State == "running" && jobs.CanWarn(container)
+}
+
+// onlineNow is how many players a running server has, or 0 when none are
+// or Ludock doesn't know.
+func (s *Server) onlineNow(id string, container servers.Container) int {
+	if container.State != "running" {
+		return 0
+	}
+	online, known := s.App.Players.Online(id, container)
+	if !known {
+		return 0
+	}
+	return online
 }
 
 // requestKey is the optional idempotency key of a form submission.

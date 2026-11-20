@@ -1,6 +1,6 @@
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { test, expect, asAdmin, dockerAction, expectOperationSucceeded, fake, openServer, restoreServer, serverRow, withGame } from "../fixtures.mjs";
+import { test, expect, asAdmin, dockerAction, expectOperationSucceeded, fake, monitoringSettings, openServer, restoreServer, serverRow, withGame } from "../fixtures.mjs";
 import { freshStack } from "../../setup.mjs";
 
 asAdmin();
@@ -21,8 +21,8 @@ const valheimFile = (name, dir = process.env.LUDOCK_E2E_DIR) => join(dir, "docke
  */
 async function startWatched(page, seconds) {
   await openServer(page, "valheim");
+  await monitoringSettings(page);
   await page.getByLabel("Monitor this server").check();
-  await page.getByText("Alert levels").click();
   const wait = page.getByLabel("Wait before alerting (seconds)");
   if (await wait.inputValue() !== String(seconds)) {
     const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
@@ -51,7 +51,7 @@ test("a game that stops answering while its container runs is an outage, until i
     // The container still runs; only the game went quiet.
     await expect(game).toContainText("Not answering", { timeout: 45_000 });
     await expect(game).toContainText("the game stopped answering its status check");
-    await expect(page.locator(".overview-facts")).toContainText("Running");
+    await expect(page.locator(".overview-facts").first()).toContainText("Running");
 
     await page.goto("/");
     const attention = page.locator("#attention");
@@ -60,7 +60,7 @@ test("a game that stops answering while its container runs is an outage, until i
     await expect(attention).toContainText("Game not answering", { timeout: 90_000 });
     await openServer(page, "valheim");
     await expect(page.locator("#availability-title + p")).toHaveText("The server is down.");
-    await expect(page.locator(".metadata-list")).toContainText("Running, but the game isn’t answering");
+    await expect(page.getByRole("region", { name: "Monitoring" }).locator(".metadata-list")).toContainText("Running, but the game isn’t answering");
 
     await rm(silence);
     await expect(page.locator(".overview-game")).toContainText("Answering", { timeout: 45_000 });
@@ -68,6 +68,7 @@ test("a game that stops answering while its container runs is an outage, until i
     await expect(attention).not.toContainText("Game not answering", { timeout: 30_000 });
 
     await openServer(page, "valheim");
+    await monitoringSettings(page);
     await page.getByLabel("Monitor this server").uncheck();
     await expect(page.locator("#availability-title + p")).toHaveText("Monitoring is off.");
   } finally {
@@ -119,7 +120,7 @@ test("a game without a status query answers through its image's health check, wh
     const game = page.locator(".overview-game");
     await expect(game).toContainText("Answering");
     await expect(game).toContainText("Its image’s health check passed");
-    await page.getByText("Alert levels").click();
+    await monitoringSettings(page);
     const wait = page.getByLabel("Wait before alerting (seconds)");
     const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
     await wait.fill("10");
@@ -212,6 +213,7 @@ test("an outage reaches an open server list when its grace period ends, and clea
     await expect(attention).not.toContainText("Server down", { timeout: 30_000 });
     await expect(row.getByRole("button", { name: "Stop" })).toBeVisible();
 
+    await monitoringSettings(detail);
     await detail.getByLabel("Monitor this server").uncheck();
     await expect(detail.locator("#availability-title + p")).toHaveText("Monitoring is off.");
   } finally {
