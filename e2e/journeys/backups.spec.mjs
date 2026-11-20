@@ -76,10 +76,16 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   await expect(page.locator("form.danger-panel")).toHaveCount(0);
   // Each backup has one button; the rest are in its menu.
   await expect(rows.last().locator(".backup-row__actions > .secondary-btn")).toHaveText(["Restore…"]);
+  // The notice comes with the refreshed list, not ahead of a slower read of it.
+  await page.route(/\/fragments\/servers\/[^/]+\/backups$/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue();
+  });
   await (await menuItem(rows.last(), "button", "Delete")).click();
   await page.getByRole("dialog", { name: "Delete this backup?" }).getByRole("button", { name: "Delete backup" }).click();
   await expect(page.locator("#detail-status")).toHaveText("Backup deleted.");
-  await expect(rows).toHaveCount(1);
+  expect(await rows.count()).toBe(1);
+  await page.unrouteAll();
 
   // A restart from the server list can take a backup first.
   await page.goto("/");

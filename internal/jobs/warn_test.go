@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -21,15 +22,20 @@ import (
 // runner as Ludock's next start would.
 func (f *fixture) interruptedWarning(t *testing.T, phase string, recovery ops.Recovery) (*ops.Runner, string) {
 	t.Helper()
-	return f.interruptedWarningOf(t, "restart", phase, recovery)
+	return f.interruptedWarningOf(t, "restart", phase, recovery, nil)
 }
 
-func (f *fixture) interruptedWarningOf(t *testing.T, kind, phase string, recovery ops.Recovery) (*ops.Runner, string) {
+func (f *fixture) interruptedWarningOf(t *testing.T, kind, phase string, recovery ops.Recovery, input map[string]any) (*ops.Runner, string) {
 	t.Helper()
 	f.runner.Stop()
 	server, _ := f.jobs.Identity.Get(ctx, f.serverID)
+	input = maps.Clone(input)
+	if input == nil {
+		input = map[string]any{}
+	}
+	input[WarnInput] = true
 	job, err := f.runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: kind,
-		BindingRevision: server.BindingRevision, Input: map[string]any{WarnInput: true}})
+		BindingRevision: server.BindingRevision, Input: input})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,9 +158,9 @@ func TestCalledOffKeepsRunnerErrors(t *testing.T) {
 	}
 }
 
-// A warned restore checks for room with a helper before it stops the
-// server. By then it is past its wait, so an interruption is recovered,
-// which removes that helper, instead of resumed, which wouldn't.
+// A warned restore starts its helpers before its warning or past its wait,
+// so an interruption is recovered, which removes them, instead of resumed,
+// which wouldn't.
 func TestWarnedRestoreIsRecoveredOncePastItsWait(t *testing.T) {
 	f := setup(t)
 	f.jobs.WarningLead = 50 * time.Millisecond
@@ -184,6 +190,42 @@ func TestWarnedRestoreIsRecoveredOncePastItsWait(t *testing.T) {
 	}
 }
 
+// A warned restore reads who is online only after it has validated its
+// archive, which can take minutes, so a player who joins meanwhile is warned.
+// It reads under the locks it holds, once.
+func TestWarnedRestoreWarnsAfterValidating(t *testing.T) {
+	f := setup(t)
+	f.jobs.WarningLead = 100 * time.Millisecond
+	backup := f.run(t, "backup", nil)
+	source := f.withPlayers(1)
+	var mu sync.Mutex
+	var events []string
+	record := func(event string) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	}
+	source.onRead = func() { record("players read") }
+	started := f.engine.OnStart
+	// The first helper is the restore's check for room, after validation.
+	f.engine.OnStart = func(c *fakedocker.Container) {
+		started(c)
+		if c.CreateRequest.Labels["ludock.internal"] == "backup-helper" {
+			record("helper")
+		}
+	}
+	restore := f.run(t, "restore", map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc", WarnInput: true})
+	mu.Lock()
+	defer mu.Unlock()
+	reads, unheld := source.counts()
+	if restore.Status != ops.Succeeded || restore.Recovery.WarnUntil == 0 || reads != 1 || unheld != 0 {
+		t.Fatalf("%+v, %d readings, %d without the lock", restore, reads, unheld)
+	}
+	if len(events) == 0 || events[0] != "helper" {
+		t.Fatal("read who is online before validating:", events)
+	}
+}
+
 // onlineSource reads a set number of players online, or fails to read
 // them when online is negative, counting its readings.
 type onlineSource struct {
@@ -193,6 +235,8 @@ type onlineSource struct {
 	reads   int
 	// unheld counts readings taken without the server's lock.
 	unheld int
+	// onRead, if set, runs at each reading.
+	onRead func()
 }
 
 func (s *onlineSource) Lists(servers.Container) bool { return true }
@@ -201,6 +245,9 @@ func (s *onlineSource) Read(ctx context.Context, server identity.Server, ask pla
 	observed, _, err := s.servers.Observe(ctx, server)
 	if err != nil {
 		return nil, err
+	}
+	if s.onRead != nil {
+		s.onRead()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -294,12 +341,17 @@ func TestWarningReadsPlayersWhenItRuns(t *testing.T) {
 // stopped waits out the time players were given after the next start, even
 // if nobody is online by then: a warning sent is never taken back.
 func TestResumedWarningIgnoresAnEmptyServer(t *testing.T) {
-	for _, kind := range []string{"restart", "backup"} {
+	for _, kind := range []string{"restart", "backup", "restore"} {
 		t.Run(kind, func(t *testing.T) {
 			f := setup(t)
+			var input map[string]any
+			if kind == "restore" {
+				backup := f.run(t, "backup", nil)
+				input = map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc"}
+			}
 			source := f.withPlayers(0)
 			until := time.Now().Add(300 * time.Millisecond).UnixMilli()
-			runner, id := f.interruptedWarningOf(t, kind, ops.PhaseWarning, ops.Recovery{WarnUntil: until, WarnSent: true})
+			runner, id := f.interruptedWarningOf(t, kind, ops.PhaseWarning, ops.Recovery{WarnUntil: until, WarnSent: true}, input)
 			job := finished(t, runner, id)
 			if reads, _ := source.counts(); job.Status != ops.Succeeded || job.Recovery.WarnSkipped || reads != 0 ||
 				job.Recovery.WarnUntil != until || job.UpdatedAt < until {

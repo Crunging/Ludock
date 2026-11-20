@@ -306,8 +306,20 @@ func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request, request *R
 		message = "Backup removed from Ludock. Its archive may still be in the folder it was saved in."
 	}
 	s.audit(r, request, "backup.deleted", id, details)
-	w.Header().Set("HX-Trigger", "backups-changed, servers-changed")
-	render(w, r, http.StatusOK, views.Alert("success", message))
+	w.Header().Set("HX-Trigger", "servers-changed")
+	s.backupOutcome(w, r, request, id, message)
+}
+
+// backupOutcome sends a change's notice with the refreshed archive table, so
+// no row from before the change stays on screen after the notice.
+func (s *Server) backupOutcome(w http.ResponseWriter, r *http.Request, request *Request, id, message string) {
+	d, err := s.detail(r, request, id, "backups", false)
+	if err != nil {
+		w.Header().Set("HX-Trigger", "backups-changed, servers-changed")
+		render(w, r, http.StatusOK, views.Alert("success", message))
+		return
+	}
+	render(w, r, http.StatusOK, views.BackupOutcome(message, s.backupsView(r, request, d)))
 }
 
 // keepBackup and releaseBackup let an administrator who can read a server's
@@ -337,8 +349,7 @@ func (s *Server) releaseBackup(w http.ResponseWriter, r *http.Request, request *
 		return
 	}
 	s.audit(r, request, "backup.released", id, map[string]any{"backupId": backupID})
-	w.Header().Set("HX-Trigger", "backups-changed")
-	render(w, r, http.StatusOK, views.Alert("success", "Backup released. Retention can remove it like any other."))
+	s.backupOutcome(w, r, request, id, "Backup released. Retention can remove it like any other.")
 }
 
 func (s *Server) assertArchives(r *http.Request, request *Request, id string) error {

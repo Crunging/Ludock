@@ -236,6 +236,8 @@ func boolText(value bool) string {
 // a queued request keeps the element it targets.
 templ FileList(f FilesView) {
 	<div id="file-list" hx-get={ "/fragments/files/" + f.ServerID + "?" + f.listQuery() } hx-include=".file-filters" hx-trigger="files-changed from:document" hx-swap="outerMorph">
+		// File changes send this back, so their response shows this folder.
+		<input type="hidden" id="file-list-state" name="list" value={ f.listQuery() }/>
 		<div class="file-filter-summary">
 			<p id="file-filter-help">This folder only, folders first</p>
 			if f.ListError == "" {
@@ -414,9 +416,18 @@ func (d FileDialog) busyLabel() string {
 	return "Working…"
 }
 
+// FileOutcome is a file change's notice, sent with the refreshed folder so
+// no row from before the change stays on screen after the notice.
+templ FileOutcome(kind, message string, list FilesView) {
+	@Alert(kind, message)
+	@Partial("#file-list", "outerMorph") {
+		@FileList(list)
+	}
+}
+
 templ FileActionDialog(d FileDialog) {
 	<dialog class="file-action-dialog" id="file-action" aria-labelledby="file-action-title" aria-describedby="file-action-description" data-open-on-load>
-		<form hx-post={ "/files/" + d.ServerID + "/" + d.Action } hx-target="#file-action" hx-swap="outerHTML" data-close-on-success>
+		<form hx-post={ "/files/" + d.ServerID + "/" + d.Action } hx-include="#file-list-state" hx-target="#file-action" hx-swap="outerHTML" data-close-on-success>
 			<input type="hidden" name="root" value={ d.Root.ID }/>
 			<input type="hidden" name="path" value={ d.Path }/>
 			<input type="hidden" name="type" value={ d.Type }/>
@@ -507,7 +518,7 @@ templ FileMoveDialog(m FileMove) {
 // FileMoveContent is the move dialog's content, swapped in place while
 // browsing for a folder.
 templ FileMoveContent(m FileMove) {
-	<form hx-post={ "/files/" + m.ServerID + "/move" } hx-target="#file-action" hx-swap="outerHTML" data-close-on-success>
+	<form hx-post={ "/files/" + m.ServerID + "/move" } hx-include="#file-list-state" hx-target="#file-action" hx-swap="outerHTML" data-close-on-success>
 		<input type="hidden" name="root" value={ m.Root.ID }/>
 		<input type="hidden" name="path" value={ m.Path }/>
 		<input type="hidden" name="to" value={ m.To }/>

@@ -81,8 +81,7 @@ type ExecOptions struct {
 	// Settle makes the command outlast the caller's context and its stream,
 	// for a next step that writes the same data: Exec returns only once
 	// Docker confirms it ended or no longer knows it, or Limit passed and the
-	// helper is stopped. It takes no Input, its create has no StepLimit, and
-	// its Limit is used as given.
+	// helper is stopped. It takes no Input, and its Limit is used as given.
 	Settle bool
 	// Poll is how often a settling command is inspected; zero means 250ms.
 	Poll time.Duration
@@ -145,24 +144,21 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 			AttachStderr: true, AttachStdin: options.Input != nil})
 		return err
 	}
-	var err error
-	if options.Settle {
-		err = create(ctx)
-	} else {
+	if !options.Settle {
 		if err := check(); err != nil {
 			return nil, err
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		err = Step(ctx, "creating a helper command", create)
 	}
-	if err != nil {
+	if err := Step(ctx, "creating a helper command", create); err != nil {
 		return nil, err
 	}
 	if err := check(); err != nil {
 		return nil, err
 	}
+	var err error
 	limit := time.Minute
 	if options.Input != nil {
 		limit = 30 * time.Minute
@@ -322,7 +318,7 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		return nil, errs.Failed
 	}
 	if !options.Settle {
-		if info, err = client.InspectExec(context.WithoutCancel(ctx), execID); err != nil {
+		if info, err = awaitExit(ctx, deadline, client, execID); err != nil {
 			return nil, err
 		}
 	}
@@ -330,6 +326,29 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		return nil, err
 	}
 	return stdout.buffer.Bytes(), nil
+}
+
+// ExitWait bounds how long a file command whose stream ended waits for
+// Docker to record its exit; tests shorten it.
+var ExitWait = 5 * time.Second
+
+// awaitExit inspects a command whose stream ended. Docker can close the
+// stream a moment before it records the exit, so a command still shown as
+// running is inspected again for up to ExitWait.
+func awaitExit(ctx, deadline context.Context, client *docker.Client, execID string) (*docker.ExecInspect, error) {
+	wait, cancel := context.WithTimeout(deadline, ExitWait)
+	defer cancel()
+	for {
+		info, err := client.InspectExec(context.WithoutCancel(ctx), execID)
+		if err != nil || (!info.Running && info.ExitCode != nil) {
+			return info, err
+		}
+		select {
+		case <-wait.Done():
+			return info, nil
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // Start starts an exec in a helper. A start that may have reached Docker

@@ -372,7 +372,7 @@ templ ScheduleList(v SchedulesView) {
 									type="button"
 									class="secondary-btn"
 									disabled?={ toggleDisabled(v, item) }
-									hx-post={ "/servers/" + v.ServerID + "/schedules/" + item.ID + "/toggle" }
+									hx-post={ "/servers/" + v.ServerID + "/schedules/" + item.ID + "/toggle?" + scheduleListQuery(v) }
 									hx-vals={ toggleValues(item) }
 									hx-target="#detail-status"
 									data-busy-label="Working…"
@@ -387,7 +387,7 @@ templ ScheduleList(v SchedulesView) {
 									type="button"
 									class="secondary-btn secondary-btn--danger"
 									disabled?={ v.Editing != "" || !v.Editable(item) }
-									hx-post={ "/servers/" + v.ServerID + "/schedules/" + item.ID + "/delete" }
+									hx-post={ "/servers/" + v.ServerID + "/schedules/" + item.ID + "/delete?" + scheduleListQuery(v) }
 									hx-target="#detail-status"
 									hx-confirm="Delete this schedule?"
 									data-confirm-detail="It won’t run again. This can’t be undone."
@@ -402,6 +402,14 @@ templ ScheduleList(v SchedulesView) {
 			</tbody>
 		</table>
 	</div>
+}
+
+// ScheduleOutcome is a change's notice, sent with the refreshed list.
+templ ScheduleOutcome(kind, message string, v SchedulesView) {
+	@Alert(kind, message)
+	@Partial("#schedule-list", "outerHTML") {
+		@ScheduleList(v)
+	}
 }
 
 func scheduleListQuery(v SchedulesView) string {

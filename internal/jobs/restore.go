@@ -314,7 +314,24 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				err = restoreErr
 			}
 		}()
+		// Players are warned once the archive is validated, which can take
+		// minutes; staging reads it again and verifies its checksum before
+		// any data is replaced. A warning resumed after a restart of Ludock
+		// is waited out first, since players already heard it.
+		resumed := job.Job.Recovery.WarnUntil != 0
+		warn := func() error {
+			if err := j.warnFirst(ctx, job, authz.BackupsRestore, true); err != nil || !warnRequested(job) {
+				return err
+			}
+			// Past the wait, an interruption is recovered like any other.
+			return job.Progress("validating", nil, nil)
+		}
 		result, err = func() (map[string]any, error) {
+			if resumed {
+				if err := warn(); err != nil {
+					return nil, err
+				}
+			}
 			if err := j.assertCapability(ctx, job, authz.BackupsRestore); err != nil {
 				return nil, err
 			}
@@ -336,6 +353,11 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			}
 			if err := j.assertStagingRoom(ctx, server, job, roots, item, staged, settings.ReserveBytes, assertAccess); err != nil {
 				return nil, err
+			}
+			if !resumed {
+				if err := warn(); err != nil {
+					return nil, err
+				}
 			}
 			if err := j.stopForData(ctx, server, job); err != nil {
 				return nil, err

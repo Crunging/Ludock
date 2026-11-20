@@ -104,8 +104,6 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
     await page.getByRole("button", { name: "Delete" }).click();
     await dialog.getByRole("button", { name: /^Delete (folder|file)$/ }).click();
     await expect(page.locator("#file-feedback")).toHaveText(`Deleted “${name}”.`);
-    // The list refreshes after the notice; rows shift under a click meanwhile.
-    await expect(row(page, name)).toHaveCount(0);
   }
   await page.getByLabel("Filter filenames").fill("server");
   await expect(names).toHaveText(["server.properties"]);
@@ -442,6 +440,37 @@ test("an archive that escapes its folder or unpacks too large is refused and lea
   expect(existsSync(join(data, "..", "escape.txt")) || existsSync(join(data, "..", "..", "escape.txt"))).toBe(false);
 });
 
+test("a change's notice arrives with the folder it changed, so no old row is left to click", async ({ page, ownServer }) => {
+  await openFiles(page, ownServer.name);
+  const names = page.locator(".file-row__name");
+  await expect(names).toHaveText(["world", "server.properties"]);
+  // A folder read on its own would leave the old rows up for this long.
+  await page.route(/\/fragments\/files\/[^/?]+\?/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue();
+  });
+  const feedback = page.locator("#file-feedback");
+  const shown = () => names.allTextContents();
+
+  await page.locator("[data-upload-input]").setInputFiles([{ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes\n") }]);
+  await expect(feedback).toHaveText("1 file uploaded.");
+  expect(await shown()).toEqual(["world", "notes.txt", "server.properties"]);
+
+  const dialog = page.getByRole("dialog");
+  await row(page, "notes.txt").getByRole("button", { name: "Actions for notes.txt" }).click();
+  await page.getByRole("button", { name: "Rename" }).click();
+  await dialog.getByLabel("New name").fill("a.txt");
+  await dialog.getByRole("button", { name: "Rename" }).click();
+  await expect(feedback).toHaveText("Renamed “notes.txt” to “a.txt”.");
+  expect(await shown()).toEqual(["world", "a.txt", "server.properties"]);
+
+  await row(page, "a.txt").getByRole("button", { name: "Actions for a.txt" }).click();
+  await page.getByRole("button", { name: "Delete" }).click();
+  await dialog.getByRole("button", { name: "Delete file" }).click();
+  await expect(feedback).toHaveText("Deleted “a.txt”.");
+  expect(await shown()).toEqual(["world", "server.properties"]);
+});
+
 test("selecting several entries and deleting them", async ({ page, ownServer }) => {
   const folder = join(ownServer.data, "logs");
   mkdirSync(folder);
@@ -464,7 +493,7 @@ test("selecting several entries and deleting them", async ({ page, ownServer }) 
   await expect(dialog.locator("li")).toHaveText(["2026-01.log", "2026-02.log"]);
   await dialog.getByRole("button", { name: "Delete 2 items" }).click();
   await expect(page.locator("#file-feedback")).toHaveText("Deleted 2 items.");
-  await expect(page.locator(".file-row__name")).toHaveText(["latest.log"]);
+  expect(await page.locator(".file-row__name").allTextContents()).toEqual(["latest.log"]);
   await expect(bar).toBeHidden();
   expect(readdirSync(folder)).toEqual(["latest.log"]);
 

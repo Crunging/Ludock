@@ -287,7 +287,7 @@ When the server is running and the game can message its players, the Restart,
 Stop, and **Create backup** dialogs, a restore, and the **Update** tab offer
 **Warn players and wait 1 minute**, ticked. Ludock checks who is online when
 the work starts, not when the page loaded; an update checks once the new image
-is downloaded. If someone is on, or Ludock can't tell, it tells players in the
+is downloaded, and a restore once it has checked the backup. If someone is on, or Ludock can't tell, it tells players in the
 game, waits the minute (shown in **Activity**), then goes ahead. If nobody is
 on, it goes ahead at once, and **Activity** says nobody was online, so players
 weren't warned. If Ludock restarts during the minute, it finishes

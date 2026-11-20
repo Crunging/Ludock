@@ -170,17 +170,16 @@ func TestExecWithinCases(t *testing.T) {
 			t.Fatal("the helper still runs", err)
 		}
 	})
-	t.Run("create never answered waits for the caller", func(t *testing.T) {
+	t.Run("create never answered fails after the step limit", func(t *testing.T) {
 		previous := launch.StepLimit
 		launch.StepLimit = 50 * time.Millisecond
 		t.Cleanup(func() { launch.StepLimit = previous })
 		h := newCommandHelper(t)
 		h.engine.AddFault(execCreate, 0, true, 1)
-		bounded, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+		bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		started := time.Now()
-		if _, err := h.exec(bounded, []string{"ok"}, nil, time.Minute); !errors.Is(err, docker.ErrRequestFailed) || time.Since(started) < 250*time.Millisecond {
-			t.Fatal(err, time.Since(started))
+		if _, err := h.exec(bounded, []string{"ok"}, nil, time.Minute); err != launch.ErrDockerTimeout || bounded.Err() != nil {
+			t.Fatal(err)
 		}
 	})
 	t.Run("start provably not sent", func(t *testing.T) {

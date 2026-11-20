@@ -327,10 +327,18 @@ func (s *Server) fileOutcome(w http.ResponseWriter, r *http.Request, request *Re
 		kind, success = "error", "The result for "+subject+" could not be confirmed. The change may have completed. Review the folder before starting another action."
 	}
 	s.audit(r, request, event, action.Logical.ID, details)
+	// Listing takes the server's locks again.
+	action.Done()
+	listing := r.Clone(r.Context())
+	listing.URL = &url.URL{Path: r.URL.Path, RawQuery: r.PostFormValue("list")}
+	list := s.filesView(listing, request)
+	if list.Error != "" {
+		list.ListError = list.Error
+	}
 	w.Header().Set("HX-Retarget", "#file-feedback")
 	w.Header().Set("HX-Reswap", "innerHTML")
-	w.Header().Set("HX-Trigger", "files-changed")
-	render(w, r, http.StatusOK, views.Alert(kind, success))
+	w.Header().Set("HX-Trigger", "files-updated")
+	render(w, r, http.StatusOK, views.FileOutcome(kind, success, list))
 }
 
 // filePreview shows a file inline, reading at most files.PreviewLimit, and
