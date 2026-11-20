@@ -44,26 +44,26 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 		plan.Roots = append(plan.Roots, Root{ID: root.ID, Path: root.Path})
 	}
 	if len(plan.Roots) == 0 {
-		return nil, fail("NO_BACKUP_ROOTS", "This server has no approved writable data roots.")
+		return nil, fail("NO_BACKUP_ROOTS", "Ludock found no data folder it can back up for this server. Its game data must be in a writable volume or folder mounted into its container.")
 	}
 	var physicalRoots []string
 	for _, root := range plan.Roots {
 		mounts := context.Observation.Mounts
 		if slices.ContainsFunc(mounts, func(mount identity.Mount) bool { return strings.HasPrefix(mount.Destination, root.Path+"/") }) {
-			return nil, fail("NESTED_BACKUP_MOUNT", "A selected root contains a nested mount. Restrict ludock.files to a data subdirectory without nested mounts before backing up.")
+			return nil, fail("NESTED_BACKUP_MOUNT", "One of the server’s data folders has another mount inside it, which Ludock can’t back up as one folder. List folders without one inside in the ludock.files label, then try again.")
 		}
 		source := writableOwnerMount(mounts, root.Path)
 		if source == nil {
-			return nil, fail("BACKUP_ROOT_CHANGED", "A selected data root no longer belongs to a writable mount.")
+			return nil, fail("BACKUP_ROOT_CHANGED", "One of the server’s data folders is no longer mounted, or no longer writable. Check how the server is defined, such as its Compose file, then try again.")
 		}
 		if !strings.HasPrefix(source.Source, "/") {
-			return nil, fail("BACKUP_ROOT_CHANGED", "The physical source of a selected data root could not be verified.")
+			return nil, fail("BACKUP_ROOT_CHANGED", "Ludock couldn’t tell where one of the server’s data folders is on the host. Check how the server is defined, such as its Compose file, then try again.")
 		}
 		physical := path.Clean(source.Source + root.Path[len(source.Destination):])
 		if slices.ContainsFunc(physicalRoots, func(other string) bool {
 			return physical == other || strings.HasPrefix(physical, other+"/") || strings.HasPrefix(other, physical+"/")
 		}) {
-			return nil, fail("OVERLAPPING_BACKUP_ROOTS", "Selected data roots overlap on the Docker host. Restrict ludock.files to one path for each distinct data subtree.")
+			return nil, fail("OVERLAPPING_BACKUP_ROOTS", "Two of the server’s data folders are the same folder on the host, or one is inside the other. List each folder once in the ludock.files label, then try again.")
 		}
 		physicalRoots = append(physicalRoots, physical)
 		alias := "/mounts/" + root.ID
@@ -79,7 +79,7 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 		}
 		plan.Checked = append(plan.Checked, checked)
 		if !files.SafeWritableDataMount(checked) {
-			return nil, fail("UNSAFE_BACKUP_ROOT", "A selected data mount is unsafe.")
+			return nil, fail("UNSAFE_BACKUP_ROOT", "One of the server’s data folders isn’t a kind Ludock can safely read or change, such as a volume with special options.")
 		}
 	}
 	return plan, nil
@@ -89,7 +89,7 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 func HelperRoot(context *servers.Context, root Root) (string, error) {
 	mount := writableOwnerMount(context.Observation.Mounts, root.Path)
 	if mount == nil {
-		return "", fail("BACKUP_ROOT_CHANGED", "The selected data root changed.")
+		return "", fail("BACKUP_ROOT_CHANGED", "One of the server’s data folders changed. Reload the page and try again.")
 	}
 	return "/mounts/" + root.ID + root.Path[len(mount.Destination):], nil
 }
@@ -145,7 +145,7 @@ func (h *Helpers) NewDataHelper(ctx context.Context, context *servers.Context, r
 			SecurityOpt: []string{"no-new-privileges"}, LogConfig: launch.NoLogs}})
 	if err != nil {
 		proof.Cleanup()
-		return nil, err
+		return nil, launch.HelperFailed(err)
 	}
 	cleanup := func() {
 		defer proof.Cleanup()
@@ -160,7 +160,7 @@ func (h *Helpers) NewDataHelper(ctx context.Context, context *servers.Context, r
 
 func (h *Helpers) prepare(ctx context.Context, id string, plan *Plan, proof *launch.Proof) error {
 	if err := h.Docker.Start(ctx, id); err != nil {
-		return err
+		return launch.HelperFailed(err)
 	}
 	if err := launch.AssertMountIdentities(ctx, h.Docker, id, proof.Identities); err != nil {
 		return err
@@ -193,7 +193,7 @@ func (h *Helpers) ExecWithin(ctx context.Context, id string, command []string, a
 }
 
 var helperErrors = &launch.ExecErrors{Timeout: errTimeout, Failed: errFailed, Unsafe: errFailed,
-	OutputLimit: fail("HELPER_OUTPUT", "A data operation produced too much output.")}
+	OutputLimit: fail("HELPER_OUTPUT", "Ludock’s helper sent back more than expected, so the work was stopped.")}
 
 // IsRunning reports whether a reused restore helper is still running.
 func (h *Helpers) IsRunning(ctx context.Context, id string) (bool, error) {
@@ -245,7 +245,7 @@ func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess fun
 			return docker.ErrRequestFailed
 		}
 		if err != nil || result.Running || result.ExitCode == nil || *result.ExitCode != 0 {
-			return fail("UNSAFE_ARCHIVE", "Archive reading failed. Backups require regular files and directories without symbolic links, hard links, special files, or inaccessible paths.")
+			return fail("UNSAFE_ARCHIVE", "Ludock couldn’t read everything in the server’s data folders, so the backup was stopped. A backup takes only ordinary files and folders that Ludock can read, not links (symbolic or hard) or device files.")
 		}
 		return nil
 	}
@@ -340,13 +340,13 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 		err = tarstream.Walk(input, func(header *tarstream.Header, body io.Reader) error {
 			name := strings.TrimSuffix(header.Name, "/")
 			if strings.HasPrefix(name, "/") || slices.ContainsFunc(strings.Split(name, "/"), func(part string) bool { return part == "" || part == ".." || part == "." }) {
-				return fail("UNSAFE_ARCHIVE", "Docker returned an unsafe archive path.")
+				return fail("UNSAFE_ARCHIVE", "A file in the server’s data has a name Ludock can’t store safely, so the backup was stopped.")
 			}
 			if prefix == "" {
 				prefix = strings.Split(name, "/")[0]
 			}
 			if name != prefix && !strings.HasPrefix(name, prefix+"/") {
-				return fail("UNSAFE_ARCHIVE", "Docker returned an archive outside the selected data root.")
+				return fail("UNSAFE_ARCHIVE", "Ludock was handed a file from outside the server’s data folders, so the backup was stopped.")
 			}
 			suffix := ""
 			if header.Type == "directory" {
@@ -398,7 +398,7 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 		input.Close()
 		if err != nil {
 			if _, ok := apperr.As(err); !ok && !docker.Unavailable(err) {
-				err = fail("UNSAFE_ARCHIVE", "Archive reading failed. Backups require regular files and directories without symbolic links, hard links, special files, or inaccessible paths.")
+				err = fail("UNSAFE_ARCHIVE", "Ludock couldn’t read everything in the server’s data folders, so the backup was stopped. A backup takes only ordinary files and folders that Ludock can read, not links (symbolic or hard) or device files.")
 			}
 			return 0, "", err
 		}
@@ -471,7 +471,7 @@ func (c *coalescer) flush() error {
 	return err
 }
 
-var errStagingCapacity = fail("RESTORE_CAPACITY", "A data root lacks space for restore staging and the configured reserve.")
+var errStagingCapacity = fail("RESTORE_CAPACITY", "The server’s disk doesn’t have room to unpack the backup next to the current data and still keep its free-space reserve. Free up space on that disk, then try again.")
 
 type StageTarget struct {
 	Root Root
@@ -486,7 +486,7 @@ type StageTarget struct {
 // any game data is replaced.
 func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID string, targets []StageTarget, stage string,
 	roots []Root, maxBytes, reserveBytes int64, checksum string, assertAccess func() error) (err error) {
-	restoreTimeout := fail("RESTORE_TIMEOUT", "Restore extraction exceeded its 30 minute execution limit.")
+	restoreTimeout := fail("RESTORE_TIMEOUT", "Unpacking the backup took longer than 30 minutes, so the restore was stopped.")
 	deadline, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), 30*time.Minute, restoreTimeout)
 	defer cancel()
 	expired := func() bool { return deadline.Err() != nil }
@@ -555,7 +555,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 			case result != nil && *result.ExitCode == helper.ExtractFullStatus:
 				err = errStagingCapacity
 			case err != nil || result == nil || *result.ExitCode != 0:
-				err = fail("RESTORE_EXTRACTION", "Restore extraction rejected a changed or unsafe data path.")
+				err = fail("RESTORE_EXTRACTION", "A folder in the server’s data changed, or isn’t safe to write to, while the backup was unpacking, so the restore was stopped.")
 			}
 			extraction.completed <- err
 		}()

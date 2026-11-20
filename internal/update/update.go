@@ -32,7 +32,7 @@ var (
 	errSwarm = apperr.New("UNSUPPORTED_CONTAINER", 409,
 		"Docker Swarm manages this container. Update its service through Swarm.")
 	errDependents = apperr.New("SERVICE_DEPENDENCY", 409,
-		"Another container shares this server's network, process, or IPC namespace and would lose it. Update them together through the tool that created them.")
+		"Another container shares this server’s network or processes and would lose them if Ludock replaced it. Update them together through the tool that created them.")
 	errVolumeUnknown = apperr.New("VOLUME_UNKNOWN", 409,
 		"Docker doesn't say which volume one of this server's mounts uses, so Ludock can't keep its data. Recreate it through the tool that created it.")
 	errImageGone = apperr.New("IMAGE_UNAVAILABLE", 409,

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/backups"
+	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/update"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -41,6 +42,9 @@ type BackupsView struct {
 	Browse *BackupBrowser
 	// Warn offers to warn players before a backup or restore.
 	Warn bool
+	// LastFailed is the newest backup attempt when it failed or was
+	// interrupted.
+	LastFailed *ops.Job
 }
 
 func (b BackupsView) archives() bool { return b.Admin && b.CanRead }
@@ -98,6 +102,18 @@ templ backupsTabBody(b BackupsView) {
 		@noDataFolders(b.Admin)
 	} else {
 		<p class="section-lede">The server stops while a backup copies, then goes back to how it was.</p>
+	}
+	if failed := b.LastFailed; failed != nil {
+		<p class="section-note backup-last-failed" id="backup-last-failed">
+			@Pip("failed")
+			if failed.Status == ops.Interrupted {
+				The last backup was interrupted
+			} else {
+				The last backup failed
+			}
+			@Time(failed.UpdatedAt, "", "")<span>.</span>
+			<a class="text-link" href={ templ.SafeURL("/servers/" + b.ServerID + "?tab=activity&operation=" + failed.ID) }>See what happened</a>
+		</p>
 	}
 	if b.CanCreate && !b.NoData && !b.Blocked && !b.Active {
 		<div id="backup-readiness" hx-get={ "/fragments/servers/" + b.ServerID + "/backups/preflight" } hx-trigger="load" hx-swap="outerHTML"></div>

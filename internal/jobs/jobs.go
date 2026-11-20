@@ -340,6 +340,9 @@ func (j *Jobs) saveWorld(ctx context.Context, job *ops.Context, server *servers.
 	}
 	if command == "" {
 		reason := "unsupported"
+		if integration := games.Lookup(server.Container.GameType); integration != nil && integration.SavesOnStop {
+			reason = "saves_on_stop"
+		}
 		if expected != nil && slices.ContainsFunc(expected.Commands, func(item games.QuickCommand) bool { return item.Label == "Save world" }) {
 			reason = "console_unavailable"
 		}

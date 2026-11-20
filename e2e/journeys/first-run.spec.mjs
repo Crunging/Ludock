@@ -194,5 +194,5 @@ test("a server with no data folders says why it can't be backed up", async ({ se
   await expect(why).toContainText("Ludock can’t back up this server. None of its data is in a folder Ludock can reach.");
   await expect(why).toContainText("give its game data a writable volume or bind mount");
   await expect(page.getByRole("button", { name: "Create backup" })).toHaveCount(0);
-  await expect(page.locator("main")).not.toContainText("approved writable data roots");
+  await expect(page.locator("main")).not.toContainText("Ludock found no data folder it can back up");
 });

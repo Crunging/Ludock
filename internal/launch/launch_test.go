@@ -214,6 +214,48 @@ func TestMountProof(t *testing.T) {
 	}
 }
 
+// Docker fails a validator's create, start, or logs, or a volume inspect:
+// that is Docker's error, not a refused data folder, while a request Docker
+// never answered stays a Docker error callers can wait out.
+func TestMountProofDockerFailure(t *testing.T) {
+	engine, client, helperID := setup(t)
+	engine.AddImage(pinnedImage)
+	images := &Images{Docker: client, Configured: pinnedImage}
+	bind := []identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data"}}
+	for _, pattern := range []string{"^POST .*/containers/create", "^POST .*/containers/[^/]+/start$", "^GET .*/containers/[^/]+/logs"} {
+		engine.ClearFaults()
+		engine.AddFault(pattern, 500, false, 0)
+		if _, err := MountProof(ctx, client, images, bind, ""); !errors.Is(err, ErrHelperFailed) {
+			t.Fatal(pattern, err)
+		}
+	}
+	engine.ClearFaults()
+	engine.AddFault("^GET .*/volumes/", 500, false, 0)
+	if _, err := MountProof(ctx, client, images, []identity.Mount{{Type: "volume", Name: "world", Destination: "/data"}}, ""); !errors.Is(err, ErrHelperFailed) {
+		t.Fatal(err)
+	}
+	engine.ClearFaults()
+	engine.AddFault("^POST .*/exec$", 500, false, 0)
+	if err := AssertMountIdentities(ctx, client, helperID, map[string]helper.MountIdentity{"/data": {Dev: "1", Ino: "1"}}); !errors.Is(err, ErrHelperFailed) {
+		t.Fatal(err)
+	}
+	// A refusing validator Docker already removed is still a refusal.
+	engine.ClearFaults()
+	engine.AddFault("^GET .*/containers/[^/]+/logs", 404, false, 0)
+	if _, err := MountProof(ctx, client, images, bind, ""); !errors.Is(err, ErrUnverifiedMount) {
+		t.Fatal(err)
+	}
+	engine.ClearFaults()
+	if err := HelperFailed(docker.ErrRequestFailed); !errors.Is(err, docker.ErrRequestFailed) {
+		t.Fatal(err)
+	}
+	for _, id := range engine.SortedIDs() {
+		if c := engine.Container(id); c != nil && c.Config.Labels["ludock.internal"] == "mount-validator" {
+			t.Fatal("validator left behind")
+		}
+	}
+}
+
 // Periodic checks at most once a second and keeps a refusal.
 func TestPeriodicCheckLimit(t *testing.T) {
 	calls, refuse := 0, false
@@ -265,7 +307,7 @@ func TestStalledValidatorCreate(t *testing.T) {
 	}()
 	select {
 	case err := <-done:
-		if !errors.Is(err, ErrUnverifiedMount) {
+		if !errors.Is(err, ErrDockerTimeout) {
 			t.Fatal(err)
 		}
 	case <-time.After(5 * time.Second):

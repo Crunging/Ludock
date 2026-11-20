@@ -128,7 +128,9 @@ volume, and Ludock turns storage on there by itself. **Settings → Backups**
 shows where backups go and how much space they use. Each server
 keeps the 3 newest backups plus the last of each of the 7 most recent days,
 4 weeks, and 6 months that have one; Ludock removes the rest after each new
-backup. To keep one for good, choose **Keep…** from its menu.
+backup. To keep one for good, choose **Keep…** from its menu. When the latest
+backup failed or was interrupted, the **Backups** tab says so, with a link to
+what happened, until the next one succeeds.
 
 A server whose data isn't in a writable volume or bind mount can't be backed
 up; its **Backups** tab says so. Give its data a volume where you define the
@@ -449,7 +451,9 @@ for maintenance** on the server's **Overview**.
 | Disk nearly full | A data folder's disk reaches 90% full |
 | Memory near its limit | A container with a memory limit stays at 90% of it for 5 minutes |
 
-Each alert is sent once, with another when it recovers. Stops and work started
+Each alert is sent once, with another when it recovers. A server that stopped
+by itself shows in **Needs attention** with **Start**, which is also the
+highlighted button on a stopped server's row and page. Stops and work started
 through Ludock don't alert, and a server that was already stopped when Ludock
 found it stays quiet until it runs. A game still starting, or whose status
 check is off or wrong, never counts as not answering. Disks are measured about

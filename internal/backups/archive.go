@@ -81,16 +81,16 @@ func ValidateEntry(header *tarstream.Header, roots []Root) error {
 		return fail("UNSAFE_ARCHIVE", "The archive contains a path outside its recorded roots.")
 	}
 	if header.Type != "file" && header.Type != "directory" {
-		return fail("UNSAFE_ARCHIVE", "Backups support regular files and directories. Remove symbolic links, hard links, and special files from the selected data roots before retrying.")
+		return fail("UNSAFE_ARCHIVE", "Ludock backs up and restores only ordinary files and folders, and found something else, such as a symbolic link, a hard link, or a device file.")
 	}
 	if slices.ContainsFunc(parts, func(part string) bool { return strings.HasPrefix(part, helper.StagePrefix) }) {
-		return fail("RESTORE_RECOVERY_REQUIRED", "A previous restore has staging data in this root. Complete its recovery before making a backup.")
+		return fail("RESTORE_RECOVERY_REQUIRED", "An interrupted restore left files waiting in one of the server’s data folders. Let Ludock finish recovering that restore before making a backup.")
 	}
 	if header.Size < 0 || header.Size > 1<<53-1 {
 		return fail("UNSAFE_ARCHIVE", "The archive has an invalid entry size.")
 	}
 	if (name == "snapshot" || len(parts) == 2) && header.Type != "directory" {
-		return fail("BACKUP_ROOT_NOT_DIRECTORY", "Backup roots must be mounted directories; individual file mounts are not supported.")
+		return fail("BACKUP_ROOT_NOT_DIRECTORY", "One of the server’s data folders is a single mounted file, which Ludock can’t back up. Mount the folder that holds it instead.")
 	}
 	return nil
 }

@@ -496,10 +496,10 @@ templ ServerCard(row ServerRow) {
 		</div>
 		<div class="server-row__actions">
 			if row.ConsoleLabel != "" {
-				<a class="secondary-btn secondary-btn--accent" href={ templ.SafeURL("/console/" + server.ID) }>{ row.ConsoleLabel }</a>
+				<a class={ "secondary-btn", templ.KV("secondary-btn--accent", !row.CanStart) } href={ templ.SafeURL("/console/" + server.ID) }>{ row.ConsoleLabel }</a>
 			}
 			if row.CanStart {
-				<button class="secondary-btn" type="button" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/start" } hx-target="#action-error" data-busy-label="Working…">Start</button>
+				<button class="secondary-btn secondary-btn--accent" type="button" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/start" } hx-target="#action-error" data-busy-label="Working…">Start</button>
 			}
 			if row.CanStop {
 				<button class="secondary-btn secondary-btn--danger" type="button" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/stop" } hx-target="#action-error" data-busy-label="Working…" { LifecycleConfirm("stop", server.DisplayName, false, row.Warn)... }>Stop</button>
@@ -685,7 +685,14 @@ templ needsAttention(view AttentionView) {
 							<strong>{ info.Title }</strong>
 							@attentionDetail(item)
 						</div>
-						<a href={ templ.SafeURL(info.Link) } class="text-link needs-attention__action" aria-label={ info.Action + ": " + attentionSubject(item) + " — " + info.Title }>{ info.Action }</a>
+						if item.CanStart && !view.DiscoveryUnavailable {
+							<div class="needs-attention__actions">
+								<button class="secondary-btn secondary-btn--accent" type="button" hx-post={ "/servers/" + item.ServerID + "/start" } hx-target="#action-error" data-busy-label="Working…" aria-label={ "Start " + item.ServerName }>Start</button>
+								<a href={ templ.SafeURL(info.Link) } class="text-link" aria-label={ "Details: " + item.ServerName + " — " + info.Title }>Details</a>
+							</div>
+						} else {
+							<a href={ templ.SafeURL(info.Link) } class="text-link needs-attention__action" aria-label={ info.Action + ": " + attentionSubject(item) + " — " + info.Title }>{ info.Action }</a>
+						}
 					</li>
 				}
 			</ul>

@@ -122,7 +122,7 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 		return err
 	}
 	if stopped.State.ExitCode == 137 || stopped.State.OOMKilled {
-		return fail("UNCLEAN_SHUTDOWN", "The server needed forced termination. The backup was not created; review its graceful shutdown configuration before retrying.")
+		return fail("UNCLEAN_SHUTDOWN", "The server didn’t shut down by itself and had to be forced to stop, so Ludock went no further: its last save may be incomplete. Give it more time to stop where it is defined (its stop timeout), then try again.")
 	}
 	return nil
 }
@@ -165,7 +165,7 @@ func stopPending(job *ops.Context) bool {
 func (j *Jobs) waitForStopDeadline(ctx context.Context, job *ops.Context) error {
 	deadline, now := job.Job.Recovery.StopRecoveryDeadlineAt, time.Now().UnixMilli()
 	if deadline <= now {
-		return fail("STOP_RECOVERY_REQUIRED", "Shutdown could not be confirmed before the recovery deadline. Review the server state before retrying.")
+		return fail("STOP_RECOVERY_REQUIRED", "Ludock couldn’t confirm in time that the server stopped, so it left it as it is. Check the server before trying again.")
 	}
 	// On shutdown the operation stays running for the next startup.
 	select {

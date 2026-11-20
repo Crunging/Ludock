@@ -260,7 +260,7 @@ var noRestart = json.RawMessage(`{"Name":"no","MaximumRetryCount":0}`)
 
 var (
 	errPull = apperr.New("PULL_FAILED", 409,
-		"Docker could not pull the server's image. Check the image name and the registry; for a private registry, set LUDOCK_DOCKER_CONFIG.")
+		"Docker couldn’t download the server’s new image. Check the machine’s internet connection and the image name; for a private registry, set LUDOCK_DOCKER_CONFIG.")
 	errCreate = apperr.New("CREATE_FAILED", 409,
 		"Docker could not create the updated container. The server stays on its previous container.")
 	errStart = apperr.New("START_FAILED", 409,

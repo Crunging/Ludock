@@ -200,6 +200,8 @@ func SaveDetail(result map[string]any) string {
 			return "Save skipped: console unavailable. Shutdown continued."
 		case "not_running":
 			return "Save skipped: server was already stopped."
+		case "saves_on_stop":
+			return "The game saves its world when it stops."
 		case "unsupported":
 			return "No save command is configured for this game."
 		}

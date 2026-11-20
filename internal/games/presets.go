@@ -63,6 +63,9 @@ type Integration struct {
 	// ServerFiles are folders where the images keep the game's own download,
 	// left out of files and backups unless ludock.files names them.
 	ServerFiles []string
+	// SavesOnStop: the game saves its world when Docker stops it, so a stop
+	// without a save command loses nothing.
+	SavesOnStop bool
 }
 
 // Integrations lists the supported games. Repository suffixes omit
@@ -126,7 +129,7 @@ var Integrations = []Integration{
 			DefaultPort: 8081, Placeholder: "listplayers, saveworld, say Hello",
 			Commands: []QuickCommand{{"List players", "listplayers"}, {"Save world", "saveworld"}, {"Message players", "say "}},
 			Players:  &PlayerQuery{Command: "listplayers", Parse: Parse7DaysPlayers}, Moderation: sevenDaysModeration}},
-	{GameType: "valheim", StopTimeoutSeconds: 180, Name: "Valheim", GamePort: &Port{2456, "udp"},
+	{GameType: "valheim", StopTimeoutSeconds: 180, SavesOnStop: true, Name: "Valheim", GamePort: &Port{2456, "udp"},
 		Repositories: []string{"community-valheim-tools/valheim-server", "lloesche/valheim-server"}, UpdatesOnStart: true,
 		ServerFiles: []string{"/opt/valheim"},
 		// Valheim answers on its game port plus one, and only when public.
@@ -141,7 +144,7 @@ var Integrations = []Integration{
 	// From Bedrock 1.26.50 the default NetherNet transport connects over TCP
 	// first, then plays on UDP ports the image leaves unset.
 	{GameType: "minecraft-bedrock", Name: "Minecraft: Bedrock Edition", GamePort: &Port{19132, "tcp"},
-		Repositories: []string{"itzg/minecraft-bedrock-server"}, UpdatesOnStart: true, Aliases: []string{"bedrock"},
+		Repositories: []string{"itzg/minecraft-bedrock-server"}, UpdatesOnStart: true, SavesOnStop: true, Aliases: []string{"bedrock"},
 		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Bedrock console", BroadcastTemplate: "say {message}",
 			Placeholder: "list, gamerule dofiretick false, say Hello",
 			Commands:    []QuickCommand{{"List players", "list"}, {"Message players", "say "}}}},
