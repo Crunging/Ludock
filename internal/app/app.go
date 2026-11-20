@@ -376,9 +376,10 @@ func (a *App) noteAlertHealth(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	// The reason is shown, so a new one refreshes too.
 	failing := ""
 	for _, problem := range problems {
-		failing += string(problem.Destination) + " "
+		failing += string(problem.Destination) + ": " + problem.Reason + "\n"
 	}
 	if failing != a.alertsFailing {
 		a.alertsFailing = failing

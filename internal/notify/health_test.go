@@ -203,3 +203,55 @@ func TestHealthKeepsOrderWithinAMillisecond(t *testing.T) {
 		t.Fatalf("a later delivery in the same millisecond left it failing: %+v %v", h, err)
 	}
 }
+
+// An alert an administrator retries after it ran out of retries starts a new
+// count: one more failure after a delivery in between doesn't mark the
+// destination failing, three do.
+func TestHealthCountsARetriedAlertAfresh(t *testing.T) {
+	up := false
+	s := setup(t, func(*http.Request) (*http.Response, error) {
+		if up {
+			return respond(204, "")
+		}
+		return nil, errors.New("connection refused")
+	})
+	attempt := func() {
+		s.DB.Exec("UPDATE notification_deliveries SET next_attempt_at=0 WHERE state='queued'")
+		s.Deliver(ctx)
+	}
+	failing := func() bool {
+		t.Helper()
+		p, err := s.Problems(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(p) > 0
+	}
+	s.Notify(ServerProblems, "outage:1", "valheim: the server is down.")
+	for range 6 {
+		attempt()
+	}
+	deliveries, _ := s.Deliveries(ctx)
+	if len(deliveries) != 1 || deliveries[0].State != "failed" || !failing() {
+		t.Fatalf("%+v", deliveries)
+	}
+	up = true
+	s.Notify(ServerProblems, "outage:2", "valheim: the server is down.")
+	attempt()
+	if failing() {
+		t.Fatal("failing after a delivery")
+	}
+	up = false
+	if _, err := s.Retry(ctx, "admin", adminSession, deliveries[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	attempt()
+	if failing() {
+		t.Fatal("one failure of a retried alert marked the destination failing")
+	}
+	attempt()
+	attempt()
+	if !failing() {
+		t.Fatal("three failures of a retried alert didn't")
+	}
+}

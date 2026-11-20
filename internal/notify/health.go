@@ -22,7 +22,8 @@ type Health struct {
 const failingAttempts = 3
 
 // failure is an undelivered row whose last attempt failed after the
-// destination's last delivery.
+// destination's last delivery. attempts counts those since it was queued or
+// an administrator last retried it.
 type failure struct {
 	kind      string
 	attempts  int
@@ -72,7 +73,7 @@ func (s *Service) Health(ctx context.Context) (map[Destination]Health, error) {
 		return nil, err
 	}
 	failures := map[Destination][]failure{}
-	rows, err = s.DB.QueryContext(ctx, `SELECT d.destination, d.kind, d.attempts, d.created_at, d.failure_code
+	rows, err = s.DB.QueryContext(ctx, `SELECT d.destination, d.kind, d.retry_attempts, d.created_at, d.failure_code
     FROM notification_deliveries d WHERE d.state!='delivered' AND d.failure_code IS NOT NULL AND d.last_attempt_at >=
       COALESCE((SELECT MAX(x.delivered_at) FROM notification_deliveries x WHERE x.destination=d.destination AND x.state='delivered'), -1)
     ORDER BY d.last_attempt_at DESC, d.rowid DESC`)
