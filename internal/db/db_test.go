@@ -584,16 +584,17 @@ func TestSharingPausedMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	var grants int
-	after.QueryRow("SELECT COUNT(*) FROM server_grants WHERE server_id='g'").Scan(&grants)
-	if grants != 0 {
-		t.Fatal(grants)
+	if err := after.QueryRow("SELECT COUNT(*) FROM server_grants WHERE server_id='g'").Scan(&grants); err != nil || grants != 0 {
+		t.Fatal(grants, err)
 	}
 	fresh := mustOpen(t, filepath.Join(t.TempDir(), "fresh.db"))
 	if got, want := schema(t, after.DB), schema(t, fresh.DB); got != want {
 		t.Fatalf("migrated schema differs from a fresh one:\n%s\n---\n%s", got, want)
 	}
-	if strings.Contains(schema(t, fresh.DB), "server_bindings") || strings.Contains(schema(t, fresh.DB), "review_required") {
-		t.Fatal(schema(t, fresh.DB))
+	for _, retired := range []string{"server_bindings", "review_required", "pending_"} {
+		if strings.Contains(schema(t, after.DB), retired) {
+			t.Fatal(retired)
+		}
 	}
 }
 
