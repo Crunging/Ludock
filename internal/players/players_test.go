@@ -553,3 +553,119 @@ func TestCheckAndWaitWaitsForANewReading(t *testing.T) {
 	}
 	close(source.release)
 }
+
+// One game's status query hangs. Each pass returns without it, the other
+// server is read again on its own interval, and the hung one gets no second
+// reading while its first runs; a page opened meanwhile gets its list once
+// the query ends.
+func TestHungReadingHoldsUpNoOther(t *testing.T) {
+	ctx := context.Background()
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	engine.AddContainer(fakedocker.GameOptions{Name: "hung", Image: "itzg/minecraft-server", Running: true})
+	players, hung := gameService(t, engine)
+	engine.AddContainer(fakedocker.GameOptions{Name: "other", Image: "itzg/minecraft-server", Running: true})
+	current, _ := players.Servers.RefreshNow(ctx)
+	views, err := players.Servers.List(ctx, &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin})
+	if err != nil || len(views) != 2 {
+		t.Fatal(views, err)
+	}
+	other := views[0].ID
+	if other == hung {
+		other = views[1].ID
+	}
+	source := &stuckSource{Source: players.Source, stuck: hung, runs: current, started: make(chan struct{}),
+		release: make(chan struct{}), reads: map[string]int{}}
+	players.Source = source
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(source.release)
+		}
+	})
+	defer func(wait time.Duration) { passWait = wait }(passWait)
+	passWait = 10 * time.Millisecond
+	players.Monitored = func(context.Context) map[string]bool { return map[string]bool{hung: true} }
+	read := func(want int) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+			players.mu.Lock()
+			_, busy := players.reading[other]
+			stored := players.readings[other] != nil
+			players.mu.Unlock()
+			if source.count(other) == want && stored && !busy {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the other server waited on the hung one:", source.count(other))
+			}
+		}
+	}
+	all := func(string) bool { return true }
+	players.Poll(ctx, nil)
+	<-source.started
+	players.Poll(ctx, all)
+	read(1)
+	players.mu.Lock()
+	players.readings[other].CheckedAt = time.Now().Add(-Interval).UnixMilli()
+	players.mu.Unlock()
+	players.Poll(ctx, all)
+	read(2)
+	if got := source.count(hung); got != 1 {
+		t.Fatal("hung server readings:", got)
+	}
+	released = true
+	close(source.release)
+	for deadline := time.Now().Add(5 * time.Second); source.count(hung) != 2 || source.listed() != 1; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the page's list was dropped:", source.count(hung), source.listed())
+		}
+	}
+}
+
+// stuckSource holds the stuck server's first reading until release and
+// reads the rest at once.
+type stuckSource struct {
+	Source
+	stuck            string
+	runs             map[string]servers.Container
+	started, release chan struct{}
+	mu               sync.Mutex
+	reads            map[string]int
+	lists            int
+}
+
+func (s *stuckSource) count(serverID string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reads[serverID]
+}
+
+func (s *stuckSource) listed() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lists
+}
+
+func (s *stuckSource) Read(ctx context.Context, server identity.Server, ask Ask) (*Reading, error) {
+	s.mu.Lock()
+	s.reads[server.ID]++
+	first := s.reads[server.ID] == 1
+	if server.ID == s.stuck && ask.Players {
+		s.lists++
+	}
+	s.mu.Unlock()
+	if server.ID == s.stuck && first {
+		close(s.started)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+		}
+		return nil, errSkipped
+	}
+	run := s.runs[server.ContainerID]
+	return &Reading{ContainerID: run.ID, StartedAt: run.StateSince, CheckedAt: time.Now().UnixMilli(), partial: !ask.Players}, nil
+}

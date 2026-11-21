@@ -36,6 +36,10 @@ const (
 	answerFresh = IdleInterval + Interval
 )
 
+// passWait is how long Poll waits for its readings, so a game that doesn't
+// answer holds up no other server's next reading.
+var passWait = 5 * time.Second
+
 // Reading is one server's players as Ludock last read them.
 type Reading struct {
 	// ContainerID and StartedAt are the container run it was read from; a
@@ -235,10 +239,13 @@ type Service struct {
 
 	mu       sync.Mutex
 	readings map[string]*Reading
-	reading  map[string]bool
+	// reading holds the servers with a reading in flight, and whether it
+	// asks for the players.
+	reading map[string]bool
 	// again holds a Check that arrived during that server's reading, which
-	// may have started before the change; it runs once the reading ends.
-	again map[string]identity.Server
+	// may have started before the change, or a pass's request for the list
+	// during a query-only reading; it runs once the reading ends.
+	again map[string]rerun
 	// waiters closes when the next fresh reading of its server, one that
 	// starts after it was made, ends; every caller waiting meanwhile shares
 	// it.
@@ -294,7 +301,8 @@ func (s *Service) ListedAt(serverID string, container servers.Container) (int, i
 // list players while an open page shows them (watched, which may be nil for
 // none), and monitored ones whose game answers a status query, less often
 // and with the query alone otherwise. It forgets servers that stopped, and
-// waits for the readings.
+// waits for the readings up to passWait; a slower one goes on alone, and
+// later passes skip its server until it ends.
 func (s *Service) Poll(ctx context.Context, watched func(serverID string) bool) {
 	var monitored map[string]bool
 	if s.Monitored != nil {
@@ -344,7 +352,18 @@ func (s *Service) Poll(ctx context.Context, watched func(serverID string) bool) 
 		}
 	}
 	s.mu.Unlock()
-	wait.Wait()
+	done := make(chan struct{})
+	go func() {
+		wait.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(passWait)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
 }
 
 // Check reads a server's players now, such as after a console command that
@@ -413,7 +432,7 @@ func (s *Service) Stop() {
 
 func (s *Service) ready() {
 	if s.reading == nil {
-		s.reading, s.readings, s.again, s.slots = map[string]bool{}, map[string]*Reading{}, map[string]identity.Server{},
+		s.reading, s.readings, s.again, s.slots = map[string]bool{}, map[string]*Reading{}, map[string]rerun{},
 			make(chan struct{}, parallel)
 	}
 }
@@ -421,14 +440,21 @@ func (s *Service) ready() {
 func (s *Service) start(ctx context.Context, server identity.Server, players, fresh bool, wait *sync.WaitGroup) {
 	s.mu.Lock()
 	s.ready()
-	if s.stopped || s.reading[server.ID] {
-		if !s.stopped && wait == nil {
-			s.again[server.ID] = server
+	if listing, busy := s.reading[server.ID]; s.stopped || busy {
+		_, queued := s.again[server.ID]
+		switch {
+		case s.stopped:
+		case wait == nil && fresh:
+			s.again[server.ID] = rerun{server: server, fresh: true}
+		// A page opened during a slow query-only reading gets its list once
+		// that reading ends, not at the next tick.
+		case players && !listing && !queued:
+			s.again[server.ID] = rerun{server: server}
 		}
 		s.mu.Unlock()
 		return
 	}
-	s.reading[server.ID] = true
+	s.reading[server.ID] = players
 	ask := Ask{Players: players, Previous: s.readings[server.ID], Fresh: fresh}
 	var waiter chan struct{}
 	if players && fresh {
@@ -451,7 +477,7 @@ func (s *Service) start(ctx context.Context, server identity.Server, players, fr
 				close(waiter)
 			}
 			if again {
-				s.start(ctx, next, true, true, nil)
+				s.start(ctx, next.server, true, next.fresh, nil)
 			}
 			if wait != nil {
 				wait.Done()
@@ -473,6 +499,11 @@ func (s *Service) start(ctx context.Context, server identity.Server, players, fr
 			s.store(server.ID, reading)
 		}
 	}()
+}
+
+type rerun struct {
+	server identity.Server
+	fresh  bool
 }
 
 func (s *Service) store(serverID string, reading *Reading) {
