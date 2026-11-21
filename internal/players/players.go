@@ -36,6 +36,10 @@ const (
 	answerFresh = IdleInterval + Interval
 )
 
+// passWait is how long Poll waits for its readings, so a game that doesn't
+// answer holds up no other server's next reading.
+var passWait = 5 * time.Second
+
 // Reading is one server's players as Ludock last read them.
 type Reading struct {
 	// ContainerID and StartedAt are the container run it was read from; a
@@ -294,7 +298,8 @@ func (s *Service) ListedAt(serverID string, container servers.Container) (int, i
 // list players while an open page shows them (watched, which may be nil for
 // none), and monitored ones whose game answers a status query, less often
 // and with the query alone otherwise. It forgets servers that stopped, and
-// waits for the readings.
+// waits for the readings up to passWait; a slower one goes on alone, and
+// later passes skip its server until it ends.
 func (s *Service) Poll(ctx context.Context, watched func(serverID string) bool) {
 	var monitored map[string]bool
 	if s.Monitored != nil {
@@ -344,7 +349,18 @@ func (s *Service) Poll(ctx context.Context, watched func(serverID string) bool) 
 		}
 	}
 	s.mu.Unlock()
-	wait.Wait()
+	done := make(chan struct{})
+	go func() {
+		wait.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(passWait)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
 }
 
 // Check reads a server's players now, such as after a console command that

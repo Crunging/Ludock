@@ -553,3 +553,88 @@ func TestCheckAndWaitWaitsForANewReading(t *testing.T) {
 	}
 	close(source.release)
 }
+
+// One game's reading hangs. Each pass returns without it, the other server
+// is read again on its own interval, and the hung one gets no second reading
+// while its first runs.
+func TestHungReadingHoldsUpNoOther(t *testing.T) {
+	ctx := context.Background()
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	engine.AddContainer(fakedocker.GameOptions{Name: "hung", Image: "itzg/minecraft-server", Running: true})
+	players, hung := gameService(t, engine)
+	engine.AddContainer(fakedocker.GameOptions{Name: "other", Image: "itzg/minecraft-server", Running: true})
+	current, _ := players.Servers.RefreshNow(ctx)
+	views, err := players.Servers.List(ctx, &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin})
+	if err != nil || len(views) != 2 {
+		t.Fatal(views, err)
+	}
+	source := &stuckSource{Source: players.Source, stuck: hung, runs: current, started: make(chan struct{}),
+		release: make(chan struct{}), reads: map[string]int{}}
+	players.Source = source
+	t.Cleanup(func() { close(source.release) })
+	defer func(wait time.Duration) { passWait = wait }(passWait)
+	passWait = 10 * time.Millisecond
+	all := func(string) bool { return true }
+	players.Poll(ctx, all)
+	<-source.started
+	other := ""
+	for _, view := range views {
+		if view.ID != hung {
+			other = view.ID
+		}
+	}
+	for deadline := time.Now().Add(5 * time.Second); source.count(other) != 1; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the other server was not read")
+		}
+	}
+	players.mu.Lock()
+	players.readings[other].CheckedAt = time.Now().Add(-Interval).UnixMilli()
+	players.mu.Unlock()
+	players.Poll(ctx, all)
+	for deadline := time.Now().Add(5 * time.Second); source.count(other) != 2; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the other server waited on the hung one")
+		}
+	}
+	if got := source.count(hung); got != 1 {
+		t.Fatal("hung server readings:", got)
+	}
+}
+
+// stuckSource holds the stuck server's reading until release and reads the
+// others at once.
+type stuckSource struct {
+	Source
+	stuck            string
+	runs             map[string]servers.Container
+	started, release chan struct{}
+	mu               sync.Mutex
+	reads            map[string]int
+}
+
+func (s *stuckSource) count(serverID string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reads[serverID]
+}
+
+func (s *stuckSource) Read(ctx context.Context, server identity.Server, _ Ask) (*Reading, error) {
+	s.mu.Lock()
+	s.reads[server.ID]++
+	s.mu.Unlock()
+	if server.ID == s.stuck {
+		close(s.started)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+		}
+		return nil, errSkipped
+	}
+	run := s.runs[server.ContainerID]
+	return &Reading{ContainerID: run.ID, StartedAt: run.StateSince, CheckedAt: time.Now().UnixMilli()}, nil
+}
