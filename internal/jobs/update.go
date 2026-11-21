@@ -114,9 +114,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 				return nil, err
 			}
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
-			recovery := job.Job.Recovery
-			return map[string]any{"action": "restart", "backupId": recovery.BackupID, "saveStatus": recovery.SaveStatus,
-				"saveReason": recovery.SaveReason}, nil
+			return withSave(job, map[string]any{"action": "restart", "backupId": job.Job.Recovery.BackupID}), nil
 		}()
 		if err != nil {
 			// A recorded stop may have reached Docker even if its result was

@@ -84,7 +84,7 @@ func ValidateEntry(header *tarstream.Header, roots []Root) error {
 		return fail("UNSAFE_ARCHIVE", "Ludock backs up and restores only ordinary files and folders, and found something else, such as a symbolic link, a hard link, or a device file.")
 	}
 	if slices.ContainsFunc(parts, func(part string) bool { return strings.HasPrefix(part, helper.StagePrefix) }) {
-		return fail("RESTORE_RECOVERY_REQUIRED", "An interrupted restore left files waiting in one of the server’s data folders. Let Ludock finish recovering that restore before making a backup.")
+		return fail("RESTORE_RECOVERY_REQUIRED", "A restore that stopped partway left files in one of the server’s data folders, and Ludock can’t finish it, so no backup was made. That restore’s entry in Activity says what the files hold.")
 	}
 	if header.Size < 0 || header.Size > 1<<53-1 {
 		return fail("UNSAFE_ARCHIVE", "The archive has an invalid entry size.")

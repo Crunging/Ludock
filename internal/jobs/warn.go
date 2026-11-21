@@ -39,7 +39,7 @@ func (j *Jobs) warningLead() time.Duration {
 }
 
 var verbs = map[string]string{"restart": "restart", "stop": "shut down", "update": "restart for an update",
-	"backup": "restart for a backup", "restore": "restart to restore a backup"}
+	"backup": "restart for a backup", "restore": "restart to restore a backup", UndoRestore: "restart to undo a restore"}
 
 type runFunc = func(ctx context.Context, job *ops.Context) (map[string]any, error)
 

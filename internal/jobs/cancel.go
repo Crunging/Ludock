@@ -25,7 +25,7 @@ func StartCapabilities(job *ops.Job) []authz.Capability {
 		}
 	case "backup":
 		capabilities = []authz.Capability{authz.BackupsCreate}
-	case "restore":
+	case "restore", UndoRestore:
 		capabilities = []authz.Capability{authz.BackupsRestore}
 	case "update":
 		capabilities = []authz.Capability{authz.ServerUpdate}

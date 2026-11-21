@@ -69,9 +69,12 @@ type Engine struct {
 	registryFail map[string]int
 	// disks are the helper "space" results of host paths that journeys set,
 	// or "" for a failed measurement.
-	disks  map[string]string
-	execs  map[string]*exec
-	events []chan []byte
+	disks map[string]string
+	// startAfter names, by restore helper step, the container to start
+	// once that step has run.
+	startAfter map[string]string
+	execs      map[string]*exec
+	events     []chan []byte
 	// Exec handles exec commands; nil exits 0 without output.
 	Exec ExecHandler
 	// OnStart runs when a container starts, under no lock, e.g. to fill in
@@ -544,6 +547,18 @@ func (e *Engine) control(w http.ResponseWriter, r *http.Request) {
 			fail(w, 404)
 			return
 		}
+		w.WriteHeader(204)
+		return
+	case "/fake/start-after":
+		// Starts a container as another manager would, right after the next
+		// restore helper step: POST /fake/start-after?container=NAME&step=moveOld.
+		query := r.URL.Query()
+		e.mu.Lock()
+		if e.startAfter == nil {
+			e.startAfter = map[string]string{}
+		}
+		e.startAfter[query.Get("step")] = query.Get("container")
+		e.mu.Unlock()
 		w.WriteHeader(204)
 		return
 	case "/fake/remove":
@@ -1420,6 +1435,9 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 		if handler != nil && c != nil {
 			code = handler(c, instance.options.Cmd, reader, write(1), write(2))
 		}
+		if code == 0 {
+			e.startAfterStep(instance.options.Cmd)
+		}
 		e.mu.Lock()
 		delay := e.ExitDelay
 		e.mu.Unlock()
@@ -1436,6 +1454,32 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 		}
 		e.mu.Unlock()
 	})
+}
+
+// startAfterStep starts the container a journey named with
+// /fake/start-after, as another manager would, once the restore helper step
+// it named has run.
+func (e *Engine) startAfterStep(cmd []string) {
+	e.mu.Lock()
+	var c *Container
+	for step, name := range e.startAfter {
+		if slices.ContainsFunc(cmd, func(arg string) bool { return strings.Contains(arg, `"operation":"`+step+`"`) }) {
+			delete(e.startAfter, step)
+			c = e.find(name)
+			break
+		}
+	}
+	if c == nil || c.State.Running {
+		e.mu.Unlock()
+		return
+	}
+	c.State.Status, c.State.Running, c.State.StartedAt = "running", true, time.Now().UTC().Format(time.RFC3339Nano)
+	e.emitLocked("start", c.ID)
+	hook := e.OnStart
+	e.mu.Unlock()
+	if hook != nil {
+		hook(c)
+	}
 }
 
 func (e *Engine) streamEvents(w http.ResponseWriter, r *http.Request) {

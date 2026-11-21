@@ -2,8 +2,10 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -684,5 +686,37 @@ func TestMonitorStateMigration(t *testing.T) {
 	fresh := mustOpen(t, filepath.Join(t.TempDir(), "fresh.db"))
 	if got, want := schema(t, after.DB), schema(t, fresh.DB); got != want {
 		t.Fatalf("migrated schema differs from a fresh one:\n%s\n---\n%s", got, want)
+	}
+}
+
+// Pruning keeps a restore whose journal isn't final, which its undo needs,
+// and removes old restores without one like other work.
+func TestPruneKeepsUnfinishedRestores(t *testing.T) {
+	d := mustOpen(t, filepath.Join(t.TempDir(), "prune.db"))
+	for _, statement := range []string{
+		`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
+		`INSERT INTO logical_servers(id,host_id,external_identity,display_name,game_type,status,binding_revision,binding_fingerprint,first_seen_at,last_seen_at)
+      VALUES('s','h','standalone:mc','mc','minecraft','active',1,'',1,1)`,
+		`INSERT INTO operations(id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at)
+      VALUES('pending','s','a','restore','failed','failed','{}','{"restore":{"status":"rolling_back","roots":[]}}',1,1,1),
+        ('plain','s','a','restore','failed','failed','{}','{}',1,1,1), ('done','s','a','restore','failed','failed','{}','{"restore":{"status":"rolled_back"}}',1,1,1)`,
+	} {
+		if _, err := d.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range operationsKeptPerServer {
+		if _, err := d.Exec(`INSERT INTO operations(id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at)
+      VALUES(?,'s','a','start','succeeded','succeeded','{}',1,?,?)`, fmt.Sprint("newer-", i), 10+i, Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.PruneOperations(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var left string
+	d.QueryRow("SELECT group_concat(id) FROM operations WHERE kind='restore'").Scan(&left)
+	if left != "pending" {
+		t.Fatal(left)
 	}
 }

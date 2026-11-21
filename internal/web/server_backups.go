@@ -176,11 +176,22 @@ func (s *Server) backupPreflight(w http.ResponseWriter, r *http.Request, request
 // the account, not the session.
 func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, request *Request, resolved *servers.Context, user *db.SessionUser,
 	kind string, input map[string]any) {
+	job, err := s.queue(r, request, resolved, user, kind, input)
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	followOperation(w, resolved.Logical.ID, job)
+	changed(w)
+}
+
+func (s *Server) queue(r *http.Request, request *Request, resolved *servers.Context, user *db.SessionUser,
+	kind string, input map[string]any) (*ops.Job, error) {
 	options := ops.EnqueueOptions{ServerID: resolved.Logical.ID, ActorID: user.ID, Kind: kind,
 		BindingRevision: resolved.Logical.BindingRevision, Input: input, IdempotencyKey: requestKey(r)}
 	var job *ops.Job
 	var err error
-	if kind == "restore" || kind == "update" {
+	if kind == "restore" || kind == "update" || kind == jobs.UndoRestore {
 		err = s.App.DB.AdminMutation(r.Context(), user.ID, request.Principal.TokenHash, db.Now(), func(tx *sql.Tx) error {
 			job, err = s.App.Runner.Enqueue(r.Context(), tx, options)
 			return err
@@ -193,12 +204,7 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, request *Reques
 	} else {
 		job, err = s.App.Runner.Enqueue(r.Context(), nil, options)
 	}
-	if err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	followOperation(w, resolved.Logical.ID, job)
-	changed(w)
+	return job, err
 }
 
 // followOperation shows queued work on the server's page.
@@ -512,4 +518,29 @@ func (s *Server) queueUpdate(w http.ResponseWriter, r *http.Request, request *Re
 		input[jobs.WarnInput] = true
 	}
 	s.enqueue(w, r, request, resolved, &current.User, "update", input)
+}
+
+// undoRestore finishes undoing a server's restores that stopped partway. It
+// warns players whenever the game can, since another manager may have
+// started the server.
+func (s *Server) undoRestore(w http.ResponseWriter, r *http.Request, request *Request) {
+	resolved, user, err := s.resolveFresh(r, request, r.PathValue("id"), authz.BackupsRestore)
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	var input map[string]any
+	if warnOffer(resolved.Container) {
+		input = map[string]any{jobs.WarnInput: true}
+	}
+	if fromDetail(r) {
+		s.enqueue(w, r, request, resolved, user, jobs.UndoRestore, input)
+		return
+	}
+	if _, err := s.queue(r, request, resolved, user, jobs.UndoRestore, input); err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	w.Header().Set("HX-Trigger", "servers-changed")
+	render(w, r, http.StatusOK, views.Alert("success", "Undoing the restore of "+resolved.Container.DisplayName+". Its Activity shows how it goes."))
 }

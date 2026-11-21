@@ -32,6 +32,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /fragments/servers/{id}/backups", s.admin(s.backupList))
 	m.HandleFunc("GET /fragments/servers/{id}/backups/preflight", s.authed(s.backupPreflight))
 	m.HandleFunc("POST /servers/{id}/backups", s.authed(s.createBackup))
+	m.HandleFunc("POST /servers/{id}/restores/undo", s.admin(s.undoRestore))
 	m.HandleFunc("GET /servers/{id}/backups/{backup}/download", s.admin(s.downloadBackup))
 	m.HandleFunc("GET /servers/{id}/backups/{backup}/file", s.admin(s.downloadBackupFile))
 	m.HandleFunc("GET /fragments/servers/{id}/backups/{backup}/folder", s.admin(s.backupFolder))

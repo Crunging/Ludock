@@ -75,6 +75,7 @@ type Jobs struct {
 
 func (j *Jobs) Register(queue *ops.Runner) {
 	j.runner = queue
+	queue.AfterRecovery = j.finishStoppedRestores
 	runner := registrar{queue, j}
 	for _, action := range []servers.Action{servers.Start, servers.Stop} {
 		runner.Register(string(action), ops.Handler{
@@ -138,6 +139,15 @@ func (j *Jobs) Register(queue *ops.Runner) {
 			return nil, ops.ErrResume
 		}
 		return j.recoverRestore(ctx, job)
+	}})
+	// Undoing a restore that stopped partway stops the server, which another
+	// manager may have started, finishes the undo, and returns the server to
+	// how it was.
+	runner.Register("undo_restore", ops.Handler{Run: j.warnedFirst(authz.BackupsRestore, j.runUndoRestore), Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+		if resumable(job) {
+			return nil, ops.ErrResume
+		}
+		return nil, j.recoverBackup(ctx, job, true)
 	}})
 	runner.Register("update", ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		result, err := j.runUpdate(ctx, job)

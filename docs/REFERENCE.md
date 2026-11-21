@@ -644,6 +644,28 @@ never repeated, and scheduled runs missed by more than five minutes are
 recorded as missed. Cancelled work stays
 cancelled, and a warning Ludock resumes can still be cancelled.
 
+A restore that stops partway, because something outside Ludock started the
+server or a step failed, always ends in one of these states, which its entry
+in **Activity** names:
+
+| Where it stopped | What it leaves | How it is finished |
+| --- | --- | --- |
+| Before any data moved (staging, unpacking) | Nothing: the unpacked copy is removed even if the server is running | Nothing to finish |
+| After data moved, with the server stopped | The restore undone | Nothing to finish |
+| After data moved, with the server started elsewhere | The previous data in the root's `.ludock-restore-<id>/old`, not in place; the server left running | See below |
+| After the backup's data was in place, cleanup failing | The data it replaced in `.ludock-restore-<id>` | Removed at the next backup, restore, or update |
+
+A restore left with previous data out of place is listed in **Needs
+attention** for administrators. **Undo the restore** stops the server, the one
+case where a data operation stops a server another manager started; it warns
+players first when anyone is online and the game can be messaged. Ludock moves
+whatever is in the data folder now into `ludock-set-aside-<id>` beside it,
+returns the previous data, and starts the server again if it was running. If
+no one does that, the next backup, restore, update, or restart with a backup
+first finishes the undo the same way before its own work, and so does Ludock's
+next start if the server is stopped then. A state Ludock can't finish safely,
+such as data folders that changed since, makes those refuse instead.
+
 If Docker itself restarts while work runs, such as for an upgrade, the work
 waits up to 90 seconds for Docker to answer again, then carries on and its
 entry in **Activity** says it waited. A stop or start whose answer was lost

@@ -11,7 +11,6 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
-	"github.com/Crunging/Ludock/internal/files"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/notify"
@@ -29,6 +28,10 @@ type journal struct {
 type restoreRecovery struct {
 	Status string    `json:"status"`
 	Roots  []journal `json:"roots,omitempty"`
+	// SetAside, saved before a later undo of a restore that ended partway
+	// moves anything, keeps what is live instead of removing it: a server
+	// started meanwhile may have written there.
+	SetAside bool `json:"setAside,omitempty"`
 }
 
 var errJournal = fail("INVALID_RESTORE_JOURNAL", "Restore recovery records are invalid. Keep the server stopped and review its recovery state.")
@@ -111,11 +114,14 @@ const removalLimit = 30 * time.Minute
 
 func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, item string, job *ops.Context, operation string, assertAccess func() error) (map[string]any, error) {
 	limit := 2 * time.Minute
-	if operation == "cleanup" || operation == "rollbackClean" {
+	if operation == "cleanup" || operation == "rollbackClean" || operation == "setAside" {
 		limit = removalLimit
 	}
-	out, err := j.Backups.Helpers.ExecWithin(ctx, data.Container, helper.Command("restore", helper.RestoreRequest{Root: root, Stage: stageName(job),
-		Operation: operation, Item: item}), assertAccess, limit)
+	request := helper.RestoreRequest{Root: root, Stage: stageName(job), Operation: operation, Item: item}
+	if operation == "setAside" {
+		request.Aside = helper.SetAsideName(job.Job.ID)
+	}
+	out, err := j.Backups.Helpers.ExecWithin(ctx, data.Container, helper.Command("restore", request), assertAccess, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -193,34 +199,62 @@ func indexOf(entries []journal, id string) int {
 	return slices.IndexFunc(entries, func(entry journal) bool { return entry.Root.ID == id })
 }
 
+// holdsLive says a root's journal phase may have live data moved: only its
+// stage folder exists otherwise.
+func holdsLive(entry journal) bool { return entry.Phase != "staging" && entry.Phase != "rolled_back" }
+
+// rollbackRestore undoes a restore, newest root first. The game never reads
+// a stage folder, so a root that holds no live restore data is cleaned up
+// even if the server was started elsewhere; the others wait until it is
+// stopped, and the error says why.
 func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper) error {
-	entries, err := journals(job)
+	state, err := restoreState(job)
 	if err != nil {
 		return err
 	}
-	if err := saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries}, ""); err != nil {
+	var entries []journal
+	setAside := false
+	if state != nil {
+		entries, setAside = state.Roots, state.SetAside
+	}
+	if err := saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries, SetAside: setAside}, ""); err != nil {
 		return err
 	}
+	var blocked error
 	for position := len(entries) - 1; position >= 0; position-- {
 		entry := entries[position]
-		if err := j.assertStopped(ctx, server, job); err != nil {
-			return err
+		if holdsLive(entry) {
+			if blocked == nil {
+				blocked = j.assertStopped(ctx, server, job)
+			}
+			if blocked != nil {
+				continue
+			}
 		}
 		rootPath, err := backups.HelperRoot(server, entry.Root)
 		if err != nil {
 			return err
 		}
 		if entry.Phase == "old_moved" || entry.Phase == "replaced" {
-			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, "rollbackClean", nil); err != nil {
+			clean := "rollbackClean"
+			if setAside {
+				clean = "setAside"
+			}
+			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, clean, nil); err != nil {
 				return err
 			}
 		}
-		if entry.Phase != "staging" && entry.Phase != "rolled_back" {
+		if holdsLive(entry) {
 			current, _ := journals(job)
 			// Persist after removing new data and before returning any old
 			// entry: a restart midway must never delete returned originals.
 			if err := persistJournal(job, indexOf(current, entry.Root.ID), "rolling_back"); err != nil {
 				return err
+			}
+			// A server started while new data was removed must not have old
+			// data returned under it.
+			if blocked = j.assertStopped(ctx, server, job); blocked != nil {
+				continue
 			}
 			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, "rollbackOld", nil); err != nil {
 				return err
@@ -233,6 +267,9 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 		if _, err := j.restoreStep(ctx, data, rootPath, "", job, "cleanup", nil); err != nil {
 			return err
 		}
+	}
+	if blocked != nil {
+		return blocked
 	}
 	return saveRestore(job, restoreRecovery{Status: "rolled_back"}, "")
 }
@@ -575,7 +612,7 @@ func (r *restoreRun) result() map[string]any {
 }
 
 // failed finishes a committed restore whose cleanup failed, or rolls back
-// one that had not committed.
+// one that had not committed. Activity says what state the data was left in.
 func (r *restoreRun) failed(err error) (map[string]any, error) {
 	ctx, job := context.WithoutCancel(r.ctx), r.job
 	state, _ := restoreState(job)
@@ -587,17 +624,60 @@ func (r *restoreRun) failed(err error) (map[string]any, error) {
 			return r.restored, nil
 		}
 		r.j.notify(notify.Results, "restore-result:"+job.Job.ID, r.server.Container.DisplayName+": "+r.what+
-			" completed, but its staging folder could not be removed. Review the operation before backing up.")
+			" completed, but its staging folder could not be removed yet. Its Activity says more.")
 		return nil, fail("RESTORE_STAGING_LEFT", "The backup was restored, but Ludock could not remove the folder "+stageName(job)+
-			" from the server's data, which holds the replaced data. Delete that folder, then back up the server.")
+			" from the server's data, which holds the replaced data. Ludock removes it the next time it stops the server for a backup, a restore or an update.")
+	}
+	touched := false
+	if state != nil {
+		touched = slices.ContainsFunc(state.Roots, holdsLive)
 	}
 	if r.data != nil && (state == nil || (state.Status != "committed" && state.Status != "cleaned")) {
 		if rollbackErr := r.j.rollbackAfterFailure(ctx, r.server, job, &r.data); rollbackErr != nil {
 			err = errors.Join(err, rollbackErr)
 		}
+	} else if r.data == nil && state != nil && state.Status == "staging" {
+		// Without a helper no stage folder was made.
+		saveRestore(job, restoreRecovery{Status: "rolled_back"}, "")
+	}
+	if guidance := endedRestoreGuidance(job, touched); guidance != "" {
+		result := maps.Clone(job.Job.Result)
+		if result == nil {
+			result = map[string]any{}
+		}
+		result["guidance"] = guidance
+		job.Progress(job.Job.Phase, nil, result)
 	}
 	r.j.notify(notify.Results, "restore-result:"+job.Job.ID, r.server.Container.DisplayName+": "+r.what+" failed. Its Activity says why.")
 	return nil, publicFirst(err)
+}
+
+const (
+	restoreNothing = "Nothing was restored: the server’s data is as it was."
+	restoreUndone  = "The restore was undone: the server’s data is as it was."
+	// pendingLater is when Ludock finishes a restore that ended partway.
+	pendingLater = "the next time it stops the server for a backup, a restore or an update"
+)
+
+// endedRestoreGuidance says what a restore that ended without finishing left
+// the data as; touched says live data had moved before it was undone.
+func endedRestoreGuidance(job *ops.Context, touched bool) string {
+	state, err := restoreState(job)
+	if err != nil || state == nil {
+		return ""
+	}
+	switch {
+	case state.Status == "rolled_back" && touched:
+		return restoreUndone
+	case state.Status == "rolled_back" || state.Status == "cleaned":
+		return restoreNothing
+	case state.Status == "committed":
+		return ""
+	case slices.ContainsFunc(state.Roots, holdsLive):
+		return "The restore was stopped partway. The server’s previous data is safe in the folder " + stageName(job) +
+			" in its data, but not in place. An administrator can undo the restore from Needs attention; otherwise Ludock undoes it " + pendingLater + "."
+	}
+	return "Nothing was restored, but the backup’s unpacked copy is still in the folder " + stageName(job) + ". Ludock removes it " + pendingLater + "."
 }
 
 // rollbackAfterFailure rolls back through a fresh helper when the command
@@ -658,14 +738,18 @@ func publicFirst(err error) error {
 func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string]any, error) {
 	// What recovery leaves the data as, for Activity: a committed restore is
 	// finished, one that began replacing is undone.
-	outcome := "Nothing was restored: the server’s data is as it was."
+	outcome := restoreNothing
 	if state, _ := restoreState(job); state != nil {
 		switch state.Status {
 		case "committed", "cleaned":
 			outcome = "The restore had finished: what it restored is in place."
 		case "replacing", "rolling_back", "rolled_back":
-			outcome = "The restore was undone: the server’s data is as it was."
+			outcome = restoreUndone
 		}
+	}
+	touched := false
+	if state, _ := restoreState(job); state != nil {
+		touched = slices.ContainsFunc(state.Roots, holdsLive)
 	}
 	err := j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
 		entries, err := journals(job)
@@ -673,15 +757,8 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string
 			return err
 		}
 		// Recovery uses exactly the roots of the revalidated binding.
-		if len(entries) > 0 {
-			if len(entries) != len(server.Container.FileRoots) && entries[0].Item == "" {
-				return fail("INVALID_RESTORE_JOURNAL", "Restore recovery roots do not match this server. Keep it stopped and review its recovery state.")
-			}
-			for _, entry := range entries {
-				if !slices.ContainsFunc(server.Container.FileRoots, func(root files.Root) bool { return root.ID == entry.Root.ID && root.Path == entry.Root.Path }) {
-					return fail("INVALID_RESTORE_JOURNAL", "Restore recovery roots do not match this server. Keep it stopped and review its recovery state.")
-				}
-			}
+		if len(entries) > 0 && !journalMatches(entries, server) {
+			return fail("INVALID_RESTORE_JOURNAL", "Restore recovery roots do not match this server. Keep it stopped and review its recovery state.")
 		}
 		if err := j.removeUnpublished(ctx, job); err != nil {
 			return err
@@ -711,12 +788,18 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string
 		}
 		return j.restoreInitialState(ctx, server, job)
 	})
-	if err != nil {
-		return nil, err
-	}
 	result := maps.Clone(job.Job.Result)
 	if result == nil {
 		result = map[string]any{}
+	}
+	if err != nil {
+		// The outcome keeps this guidance: a recovery that can't finish, such
+		// as one blocked by a server started elsewhere, is finished later.
+		if guidance := endedRestoreGuidance(job, touched); guidance != "" {
+			result["guidance"] = guidance
+			job.Progress(job.Job.Phase, nil, result)
+		}
+		return nil, err
 	}
 	result["guidance"] = outcome
 	return result, nil

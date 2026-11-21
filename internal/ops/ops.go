@@ -104,6 +104,11 @@ type Recovery struct {
 
 	// DataUnsafe is set while a restore is replacing or rolling back data.
 	DataUnsafe bool `json:"dataUnsafe,omitempty"`
+	// PendingUndo is set while this operation finishes undoing an earlier
+	// restore that ended partway; the data is unsafe until it is cleared.
+	// Undone says, for Activity, what that left.
+	PendingUndo bool   `json:"pendingUndo,omitempty"`
+	Undone      string `json:"undone,omitempty"`
 
 	// WarnUntil (Unix ms) is when players were told the action happens,
 	// saved before the warning is sent; WarnSent once it was.
@@ -121,6 +126,16 @@ type Context struct {
 	Job       *Job
 	runner    *Runner
 	cancelled chan struct{}
+	// ended is the status of a job that already ended and whose recovery
+	// state later work finishes; "" for a running job.
+	ended string
+}
+
+// Ended is the context of a job that already ended, failed or interrupted,
+// whose recovery state another operation or startup still finishes. Its
+// Progress saves without changing the outcome.
+func (r *Runner) Ended(job *Job) *Context {
+	return &Context{Job: job, runner: r, ended: job.Status}
 }
 
 // Cancelled closes when someone cancels the job while it waits.
@@ -164,8 +179,12 @@ func (c *Context) Progress(phase string, change func(*Recovery), result map[stri
 	}
 	// A cancelled job is no longer running, so it saves nothing more, and
 	// whichever of the cancel and this write commits first wins.
-	saved, err := c.runner.DB.Exec("UPDATE operations SET phase=?, recovery_json=?, result_json=?, updated_at=? WHERE id=? AND status='running'",
-		phase, string(recoveryJSON), resultJSON, db.Now(), c.Job.ID)
+	status := Running
+	if c.ended != "" {
+		status, phase = c.ended, c.Job.Phase
+	}
+	saved, err := c.runner.DB.Exec("UPDATE operations SET phase=?, recovery_json=?, result_json=?, updated_at=? WHERE id=? AND status=?",
+		phase, string(recoveryJSON), resultJSON, db.Now(), c.Job.ID, status)
 	if err != nil {
 		return err
 	}
@@ -212,6 +231,9 @@ type Runner struct {
 	// no event for that, and the container's last one can come well before.
 	// It must not block.
 	Changed func(serverID string)
+	// AfterRecovery, when set, runs once interrupted operations are
+	// reconciled and before queued work can take locks.
+	AfterRecovery func(ctx context.Context)
 
 	mu       sync.Mutex
 	handlers map[string]Handler
@@ -923,6 +945,9 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 		if _, err := r.finish(ctx, job, Interrupted, result, "Ludock restarted while this ran. Check the server before trying again.", false); err != nil {
 			return err
 		}
+	}
+	if r.AfterRecovery != nil {
+		r.AfterRecovery(ctx)
 	}
 	return nil
 }

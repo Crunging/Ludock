@@ -415,10 +415,20 @@ sockets. To limit access to some folders, set
   downloading, restoring, keeping, and deleting are for administrators, since
   archives can hold configuration secrets.
 
-If a restore fails, leave the server stopped and check **Activity**. Don't
-delete `.ludock-restore-*` folders: they may be needed to recover the previous
-data. An interrupted restore is finished or rolled back when Ludock starts
-again, and its entry in **Activity** says which.
+If a restore fails, check **Activity**: its entry says what the data was left
+as. Usually the restore was undone and the data is as it was. If something
+outside Ludock started the server partway, the restore stops there and leaves
+the server running. If the server's previous data had already been moved out,
+it waits, safe but not in place, in the restore's `.ludock-restore-*` folder;
+don't delete those folders. **Needs attention** offers administrators
+**Undo the restore**, which stops the server (warning players first when it
+can), puts the previous data back, and starts it again if it was running.
+Anything the game wrote meanwhile is kept in a `ludock-set-aside-*` folder
+beside the data, not deleted. Otherwise Ludock finishes the undo itself the
+next time it stops that server for a backup, a restore, or an update, or when
+it starts and finds the server stopped, and that work's **Activity** entry says
+so. An interrupted restore is finished or rolled back when Ludock starts again
+in the same way, and its entry in **Activity** says which.
 
 ### Schedules
 
