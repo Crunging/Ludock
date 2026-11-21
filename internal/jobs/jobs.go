@@ -156,7 +156,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 		if resumable(job) {
 			return nil, ops.ErrResume
 		}
-		return nil, j.recoverUpdate(ctx, job)
+		return j.recoverUpdate(ctx, job)
 	}})
 }
 

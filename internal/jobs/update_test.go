@@ -63,7 +63,7 @@ func TestUpdateKeepsOriginalStoppedWhenReplacementFails(t *testing.T) {
 
 // interrupt saves an update that was running when Ludock stopped, while it
 // swapped containers, then starts Ludock's runner again. prepare sets up
-// Docker and the saved swap.
+// Docker and the saved swap; one it gives no stage is before the swap.
 func (f *fixture) interrupt(t *testing.T, prepare func(id string, swap *swapState)) *ops.Job {
 	t.Helper()
 	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
@@ -72,7 +72,10 @@ func (f *fixture) interrupt(t *testing.T, prepare func(id string, swap *swapStat
 		RestartPolicy: json.RawMessage(`{"Name":"unless-stopped"}`)}
 	prepare(id, &swap)
 	running := true
-	swapJSON, _ := json.Marshal(swap)
+	var swapJSON json.RawMessage
+	if swap.Stage != "" {
+		swapJSON, _ = json.Marshal(swap)
+	}
 	encoded, _ := json.Marshal(ops.Recovery{ContainerID: f.game, Fingerprint: logical.BindingFingerprint,
 		LockKeys: []string{locks.ServerKey(f.serverID)}, InitialRunning: &running, StopStarted: true, StopSettled: true, Swap: swapJSON})
 	input, _ := json.Marshal(skipBackup)
@@ -114,23 +117,40 @@ func (f *fixture) replacement(t *testing.T, operation string, start bool) string
 	return id
 }
 
-// Ludock restarted while the replacement was still being checked: the
-// original remains the server. It starts again only if the replacement
-// never ran, since a replacement that ran may have changed the world.
+// Ludock restarted during an update, before or while the replacement was
+// being checked: the original remains the server. An interruption isn't a
+// failed update, so a server that was running starts again, unless the
+// replacement had run, since it may have changed the world. Activity says
+// which.
 func TestUpdateRecoveryUndoesUncheckedReplacement(t *testing.T) {
-	for _, ran := range []bool{false, true} {
+	for _, c := range []struct {
+		stage    string
+		guidance string
+	}{
+		{"", "Ludock restarted during the update, so the update didn’t happen. The server was started again as it was."},
+		{swapCreating, "Ludock restarted during the update, so the update didn’t happen. The server was started again as it was."},
+		{swapStarting, "Ludock restarted while it checked the updated container, so the update was undone and the previous container kept. " +
+			"The server was left stopped, since the new version may already have run and changed the game data. Check the server, then start it."},
+	} {
+		ran := c.stage == swapStarting
 		f := setup(t)
 		if err := f.jobs.Docker.Stop(ctx, f.game, nil); err != nil {
 			t.Fatal(err)
 		}
 		job := f.interrupt(t, func(id string, swap *swapState) {
-			f.replacement(t, id, ran)
-			if ran {
-				swap.Stage = swapStarting
+			if c.stage != "" {
+				f.replacement(t, id, ran)
 			}
+			swap.Stage = c.stage
 		})
-		if job.Status != ops.Interrupted || job.Error != "Ludock restarted while this ran. Check the server before trying again." {
+		if job.Status != ops.Interrupted || job.Error != "Ludock restarted while this ran. Check the server before trying again." || job.Result["guidance"] != c.guidance {
 			t.Fatalf("%+v", job)
+		}
+		if c.stage == "" {
+			if !f.running() {
+				t.Fatal("left stopped")
+			}
+			continue
 		}
 		original := f.containerNamed("mc")
 		if ids := f.engine.SortedIDs(); len(ids) != 2 || original == nil || original.ID != f.game {

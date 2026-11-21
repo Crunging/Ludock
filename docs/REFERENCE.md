@@ -638,8 +638,12 @@ Work is recorded before it runs. When Ludock starts after a crash or restart,
 it removes helpers left behind before anything else runs, waits for a stop that
 was in progress instead of sending it again, finishes or rolls back an
 interrupted restore from its journal, removes unpacking leftovers, and starts
-a server that a backup or a restart with a backup first had stopped, without
-taking the backup again. Work it can't safely finish is marked interrupted,
+a server that a backup, a restart with a backup first, or an update had
+stopped, without taking the backup again. An update interrupted before its new
+container ran didn't happen; one interrupted while its new container was being
+checked is undone and the server left stopped, since the new version may have
+changed the game data; one that had begun removing the original is finished.
+**Activity** says which. Work it can't safely finish is marked interrupted,
 never repeated, and scheduled runs missed by more than five minutes are
 recorded as missed. Cancelled work stays
 cancelled, and a warning Ludock resumes can still be cancelled.

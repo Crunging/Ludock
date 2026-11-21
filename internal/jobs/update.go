@@ -155,33 +155,54 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[
 // removal began, finished after. An undone swap leaves the original stopped
 // if the replacement may have run, since the new game version may have
 // changed the world.
-func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) error {
+func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]any, error) {
 	swap, err := savedSwap(job)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if swap != nil {
 		release, err := j.Locks.AcquireForRecovery(recoveryLocks(job))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		err = j.settle(ctx, job)
 		release()
-		if err != nil || swap.reached(swapReplacing) {
-			return err
+		if err != nil {
+			return nil, err
+		}
+		if swap.reached(swapReplacing) {
+			return map[string]any{"guidance": "Ludock restarted while the updated container replaced the previous one, so it finished the update."}, nil
 		}
 	}
 	// Pulling changes no state. Backup recovery applies only after the
 	// initial state and binding were recorded before stopping.
-	if job.Job.Recovery.InitialRunning == nil {
-		return nil
+	initial := job.Job.Recovery.InitialRunning
+	if initial == nil {
+		return map[string]any{"guidance": "Ludock restarted before the update changed anything, so the update didn’t happen."}, nil
 	}
 	if swap != nil && swap.reached(swapStarting) {
-		return j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
+		err := j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
 			return j.keepStopped(ctx, server, job, notify.Results, failedReplacement)
 		})
+		if err != nil {
+			return nil, err
+		}
+		if info, err := j.Docker.Inspect(ctx, job.Job.Recovery.ContainerID); err == nil && info.State.Running {
+			return map[string]any{"guidance": "Ludock restarted while it checked the updated container, so the update was undone and the previous container kept. " +
+				"Something outside Ludock started it again meanwhile."}, nil
+		}
+		return map[string]any{"guidance": "Ludock restarted while it checked the updated container, so the update was undone and the previous container kept. " +
+			"The server was left stopped, since the new version may already have run and changed the game data. Check the server, then start it."}, nil
 	}
-	return j.recoverBackup(ctx, job, true)
+	// Ludock restarting is not a failed update: the server is returned to
+	// how it was.
+	if err := j.recoverBackup(ctx, job, true); err != nil {
+		return nil, err
+	}
+	if *initial {
+		return withSave(job, map[string]any{"guidance": "Ludock restarted during the update, so the update didn’t happen. The server was started again as it was."}), nil
+	}
+	return withSave(job, map[string]any{"guidance": "Ludock restarted during the update, so the update didn’t happen. The server stays stopped, as it was."}), nil
 }
 
 const failedReplacement = "the update did not finish after its new container started, which may have changed the game data, " +
