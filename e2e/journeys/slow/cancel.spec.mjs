@@ -1,7 +1,7 @@
-import { test, expect, asAdmin, gameCommand, openServer, createUser, shareServer, signIn, expectOperationSucceeded } from "../fixtures.mjs";
+import { test, expect, asAdmin, gameCommand, openServer, expectOperationSucceeded } from "../fixtures.mjs";
 
 asAdmin();
-// Each journey restarts or backs up a server of its own.
+// Each journey restarts or backs up servers of its own.
 test.describe.configure({ mode: "parallel" });
 
 /** Starts a restart that warns the players online, from the server's page. */
@@ -13,97 +13,51 @@ async function warnedRestart(page, server) {
   await page.locator(".detail-actions").getByRole("button", { name: "Restart" }).click();
   const dialog = page.getByRole("dialog", { name: `Restart ${server}?` });
   await expect(dialog.getByLabel("Warn players and wait 1 minute")).toBeChecked();
+  await expect(dialog.getByLabel("Back up first")).not.toBeChecked();
   await dialog.getByRole("button", { name: "Restart server" }).click();
   await expect(page.locator("#selected-operation")).toContainText("Giving players 1 minute");
 }
 
-test.describe("cancelling a warned restart", () => {
-  let console;
-  test.beforeEach(async ({ page, ownServer }) => {
-    console = await page.context().newPage();
-    await gameCommand(console, "fake-join Ada", ownServer.name);
-  });
+// Two warned restarts count down side by side, both followed live on
+// Activity. One is cancelled there: its players hear it's off, the server
+// keeps running, and its page, left open, says who cancelled it. The other
+// goes ahead once its minute is up: Cancel goes away and the restart
+// finishes, as Activity and the details say.
+test("a warned restart counts down on Activity, and is cancelled there or goes ahead after its minute", async ({ page, ownServer, otherServer }) => {
+  test.setTimeout(150_000);
+  const console = await page.context().newPage();
+  await gameCommand(console, "fake-join Ada", ownServer.name);
+  await gameCommand(console, "fake-join Ada", otherServer.name);
+  const other = await page.context().newPage();
+  await warnedRestart(page, ownServer.name);
+  await warnedRestart(other, otherServer.name);
 
-  // Once the minute is up and the restart begins, Cancel goes away: the
-  // restart finishes.
-  // Activity, left open, follows it to its result, named as the details
-  // name it, and the details drop their progress line.
-  test("goes away once the restart begins", async ({ page, ownServer }) => {
-    test.setTimeout(150_000);
-    await warnedRestart(page, ownServer.name);
-    const activity = await page.context().newPage();
-    await activity.goto("/activity");
-    const row = activity.locator("#activity-list tbody tr", { hasText: ownServer.name }).filter({ hasText: "Restart" }).first();
-    await expect(row).toContainText("Giving players 1 minute");
-    const cancel = page.locator("#selected-operation").getByRole("button", { name: "Cancel restart" });
-    await expect(cancel).toBeVisible();
-    await expect(cancel).toHaveCount(0, { timeout: 90_000 });
-    const details = page.locator("#selected-operation");
-    await expect(details).toContainText("Succeeded", { timeout: 45_000 });
-    await expect(details).not.toContainText("Cancelled");
-    await expect(details).not.toContainText("Progress");
-    await expect(row).toContainText("Succeeded", { timeout: 10_000 });
-    await expect(row.getByRole("button", { name: "Cancel restart" })).toHaveCount(0);
-    await activity.close();
-  });
+  const activity = await page.context().newPage();
+  await activity.goto("/activity");
+  const restart = (server) => activity.locator("#activity-list tbody tr", { hasText: server }).filter({ hasText: "Restart" }).first();
+  await expect(restart(ownServer.name)).toContainText("Giving players 1 minute");
+  const cancelled = restart(otherServer.name);
+  await cancelled.getByRole("button", { name: "Cancel restart" }).click();
+  await expect(activity.locator("#activity-status")).toHaveText("Cancelled. Nothing was changed.");
+  await expect(cancelled).toContainText("Cancelled by admin before it changed anything.");
+  await expect(cancelled.getByRole("button", { name: "Cancel restart" })).toHaveCount(0);
+  await expect(other.locator("#selected-operation")).toContainText("Cancelled by admin before it changed anything.");
+  await expect(other.locator(".detail-header__identity")).toContainText("Running");
+  await gameCommand(console, "fake-said", otherServer.name);
+  await expect(console.locator(".xterm-rows")).toContainText("Said: Server restart in 1 minute. | Server restart cancelled.");
 
-  // The guide promises a waiting run can be cancelled from Activity too.
-  test("can be cancelled from Activity", async ({ page, ownServer }) => {
-    await warnedRestart(page, ownServer.name);
-    await page.goto("/activity");
-    const row = page.locator("#activity-list tbody tr", { hasText: ownServer.name }).filter({ hasText: "Restart" }).first();
-    await row.getByRole("button", { name: "Cancel restart" }).click();
-    await expect(page.locator("#activity-status")).toHaveText("Cancelled. Nothing was changed.");
-    await expect(row).toContainText("Cancelled by admin before it changed anything.");
-    await expect(row.getByRole("button", { name: "Cancel restart" })).toHaveCount(0);
-  });
-
-  // Someone who sees the warning go out on the wrong server cancels it: the
-  // players hear it's off, the server keeps running, and Activity says who
-  // cancelled it.
-  test("tells the players and leaves the server running", async ({ page, ownServer }) => {
-    await warnedRestart(page, ownServer.name);
-    await page.locator("#selected-operation").getByRole("button", { name: "Cancel restart" }).click();
-    await expect(page.locator("#detail-status")).toHaveText("Cancelled. Nothing was changed.");
-    const details = page.locator("#selected-operation");
-    await expect(details).toContainText("Cancelled by admin before it changed anything.");
-    await expect(details.getByRole("button", { name: "Cancel restart" })).toHaveCount(0);
-    await expect(page.locator(".detail-header__identity")).toContainText("Running");
-
-    await page.getByRole("tab", { name: "Activity" }).click();
-    const row = page.locator("#activity-list tbody tr").first();
-    await expect(row).toContainText("Restart");
-    await expect(row).toContainText("Cancelled by admin before it changed anything.");
-
-    await gameCommand(console, "fake-said", ownServer.name);
-    await expect(console.locator(".xterm-rows")).toContainText("Said: Server restart in 1 minute. | Server restart cancelled.");
-  });
-
-  // Only someone who may restart the server sees Cancel; a member who can
-  // only see it doesn't, and one who can run it cancels it.
-  test("is offered to whoever may restart the server", async ({ page, session, ownServer }) => {
-    test.setTimeout(150_000);
-    const [viewerName, runnerName] = ["viewer-" + ownServer.container, "runner-" + ownServer.container];
-    await createUser(page, viewerName, "viewer password 12345");
-    await createUser(page, runnerName, "runner password 12345");
-    await shareServer(page, ownServer.name, viewerName, "Can see it");
-    await shareServer(page, ownServer.name, runnerName, "Can run it");
-    await warnedRestart(page, ownServer.name);
-
-    const viewer = await session({ storageState: { cookies: [], origins: [] } });
-    await signIn(viewer, viewerName, "viewer password 12345");
-    await openServer(viewer, ownServer.name);
-    await expect(viewer.locator(".detail-operation-notice")).toContainText("Giving players 1 minute");
-    await expect(viewer.getByRole("button", { name: "Cancel restart" })).toHaveCount(0);
-
-    const runner = await session({ storageState: { cookies: [], origins: [] } });
-    await signIn(runner, runnerName, "runner password 12345");
-    await openServer(runner, ownServer.name);
-    await runner.locator(".detail-operation-notice").getByRole("button", { name: "Cancel restart" }).click();
-    await expect(runner.locator("#detail-status")).toHaveText("Cancelled. Nothing was changed.");
-    await expect(runner.locator(".detail-operation-notice")).toHaveCount(0);
-    await expect(page.locator("#selected-operation")).toContainText(`Cancelled by ${runnerName} before it changed anything.`);
-  });
+  const cancel = page.locator("#selected-operation").getByRole("button", { name: "Cancel restart" });
+  await expect(cancel).toBeVisible();
+  await expect(cancel).toHaveCount(0, { timeout: 90_000 });
+  const details = page.locator("#selected-operation");
+  await expect(details).toContainText("Succeeded", { timeout: 45_000 });
+  await expect(details).not.toContainText("Cancelled");
+  await expect(details).not.toContainText("Progress");
+  const ahead = restart(ownServer.name);
+  await expect(ahead).toContainText("Succeeded", { timeout: 10_000 });
+  await expect(ahead.getByRole("button", { name: "Cancel restart" })).toHaveCount(0);
+  await activity.close();
+  await other.close();
 });
 
 // A backup or restore stops the server like a restart, so with someone

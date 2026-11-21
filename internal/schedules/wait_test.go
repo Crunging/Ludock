@@ -132,6 +132,9 @@ func TestWaitForEmptyEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due)
+	if f.operations(t) != 0 {
+		t.Fatal("went ahead before the end of the wait")
+	}
 	f.s.Run(ctx, due+10*minute)
 	if f.operations(t) != 1 {
 		t.Fatal("did not go ahead at the end of the wait")
@@ -513,7 +516,8 @@ func TestConsiderateDefaults(t *testing.T) {
 		}
 	}
 	for action, message := range map[string]string{"restart": "Server restart in 5 minutes.", "stop": "Server shutting down in 5 minutes.",
-		"backup": "Server restart for a backup in 5 minutes.", "update": "Server restart for an update in 5 minutes."} {
+		"backup": "Server restart for a backup in 5 minutes.", "update": "Server restart for an update in 5 minutes.",
+		"restore": "Server restart to restore a backup in 5 minutes."} {
 		if got := WarningMessage(action, 5); got != message {
 			t.Fatal(got)
 		}

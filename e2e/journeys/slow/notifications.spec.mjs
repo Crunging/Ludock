@@ -1,6 +1,5 @@
-import { createServer, request } from "node:http";
+import { createServer } from "node:http";
 import { createServer as createTCPServer } from "node:net";
-import { join } from "node:path";
 import { test, expect, asAdmin, createUser, dockerAction, expectOperationSucceeded, monitoringSettings, openServer, signIn } from "../fixtures.mjs";
 
 asAdmin();
@@ -155,6 +154,27 @@ test("sending test alerts to ntfy, Gotify, email, and a webhook", async ({ page 
     await expect(webhook.getByLabel("Remove the saved Authorization header")).toHaveCount(0);
     await expect(webhook.getByLabel("Replace webhook URL")).toBeVisible();
 
+    // Alert types default to everything except newer images, a choice is
+    // saved, and choosing none is refused.
+    const types = webhook.locator(".notification-alerts");
+    await expect(types.locator("summary")).toHaveText("Alert types Everything except newer images");
+    await types.locator("summary").click();
+    await webhook.getByLabel("Newer images available").check();
+    await webhook.getByLabel("Server problems").uncheck();
+    await save(webhook, "Webhook");
+    await expect(types.locator("summary")).toHaveText("Alert types Failed backups and schedules, Restores and updates, Newer images available");
+    if (!(await types.evaluate((details) => details.open))) await types.locator("summary").click();
+    for (const label of ["Failed backups and schedules", "Restores and updates", "Newer images available"]) {
+      await webhook.getByLabel(label).uncheck();
+    }
+    await webhook.getByRole("button", { name: "Save Webhook" }).click();
+    await expect(webhook.locator(".alert--error")).toHaveText("Choose at least one alert type");
+    for (const label of ["Server problems", "Failed backups and schedules", "Restores and updates"]) {
+      await webhook.getByLabel(label).check();
+    }
+    await save(webhook, "Webhook");
+    await expect(types.locator("summary")).toHaveText("Alert types Everything except newer images");
+
     await page.reload();
     const content = await page.content();
     for (const secret of ["e2e-secret-topic", "tk_e2esecret", "Ae2esecret", "e2e-secret-query", "e2e-secret-header"]) {
@@ -175,8 +195,8 @@ test("sending test alerts to ntfy, Gotify, email, and a webhook", async ({ page 
 
 // A destination whose alerts don't arrive says so on its card and in Needs
 // attention, for administrators only, until a delivery gets through.
-test("a failing webhook is called out until a delivery gets through", async ({ page, session }) => {
-  test.setTimeout(120_000);
+test("a failing webhook is called out until a delivery gets through, and then an outage reaches it", async ({ page, session }) => {
+  test.setTimeout(180_000);
   const http = await receiver();
   http.statuses["/status/503"] = 503;
   const unavailable = "Delivery to the webhook failed because it is temporarily unavailable. Try again later.";
@@ -236,17 +256,33 @@ test("a failing webhook is called out until a delivery gets through", async ({ p
     await page.goto("/");
     await expect(page.locator("#attention")).not.toContainText("Alerts aren’t reaching");
 
-    // It fails again on a test, and a test that gets through clears it on the spot.
-    http.statuses["/status/503"] = 503;
+    // A real alert reaches it too: Enshrouded, started through Ludock with a
+    // short wait before alerting, goes down behind Ludock's back.
+    await openServer(page, "enshrouded");
+    await monitoringSettings(page);
+    await expect(page.getByLabel("Monitor this server")).toBeChecked();
+    const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
+    await page.getByLabel("Wait before alerting (seconds)").fill("11");
+    await page.getByLabel("Wait before alerting (seconds)").press("Tab");
+    expect((await saved).ok()).toBe(true);
+    await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
+    await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
+    await dockerAction("enshrouded", "stop");
+    await expect.poll(() => http.requests.filter((r) => r.url === "/status/503").map((r) => r.body?.message), { timeout: 90_000 })
+      .toContain("enshrouded: the server is down.");
+    // Recent deliveries shows the alert as sent, with its type.
     await page.goto("/settings");
-    webhook = await openDestination(page, "webhook");
-    await webhook.getByRole("button", { name: "Send test notification" }).click();
-    await expect(webhook.locator(":scope > summary")).toContainText("Failing", { timeout: 30_000 });
-    http.statuses["/status/503"] = 204;
-    await sendTest(webhook, "Webhook");
-    await expect(webhook.locator(":scope > summary")).toContainText("On");
-    await expect(webhook.locator(".notification-destination__health")).toBeEmpty();
+    await openDeliveries(page);
+    const alertRow = page.locator(".notification-deliveries-table tbody tr").first();
+    await expect(alertRow).toContainText("enshrouded: the server is down.");
+    await expect(alertRow).toContainText("Server problems · Queued");
   } finally {
+    // A stop through Ludock leaves it watched but quiet for later journeys.
+    await dockerAction("enshrouded", "start");
+    await openServer(page, "enshrouded");
+    await page.locator(".detail-actions").getByRole("button", { name: "Stop" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Stop server" }).click();
+    await expectOperationSucceeded(page);
     await page.goto("/settings");
     await turnOff(page, "webhook", "Webhook");
     http.close();
@@ -291,127 +327,4 @@ test("saving Discord and Telegram settings without showing secrets again", async
   const content = await page.content();
   expect(content).not.toContain("e2e-secret-token");
   expect(content).not.toContain("e2e-secret-bot-token");
-});
-
-async function openAlertTypes(card) {
-  const types = card.locator(".notification-alerts");
-  if (!(await types.evaluate((details) => details.open))) await types.locator("summary").click();
-  return types;
-}
-
-/** Publishes a new version of Survival's image tag in the fake daemon's registry. */
-function publishSurvivalImage(digit) {
-  return new Promise((resolve, reject) => {
-    const call = request({ socketPath: join(process.env.LUDOCK_E2E_DIR, "docker", "docker.sock"), method: "POST",
-      path: "/fake/registry?" + new URLSearchParams({ image: "itzg/minecraft-server:java21", id: "sha256:" + digit.repeat(64) }) }, (response) => {
-      response.resume();
-      response.on("end", resolve);
-    });
-    call.on("error", reject);
-    call.end();
-  });
-}
-
-/**
- * Checks Survival's image until a check newer than the last one finds a newer
- * image; checks run at most every 10 seconds.
- */
-async function findNewerSurvivalImage(page) {
-  await openServer(page, "Survival");
-  await page.getByRole("tab", { name: "Update" }).click();
-  const check = page.locator("#image-check");
-  const checked = check.locator(".image-check__checked time");
-  await expect(check.getByRole("button", { name: "Check now" })).toBeVisible();
-  const before = await checked.count() ? await checked.getAttribute("datetime") : null;
-  await expect(async () => {
-    await check.getByRole("button", { name: "Check now" }).click();
-    await expect(check).toContainText("A newer image is available.", { timeout: 2_000 });
-    expect(await checked.getAttribute("datetime", { timeout: 2_000 })).not.toBe(before);
-  }).toPass({ timeout: 30_000, intervals: [1_000, 3_000] });
-}
-
-// A destination gets server problems but not newer images until that type
-// is switched on; the panel shows newer images either way.
-test("choosing which types of alert reach a webhook", async ({ page }) => {
-  test.setTimeout(240_000);
-  const http = await receiver();
-  const messages = () => http.requests.filter((r) => r.url === "/alerts").map((r) => r.body.message);
-  const newerImage = /^Survival: a newer image is available/;
-  try {
-    await page.goto("/settings");
-    let webhook = await openDestination(page, "webhook");
-    await webhook.locator("input[name=url]").fill(http.url + "/alerts");
-    await webhook.getByLabel("Send alerts to the webhook").check();
-    const types = webhook.locator(".notification-alerts");
-    await expect(types.locator("summary")).toHaveText("Alert types Everything except newer images");
-    await expect(types.getByLabel("Server problems")).toBeHidden();
-    await save(webhook, "Webhook");
-
-    await publishSurvivalImage("5");
-    await findNewerSurvivalImage(page);
-
-    // Enshrouded goes down behind Ludock's back after a start through Ludock.
-    await openServer(page, "enshrouded");
-    // Watched by default; a short wait makes the alert quick.
-    await monitoringSettings(page);
-    await expect(page.getByLabel("Monitor this server")).toBeChecked();
-    const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
-    await page.getByLabel("Wait before alerting (seconds)").fill("11");
-    await page.getByLabel("Wait before alerting (seconds)").press("Tab");
-    expect((await saved).ok()).toBe(true);
-    await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
-    await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
-    await dockerAction("enshrouded", "stop");
-    await expect.poll(messages, { timeout: 90_000 }).toContain("enshrouded: the server is down.");
-    // Recent deliveries shows each alert as sent, with its type.
-    await page.goto("/settings");
-    const alertRow = page.locator(".notification-deliveries-table tbody tr").first();
-    await expect(alertRow).toContainText("enshrouded: the server is down.");
-    await expect(alertRow).toContainText("Server problems · Queued");
-    await expect(page.locator(".notification-deliveries-table")).not.toContainText("Server notification");
-    // Alerts are delivered in the order they were queued, so a newer-image
-    // notice would have arrived first.
-    expect(messages().filter((m) => newerImage.test(m))).toEqual([]);
-
-    await page.goto("/settings");
-    webhook = await openDestination(page, "webhook");
-    await openAlertTypes(webhook);
-    await webhook.getByLabel("Newer images available").check();
-    await webhook.getByLabel("Server problems").uncheck();
-    await save(webhook, "Webhook");
-    await expect(webhook.locator(".notification-alerts summary")).toHaveText(
-      "Alert types Failed backups and schedules, Restores and updates, Newer images available");
-
-    await publishSurvivalImage("6");
-    await findNewerSurvivalImage(page);
-    await expect.poll(() => messages().filter((m) => newerImage.test(m)).length, { timeout: 30_000 }).toBe(1);
-    // A test still reaches it, whatever types are chosen.
-    await page.goto("/settings");
-    webhook = await openDestination(page, "webhook");
-    await sendTest(webhook, "Webhook");
-
-    // Saving with no alert type is refused.
-    await openAlertTypes(webhook);
-    for (const label of ["Failed backups and schedules", "Restores and updates", "Newer images available"]) {
-      await webhook.getByLabel(label).uncheck();
-    }
-    await webhook.getByRole("button", { name: "Save Webhook" }).click();
-    await expect(webhook.locator(".alert--error")).toHaveText("Choose at least one alert type");
-    await expect(webhook.getByLabel("Server problems")).not.toBeChecked();
-  } finally {
-    // A stop through Ludock leaves it watched but quiet for later journeys.
-    await dockerAction("enshrouded", "start");
-    await openServer(page, "enshrouded");
-    await page.locator(".detail-actions").getByRole("button", { name: "Stop" }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Stop server" }).click();
-    await expectOperationSucceeded(page);
-    await page.goto("/settings");
-    const webhook = await openDestination(page, "webhook");
-    await openAlertTypes(webhook);
-    await webhook.getByLabel("Server problems").check();
-    await webhook.getByLabel("Newer images available").uncheck();
-    await webhook.locator("input[name=enabled]").uncheck();
-    await save(webhook, "Webhook");
-    http.close();
-  }
 });

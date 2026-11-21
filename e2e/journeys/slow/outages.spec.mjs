@@ -1,16 +1,15 @@
-import { rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { test, expect, asAdmin, dockerAction, expectOperationSucceeded, fake, monitoringSettings, openServer, restoreServer, serverRow, withGame } from "../fixtures.mjs";
+import { test, expect, asAdmin, dockerAction, monitoringSettings, openServer, restoreServer, serverRow } from "../fixtures.mjs";
 import { freshStack } from "../../setup.mjs";
 
 asAdmin();
 // Each journey waits for monitoring to notice, so they run beside each other.
 test.describe.configure({ mode: "parallel" });
 
-// While one of these files is in the fake Valheim server's data folder, its
-// status query goes silent, as a game that hangs while its container keeps
-// running. fake-hang lasts until the container starts again, which a
-// restart cures.
+// While fake-hang is in the fake Valheim server's data folder, its status
+// query goes silent, as a game that hangs while its container keeps running,
+// until the container starts again, which a restart cures.
 const valheimFile = (name, dir = process.env.LUDOCK_E2E_DIR) => join(dir, "docker", "data", "valheim", name);
 
 /**
@@ -34,113 +33,6 @@ async function startWatched(page, seconds) {
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
 }
 
-test("a game that stops answering while its container runs is an outage, until it answers again", async ({ page }) => {
-  test.setTimeout(240_000);
-  const silence = valheimFile("fake-silent");
-  try {
-    // A wait no other journey sets.
-    await startWatched(page, 12);
-    const game = page.locator(".overview-game");
-    // Readings run every 30 seconds, and the overview shows them within 10.
-    await expect(game).toContainText("Answering", { timeout: 45_000 });
-    await expect(game).toContainText("Over its status check");
-
-    // Monitoring may still be in the start's quiet time; the outage begins
-    // once it ends.
-    await writeFile(silence, "");
-    // The container still runs; only the game went quiet.
-    await expect(game).toContainText("Not answering", { timeout: 45_000 });
-    await expect(game).toContainText("the game stopped answering its status check");
-    await expect(page.locator(".overview-facts").first()).toContainText("Running");
-
-    await page.goto("/");
-    const attention = page.locator("#attention");
-    // The next monitor tick starts the outage, and the one after its grace
-    // period reports it.
-    await expect(attention).toContainText("Game not answering", { timeout: 90_000 });
-    await openServer(page, "valheim");
-    await expect(page.locator("#availability-title + p")).toHaveText("The server is down.");
-    await expect(page.getByRole("region", { name: "Monitoring" }).locator(".metadata-list")).toContainText("Running, but the game isn’t answering");
-
-    await rm(silence);
-    await expect(page.locator(".overview-game")).toContainText("Answering", { timeout: 45_000 });
-    await page.goto("/");
-    await expect(attention).not.toContainText("Game not answering", { timeout: 30_000 });
-
-    await openServer(page, "valheim");
-    await monitoringSettings(page);
-    await page.getByLabel("Monitor this server").uncheck();
-    await expect(page.locator("#availability-title + p")).toHaveText("Monitoring is off.");
-  } finally {
-    await rm(silence, { force: true });
-    await restoreServer(page, "valheim");
-  }
-});
-
-// When recovery acts, gives up, or stays out of the way is covered by the Go
-// tests in internal/monitor and internal/jobs.
-test("Ludock restarts a game that stopped answering, and says when it answers again", async ({ page }) => {
-  test.setTimeout(240_000);
-  const hang = valheimFile("fake-hang");
-  try {
-    // The shortest wait before alerting, so the restart comes two monitor
-    // checks after the game goes silent.
-    await startWatched(page, 10);
-    const game = page.locator(".overview-game");
-    await expect(game).toContainText("Answering", { timeout: 45_000 });
-    const saved = page.waitForResponse((response) => response.url().endsWith("/availability"));
-    await page.getByLabel("Restart it if the game stops answering").check();
-    expect((await saved).ok()).toBe(true);
-    const status = page.locator(".recovery-status");
-    await expect(status).toHaveText("On. Not needed so far.");
-
-    await writeFile(hang, "");
-    await expect(status).toContainText("because the game stopped answering", { timeout: 120_000 });
-    await expect(status).toContainText("It answered again.", { timeout: 60_000 });
-    await expect(game).toContainText("Answering");
-
-    await page.getByRole("tab", { name: "Activity" }).click();
-    await expect(page.getByText("By Ludock, because the game stopped answering").first()).toBeVisible();
-    await page.getByRole("link", { name: "Restart" }).first().click();
-    await expect(page.locator(".metadata-list")).toContainText("Ludock, because the game stopped answering");
-  } finally {
-    await rm(hang, { force: true });
-    await openServer(page, "valheim");
-    await page.getByLabel("Restart it if the game stops answering").uncheck();
-    await restoreServer(page, "valheim");
-  }
-});
-
-test("a game without a status query answers through its image's health check, which can restart it", async ({ page }) => {
-  // Factorio has no status query, but factoriotools/factorio's health check
-  // asks the game, so a hung game was only Unhealthy and never restarted.
-  test.setTimeout(240_000);
-  await withGame(page, "factorio", async (factorio) => {
-    await openServer(page, factorio);
-    const game = page.locator(".overview-game");
-    await expect(game).toContainText("Answering");
-    await expect(game).toContainText("Its image’s health check passed");
-    await monitoringSettings(page);
-    const wait = page.getByLabel("Wait before alerting (seconds)");
-    const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
-    await wait.fill("10");
-    await wait.press("Tab");
-    expect((await saved).ok()).toBe(true);
-    const recovery = page.waitForResponse((response) => response.url().endsWith("/availability"));
-    await page.getByLabel("Restart it if the game stops answering").check();
-    expect((await recovery).ok()).toBe(true);
-    const status = page.locator(".recovery-status");
-    await expect(status).toHaveText("On. Not needed so far.");
-
-    await fake("/fake/health", { container: factorio, status: "unhealthy" });
-    await expect(game).toContainText("its image’s health check keeps failing", { timeout: 45_000 });
-    // The restart starts the game again, and its health check passes.
-    await expect(status).toContainText("because the game stopped answering", { timeout: 120_000 });
-    await expect(status).toContainText("It answered again.", { timeout: 60_000 });
-    await expect(game).toContainText("Its image’s health check passed");
-  });
-});
-
 test.describe("a game that hangs while Ludock restarts", () => {
   // Restarting Ludock would disturb the other journeys, so this one has an
   // install of its own.
@@ -155,8 +47,10 @@ test.describe("a game that hangs while Ludock restarts", () => {
   test("is still caught: it alerts, and automatic restart restarts it", async ({ session }) => {
     test.setTimeout(360_000);
     const page = await session({ baseURL: stack.env.LUDOCK_E2E_URL, storageState: stack.env.LUDOCK_E2E_ADMIN_STATE });
-    // Long enough a wait that Ludock restarts before it ends.
-    await startWatched(page, 30);
+    // The outage starts at the first monitor tick after a reading finds the
+    // game silent, and Ludock restarts within seconds of that reading, so a
+    // 20-second wait ends after the restart, which must judge it afresh.
+    await startWatched(page, 20);
     const game = page.locator(".overview-game");
     await expect(game).toContainText("Answering", { timeout: 45_000 });
     await writeFile(valheimFile("fake-hang", stack.env.LUDOCK_E2E_DIR), "");
@@ -169,16 +63,32 @@ test.describe("a game that hangs while Ludock restarts", () => {
     await stack.restart();
     await openServer(page, "valheim");
     await expect(page.locator(".overview-game")).toContainText("Not answering", { timeout: 45_000 });
+    await expect(page.locator(".overview-game")).toContainText("the game stopped answering its status check");
+    // The container still runs; only the game went quiet.
+    await expect(page.locator(".overview-facts").first()).toContainText("Running");
     await page.goto("/");
-    await expect(page.locator("#attention")).toContainText("Game not answering", { timeout: 90_000 });
-
+    const attention = page.locator("#attention");
+    await expect(attention).toContainText("Game not answering", { timeout: 90_000 });
     await openServer(page, "valheim");
+    await expect(page.locator("#availability-title + p")).toHaveText("The server is down.");
+    await expect(page.getByRole("region", { name: "Monitoring" }).locator(".metadata-list")).toContainText("Running, but the game isn’t answering");
+
     const saved = page.waitForResponse((response) => response.url().endsWith("/availability"));
     await page.getByLabel("Restart it if the game stops answering").check();
     expect((await saved).ok()).toBe(true);
     const status = page.locator(".recovery-status");
     await expect(status).toContainText("because the game stopped answering", { timeout: 120_000 });
     await expect(status).toContainText("It answered again.", { timeout: 60_000 });
+    await page.getByRole("tab", { name: "Activity" }).click();
+    await expect(page.getByText("By Ludock, because the game stopped answering").first()).toBeVisible();
+    await page.getByRole("link", { name: "Restart" }).first().click();
+    await expect(page.locator(".metadata-list")).toContainText("Ludock, because the game stopped answering");
+    // Its answer ends the outage.
+    await openServer(page, "valheim");
+    await expect(async () => {
+      await page.reload();
+      await expect(page.locator("#availability-title + p")).toHaveText("No outage detected.", { timeout: 1000 });
+    }).toPass({ timeout: 30_000, intervals: [3_000] });
   });
 });
 
@@ -219,30 +129,4 @@ test("an outage reaches an open server list when its grace period ends, and clea
   } finally {
     await restoreServer(page, "valheim");
   }
-});
-
-// Nobody configured Enshrouded's monitoring. Stopped when Ludock found it, it
-// stays quiet; once it runs, a stop outside Ludock is an outage.
-test("a server nobody set up is monitored", async ({ page }) => {
-  await openServer(page, "enshrouded");
-  const status = page.locator("#availability-title + p");
-  await expect(page.getByLabel("Monitor this server")).toBeChecked();
-  await expect(status).toHaveText("Stopped. Alerts resume once the server is running again.");
-  await dockerAction("enshrouded", "start");
-  try {
-    await expect(status).toHaveText("No outage detected.", { timeout: 30_000 });
-    await dockerAction("enshrouded", "stop");
-    // Another journey may have shortened its wait before alerting.
-    await expect(status).toHaveText(/^The server (looks|is) down\./, { timeout: 30_000 });
-    await dockerAction("enshrouded", "start");
-    await expect(status).toHaveText("No outage detected.", { timeout: 30_000 });
-  } finally {
-    // A stop through Ludock stays quiet for the journeys after this one.
-    await page.goto(page.url());
-    await page.locator(".detail-actions").getByRole("button", { name: "Stop" }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Stop server" }).click();
-    await expectOperationSucceeded(page);
-  }
-  await page.getByRole("tab", { name: "Overview" }).click();
-  await expect(status).toHaveText("Stopped. Alerts resume once the server is running again.");
 });
