@@ -247,7 +247,7 @@ func TestRestoreSteps(t *testing.T) {
 	input := records[0] + "\n" + records[1] + "\nrestored"
 	argument, _ := json.Marshal(map[string]any{"root": root, "stage": stage, "maxBytes": 100, "reserveBytes": 0})
 	var stdout, stderr bytes.Buffer
-	if code := RunRestoreExtract(string(argument), strings.NewReader(input), &stdout, &stderr); code != 0 || stdout.String() != "ok" {
+	if code := RunRestoreExtract(string(argument), strings.NewReader(input), &stdout, &stderr); code != 0 || !strings.HasPrefix(stdout.String(), "ok ") {
 		t.Fatal(stderr.String())
 	}
 	info, _ := os.Stat(filepath.Join(root, stage, "new", "world"))
@@ -539,5 +539,31 @@ func TestRestoreItemRefusesUnremovableFolder(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "world/mods/cache")); err != nil {
 		t.Fatal("the folder was moved", err)
+	}
+}
+
+// Input that ends partway through a record or a file's bytes, as a cut
+// stream does, exits with its own status; a record it refuses still exits
+// as a refusal.
+func TestExtractionCutInput(t *testing.T) {
+	root := t.TempDir()
+	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
+	if _, code := restore(t, root, stage, "stage"); code != 0 {
+		t.Fatal("stage")
+	}
+	owner := `,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":420}`
+	argument, _ := json.Marshal(map[string]any{"root": root, "stage": stage, "maxBytes": 1000, "reserveBytes": 0})
+	for _, c := range []struct {
+		name, input string
+		status      int
+	}{
+		{"mid-file", `{"name":"a.dat","type":"file","size":10` + owner + "\nabc", ExtractCutStatus},
+		{"mid-record", `{"name":"b.dat","type":"fi`, ExtractCutStatus},
+		{"refused", `{"name":"../c.dat","type":"file","size":1` + owner + "\nx", 1},
+	} {
+		var stderr bytes.Buffer
+		if code := RunRestoreExtract(string(argument), strings.NewReader(c.input), io.Discard, &stderr); code != c.status {
+			t.Error(c.name, code, stderr.String())
+		}
 	}
 }

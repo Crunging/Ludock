@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/Crunging/Ludock/internal/history"
 	"github.com/Crunging/Ludock/internal/monitor"
@@ -816,8 +817,13 @@ templ ActivityList(a ActivityView) {
 	</div>
 }
 
+// guidance is what an operation's result tells the owner, starting with
+// any restore it finished undoing first.
 func guidance(result map[string]any) string {
 	text, _ := result["guidance"].(string)
+	if undone, _ := result["undone"].(string); undone != "" {
+		text = strings.TrimSpace(undone + " " + text)
+	}
 	return text
 }
 

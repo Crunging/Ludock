@@ -1,6 +1,7 @@
 package backups
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -91,7 +93,13 @@ func HelperRoot(context *servers.Context, root Root) (string, error) {
 	if mount == nil {
 		return "", fail("BACKUP_ROOT_CHANGED", "One of the server’s data folders changed. Reload the page and try again.")
 	}
-	return "/mounts/" + root.ID + root.Path[len(mount.Destination):], nil
+	// A backup from 0.6.0 numbered its roots instead; the helper mounts each
+	// under the server's own ID for its path.
+	id := root.ID
+	if index := slices.IndexFunc(context.Container.FileRoots, func(current files.Root) bool { return current.Path == root.Path }); index >= 0 {
+		id = context.Container.FileRoots[index].ID
+	}
+	return "/mounts/" + id + root.Path[len(mount.Destination):], nil
 }
 
 type DataHelper struct {
@@ -489,6 +497,13 @@ type StageTarget struct {
 var (
 	errExtractCut = errors.New("restore extraction stream closed")
 	errExtraction = fail("RESTORE_EXTRACTION", "A folder in the server’s data changed, or isn’t safe to write to, while the backup was unpacking, so the restore was stopped.")
+	// errInputCut is a helper that saw its input end early, and errExitUnknown
+	// one whose exit Docker didn't report: neither refused anything.
+	errInputCut    = errors.New("restore extraction input ended early")
+	errExitUnknown = errors.New("restore extraction exit unknown")
+	// ErrStreamCut is an unpack whose stream to the helper was cut while
+	// Docker kept answering, as when a proxy in front of its socket reloads.
+	ErrStreamCut = fail("RESTORE_STREAM_CUT", "The connection to Docker dropped while the backup was unpacking, so the restore was stopped. Nothing was replaced.")
 )
 
 // ExtractToStage streams an archive into the helper's restore stage of
@@ -504,6 +519,10 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 	type extraction struct {
 		conn      *docker.Conn
 		completed chan error
+		// sent counts the records written; report is what the helper printed,
+		// how many it read, set before completed.
+		sent   int
+		report string
 	}
 	var mu sync.Mutex
 	extractions := map[string]*extraction{}
@@ -515,20 +534,40 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 			extraction.conn.Close()
 		}
 	}
-	// wait collects every extraction once; a helper that stopped at the
-	// reserve is why writing to it failed.
+	// wait collects every extraction once. A helper that stopped at the
+	// reserve, or refused what it was sent, is why writing to it failed; one
+	// that only saw its input end, or whose exit is unknown, isn't.
 	waited, extracted := false, error(nil)
 	wait := func() error {
 		if !waited {
 			waited = true
+			rank := func(err error) int {
+				switch {
+				case errors.Is(err, errStagingCapacity):
+					return 3
+				case errors.Is(err, errExtraction):
+					return 2
+				case err != nil:
+					return 1
+				}
+				return 0
+			}
 			for _, extraction := range extractions {
-				err := <-extraction.completed
-				if errors.Is(err, errStagingCapacity) || (extracted == nil && err != nil) {
+				if err := <-extraction.completed; rank(err) > rank(extracted) {
 					extracted = err
 				}
 			}
 		}
 		return extracted
+	}
+	// cut explains a stream that ended early: Docker away as it ended, or
+	// the connection alone.
+	ping := func() error { return h.Docker.Ping(docker.Promptly(context.WithoutCancel(ctx))) }
+	cut := func(pingErr error) error {
+		if docker.Unavailable(pingErr) {
+			return pingErr
+		}
+		return ErrStreamCut
 	}
 	defer func() {
 		if err != nil {
@@ -564,14 +603,20 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		items[target.Root.ID] = target.Item
 		mu.Unlock()
 		go func() {
-			err := docker.Demux(conn, nil, nil)
+			var out boundedBuffer
+			err := docker.Demux(conn, &out, nil)
 			result := launch.WaitForExit(h.Docker, helperID, execID, h.pollInterval, expired)
 			switch {
-			case result != nil && *result.ExitCode == helper.ExtractFullStatus:
+			case result == nil:
+				err = errExitUnknown
+			case *result.ExitCode == helper.ExtractFullStatus:
 				err = errStagingCapacity
-			case err != nil || result == nil || *result.ExitCode != 0:
+			case *result.ExitCode == helper.ExtractCutStatus || (*result.ExitCode == 0 && err != nil):
+				err = errInputCut
+			case *result.ExitCode != 0:
 				err = errExtraction
 			}
+			extraction.report = out.String()
 			extraction.completed <- err
 		}()
 	}
@@ -625,6 +670,9 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		if err := write(extraction.conn, append(record, '\n')); err != nil {
 			return err
 		}
+		mu.Lock()
+		extraction.sent++
+		mu.Unlock()
 		for {
 			n, readErr := body.Read(chunk)
 			if n > 0 {
@@ -651,12 +699,19 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		err = fail("BACKUP_CHECKSUM", "The archive changed while it was being staged. No existing game data was replaced.")
 	}
 	if errors.Is(err, errExtractCut) {
-		// The archive is fine; the stream to the helper broke, such as when
-		// Docker went away.
-		if pingErr := h.Docker.Ping(docker.Promptly(context.WithoutCancel(ctx))); docker.Unavailable(pingErr) {
-			return pingErr
+		// The archive is fine; the stream to a helper broke. A helper that
+		// refused what it was sent closed it; otherwise it was cut. Docker is
+		// asked first, since waiting for the helpers waits for it to answer.
+		pingErr := ping()
+		closeAll()
+		extracted := wait()
+		if expired() {
+			return context.Cause(deadline)
 		}
-		return errExtraction
+		if errors.Is(extracted, errStagingCapacity) || errors.Is(extracted, errExtraction) {
+			return extracted
+		}
+		return cut(pingErr)
 	}
 	if err != nil {
 		if _, ok := apperr.As(err); !ok {
@@ -667,7 +722,21 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 	for _, extraction := range extractions {
 		extraction.conn.CloseWrite()
 	}
-	return wait()
+	if err := wait(); expired() {
+		return context.Cause(deadline)
+	} else if errors.Is(err, errInputCut) || errors.Is(err, errExitUnknown) {
+		return cut(ping())
+	} else if err != nil {
+		return err
+	}
+	// Every record was sent: a helper that read fewer saw the stream end
+	// cleanly between two.
+	for _, extraction := range extractions {
+		if extraction.report != "ok "+strconv.Itoa(extraction.sent) {
+			return cut(ping())
+		}
+	}
+	return nil
 }
 
 // writableOwnerMount is the deepest writable bind or volume containing rootPath.
@@ -682,4 +751,15 @@ func writableOwnerMount(mounts []identity.Mount, rootPath string) *identity.Moun
 		}
 	}
 	return owner
+}
+
+// boundedBuffer keeps the first bytes a helper prints, enough for its
+// short report.
+type boundedBuffer struct{ bytes.Buffer }
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	if room := 64 - b.Len(); room > 0 {
+		b.Buffer.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
 }

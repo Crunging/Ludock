@@ -390,7 +390,25 @@ docker compose pull ludock
 docker compose up -d ludock
 ```
 
-Its data and your servers stay as they are.
+Its data and your servers stay as they are. Let running work, such as a
+backup, finish first: work Ludock is stopped in the middle of is recovered at
+the next start, but not across a change in how it records servers.
+
+From 0.6.0, the first start upgrades Ludock's data in place:
+
+- Operators and viewers become members. Operators keep the access shared with
+  them; viewers keep only seeing a server, its logs, and its files.
+- Backups are kept by a fixed rule, so the number of backups to keep goes from
+  **Settings**. The backup folder and its limits stay.
+- Ludock records what makes a server the same one differently now. It takes
+  each server running the same game in the same container as it finds it at
+  that start, so sharing isn't paused and backups made before still restore
+  as usual.
+
+A data folder from before 0.6.0 can't be upgraded. Ludock says so in its log
+and on its address, then waits instead of exiting, so a container that
+restarts on its own doesn't repeat the message. Start it with a new data
+volume.
 
 ### Logs
 
@@ -617,7 +635,7 @@ Each piece of work in **Activity** shows one result:
 | Result | Means |
 | --- | --- |
 | Queued | Waiting for other work on the server, or on the backup folder, to finish |
-| Running | Under way; work asked to warn players first shows **Checking who is online**, then **Giving players 1 minute** if anyone is |
+| Running | Under way; work asked to warn players first shows **Checking who is online**, then **Warning players** until the warning is sent and **Giving players 1 minute** once it is |
 | Succeeded | Done |
 | Already up to date | An update found nothing newer |
 | Skipped | Decided not to act, such as a scheduled command for a stopped server |
@@ -638,20 +656,59 @@ Work is recorded before it runs. When Ludock starts after a crash or restart,
 it removes helpers left behind before anything else runs, waits for a stop that
 was in progress instead of sending it again, finishes or rolls back an
 interrupted restore from its journal, removes unpacking leftovers, and starts
-a server that a backup or a restart with a backup first had stopped, without
-taking the backup again. Work it can't safely finish is marked interrupted,
+a server that a backup, a restart with a backup first, or an update had
+stopped, without taking the backup again. An update interrupted before its new
+container ran didn't happen; one interrupted while its new container was being
+checked is undone and the server left stopped, since the new version may have
+changed the game data; one that had begun removing the original is finished.
+**Activity** says which. Work it can't safely finish is marked interrupted,
 never repeated, and scheduled runs missed by more than five minutes are
 recorded as missed. Cancelled work stays
 cancelled, and a warning Ludock resumes can still be cancelled.
 
-If Docker itself restarts while work runs, such as for an upgrade, the work
-waits up to 90 seconds for Docker to answer again, then carries on and its
-entry in **Activity** says it waited. A stop or start whose answer was lost
-counts as done if Docker then shows the server stopped or started, and a
-backup copy Docker cut short is removed and copied again. Docker coming back
-with the server started on its own still counts as a change outside Ludock.
-After 90 seconds, or when Ludock can't tell what Docker did, the work stops
-and says Ludock couldn't reach Docker.
+A restore that stops partway, because something outside Ludock started the
+server or a step failed, always ends in one of these states, which its entry
+in **Activity** names:
+
+| Where it stopped | What it leaves | How it is finished |
+| --- | --- | --- |
+| Before any data moved (staging, unpacking) | Nothing: the unpacked copy is removed even if the server is running | Nothing to finish |
+| After data moved, with the server stopped | The restore undone | Nothing to finish |
+| After data moved, with the server started elsewhere | The previous data in the root's `.ludock-restore-<id>/old`, not in place; the server left running | See below |
+| After the backup's data was in place, cleanup failing | The data it replaced in `.ludock-restore-<id>` | Removed at the next backup, restore, or update |
+
+A restore left with previous data out of place is listed in **Needs
+attention** for administrators. **Undo the restore** stops the server, the one
+case where a data operation stops a server another manager started; it warns
+players first when anyone is online and the game can be messaged. Ludock moves
+whatever is in the data folder now into `ludock-set-aside-<id>` beside it,
+returns the previous data, and starts the server again if it was running. If
+no one does that, the next backup, restore, update, or restart with a backup
+first finishes the undo the same way before its own work, and so does Ludock's
+next start if the server is stopped then. A state Ludock can't finish safely,
+such as data folders that changed since, makes those refuse instead.
+
+If Docker itself restarts while work runs, such as for an upgrade, Ludock's
+requests to it wait up to 90 seconds for it to answer again, and the work's
+entry in **Activity** says it waited. What happens to the step Docker cut
+depends on the step:
+
+- **Waits and carries on:** stops, starts, container checks, and an update's
+  steps, each checked again before it is sent. A stop or start whose answer
+  was lost counts as done if Docker then shows the server stopped or started.
+- **Done again from the start, at most three times:** a backup's copy, whose
+  partial archive is removed first, and a restore's unpacking, whose stage
+  folders are emptied first. Each starts again only once the helper that was
+  writing is gone. Unpacking also starts again when only the connection to
+  Docker dropped, such as when a proxy in front of its socket reloads.
+- **Rolled back:** a restore cut while it moved data into place. Its journal
+  undoes the swap instead of repeating it.
+- **Fails:** a scheduled console command, which is sent on time or not at
+  all, and work Docker answered with an error of its own.
+
+Docker coming back with the server started on its own still counts as a
+change outside Ludock. After 90 seconds, or when Ludock can't tell what Docker
+did, the work stops and says Ludock couldn't reach Docker.
 
 Asked to stop, Ludock gives running work about six seconds to finish, inside
 the ten Docker waits before killing it. Work still running then, such as a

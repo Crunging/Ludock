@@ -5,6 +5,8 @@ package attention
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"slices"
 	"sort"
 	"strings"
@@ -22,7 +24,7 @@ import (
 
 type Item struct {
 	ID         string
-	Kind       string // binding, sharing, availability, disk, memory, schedule, operation, notifications
+	Kind       string // binding, sharing, availability, disk, memory, schedule, operation, restore, notifications
 	ServerID   string
 	ServerName string
 	// binding
@@ -71,7 +73,7 @@ type Service struct {
 	Refresh func(ctx context.Context) error
 }
 
-var priority = map[string]int{"notifications": 0, "binding": 0, "sharing": 0, "availability": 1, "disk": 2, "memory": 2, "schedule": 3, "operation": 4}
+var priority = map[string]int{"notifications": 0, "binding": 0, "sharing": 0, "restore": 1, "availability": 1, "disk": 2, "memory": 2, "schedule": 3, "operation": 4}
 
 // List reads current authority after discovery: a stale principal never
 // exposes a revoked server's saved history.
@@ -158,6 +160,23 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 				result.Items = append(result.Items, item)
 			}
 		}
+		// A restore that stopped partway with live data moved has the
+		// server's previous data out of place until it is undone, which only
+		// an administrator can do.
+		stranded := ""
+		if current != nil && current.Role == db.RoleAdmin && server.Status == identity.StatusActive {
+			item := base
+			err := s.DB.QueryRowContext(ctx, `SELECT id,updated_at FROM operations WHERE server_id=? AND kind='restore' AND status IN ('failed','interrupted')
+        AND json_valid(recovery_json) AND json_extract(recovery_json,'$.restore.status') IN ('replacing','rolling_back')
+        AND EXISTS (SELECT 1 FROM json_each(recovery_json,'$.restore.roots') WHERE json_extract(value,'$.phase') NOT IN ('staging','rolled_back'))
+        ORDER BY created_at DESC,id DESC LIMIT 1`, server.ID).Scan(&item.OperationID, &item.UpdatedAt)
+			if err == nil {
+				item.ID, item.Kind, item.OperationKind, stranded = "restore:"+server.ID, "restore", "restore", item.OperationID
+				result.Items = append(result.Items, item)
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return nil, err
+			}
+		}
 		// Limit recent work before filtering issues; read summary fields only.
 		// Work that failed is settled once the same kind of work succeeds
 		// later, unless it may have left something only a person can sort
@@ -183,7 +202,9 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 				return nil, err
 			}
 			item.ID, item.Kind, item.ForceStopped = "operation:"+item.OperationID, "operation", forced == 1
-			result.Items = append(result.Items, item)
+			if item.OperationID != stranded {
+				result.Items = append(result.Items, item)
+			}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {

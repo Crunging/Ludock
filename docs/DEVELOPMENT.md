@@ -114,6 +114,19 @@ change to those pages:
 cd e2e && node screenshots.mjs
 ```
 
+### Upgrading from the last release
+
+[`e2e/upgrade.mjs`](../e2e/upgrade.mjs) builds the last release's tag beside
+this checkout, sets up an administrator, a shared server, a schedule, a backup,
+monitoring, and a notification destination on the release, then starts this
+build on the same data and checks each still works, and that a database no
+release can read is refused once. It needs no Docker, only Go and git; run it
+before a release that changes stored data:
+
+```sh
+cd e2e && node upgrade.mjs   # or: node upgrade.mjs v0.6.0
+```
+
 ### Container journeys
 
 `e2e/docker` runs the built image against real Docker. It deploys

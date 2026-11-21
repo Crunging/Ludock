@@ -2,6 +2,8 @@ package jobs
 
 import (
 	"bufio"
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -163,33 +166,91 @@ func TestBackupCopyRidesOutDroppedConnection(t *testing.T) {
 	}
 }
 
-// The connection to Docker drops while a restore unpacks the backup. The
-// restore is rolled back and says Ludock couldn't reach Docker, not that the
-// backup is damaged.
+// The stream to a restore's unpacking helper is cut: by Docker going away
+// for a moment, by the connection alone while Docker answers, as when a
+// proxy in front of its socket reloads, or three times running. The helper
+// says its input ended early, or read fewer records than were sent, which
+// isn't the server's folders refusing.
+// Only the stage folders were written, so they are made again and the
+// archive unpacked again, at most three times; the restore then finishes,
+// or fails saying the connection dropped and nothing was replaced. A helper
+// that refuses what it is sent fails the restore without unpacking again.
 func TestRestoreUnpackCutByDroppedConnection(t *testing.T) {
-	f := setup(t)
-	if err := os.WriteFile(filepath.Join(f.data, "large.dat"), make([]byte, 16<<20), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	backup := f.run(t, "backup", nil)
-	input := map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc"}
-	var once sync.Once
-	exec := f.engine.Exec
-	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
-		if strings.Contains(strings.Join(cmd, " "), "restore-extract") {
-			cut := false
-			once.Do(func() { cut = true })
-			if cut {
-				go f.engine.Disconnect(2 * time.Second)
-				time.Sleep(200 * time.Millisecond)
-				return 1
+	for _, c := range []struct {
+		name       string
+		cuts       int
+		disconnect bool
+		status     int
+		want       string
+	}{
+		{"Docker away", 1, true, helper.ExtractCutStatus, ""},
+		{"connection alone", 1, false, helper.ExtractCutStatus, ""},
+		// Cut between two records, the helper sees a clean end, but reports
+		// reading fewer records than were sent.
+		{"between records", 1, false, 0, ""},
+		// The helper reads only the first record and says so, while the
+		// rest is still accepted from the sender.
+		{"first record only", 1, false, -1, ""},
+		{"three times", 3, false, helper.ExtractCutStatus, "The connection to Docker dropped while the backup was unpacking"},
+		{"refused", 1, false, 1, "A folder in the server’s data changed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			if err := os.WriteFile(filepath.Join(f.data, "large.dat"), make([]byte, 16<<20), 0o644); err != nil {
+				t.Fatal(err)
 			}
-		}
-		return exec(c, cmd, stdin, stdout, stderr)
-	}
-	job := f.run(t, "restore", input)
-	if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") || !f.running() || f.staged() {
-		t.Fatalf("%+v", job)
+			backup := f.run(t, "backup", nil)
+			os.WriteFile(filepath.Join(f.data, "large.dat"), []byte("changed"), 0o644)
+			input := map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc"}
+			var mu sync.Mutex
+			cuts, extracts := 0, 0
+			trace := f.traceRestore(nil)
+			exec := f.engine.Exec
+			f.engine.Exec = func(c2 *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+				if strings.Contains(strings.Join(cmd, " "), "restore-extract") {
+					mu.Lock()
+					extracts++
+					cut := cuts < c.cuts
+					cuts++
+					mu.Unlock()
+					if cut && c.status == -1 {
+						first, _ := stdin.ReadBytes('\n')
+						code := exec(c2, cmd, bufio.NewReader(bytes.NewReader(first)), stdout, stderr)
+						io.Copy(io.Discard, stdin)
+						return code
+					}
+					if cut {
+						if c.disconnect {
+							go f.engine.Disconnect(2 * time.Second)
+						}
+						time.Sleep(200 * time.Millisecond)
+						return c.status
+					}
+				}
+				return exec(c2, cmd, stdin, stdout, stderr)
+			}
+			job := f.run(t, "restore", input)
+			restored := false
+			if info, err := os.Stat(filepath.Join(f.data, "large.dat")); err == nil {
+				restored = info.Size() == 16<<20
+			}
+			if c.want == "" {
+				if job.Status != ops.Succeeded || !restored || !f.running() || f.staged() || extracts != 2 || (job.Result["waitedForDocker"] == true) != c.disconnect {
+					t.Fatalf("%+v, %d unpacks", job, extracts)
+				}
+				if lines := strings.Join(trace.lines(), "\n"); !strings.Contains(lines, "cleanup game: staging staging\nstage game: staging staging") {
+					t.Fatal(lines)
+				}
+				return
+			}
+			wantExtracts := 1
+			if c.status == helper.ExtractCutStatus {
+				wantExtracts = 3
+			}
+			if job.Status != ops.Failed || !strings.HasPrefix(job.Error, c.want) || restored || !f.running() || f.staged() || extracts != wantExtracts {
+				t.Fatalf("%+v, %d unpacks", job, extracts)
+			}
+		})
 	}
 }
 

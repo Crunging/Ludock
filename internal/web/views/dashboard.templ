@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/attention"
+	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -541,6 +542,14 @@ func OnlineNote(online int) string {
 // DisconnectNote says taking a running server down disconnects whoever is
 // on, without a number: for tabs that don't follow the player count, where
 // one would go stale.
+// UndoRestoreDetail says what undoing a restore that stopped partway does.
+// It is the one data operation that stops a server another manager started.
+func UndoRestoreDetail(operationID string) string {
+	return "Ludock stops the server, even though it was started outside Ludock, warning players a minute ahead if anyone is online and the game can. " +
+		"It puts the server’s previous data back and starts the server again if it was running. Anything the game wrote since the restore stopped is kept in the folder " +
+		helper.SetAsideName(operationID) + " in its data folder, not deleted."
+}
+
 func DisconnectNote(running bool) string {
 	if running {
 		return "Connected players will be disconnected."
@@ -606,6 +615,8 @@ func describeAttention(item attention.Item) attentionText {
 			title = "Force-stopped; recent progress may be lost"
 		}
 		return attentionText{title, path + "?tab=activity&operation=" + item.OperationID, "Review activity"}
+	case "restore":
+		return attentionText{"Restore stopped partway", path + "?tab=activity&operation=" + item.OperationID, "Review activity"}
 	case "schedule":
 		return attentionText{Capitalize(item.Action) + " schedule suspended", path + "?tab=schedules&schedule=" + item.ScheduleID, "Review schedule"}
 	case "binding":
@@ -649,6 +660,8 @@ templ attentionDetail(item attention.Item) {
 					<span>· By { RecoveryActorLabel }</span>
 				}
 			</span>
+		case "restore":
+			<span class="muted">The restore of { item.ServerName } was stopped partway. Its previous data is safe but not in place: undo the restore to put it back.</span>
 		case "schedule":
 			<span class="muted">{ scheduleReasons[item.Reason] }</span>
 		case "disk":
@@ -720,6 +733,20 @@ templ needsAttention(view AttentionView) {
 						if item.CanStart && !view.DiscoveryUnavailable {
 							<div class="needs-attention__actions">
 								<button class="secondary-btn secondary-btn--accent" type="button" hx-post={ "/servers/" + item.ServerID + "/start" } hx-target="#action-error" data-busy-label="Working…" aria-label={ "Start " + item.ServerName }>Start</button>
+								<a href={ templ.SafeURL(info.Link) } class="text-link" aria-label={ "Details: " + item.ServerName + " — " + info.Title }>Details</a>
+							</div>
+						} else if item.Kind == "restore" && !view.DiscoveryUnavailable {
+							<div class="needs-attention__actions">
+								<button
+									class="secondary-btn secondary-btn--accent"
+									type="button"
+									hx-post={ "/servers/" + item.ServerID + "/restores/undo" }
+									hx-target="#action-error"
+									hx-confirm={ "Undo the restore of " + item.ServerName + "?" }
+									data-confirm-detail={ UndoRestoreDetail(item.OperationID) }
+									data-confirm-action="Undo the restore"
+									data-busy-label="Working…"
+								>Undo the restore</button>
 								<a href={ templ.SafeURL(info.Link) } class="text-link" aria-label={ "Details: " + item.ServerName + " — " + info.Title }>Details</a>
 							</div>
 						} else {

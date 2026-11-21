@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unsafe"
@@ -24,6 +25,8 @@ type RestoreRequest struct {
 	// replaced copy waits in the stage as old/item, a rolled-back one as
 	// returned.
 	Item string `json:"item,omitempty"`
+	// Aside names the folder below Root that setAside moves live data into.
+	Aside string `json:"aside,omitempty"`
 }
 
 // RestoreFailure is the only error text the restore helper prints.
@@ -35,6 +38,13 @@ const StagePrefix = ".ludock-restore-"
 
 // StageName names the stage folder of the restore with that operation ID.
 func StageName(id string) string { return StagePrefix + id }
+
+// SetAsidePrefix starts the folder, beside the data it returns, that undoing
+// a restore keeps what a server started elsewhere wrote meanwhile in.
+const SetAsidePrefix = "ludock-set-aside-"
+
+// SetAsideName names the set-aside folder of the restore with that ID.
+func SetAsideName(id string) string { return SetAsidePrefix + id }
 
 func validStage(name string) bool {
 	id, ok := strings.CutPrefix(name, StagePrefix)
@@ -99,7 +109,7 @@ func (h *restoreHelper) unchanged(parent fd, name string, handle fd) error {
 // moveContents moves entries one at a time. rename never follows its final
 // component: a racing symlink can be moved, but cannot turn this into a
 // write through that symlink to outside data.
-func (h *restoreHelper) moveContents(source, destination fd, omitted string) error {
+func (h *restoreHelper) moveContents(source, destination fd, omitted ...string) error {
 	children, err := names(source)
 	if err != nil {
 		return err
@@ -108,7 +118,7 @@ func (h *restoreHelper) moveContents(source, destination fd, omitted string) err
 		return errUnsafe
 	}
 	for _, name := range children {
-		if name == omitted {
+		if slices.Contains(omitted, name) {
 			continue
 		}
 		if strings.HasPrefix(name, StagePrefix) {
@@ -213,8 +223,32 @@ func (h *restoreHelper) pinStage(root fd, optional bool) (fd, error) {
 	return stage, err
 }
 
+// pinAside makes, or reopens after an interrupted attempt, the set-aside
+// folder: a real directory on the root's mount.
+func (h *restoreHelper) pinAside(root fd) (fd, error) {
+	if err := unix.Mkdirat(int(root), h.request.Aside, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
+		return -1, err
+	}
+	aside, err := h.t.openAt(root, h.request.Aside, directoryFlags, 0)
+	if err != nil {
+		return -1, err
+	}
+	if same, err := sameMount(root, aside); err != nil || !same {
+		return -1, errUnsafe
+	}
+	return aside, nil
+}
+
 func (h *restoreHelper) run() (any, error) {
 	if !validStage(h.request.Stage) {
+		return nil, errUnsafe
+	}
+	if h.request.Aside != "" {
+		id, ok := strings.CutPrefix(h.request.Aside, SetAsidePrefix)
+		if !ok || !ValidID(id) || h.request.Operation != "setAside" {
+			return nil, errUnsafe
+		}
+	} else if h.request.Operation == "setAside" {
 		return nil, errUnsafe
 	}
 	root, err := h.pinRoot()
@@ -322,7 +356,7 @@ func (h *restoreHelper) run() (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := h.moveContents(next, root, ""); err != nil {
+		if err := h.moveContents(next, root); err != nil {
 			return nil, err
 		}
 	case "rollbackClean":
@@ -345,12 +379,26 @@ func (h *restoreHelper) run() (any, error) {
 				return nil, err
 			}
 		}
+	case "setAside":
+		// Like rollbackClean, but what is live is kept: a server started
+		// elsewhere may have written there.
+		if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
+			return nil, err
+		}
+		aside, err := h.pinAside(root)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.moveContents(root, aside, h.request.Stage, h.request.Aside); err != nil {
+			return nil, err
+		}
+		return ok, syncAll(aside, stage, root)
 	case "rollbackOld":
 		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 		if err != nil {
 			return nil, err
 		}
-		if err := h.moveContents(old, root, ""); err != nil {
+		if err := h.moveContents(old, root); err != nil {
 			return nil, err
 		}
 	default:
@@ -601,6 +649,23 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		return move(parent, name, stage, "returned", info)
+	case "setAside":
+		if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
+			return err
+		}
+		parent, err := h.itemParent(root, parts)
+		if err != nil {
+			return err
+		}
+		info, err := movable(parent, name, rootInfo.Dev)
+		if err != nil || info == nil {
+			return err
+		}
+		aside, err := h.pinAside(root)
+		if err != nil {
+			return err
+		}
+		return move(parent, name, aside, name, info)
 	case "rollbackOld":
 		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 		if err != nil {
@@ -701,6 +766,8 @@ type extractor struct {
 	// dirty holds directories, by path below the destination, whose entries
 	// changed and must be synced before extraction reports success.
 	dirty map[string][]string
+	// records counts the entries read.
+	records int
 }
 
 // parent creates (0700) and pins the directories above an entry. The
@@ -772,6 +839,16 @@ const (
 
 var errFull = errors.New("restore reserve reached")
 
+// ExtractCut is printed, with exit status ExtractCutStatus, when the input
+// ends partway through a record or a file's bytes, as when the stream to the
+// helper is cut; nothing in it was refused.
+const (
+	ExtractCut       = "Restore extraction stopped: its input ended early."
+	ExtractCutStatus = 4
+)
+
+var errCut = errors.New("restore input ended early")
+
 // room fails unless the destination keeps reserve bytes free after an entry
 // of size bytes, counted in whole filesystem blocks plus one for its inode
 // and directory entry: the staging estimate cannot bound allocation.
@@ -806,7 +883,9 @@ func RunRestoreExtract(argument string, stdin io.Reader, stdout, stderr io.Write
 		io.WriteString(stderr, message)
 		return status
 	}
-	io.WriteString(stdout, "ok")
+	// The count lets the sender tell a complete stream from one that ended
+	// between records.
+	io.WriteString(stdout, "ok "+strconv.Itoa(x.records))
 	return 0
 }
 
@@ -815,6 +894,9 @@ func RunRestoreExtract(argument string, stdin io.Reader, stdout, stderr io.Write
 func extractExit(err error) (int, string) {
 	if errors.Is(err, errFull) || errors.Is(err, unix.ENOSPC) || errors.Is(err, unix.EDQUOT) {
 		return ExtractFullStatus, ExtractFull
+	}
+	if errors.Is(err, errCut) {
+		return ExtractCutStatus, ExtractCut
 	}
 	return 1, ExtractFailure
 }
@@ -860,18 +942,19 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		}
 		if err == io.EOF {
 			if len(line) > 0 {
-				return errUnsafe
+				return errCut
 			}
 			break
 		}
 		if err != nil {
-			return err
+			return errCut
 		}
 		var record ExtractRecord
 		if json.Unmarshal(bytes.TrimSuffix(line, []byte("\n")), &record) != nil {
 			return errUnsafe
 		}
 		count++
+		x.records = count
 		size, uid, gid, mode, ok := record.checked()
 		if count > 100000 || !ok {
 			return errUnsafe
@@ -920,7 +1003,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 			for remaining := size; remaining > 0; {
 				n := min(remaining, int64(len(chunk)))
 				if _, err := io.ReadFull(reader, chunk[:n]); err != nil {
-					return errUnsafe
+					return errCut
 				}
 				if err := x.room(remaining, reserve); err != nil {
 					return err

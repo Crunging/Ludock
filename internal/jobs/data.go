@@ -33,7 +33,7 @@ func (j *Jobs) dataAuthority(ctx context.Context, server *servers.Context, job *
 	switch job.Job.Kind {
 	case "backup", "restart":
 		capability = authz.BackupsCreate
-	case "restore":
+	case "restore", UndoRestore:
 		capability = authz.BackupsRestore
 	}
 	if err := j.assertCapability(ctx, job, capability); err != nil {
@@ -47,6 +47,9 @@ func (j *Jobs) dataAuthority(ctx context.Context, server *servers.Context, job *
 func withSave(job *ops.Context, result map[string]any) map[string]any {
 	if recovery := job.Job.Recovery; recovery.SaveStatus != "" {
 		result["saveStatus"], result["saveReason"] = recovery.SaveStatus, recovery.SaveReason
+	}
+	if undone := job.Job.Recovery.Undone; undone != "" {
+		result["undone"] = undone
 	}
 	return result
 }
@@ -119,6 +122,9 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 	if err := job.Progress("stopped", func(r *ops.Recovery) {
 		r.StoppedStartedAt, r.StopSettled = stopped.State.StartedAt, true
 	}, nil); err != nil {
+		return err
+	}
+	if err := j.finishPendingRestores(ctx, server, job, stopped.State.StartedAt); err != nil {
 		return err
 	}
 	if stopped.State.ExitCode == 137 || stopped.State.OOMKilled {
@@ -231,7 +237,7 @@ func settleStop(r *ops.Recovery) { r.StopSettled = true }
 // stopped it, once its data is safe. A start that reached Docker is never
 // repeated.
 func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context, job *ops.Context) error {
-	dataSafe := !job.Job.Recovery.DataUnsafe
+	dataSafe := !job.Job.Recovery.DataUnsafe && !job.Job.Recovery.PendingUndo
 	if job.Job.Kind == "restore" {
 		restore, err := restoreState(job)
 		if err != nil {
@@ -373,6 +379,13 @@ func (j *Jobs) withRecoveryLocks(ctx context.Context, job *ops.Context, action f
 		return err
 	}
 	defer releaseExtra()
+	// Interrupted while it finished undoing an earlier restore: that undo
+	// completes before this operation's own recovery.
+	if job.Job.Recovery.PendingUndo {
+		if err := j.finishPendingRestores(ctx, server, job, job.Job.Recovery.StoppedStartedAt); err != nil {
+			return err
+		}
+	}
 	return action(server)
 }
 

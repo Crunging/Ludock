@@ -16,9 +16,12 @@ const operationKeepFor = 90 * 24 * time.Hour
 // them, and not the last run of a schedule or a pending automatic restart.
 func (d *DB) PruneOperations(ctx context.Context) error {
 	_, err := d.ExecContext(ctx, `DELETE FROM operations WHERE id IN (
-      SELECT id FROM (SELECT id, server_id, status, updated_at,
+      SELECT id FROM (SELECT id, server_id, status, updated_at, kind, recovery_json,
         ROW_NUMBER() OVER (PARTITION BY server_id ORDER BY created_at DESC, id DESC) AS newer FROM operations) o
       WHERE newer > ? AND updated_at < ? AND status NOT IN ('queued','running')
+        -- A restore that ended partway keeps the journal its undo needs.
+        AND NOT COALESCE(kind='restore' AND json_valid(recovery_json) AND
+          json_extract(recovery_json,'$.restore.status') IN ('staging','replacing','rolling_back','committed'), 0)
         AND NOT EXISTS (SELECT 1 FROM schedules s WHERE s.last_operation_id = o.id)
         AND NOT EXISTS (SELECT 1 FROM availability v WHERE v.server_id = o.server_id
           AND json_valid(v.recovery_json) AND json_extract(v.recovery_json, '$.operationId') = o.id)
