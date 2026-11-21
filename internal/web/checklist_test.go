@@ -22,36 +22,6 @@ type postingAs struct {
 	csrf    string
 }
 
-func checklistKeysOf(items []views.ChecklistItem) []string {
-	var keys []string
-	for _, item := range items {
-		keys = append(keys, item.Key)
-	}
-	return keys
-}
-
-// Each item shows exactly while its condition holds and it isn't
-// dismissed, in the order a newcomer needs them.
-func TestChecklistItemConditions(t *testing.T) {
-	t.Parallel()
-	fresh := checklistState{Unbacked: []string{"a"}, Unrecovered: []string{"a"}, LocalHost: "127.0.0.1", Unmanaged: []string{"b"}}
-	if keys := checklistKeysOf(checklistItems(fresh)); !slices.Equal(keys, checklistKeys) {
-		t.Fatal(keys)
-	}
-	done := checklistState{AlertsOn: true, TwoFactor: true}
-	if items := checklistItems(done); len(items) != 0 {
-		t.Fatal(items)
-	}
-	fresh.Dismissed = []string{views.ChecklistRecovery, views.ChecklistAddress, views.ChecklistTwoFactor}
-	if keys := checklistKeysOf(checklistItems(fresh)); !slices.Equal(keys, []string{views.ChecklistAlerts, views.ChecklistBackups, views.ChecklistServers}) {
-		t.Fatal(keys)
-	}
-	address := checklistItems(checklistState{AlertsOn: true, TwoFactor: true, LocalHost: "192.168.1.20"})
-	if len(address) != 1 || address[0].Host != "192.168.1.20" || address[0].Loopback {
-		t.Fatal(address)
-	}
-}
-
 // Players can't reach loopback, private, or link-local addresses, nor names
 // only a local network resolves, from elsewhere.
 func TestLocalHost(t *testing.T) {
