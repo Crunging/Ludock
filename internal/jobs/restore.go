@@ -11,6 +11,7 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
+	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/notify"
@@ -318,7 +319,9 @@ type restoreRun struct {
 	staged  map[string]int64
 	data    *backups.DataHelper
 	targets []backups.StageTarget
-	safety  *backups.Backup
+	// stageMade is set once a stage folder may exist.
+	stageMade bool
+	safety    *backups.Backup
 	// restored is the result, set once the restore commits.
 	restored map[string]any
 }
@@ -544,6 +547,7 @@ func (r *restoreRun) stage() error {
 		}
 		r.targets = append(r.targets, backups.StageTarget{Root: root, Path: destination, Item: r.item})
 	}
+	r.stageMade = true
 	for _, target := range r.targets {
 		if err := r.assertAccess(); err != nil {
 			return err
@@ -555,16 +559,62 @@ func (r *restoreRun) stage() error {
 	return nil
 }
 
-// unpack extracts the archive into the stage folders.
+// unpack extracts the archive into the stage folders. A stream cut while
+// Docker restarted, or by the connection alone, only ever wrote into stage
+// folders, which nothing live uses yet: once every helper that may still
+// write is gone, they are made again and the archive unpacked again, at most
+// three times in all. The replace that follows is never repeated.
 func (r *restoreRun) unpack() error {
-	if err := r.stillSafe(); err != nil {
+	var since time.Time
+	for attempt := 1; ; attempt++ {
+		if err := r.stillSafe(); err != nil {
+			return err
+		}
+		err := r.j.Backups.Helpers.ExtractToStage(r.ctx, r.folder, r.row.ID, r.data.Container, r.targets, stageName(r.job),
+			r.row.Roots, r.row.Size, r.reserve, r.row.Checksum, r.assertAccess)
+		if err == nil {
+			return r.assertAccess()
+		}
+		// A 5xx answer means Docker is there but failing, which unpacking
+		// again won't fix.
+		cut := errors.Is(err, backups.ErrStreamCut) ||
+			(docker.Unavailable(err) && docker.StatusCode(err) < 500 && r.j.Docker.WaitForDocker(r.ctx, err, &since))
+		if attempt == 3 || !cut {
+			return err
+		}
+		if err := r.restage(); err != nil {
+			return err
+		}
+	}
+}
+
+// restage removes this restore's helpers, then empties and makes again
+// every stage folder through a new one.
+func (r *restoreRun) restage() error {
+	r.data.Cleanup()
+	r.data = nil
+	if err := r.j.removeOperationHelpers(r.ctx, r.job); err != nil {
 		return err
 	}
-	if err := r.j.Backups.Helpers.ExtractToStage(r.ctx, r.folder, r.row.ID, r.data.Container, r.targets, stageName(r.job),
-		r.row.Roots, r.row.Size, r.reserve, r.row.Checksum, r.assertAccess); err != nil {
+	data, err := r.j.Backups.Helpers.NewDataHelper(r.ctx, r.server, false, r.job.Job.ID)
+	if err != nil {
 		return err
 	}
-	return r.assertAccess()
+	r.data = data
+	if err := r.job.Progress("restore_staging", func(recovery *ops.Recovery) { recovery.DataHelperID = data.Container }, nil); err != nil {
+		return err
+	}
+	if err := r.j.assertStopped(r.ctx, r.server, r.job); err != nil {
+		return err
+	}
+	for _, target := range r.targets {
+		for _, operation := range []string{"cleanup", "stage"} {
+			if _, err := r.j.restoreStep(r.ctx, r.data, target.Path, "", r.job, operation, r.assertAccess); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // replace swaps one root's data for its staged copy, journaling each move
@@ -632,7 +682,7 @@ func (r *restoreRun) failed(err error) (map[string]any, error) {
 	if state != nil {
 		touched = slices.ContainsFunc(state.Roots, holdsLive)
 	}
-	if r.data != nil && (state == nil || (state.Status != "committed" && state.Status != "cleaned")) {
+	if (r.data != nil || r.stageMade) && (state == nil || (state.Status != "committed" && state.Status != "cleaned")) {
 		if rollbackErr := r.j.rollbackAfterFailure(ctx, r.server, job, &r.data); rollbackErr != nil {
 			err = errors.Join(err, rollbackErr)
 		}
@@ -683,8 +733,14 @@ func endedRestoreGuidance(job *ops.Context, touched bool) string {
 // rollbackAfterFailure rolls back through a fresh helper when the command
 // that failed stopped the old one, as recovery does.
 func (j *Jobs) rollbackAfterFailure(ctx context.Context, server *servers.Context, job *ops.Context, data **backups.DataHelper) error {
-	if running, err := j.Backups.Helpers.IsRunning(ctx, (*data).Container); err != nil || !running {
-		(*data).Cleanup()
+	running := false
+	if *data != nil {
+		running, _ = j.Backups.Helpers.IsRunning(ctx, (*data).Container)
+	}
+	if !running {
+		if *data != nil {
+			(*data).Cleanup()
+		}
 		*data = nil
 		if err := j.assertStopped(ctx, server, job); err != nil {
 			return err

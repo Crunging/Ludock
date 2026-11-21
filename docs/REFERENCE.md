@@ -670,14 +670,27 @@ first finishes the undo the same way before its own work, and so does Ludock's
 next start if the server is stopped then. A state Ludock can't finish safely,
 such as data folders that changed since, makes those refuse instead.
 
-If Docker itself restarts while work runs, such as for an upgrade, the work
-waits up to 90 seconds for Docker to answer again, then carries on and its
-entry in **Activity** says it waited. A stop or start whose answer was lost
-counts as done if Docker then shows the server stopped or started, and a
-backup copy Docker cut short is removed and copied again. Docker coming back
-with the server started on its own still counts as a change outside Ludock.
-After 90 seconds, or when Ludock can't tell what Docker did, the work stops
-and says Ludock couldn't reach Docker.
+If Docker itself restarts while work runs, such as for an upgrade, Ludock's
+requests to it wait up to 90 seconds for it to answer again, and the work's
+entry in **Activity** says it waited. What happens to the step Docker cut
+depends on the step:
+
+- **Waits and carries on:** stops, starts, container checks, and an update's
+  steps, each checked again before it is sent. A stop or start whose answer
+  was lost counts as done if Docker then shows the server stopped or started.
+- **Done again from the start, at most three times:** a backup's copy, whose
+  partial archive is removed first, and a restore's unpacking, whose stage
+  folders are emptied first. Each starts again only once the helper that was
+  writing is gone. Unpacking also starts again when only the connection to
+  Docker dropped, such as when a proxy in front of its socket reloads.
+- **Rolled back:** a restore cut while it moved data into place. Its journal
+  undoes the swap instead of repeating it.
+- **Fails:** a scheduled console command, which is sent on time or not at
+  all, and work Docker answered with an error of its own.
+
+Docker coming back with the server started on its own still counts as a
+change outside Ludock. After 90 seconds, or when Ludock can't tell what Docker
+did, the work stops and says Ludock couldn't reach Docker.
 
 Asked to stop, Ludock gives running work about six seconds to finish, inside
 the ten Docker waits before killing it. Work still running then, such as a

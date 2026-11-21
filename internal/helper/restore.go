@@ -766,6 +766,8 @@ type extractor struct {
 	// dirty holds directories, by path below the destination, whose entries
 	// changed and must be synced before extraction reports success.
 	dirty map[string][]string
+	// records counts the entries read.
+	records int
 }
 
 // parent creates (0700) and pins the directories above an entry. The
@@ -837,6 +839,16 @@ const (
 
 var errFull = errors.New("restore reserve reached")
 
+// ExtractCut is printed, with exit status ExtractCutStatus, when the input
+// ends partway through a record or a file's bytes, as when the stream to the
+// helper is cut; nothing in it was refused.
+const (
+	ExtractCut       = "Restore extraction stopped: its input ended early."
+	ExtractCutStatus = 4
+)
+
+var errCut = errors.New("restore input ended early")
+
 // room fails unless the destination keeps reserve bytes free after an entry
 // of size bytes, counted in whole filesystem blocks plus one for its inode
 // and directory entry: the staging estimate cannot bound allocation.
@@ -871,7 +883,9 @@ func RunRestoreExtract(argument string, stdin io.Reader, stdout, stderr io.Write
 		io.WriteString(stderr, message)
 		return status
 	}
-	io.WriteString(stdout, "ok")
+	// The count lets the sender tell a complete stream from one that ended
+	// between records.
+	io.WriteString(stdout, "ok "+strconv.Itoa(x.records))
 	return 0
 }
 
@@ -880,6 +894,9 @@ func RunRestoreExtract(argument string, stdin io.Reader, stdout, stderr io.Write
 func extractExit(err error) (int, string) {
 	if errors.Is(err, errFull) || errors.Is(err, unix.ENOSPC) || errors.Is(err, unix.EDQUOT) {
 		return ExtractFullStatus, ExtractFull
+	}
+	if errors.Is(err, errCut) {
+		return ExtractCutStatus, ExtractCut
 	}
 	return 1, ExtractFailure
 }
@@ -925,18 +942,19 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		}
 		if err == io.EOF {
 			if len(line) > 0 {
-				return errUnsafe
+				return errCut
 			}
 			break
 		}
 		if err != nil {
-			return err
+			return errCut
 		}
 		var record ExtractRecord
 		if json.Unmarshal(bytes.TrimSuffix(line, []byte("\n")), &record) != nil {
 			return errUnsafe
 		}
 		count++
+		x.records = count
 		size, uid, gid, mode, ok := record.checked()
 		if count > 100000 || !ok {
 			return errUnsafe
@@ -985,7 +1003,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 			for remaining := size; remaining > 0; {
 				n := min(remaining, int64(len(chunk)))
 				if _, err := io.ReadFull(reader, chunk[:n]); err != nil {
-					return errUnsafe
+					return errCut
 				}
 				if err := x.room(remaining, reserve); err != nil {
 					return err
