@@ -69,9 +69,10 @@ func TestWarnedRestartResumesAfterLudockRestarts(t *testing.T) {
 	}
 }
 
-// Ludock stopping while a warned restart waits out its minute ends the wait
-// at once and leaves the restart running with the time players were given,
-// which the next start resumes.
+// Ludock stopping while a warned restart waits ends the wait at once and
+// leaves the restart running with the time players were given, which the
+// next start resumes. This fixture's console never answers, so the restart
+// is still trying to send its warning, which the next start sends again.
 func TestStoppingDuringAWarningLeavesItToResume(t *testing.T) {
 	f := setup(t)
 	f.jobs.WarningLead = time.Minute
@@ -105,7 +106,7 @@ func TestStoppingDuringAWarningLeavesItToResume(t *testing.T) {
 		t.Fatal("stopping waited", waited)
 	}
 	current, _ := runner.Get(ctx, job.ID)
-	if current.Status != ops.Running || current.Phase != "warning" || current.Recovery.WarnUntil == 0 || f.startedAt() != before {
+	if current.Status != ops.Running || current.Phase != ops.PhaseWarningPlayers || current.Recovery.WarnUntil == 0 || f.startedAt() != before {
 		t.Fatalf("%+v", current)
 	}
 }

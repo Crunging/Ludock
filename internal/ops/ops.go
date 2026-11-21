@@ -44,6 +44,11 @@ const (
 // given. Only it and queued work can be cancelled: every later phase acts.
 const PhaseWarning = "warning"
 
+// PhaseWarningPlayers is a running operation still sending its warning,
+// which it tries again while Docker or the console is briefly unreachable.
+// It can be cancelled like PhaseWarning.
+const PhaseWarningPlayers = "warning_players"
+
 // ErrCancelled is what a cancelled job's next save returns; the job then
 // stops without acting.
 var ErrCancelled = errors.New("operation cancelled")
@@ -116,6 +121,8 @@ type Recovery struct {
 	WarnSent  bool  `json:"warnSent,omitempty"`
 	// WarnSkipped: nobody was online to warn, so the operation didn't wait.
 	WarnSkipped bool `json:"warnSkipped,omitempty"`
+	// WarnFailed: the warning could not be sent, and the work went ahead.
+	WarnFailed bool `json:"warnFailed,omitempty"`
 	// Restore and Swap are the restore journal and update swap, which their
 	// handlers decode and validate.
 	Restore json.RawMessage `json:"restore,omitempty"`
@@ -978,7 +985,7 @@ var (
 // Waiting reports whether a job can still be cancelled: it is queued, or
 // waits out a warning.
 func Waiting(job *Job) bool {
-	return job.Status == Queued || (job.Status == Running && job.Phase == PhaseWarning)
+	return job.Status == Queued || (job.Status == Running && (job.Phase == PhaseWarning || job.Phase == PhaseWarningPlayers))
 }
 
 // Cancel calls off a job that is still waiting, on behalf of userID, and

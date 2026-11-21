@@ -617,7 +617,7 @@ Each piece of work in **Activity** shows one result:
 | Result | Means |
 | --- | --- |
 | Queued | Waiting for other work on the server, or on the backup folder, to finish |
-| Running | Under way; work asked to warn players first shows **Checking who is online**, then **Giving players 1 minute** if anyone is |
+| Running | Under way; work asked to warn players first shows **Checking who is online**, then **Warning players** until the warning is sent and **Giving players 1 minute** once it is |
 | Succeeded | Done |
 | Already up to date | An update found nothing newer |
 | Skipped | Decided not to act, such as a scheduled command for a stopped server |

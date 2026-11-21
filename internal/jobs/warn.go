@@ -84,26 +84,35 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 		return nil
 	}
 	until := job.Job.Recovery.WarnUntil
-	if until == 0 {
-		if err := job.Progress(phaseCounting, nil, nil); err != nil {
-			return err
-		}
-		if j.nobodyOnline(ctx, server, locked) {
-			if err := assertAccess(); err != nil {
+	// Resumed while it was still trying to send the warning, which a requeue
+	// doesn't keep as the phase: nobody heard one yet, so it is sent now.
+	r := job.Job.Recovery
+	sending := until != 0 && !r.WarnSent && !r.WarnFailed && CanWarn(server.Container)
+	if until == 0 || sending {
+		if until == 0 {
+			if err := job.Progress(phaseCounting, nil, nil); err != nil {
 				return err
 			}
-			return job.Progress(phaseCounting, func(r *ops.Recovery) { r.WarnSkipped = true }, nil)
+			if j.nobodyOnline(ctx, server, locked) {
+				if err := assertAccess(); err != nil {
+					return err
+				}
+				return job.Progress(phaseCounting, func(r *ops.Recovery) { r.WarnSkipped = true }, nil)
+			}
+			until = time.Now().Add(j.warningLead()).UnixMilli()
 		}
-		until = time.Now().Add(j.warningLead()).UnixMilli()
 		// An earlier attempt, requeued behind other work, may have found nobody.
-		if err := job.Progress("warning", func(r *ops.Recovery) { r.WarnUntil, r.WarnSkipped = until, false }, nil); err != nil {
+		if err := job.Progress(ops.PhaseWarningPlayers, func(r *ops.Recovery) { r.WarnUntil, r.WarnSkipped = until, false }, nil); err != nil {
 			return err
 		}
 		// Best effort: a warning that can't be sent doesn't stop the action.
 		// One that was gives players the full time from when they heard it.
 		// A warning cancelled before it goes out is never sent.
-		if j.broadcast(ctx, server, schedules.WarningMessage(job.Job.Kind, WarningMinutes), func() error { return job.Active(ctx) },
-			assertAccess, locked) == nil {
+		sent, err := j.sendWarning(ctx, job, server, assertAccess, locked)
+		switch {
+		case err != nil:
+			return err
+		case sent:
 			until = max(until, time.Now().Add(j.warningLead()).UnixMilli())
 			err := job.Progress(ops.PhaseWarning, func(r *ops.Recovery) { r.WarnSent, r.WarnUntil = true, until }, nil)
 			// Cancelled while the warning went out: the canceller didn't know
@@ -117,13 +126,25 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 			if err != nil {
 				return err
 			}
-		} else if err := job.Active(ctx); err != nil {
-			return err
-		} else if err := assertAccess(); err != nil {
-			return err
+		case CanWarn(server.Container):
+			// Nobody heard a warning, so there is no minute to give: the
+			// work goes ahead, and Activity says players weren't warned.
+			if err := assertAccess(); err != nil {
+				return err
+			}
+			result := withUndone(job.Job.Result, "")
+			result["warnFailed"] = warnFailedNote(job.Job.Kind)
+			return job.Progress(phaseWarned, func(r *ops.Recovery) { r.WarnFailed = true }, result)
+		default:
+			// A game that can't message its players waits out the minute.
+			if err := job.Progress(ops.PhaseWarning, nil, nil); err != nil {
+				return err
+			}
 		}
 	} else if err := warnedTooLate(job); err != nil {
 		return err
+	} else if r.WarnFailed {
+		return job.Progress(phaseWarned, nil, nil)
 	} else if err := job.Progress(ops.PhaseWarning, nil, nil); err != nil {
 		return err
 	}
@@ -145,6 +166,47 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 		}
 		if err := assertAccess(); err != nil {
 			return err
+		}
+	}
+}
+
+// warnFailedNote is what Activity says when a warning never went out.
+func warnFailedNote(kind string) string {
+	if kind == "stop" {
+		return "Couldn’t warn players before the shutdown."
+	}
+	return "Couldn’t warn players before the restart."
+}
+
+// sendWarning sends the warning, trying again for the warning's own time
+// while the failure may pass, such as Docker or the game's console being
+// briefly unreachable. It reports whether players were told; an error means
+// the job was cancelled or its owner lost access, and no warning went out.
+func (j *Jobs) sendWarning(ctx context.Context, job *ops.Context, server *servers.Context, assertAccess func() error, locked bool) (bool, error) {
+	message := schedules.WarningMessage(job.Job.Kind, WarningMinutes)
+	deadline := time.Now().Add(j.warningLead())
+	for {
+		err := j.broadcast(ctx, server, message, func() error { return job.Active(ctx) }, assertAccess, locked)
+		if err == nil {
+			return true, nil
+		}
+		if err := job.Active(ctx); err != nil {
+			return false, err
+		}
+		if err := assertAccess(); err != nil {
+			return false, err
+		}
+		// A refusal, such as a game without a way to message players, won't
+		// pass by waiting.
+		if _, public := apperr.As(err); public || !time.Now().Before(deadline) {
+			return false, nil
+		}
+		select {
+		case <-time.After(min(j.poll(), time.Until(deadline))):
+		case <-job.Cancelled():
+			return false, ops.ErrCancelled
+		case <-ctx.Done():
+			return false, ctx.Err()
 		}
 	}
 }
@@ -192,11 +254,15 @@ func warnedResult(job *ops.Context, result map[string]any, err error) (map[strin
 	if err != nil {
 		return result, calledOff(job, err)
 	}
-	if job.Job.Recovery.WarnSkipped {
+	if job.Job.Recovery.WarnSkipped || job.Job.Recovery.WarnFailed {
 		if result == nil {
 			result = map[string]any{}
 		}
-		result["warnSkipped"] = true
+		if job.Job.Recovery.WarnFailed {
+			result["warnFailed"] = warnFailedNote(job.Job.Kind)
+		} else {
+			result["warnSkipped"] = true
+		}
 	}
 	return result, nil
 }
@@ -231,6 +297,9 @@ func (j *Jobs) broadcast(ctx context.Context, server *servers.Context, message s
 // warnedTooLate refuses to act more than a few minutes after the time
 // players were given, as after Ludock was down.
 func warnedTooLate(job *ops.Context) error {
+	if !job.Job.Recovery.WarnSent {
+		return nil
+	}
 	if until := job.Job.Recovery.WarnUntil; until != 0 && time.Now().UnixMilli() > until+schedtime.OneTimeGraceMs {
 		return apperr.New("WARNED_ACTION_MISSED", 409, "Ludock wasn’t running when the server was due to "+verbs[job.Job.Kind]+
 			", so it didn’t. Players had been told it would.")
@@ -252,7 +321,7 @@ func resumable(job *ops.Context) bool {
 	if job.Job.Kind == "update" {
 		return r.InitialRunning == nil && !r.StopStarted && len(r.Swap) == 0
 	}
-	return job.Job.Phase == ops.PhaseWarning || job.Job.Phase == phaseWarned
+	return job.Job.Phase == ops.PhaseWarning || job.Job.Phase == ops.PhaseWarningPlayers || job.Job.Phase == phaseWarned
 }
 
 // calledOff tells whoever reads the failure that players had been warned.
