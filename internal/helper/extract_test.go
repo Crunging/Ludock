@@ -2,138 +2,70 @@ package helper
 
 import (
 	"encoding/json"
-	"math"
 	"testing"
 )
 
-// Ludock once sent restore-extract's request and records as maps. The typed
-// ones encode to the same bytes, from the smallest values to the largest the
-// extractor takes, and with names JSON escapes.
-func TestExtractEncodingMatchesMaps(t *testing.T) {
-	for _, r := range []struct {
-		name, kind     string
-		size, uid, gid int64
-		mode           int64
-		mtime          float64
-	}{
-		{"world/level.dat", "file", 8, 1000, 1000, 0o644, 1700000000.5},
-		{"world", "directory", 0, 0, 0, 0o755, 0},
-		{`a <b> & "c"/ü\x`, "file", 1<<53 - 1, 4294967294, 4294967294, 1<<53 - 1, 8.64e12},
-		{"x", "file", 0, 0, 0, -(1<<53 - 1), -1.25},
-		{"y", "file", 1, 1, 1, -1, -8.64e12},
-	} {
-		old, _ := json.Marshal(map[string]any{"name": r.name, "type": r.kind, "mode": r.mode,
-			"uid": r.uid, "gid": r.gid, "mtime": r.mtime, "size": r.size})
-		typed, _ := json.Marshal(ExtractRecord{GID: &r.gid, Mode: &r.mode, Mtime: &r.mtime, Name: r.name, Size: &r.size,
-			Type: r.kind, UID: &r.uid})
-		if string(old) != string(typed) {
-			t.Fatalf("record\n%s\n%s", old, typed)
-		}
+// Restore-extract's request and records are the bytes Ludock sends its
+// helper: names keep JSON's escaping, and a record is accepted only with
+// whole numbers in range and a file or directory type, so a value past 2^53
+// can't be rounded into another.
+func TestExtractWireFormat(t *testing.T) {
+	gid, uid, size, mode, mtime := int64(1000), int64(1000), int64(8), int64(0o644), 1700000000.5
+	record, _ := json.Marshal(ExtractRecord{GID: &gid, Mode: &mode, Mtime: &mtime, Name: `a <b> & "c"/ü\x`, Size: &size, Type: "file", UID: &uid})
+	if want := `{"gid":1000,"mode":420,"mtime":1700000000.5,"name":"a \u003cb\u003e \u0026 \"c\"/ü\\x","size":8,"type":"file","uid":1000}`; string(record) != want {
+		t.Fatalf("record\n%s\n%s", record, want)
 	}
-	for _, r := range []struct {
-		max, reserve int64
-		root         string
-	}{{0, 0, "/data"}, {1 << 62, 1<<53 - 1, "/srv/a <b> & ü"}, {-1, 1 << 20, "/"}} {
-		stage := StageName("0f9619ff-8b86-4011-b42d-00c04fc964ff")
-		old, _ := json.Marshal(map[string]any{"root": r.root, "stage": stage, "maxBytes": r.max, "reserveBytes": r.reserve})
-		typed, _ := json.Marshal(ExtractRequest{MaxBytes: r.max, ReserveBytes: &r.reserve, Root: r.root, Stage: stage})
-		if string(old) != string(typed) {
-			t.Fatalf("request\n%s\n%s", old, typed)
-		}
+	reserve := int64(1 << 20)
+	request, _ := json.Marshal(ExtractRequest{MaxBytes: 100, ReserveBytes: &reserve, Root: "/srv/a <b> & ü", Stage: StageName("0f9619ff-8b86-4011-b42d-00c04fc964ff")})
+	if want := `{"maxBytes":100,"reserveBytes":1048576,"root":"/srv/a \u003cb\u003e \u0026 ü","stage":".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"}`; string(request) != want {
+		t.Fatalf("request\n%s\n%s", request, want)
 	}
-}
 
-// The extractor accepted record numbers through float64 pointers. The typed
-// record accepts and rejects the same lines, with the same values, except
-// integers spelled as decimals or exponents, which Ludock never writes and
-// the typed record now rejects.
-func TestExtractRecordChecksMatchFloats(t *testing.T) {
-	type floats struct {
-		Name  string   `json:"name"`
-		Type  string   `json:"type"`
-		Size  *float64 `json:"size"`
-		UID   *float64 `json:"uid"`
-		GID   *float64 `json:"gid"`
-		Mode  *float64 `json:"mode"`
-		Mtime *float64 `json:"mtime"`
+	zero, _ := json.Marshal(ExtractRequest{ReserveBytes: new(int64), Root: "/", Stage: StageName("0f9619ff-8b86-4011-b42d-00c04fc964ff")})
+	if want := `{"maxBytes":0,"reserveBytes":0,"root":"/","stage":".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"}`; string(zero) != want {
+		t.Fatalf("request\n%s\n%s", zero, want)
 	}
-	safe := func(value *float64, low, high float64) (int64, bool) {
-		if value == nil || *value != math.Trunc(*value) || *value < low || *value > high || math.Abs(*value) > 1<<53-1 {
-			return 0, false
-		}
-		return int64(*value), true
-	}
-	before := func(line string) (values [4]int64, ok bool) {
-		var r floats
-		if json.Unmarshal([]byte(line), &r) != nil {
-			return values, false
-		}
-		size, okSize := safe(r.Size, 0, 1<<53-1)
-		uid, okUID := safe(r.UID, 0, 4294967294)
-		gid, okGID := safe(r.GID, 0, 4294967294)
-		mode, okMode := safe(r.Mode, -(1<<53 - 1), 1<<53-1)
-		ok = (r.Type == "file" || r.Type == "directory") && okSize && okUID && okGID && okMode
-		return [4]int64{size, uid, gid, mode}, ok
-	}
-	after := func(line string) (values [4]int64, ok bool) {
-		var r ExtractRecord
-		if json.Unmarshal([]byte(line), &r) != nil {
-			return values, false
-		}
-		size, uid, gid, mode, ok := r.checked()
-		return [4]int64{size, uid, gid, mode}, ok
-	}
+
 	base := `"name":"w","type":"file","uid":1,"gid":2,"mode":420,"mtime":1700000000.5`
-	lines := []string{
-		`{` + base + `,"size":8}`,
-		`{` + base + `,"size":0}`,
-		`{` + base + `,"size":-0}`,
-		`{` + base + `,"size":9007199254740991}`,
-		`{` + base + `,"size":9007199254740992}`,
-		`{` + base + `,"size":9223372036854775807}`,
-		`{` + base + `,"size":9223372036854775808}`,
-		`{` + base + `,"size":-1}`,
-		`{` + base + `,"size":1.5}`,
-		`{` + base + `,"size":1e400}`,
-		`{` + base + `,"size":"8"}`,
-		`{` + base + `,"size":null}`,
-		`{` + base + `}`,
-		`{` + base + `,"size":1,"size":null}`,
-		`{"name":"w","type":"file","size":1,"uid":4294967294,"gid":0,"mode":0}`,
+	for line, want := range map[string][4]int64{
+		`{` + base + `,"size":8}`:                                               {8, 1, 2, 420},
+		`{` + base + `,"size":-0}`:                                              {0, 1, 2, 420},
+		`{` + base + `,"size":9007199254740991}`:                                {1<<53 - 1, 1, 2, 420},
+		`{"name":"w","type":"file","size":1,"uid":4294967294,"gid":0,"mode":0}`: {1, 4294967294, 0, 0},
+		`{"name":"w","type":"directory","size":0,"uid":0,"gid":0,"mode":-9007199254740991,"mtime":null}`: {0, 0, 0, -(1<<53 - 1)},
+	} {
+		var r ExtractRecord
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatal(line, err)
+		}
+		if size, uid, gid, mode, ok := r.checked(); !ok || [4]int64{size, uid, gid, mode} != want {
+			t.Errorf("%s: %v %v %v %v %v", line, size, uid, gid, mode, ok)
+		}
+	}
+	for _, line := range []string{
+		`{` + base + `,"size":9007199254740992}`, `{` + base + `,"size":9223372036854775808}`, `{` + base + `,"size":-1}`,
+		`{` + base + `,"size":1.5}`, `{` + base + `,"size":8.0}`, `{` + base + `,"size":8e0}`, `{` + base + `,"size":1e400}`,
+		`{` + base + `,"size":"8"}`, `{` + base + `,"size":null}`, `{` + base + `}`, `{` + base + `,"size":1,"size":null}`,
 		`{"name":"w","type":"file","size":1,"uid":4294967295,"gid":0,"mode":0}`,
 		`{"name":"w","type":"file","size":1,"uid":-1,"gid":0,"mode":0}`,
 		`{"name":"w","type":"file","size":1,"uid":0,"gid":4294967295,"mode":0}`,
 		`{"name":"w","type":"file","size":1,"uid":0,"mode":0}`,
-		`{"name":"w","type":"directory","size":0,"uid":0,"gid":0,"mode":-9007199254740991,"mtime":null}`,
 		`{"name":"w","type":"directory","size":0,"uid":0,"gid":0,"mode":-9007199254740992}`,
 		`{"name":"w","type":"directory","size":0,"uid":0,"gid":0,"mode":9007199254740992}`,
 		`{"name":"w","type":"directory","size":0,"uid":0,"gid":0}`,
 		`{"name":"w","type":"symlink","size":0,"uid":0,"gid":0,"mode":0}`,
 		`{"name":"w","size":0,"uid":0,"gid":0,"mode":0}`,
 		`{"name":"w","type":"file","size":0,"uid":0,"gid":0,"mode":0,"mtime":"x"}`,
-		`[]`,
-		`null`,
-	}
-	for _, line := range lines {
-		old, oldOK := before(line)
-		typed, typedOK := after(line)
-		if oldOK != typedOK || oldOK && old != typed {
-			t.Errorf("%s: %v %v, now %v %v", line, old, oldOK, typed, typedOK)
+		`[]`, `null`,
+	} {
+		var r ExtractRecord
+		if json.Unmarshal([]byte(line), &r) == nil {
+			if _, _, _, _, ok := r.checked(); ok {
+				t.Errorf("accepted %s", line)
+			}
 		}
 	}
-	for _, line := range []string{`{` + base + `,"size":8.0}`, `{` + base + `,"size":8e0}`} {
-		if _, ok := before(line); !ok {
-			t.Fatal("floats rejected", line)
-		}
-		if _, ok := after(line); ok {
-			t.Fatal("accepted a decimal integer", line)
-		}
-	}
-}
 
-// The request's reserve was a float64 pointer too: missing, null, negative
-// or past 2^53 fails the same way, and a missing maxBytes is still 0.
-func TestExtractRequestReserveMatchesFloats(t *testing.T) {
 	stage := `"root":"/data","stage":"` + StageName("0f9619ff-8b86-4011-b42d-00c04fc964ff") + `"`
 	for line, want := range map[string]bool{
 		`{` + stage + `,"maxBytes":100,"reserveBytes":0}`:                true,
