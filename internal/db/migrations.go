@@ -284,12 +284,15 @@ var Migrations = []Migration{
 	},
 	{
 		// Retention never removes a kept backup (kept_at set). reason names
-		// the work that took a backup for its own protection.
+		// the work that took a backup for its own protection. Retention is a
+		// fixed rule, so the count 0.6.0 saved goes.
 		Version: 8,
 		SQL: `
       ALTER TABLE backups ADD COLUMN kept_at INTEGER CHECK (kept_at >= 0);
       ALTER TABLE backups ADD COLUMN note TEXT NOT NULL DEFAULT '';
       ALTER TABLE backups ADD COLUMN reason TEXT NOT NULL DEFAULT '' CHECK (reason IN ('', 'restore', 'update'));
+      UPDATE settings SET value_json = json_remove(value_json, '$.retentionCount')
+        WHERE key = 'backups' AND json_valid(value_json) AND json_type(value_json) = 'object';
     `,
 	},
 	{
@@ -360,7 +363,9 @@ var Migrations = []Migration{
 		// its grants until an administrator confirms it. The binding history
 		// and the review fields before it had no readers. A server 0.6.0 left
 		// waiting for review becomes missing, still not usable, until the next
-		// discovery settles it as it would have.
+		// discovery settles it as it would have. 0.6.0 fingerprinted more of
+		// the container, so its fingerprints are marked for discovery to
+		// replace (identity.LegacyFingerprint).
 		Version: 13,
 		SQL: `
       DROP TABLE server_bindings;
@@ -383,7 +388,8 @@ var Migrations = []Migration{
         binding_revision, binding_fingerprint, sharing_paused, first_seen_at, last_seen_at)
         SELECT id, host_id, external_identity, container_id, display_name, game_type,
           CASE status WHEN 'review_required' THEN 'missing' ELSE status END,
-          binding_revision, binding_fingerprint, review_required, first_seen_at, last_seen_at FROM logical_servers;
+          binding_revision, CASE binding_fingerprint WHEN '' THEN '' ELSE 'legacy:' || binding_fingerprint END, review_required,
+          first_seen_at, last_seen_at FROM logical_servers;
       DROP TABLE logical_servers;
       ALTER TABLE logical_servers_v13 RENAME TO logical_servers;
       CREATE INDEX logical_servers_container_idx ON logical_servers(host_id, container_id);

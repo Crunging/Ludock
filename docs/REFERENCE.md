@@ -390,7 +390,25 @@ docker compose pull ludock
 docker compose up -d ludock
 ```
 
-Its data and your servers stay as they are.
+Its data and your servers stay as they are. Let running work, such as a
+backup, finish first: work Ludock is stopped in the middle of is recovered at
+the next start, but not across a change in how it records servers.
+
+From 0.6.0, the first start upgrades Ludock's data in place:
+
+- Operators and viewers become members. Operators keep the access shared with
+  them; viewers keep only seeing a server, its logs, and its files.
+- Backups are kept by a fixed rule, so the number of backups to keep goes from
+  **Settings**. The backup folder and its limits stay.
+- Ludock records what makes a server the same one differently now. It takes
+  each server running the same game in the same container as it finds it at
+  that start, so sharing isn't paused and backups made before still restore
+  as usual.
+
+A data folder from before 0.6.0 can't be upgraded. Ludock says so in its log
+and on its address, then waits instead of exiting, so a container that
+restarts on its own doesn't repeat the message. Start it with a new data
+volume.
 
 ### Logs
 

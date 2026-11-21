@@ -79,6 +79,9 @@ func serve() int {
 	defer stop()
 
 	database, err := db.Open(cfg.DBPath())
+	if apperr.Is(err, "DATABASE_INCOMPATIBLE") {
+		return refuse(ctx, cfg.Listen, startupError(err, ""))
+	}
 	if err != nil {
 		log.Error(startupError(err, "Could not open the database. Check that LUDOCK_DATA_DIR exists and is writable."))
 		return 1
@@ -239,6 +242,27 @@ func healthcheck() int {
 // startupError describes a failure without its underlying message, which can
 // name host paths: a public error keeps its message, anything else gets the
 // fixed description.
+// refuse keeps running with a database Ludock can't use, saying why once in
+// its log and on every page, until it is stopped: exiting would have a
+// container restarted over and over with the reason buried in its log.
+func refuse(ctx context.Context, address, message string) int {
+	log.Error(message)
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		log.Error("Could not listen", logging.F("address", address))
+		return 1
+	}
+	server := &http.Server{ReadHeaderTimeout: 30 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprintln(w, message)
+	})}
+	go server.Serve(listener)
+	<-ctx.Done()
+	server.Close()
+	return 0
+}
+
 func startupError(err error, fallback string) string {
 	if public, ok := apperr.As(err); ok {
 		return public.Message

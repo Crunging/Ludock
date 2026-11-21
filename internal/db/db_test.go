@@ -448,6 +448,26 @@ func TestScheduleSaveTimeMigration(t *testing.T) {
 	}
 }
 
+// The backup settings 0.6.0 saved keep their folder and limits but lose the
+// retention count, which a fixed rule replaced and settings now refuse.
+func TestRetentionCountMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.db")
+	before, err := open(path, Migrations[:7])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := before.Exec(`INSERT INTO settings(key,value_json)
+    VALUES('backups','{"destination":"/backups","retentionCount":10,"maxBytes":0,"reserveBytes":5368709120}')`); err != nil {
+		t.Fatal(err)
+	}
+	before.Close()
+	var value string
+	if err := mustOpen(t, path).QueryRow("SELECT value_json FROM settings WHERE key='backups'").Scan(&value); err != nil ||
+		value != `{"destination":"/backups","maxBytes":0,"reserveBytes":5368709120}` {
+		t.Fatal(value, err)
+	}
+}
+
 // Countdown warnings claimed before deliveries were recorded upgrade as not
 // heard, so no call-off follows one nobody may have heard; a delivery can
 // then be recorded on them.
@@ -528,7 +548,8 @@ func TestMemberRoleMigration(t *testing.T) {
 // Servers keep their bindings, paused sharing, and everything that refers to
 // them when the review fields and binding history go; one 0.6.0 left waiting
 // for review stays unusable until discovery settles it, and the schema ends
-// as a fresh database's does.
+// as a fresh database's does. 0.6.0's fingerprints are marked for discovery to
+// replace.
 func TestSharingPausedMigration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "servers.db")
 	before, err := open(path, Migrations[:12])
@@ -565,7 +586,7 @@ func TestSharingPausedMigration(t *testing.T) {
 	after.QueryRow(`SELECT group_concat(row, ' ') FROM (SELECT id||'='||COALESCE(container_id,'-')||','||game_type||','||status||','||
       binding_revision||','||binding_fingerprint||','||sharing_paused||','||first_seen_at||','||last_seen_at AS row
       FROM logical_servers ORDER BY id)`).Scan(&servers)
-	if servers != "g=-,unknown,ambiguous,0,,0,1,2 p=c2,valheim,active,5,f5,1,1,2 r=c3,minecraft,missing,2,f1,1,1,2 s=c1,minecraft,active,3,f3,0,1,2" {
+	if servers != "g=-,unknown,ambiguous,0,,0,1,2 p=c2,valheim,active,5,legacy:f5,1,1,2 r=c3,minecraft,missing,2,legacy:f1,1,1,2 s=c1,minecraft,active,3,legacy:f3,0,1,2" {
 		t.Fatal(servers)
 	}
 	var references int

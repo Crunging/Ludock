@@ -33,6 +33,11 @@ func TestCompareFit(t *testing.T) {
 			t.Errorf("%s: %+v", test.name, fit)
 		}
 	}
+	// 0.6.0 numbered roots; their paths are the same folders.
+	numbered := &Backup{Roots: []Root{{ID: "root-0", Path: "/data"}, {ID: "root-1", Path: "/world"}}, GameType: "minecraft", fingerprint: "taken"}
+	if fit := CompareFit(numbered, "taken", "minecraft", []Root{data, world}); fit != (Fit{}) {
+		t.Errorf("0.6.0's numbered roots: %+v", fit)
+	}
 	unknown := &Backup{Roots: []Root{data}, fingerprint: "taken"}
 	if fit := CompareFit(unknown, "taken", "minecraft", []Root{data}); fit != (Fit{}) {
 		t.Errorf("same binding without a recorded game: %+v", fit)
