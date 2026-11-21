@@ -56,6 +56,16 @@ export const test = base.extend({
       await server.remove();
     }
   },
+  // otherServer is a second server like ownServer, so a journey can let two
+  // servers' timers run side by side instead of one after another.
+  otherServer: async ({}, use) => {
+    const server = await addServer();
+    try {
+      await use(server);
+    } finally {
+      await server.remove();
+    }
+  },
   // session(options) opens another browser profile, such as a second user or
   // device, with the same checks as page.
   session: async ({ browser }, use) => {

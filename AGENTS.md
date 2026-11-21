@@ -70,15 +70,29 @@ Before finishing, run `gofmt -l cmd internal`, `go vet ./...`,
 journeys if you changed anything a user can see
 (`cd e2e && npx playwright test`).
 
-Prefer end-to-end tests. The Playwright journeys in `e2e/journeys` run the real
-binary against `cmd/fakedocker`; add or extend one for any behavior a user can
-reach in the browser. Write a Go unit test only when it is clearly the better
-fit: logic with many edge cases (time math, parsers, path and tar handling),
-requests the UI never sends (forged or cross-site requests, missing grants),
-and failures or races a journey can't trigger (a database error, a revocation
-between two steps). Name Go tests after the code and behavior in a few words,
-such as `TestRestoreSpacePerDisk`, and describe the scenario in a comment above
-the test.
+Keep tests to the minimum that checks behavior from the outside. A test that
+restates the code beside it is a second copy of the logic: don't write it.
+
+- One quick journey per thing a person does, through the real binary: the
+  Playwright journeys in `e2e/journeys` run it against `cmd/fakedocker`.
+  Extend an existing journey before adding one.
+- Dangerous sequences (restore, update, backup, recovery) are pinned by
+  recorded-trace tests of what ran in what order, a few tests covering many
+  cases (`internal/jobs/restore_order_test.go` is the model).
+- A Go test is for what a journey can't reach: time passing, with an injected
+  clock; injected failures and races; forged or cross-site requests and
+  missing grants; parsers checked against captured real output. Behavior that
+  waits (grace periods, schedules, warnings, retries) gets one slow journey
+  per chain a person watches, to prove the wiring reaches the page; its
+  variations go in one Go table, never a journey each. A new slow journey
+  needs a reason a Go test can't give.
+- No per-function unit tests and no test per branch. A fix extends an existing
+  test or table where one fits.
+- The real-server rig (`e2e/real`) runs on demand before a release, not in CI.
+
+Name Go tests after the code and behavior in a few words, such as
+`TestRestoreSpacePerDisk`, and describe the scenario in a comment above the
+test.
 
 ## Comments
 

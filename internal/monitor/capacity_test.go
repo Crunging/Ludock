@@ -154,22 +154,44 @@ func TestDiskAlertEndsWithItsBinding(t *testing.T) {
 	}
 }
 
-// Changing a disk threshold ends the alert without a recovery and measures
-// again on the next tick.
-func TestDiskThresholdChange(t *testing.T) {
-	s, events, server, configure := setupWith(t, nil)
-	s.MeasureDisk = func(context.Context, identity.Server) ([]DiskSpace, error) { return space(93), nil }
-	s.CheckDisk(ctx, state("running", ""), 1000, true)
-	policy := DefaultPolicy()
-	policy.Enabled, policy.DiskPercent = true, 95
-	configure(policy)
-	if problems, _ := s.ResourceProblems(ctx); len(problems) != 0 {
-		t.Fatal(problems)
-	}
-	s.CheckDisk(ctx, state("running", ""), 2000, true)
-	disk, _ := s.Disk(ctx, server.ID)
-	if len(events.events) != 1 || disk.CheckedAt != 2000 || disk.Folders[0].AlertSince != 0 {
-		t.Fatal(events.events, disk)
+// A policy change ends the alert it touches without a recovery, leaving the
+// other: a changed disk threshold measures again on the next tick, and an
+// alert turned off ends at once.
+func TestPolicyChangeEndsItsAlert(t *testing.T) {
+	const minute = 10 * 60_000
+	for name, c := range map[string]struct {
+		change func(*Policy)
+		left   string
+	}{
+		"disk threshold": {func(policy *Policy) { policy.DiskPercent = 97 }, "memory"},
+		"disk alert off": {func(policy *Policy) { policy.DiskAlert = false }, "memory"},
+		"memory off":     {func(policy *Policy) { policy.MemoryAlert = false }, "disk"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, events, server, configure := setupWith(t, func(policy *Policy) { policy.MemoryMinutes = 1 })
+			s.MeasureDisk = func(context.Context, identity.Server) ([]DiskSpace, error) { return space(95), nil }
+			addSamples(t, s, server.ID, minute, 950)
+			s.CheckDisk(ctx, state("running", ""), minute, true)
+			s.CheckMemory(ctx, map[string]int64{server.ID: 1000}, state("running", ""), minute)
+			if problems, _ := s.ResourceProblems(ctx); len(problems[server.ID]) != 2 {
+				t.Fatal(problems, events.events)
+			}
+			policy := DefaultPolicy()
+			policy.Enabled, policy.GraceSeconds, policy.MemoryMinutes = true, 60, 1
+			c.change(&policy)
+			configure(policy)
+			if problems, _ := s.ResourceProblems(ctx); len(problems[server.ID]) != 1 || problems[server.ID][0].Kind != c.left || len(events.events) != 2 {
+				t.Fatal(problems, events.events)
+			}
+			s.CheckDisk(ctx, state("running", ""), minute+1000, true)
+			disk, err := s.Disk(ctx, server.ID)
+			if err != nil || len(disk.Folders) != 1 {
+				t.Fatal(err, disk)
+			}
+			if name == "disk threshold" && (disk.CheckedAt != minute+1000 || disk.Folders[0].AlertSince != 0 || len(events.events) != 2) {
+				t.Fatal(events.events, disk)
+			}
+		})
 	}
 }
 

@@ -43,12 +43,13 @@ cd e2e && npm ci && npx playwright test
 
 The Playwright journeys in `e2e/journeys` are the main suite. They build the
 real binary and `cmd/fakedocker`, start one of each on fresh temporary data for
-every worker, and use the product as people do. Add or extend a journey for
-anything a user can reach in the browser; Go unit tests are for what a journey
-can't reach. A journey that changes a server's state, files, schedules,
-backups, or sharing takes the `ownServer` fixture: a running Minecraft server
-like Survival that only it sees, added for it and removed after
-(`addServer()`). Journeys that only look stay on the shared servers. Workers
+every worker, and use the product as people do: one quick journey per thing a
+person does, extended before another is added. Go tests are for what a journey
+can't reach (see "Checks and tests" in [`AGENTS.md`](../AGENTS.md)). A journey
+that changes a server's state, files, schedules, backups, or sharing takes the
+`ownServer` fixture: a running Minecraft server like Survival that only it
+sees, added for it and removed after (`addServer()`); `otherServer` gives it a
+second, so two servers' timers run side by side. Journeys that only look stay on the shared servers. Workers
 run whole files, so a file must pass on a fresh install without the files
 before it and leave each shared server as the next file expects it
 (`restoreServer()`). A file whose journeys each pass on their own can set
@@ -58,21 +59,23 @@ from `ownServer.container`, since a retry runs on the same install.
 `--workers=1` runs every file on one server. CI retries a failed journey once
 to show whether it's flaky, but a flaky journey still fails the run.
 
-A journey that waits on Ludock's own clocks goes in `journeys/slow`, in
-parallel mode, one wait per journey: player and game readings come every 30
-seconds on the 15-second tick that also runs monitoring and schedules, an
-alerting disk is measured every minute, memory is sampled every minute, and a
-warned restart waits one. Shorten what Ludock lets you, such as the shortest
-"Wait before alerting", and start a server through Ludock after changing it,
-which replaces an earlier stop's quiet time with the new wait. The `slow`
-project runs beside `quick`, everything else, so the whole suite takes about
-three minutes locally with 6 and 3 workers. Each worker needs about 600 MB,
-and a machine that runs short of memory stalls every journey at once, so a
-local run takes workers for at most half the memory free when it starts,
-from two to nine. CI
-runs each project in two jobs, with a worker for each slow journey, so a slow
-job takes about as long as its longest journey. Ordering a slow file's longest
-journeys first keeps one from starting last.
+`journeys/slow` holds one journey per chain a person watches happen by
+itself: a warned restart, backup, or restore counting down, a hung game
+restarted, a schedule firing and one waiting for players, a disk alert, an
+alert reaching a webhook, and an outage on an open page; the notification
+settings journeys share that webhook's file. They run in parallel mode and
+wait on Ludock's own clocks: player and game readings come every 30 seconds on the
+15-second tick that also runs monitoring and schedules, an alerting disk is
+measured every minute, and a warned restart waits one. Variations of those
+rules are Go tests with an injected clock, not more journeys. Shorten what
+Ludock lets you, such as the shortest "Wait before alerting", and start a
+server through Ludock after changing it, which replaces an earlier stop's
+quiet time with the new wait. The `slow` project runs beside `quick`,
+everything else. Each worker needs about 600 MB, and a machine that runs short
+of memory stalls every journey at once, so a local run takes workers for at
+most half the memory free when it starts, from two to nine. CI runs each
+project in two jobs, with a worker for each slow journey, so a slow job takes
+about as long as its longest journey, the hung game across a restart.
 
 [`e2e/journeys/fixtures.mjs`](../e2e/journeys/fixtures.mjs) holds the shared
 helpers: `asAdmin()` signs a file's journeys in as the setup administrator,
