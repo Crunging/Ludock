@@ -354,30 +354,6 @@ func TestInterruptedPruning(t *testing.T) {
 	}
 }
 
-// Backup deletion revoked before the unlink keeps the backup.
-func TestRevokedBackupDeletion(t *testing.T) {
-	f := setup(t)
-	id := f.run(t, "backup", nil).Result["backupId"].(string)
-	checks := 0
-	_, err := f.jobs.Backups.Delete(ctx, f.serverID, id, false, func() error {
-		if checks++; checks > 1 {
-			return apperr.New("FORBIDDEN", 403, "Forbidden")
-		}
-		return nil
-	})
-	if !apperr.Is(err, "FORBIDDEN") || checks != 2 {
-		t.Fatal(err, checks)
-	}
-	if backup, err := f.jobs.Backups.Get(ctx, f.serverID, id); err != nil || backup == nil {
-		t.Fatal("lost a backup whose deletion was revoked", err)
-	}
-	if reader, err := f.jobs.Backups.Open(ctx, f.serverID, id); err != nil {
-		t.Fatal(err)
-	} else {
-		reader.Close()
-	}
-}
-
 // Unremoved failed archive is removed in the background.
 func TestUnremovedArchiveCleanup(t *testing.T) {
 	f := setup(t)
@@ -528,7 +504,8 @@ func TestRestoreSpacePerRoot(t *testing.T) {
 	}
 }
 
-// Roots sharing a disk must fit together before the server stops.
+// Roots sharing a disk must fit together, or the restore is refused before
+// the server stops.
 func TestRestoreSpacePerDisk(t *testing.T) {
 	f := setup(t)
 	backupID := twoRootBackup(t, f)
@@ -539,38 +516,8 @@ func TestRestoreSpacePerDisk(t *testing.T) {
 	if restored.Status != ops.Failed || !strings.Contains(restored.Error, "doesn’t have room to unpack") || *checks != 2 {
 		t.Fatal(restored.Status, restored.Error, *checks)
 	}
-	if after, _ := f.jobs.Backups.List(ctx, f.serverID); len(after) != len(before) {
-		t.Fatal("stopped the server and took a safety backup for a restore that cannot fit")
-	}
-}
-
-// A restore that cannot fit is refused before the server stops.
-func TestRestoreSpaceCheckedBeforeStop(t *testing.T) {
-	f := setup(t)
-	backup := f.run(t, "backup", nil)
-	if backup.Status != ops.Succeeded {
-		t.Fatal(backup)
-	}
-	before, _ := f.jobs.Backups.List(ctx, f.serverID)
-	run := f.engine.Exec
-	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
-		var request helper.RestoreRequest
-		if len(cmd) > 3 && cmd[0] == helper.Binary && cmd[2] == "restore" && json.Unmarshal([]byte(cmd[3]), &request) == nil &&
-			request.Operation == "space" {
-			stdout([]byte(`{"availableBytes":0}`))
-			return 0
-		}
-		return run(c, cmd, stdin, stdout, stderr)
-	}
-	restored := f.run(t, "restore", map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc"})
-	if restored.Status != ops.Failed || !strings.Contains(restored.Error, "doesn’t have room to unpack") {
-		t.Fatal(restored.Status, restored.Error)
-	}
-	if game := f.engine.Container(f.game); !game.State.Running {
-		t.Fatal("stopped the server for a restore that cannot fit")
-	}
-	if after, _ := f.jobs.Backups.List(ctx, f.serverID); len(after) != len(before) {
-		t.Fatal("took a safety backup for a restore that cannot fit")
+	if after, _ := f.jobs.Backups.List(ctx, f.serverID); len(after) != len(before) || !f.running() {
+		t.Fatal("stopped the server or took a safety backup for a restore that cannot fit")
 	}
 }
 

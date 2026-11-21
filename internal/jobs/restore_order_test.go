@@ -319,6 +319,18 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 				restored != scenario.restored || left != scenario.left {
 				t.Errorf("%s, %q, journal %q, restored %v, stage left %v", job.Status, job.Error, journal, restored, left)
 			}
+			// A restore that rolled back leaves the data exactly as it was.
+			if !scenario.restored && !scenario.left {
+				current := map[string]string{"world/level.dat": "newer"}
+				if !scenario.item {
+					current = map[string]string{"world/large.dat": "changed", "config/large.dat": "changed"}
+				}
+				for file, want := range current {
+					if got := read(t, filepath.Join(f.data, file)); got != want {
+						t.Errorf("%s is %q after the rollback, want %q", file, got, want)
+					}
+				}
+			}
 			if guidance, _ := job.Result["guidance"].(string); !strings.HasPrefix(guidance, scenario.guidance) {
 				t.Errorf("guidance %q", guidance)
 			}

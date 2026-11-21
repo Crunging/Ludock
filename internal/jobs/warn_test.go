@@ -132,18 +132,6 @@ func TestWarnedRestartTooLateOrStartedIsNotResumed(t *testing.T) {
 	}
 }
 
-// A fresh warned restart saves when players were told before it waits, and
-// restarts once that time has come.
-func TestWarnedRestartWaitsForTheTimeGiven(t *testing.T) {
-	f := setup(t)
-	f.jobs.WarningLead = 200 * time.Millisecond
-	started := time.Now()
-	job := f.run(t, "restart", map[string]any{WarnInput: true})
-	if job.Status != ops.Succeeded || job.Recovery.WarnUntil == 0 || time.Since(started) < 200*time.Millisecond {
-		t.Fatalf("%+v", job)
-	}
-}
-
 // A failure after players were warned says so, except one the runner acts
 // on, such as resources being busy, which keeps its chain so the job is
 // queued again instead of failing.

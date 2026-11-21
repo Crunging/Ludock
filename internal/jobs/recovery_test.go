@@ -67,20 +67,37 @@ func TestRecoveryRestartRunsOnTheServersSetting(t *testing.T) {
 	}
 }
 
-// A recovery restart does nothing when the game answered again or the
-// server was stopped since it was queued, or when recovery is no longer on.
+// A recovery restart does nothing when the game answered again, was stopped,
+// or answered and went silent again since it was queued, when recovery is no
+// longer on or was turned off while the restart ran, when it was queued for
+// an earlier run of the container, or when recovery was turned off and on
+// again, which drops its pending record.
 func TestRecoveryRestartSkipsUnlessStillWanted(t *testing.T) {
 	for name, scenario := range map[string]struct {
-		hung   bool
-		stop   bool
-		policy func(*monitor.Policy)
-		status string
+		hung      func(*fixture) bool
+		stop      bool
+		newerRun  bool
+		forgotten bool
+		policy    func(*monitor.Policy)
+		status    string
 	}{
-		"answered again": {status: ops.Skipped},
-		"stopped":        {hung: true, stop: true, status: ops.Skipped},
-		"switched off":   {hung: true, policy: func(p *monitor.Policy) { p.Recover = false }, status: ops.Failed},
-		"paused":         {hung: true, policy: func(p *monitor.Policy) { p.Maintenance = true }, status: ops.Failed},
-		"not monitored":  {hung: true, policy: func(p *monitor.Policy) { p.Enabled = false }, status: ops.Failed},
+		"answered again": {hung: func(*fixture) bool { return false }, status: ops.Skipped},
+		"new silence": {status: ops.Skipped, hung: func(f *fixture) bool {
+			f.jobs.Hung = func(string, servers.Container) (bool, int64) { return true, 43 }
+			return true
+		}},
+		"stopped":       {stop: true, status: ops.Skipped},
+		"newer run":     {newerRun: true, status: ops.Skipped},
+		"switched off":  {policy: func(p *monitor.Policy) { p.Recover = false }, status: ops.Failed},
+		"paused":        {policy: func(p *monitor.Policy) { p.Maintenance = true }, status: ops.Failed},
+		"not monitored": {policy: func(p *monitor.Policy) { p.Enabled = false }, status: ops.Failed},
+		"turned off while running": {status: ops.Failed, hung: func(f *fixture) bool {
+			if err := f.jobs.Monitor.SetRecovery(ctx, f.admin.ID, f.adminSession, f.serverID, false); err != nil {
+				panic(err)
+			}
+			return true
+		}},
+		"pending record dropped": {forgotten: true, status: ops.Failed},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := setup(t)
@@ -95,68 +112,21 @@ func TestRecoveryRestartSkipsUnlessStillWanted(t *testing.T) {
 			if scenario.stop {
 				f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.Status, c.State.Running = "exited", false })
 			}
+			if scenario.newerRun {
+				f.engine.Update(f.game, func(c *fakedocker.Container) {
+					c.State.StartedAt = time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
+				})
+				f.jobs.Servers.RefreshNow(ctx)
+			}
+			hung := func() bool { return true }
+			if scenario.hung != nil {
+				hung = func() bool { return scenario.hung(f) }
+			}
 			before := f.startedAt()
-			job := f.recoveryRestart(t, func() bool { return scenario.hung })
+			job := f.recoveryRestart(t, hung, scenario.forgotten, scenario.newerRun)
 			if job.Status != scenario.status || f.startedAt() != before || f.running() == scenario.stop {
 				t.Fatalf("%+v", job)
 			}
 		})
-	}
-}
-
-// Recovery turned off while its restart runs stops it before it acts.
-func TestRecoveryRestartStopsWhenTurnedOff(t *testing.T) {
-	f := setup(t)
-	f.setRecovery(t, true)
-	before := f.startedAt()
-	var turnedOff error
-	job := f.recoveryRestart(t, func() bool {
-		turnedOff = f.jobs.Monitor.SetRecovery(ctx, f.admin.ID, f.adminSession, f.serverID, false)
-		return true
-	})
-	if turnedOff != nil || job.Status != ops.Failed || f.startedAt() != before || !f.running() {
-		t.Fatalf("%v %+v", turnedOff, job)
-	}
-}
-
-// A restart queued before recovery was turned off and on again doesn't run.
-func TestRecoveryRestartNeedsItsPendingRecord(t *testing.T) {
-	f := setup(t)
-	f.setRecovery(t, true)
-	before := f.startedAt()
-	job := f.recoveryRestart(t, func() bool { return true }, true)
-	if job.Status != ops.Failed || f.startedAt() != before {
-		t.Fatalf("%+v", job)
-	}
-}
-
-// A restart queued for an earlier run of the container doesn't act on a
-// newer one.
-func TestRecoveryRestartActsOnlyOnItsRun(t *testing.T) {
-	f := setup(t)
-	f.setRecovery(t, true)
-	f.engine.Update(f.game, func(c *fakedocker.Container) {
-		c.State.StartedAt = time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
-	})
-	before := f.startedAt()
-	f.jobs.Servers.RefreshNow(ctx)
-	job := f.recoveryRestart(t, func() bool { return true }, false, true)
-	if job.Status != ops.Skipped || f.startedAt() != before || !f.running() {
-		t.Fatalf("%+v", job)
-	}
-}
-
-// A game that answered after its restart was queued has a new silence, with
-// its own wait.
-func TestRecoveryRestartNeedsTheSilenceItWasQueuedFor(t *testing.T) {
-	f := setup(t)
-	f.setRecovery(t, true)
-	before := f.startedAt()
-	job := f.recoveryRestart(t, func() bool {
-		f.jobs.Hung = func(string, servers.Container) (bool, int64) { return true, 43 }
-		return true
-	})
-	if job.Status != ops.Skipped || f.startedAt() != before {
-		t.Fatalf("%+v", job)
 	}
 }
