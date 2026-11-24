@@ -82,7 +82,7 @@ func (s *Service) wait(ctx context.Context, r *row, data Input, now int64) error
 	if err != nil {
 		return err
 	}
-	user, binding, err := s.authority(ctx, s.DB, r, data)
+	user, binding, err := s.authority(ctx, r, data)
 	if err != nil {
 		return err
 	}
