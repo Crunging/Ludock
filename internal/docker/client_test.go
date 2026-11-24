@@ -75,7 +75,7 @@ func TestRejectsUnsupportedEngine(t *testing.T) {
 func TestErrorsKeepOnlyStatus(t *testing.T) {
 	e, client := engine(t)
 	client.Ping(ctx)
-	e.Fail = 500
+	e.AddFault(".", 500, false, 0)
 	_, err := client.ListContainers(ctx, true, nil)
 	var api *docker.APIError
 	if !errors.As(err, &api) || api.Status != 500 || strings.Contains(err.Error(), "fake docker error") {

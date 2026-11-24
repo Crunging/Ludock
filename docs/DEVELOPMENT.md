@@ -86,6 +86,14 @@ daemon's controls, such as `/fake/disk`. Every page fails its journey on a scrip
 dialog. A journey that needs a fresh install, such as the first-run checklist,
 starts its own stack with `freshStack()` from `setup.mjs`.
 
+The fake daemon is `internal/docker/fakedocker`, one file per part of Docker:
+`containers.go` for create, inspect, and the actions on a container,
+`exec.go`, `images.go` with the registry, `events.go`, `state.go` for
+changing containers from Go, and `faults.go` for failures and outages.
+Journey controls are all in `control.go`, and `helpers.go` runs Ludock's
+helpers in-process for both the binary and Go tests. `cmd/fakedocker` seeds the
+servers (`seed.go`) and the fake games' consoles (`games.go`).
+
 Locally, run `npx playwright install chromium` once, or point the journeys at
 an installed Chromium with `LUDOCK_E2E_CHROMIUM=/path/to/chrome`. Playwright's
 own headless shell needs much less memory than a full Chrome. Each stack

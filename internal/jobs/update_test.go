@@ -333,9 +333,9 @@ func TestUpdateRetriesRemovingFailedReplacement(t *testing.T) {
 	f.engine.OnStart = func(c *fakedocker.Container) {
 		started(c)
 		if strings.Contains(c.Name, "-ludock-update-") {
+			f.engine.AddFault(`^DELETE .*/containers/[^/]+$`, 500, false, 3)
 			f.engine.Update(c.ID, func(c *fakedocker.Container) {
 				c.State.Status, c.State.Running, c.State.ExitCode = "exited", false, 1
-				f.engine.FailRemoves = 3 // Update holds the engine's lock.
 			})
 		}
 	}
@@ -371,13 +371,13 @@ func TestUpdateUndoRetriesThroughDockerFailures(t *testing.T) {
 	f.engine.OnStart = func(c *fakedocker.Container) {
 		started(c)
 		if strings.Contains(c.Name, "-ludock-update-") {
+			f.engine.AddFault(".", 500, false, 0)
 			f.engine.Update(c.ID, func(c *fakedocker.Container) {
 				c.State.Status, c.State.Running, c.State.ExitCode = "exited", false, 1
-				f.engine.Fail = 500 // Update holds the engine's lock.
 			})
 			go func() {
 				time.Sleep(300 * time.Millisecond)
-				f.engine.Update(f.game, func(*fakedocker.Container) { f.engine.Fail = 0 })
+				f.engine.ClearFaults()
 			}()
 		}
 	}

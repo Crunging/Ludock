@@ -1,7 +1,6 @@
 package backups
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"os"
@@ -25,8 +24,7 @@ var ctx = context.Background()
 
 const image = "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab"
 
-// startHelpers runs helper commands in-process. Helper containers see data
-// under /mounts/<root>; the fake maps those targets back to host sources.
+// startHelpers runs helper commands in-process.
 func startHelpers(t *testing.T) (*fakedocker.Engine, *docker.Client) {
 	t.Helper()
 	engine, err := fakedocker.Start(t.TempDir())
@@ -37,28 +35,7 @@ func startHelpers(t *testing.T) (*fakedocker.Engine, *docker.Client) {
 	helper.HostRoot = "/"
 	t.Cleanup(func() { helper.HostRoot = "/host" })
 	engine.AddImage(image)
-	engine.OnStart = func(c *fakedocker.Container) {
-		if c.CreateRequest.Labels["ludock.internal"] == "mount-validator" {
-			var out bytes.Buffer
-			helper.RunMountProof(c.CreateRequest.Cmd[2], "1", &out)
-			engine.Update(c.ID, func(c *fakedocker.Container) { c.Logs = []string{strings.TrimSpace(out.String())} })
-		}
-	}
-	engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
-		args := append([]string(nil), cmd[2:]...)
-		if c.CreateRequest.HostConfig != nil {
-			for _, mount := range c.CreateRequest.HostConfig.Mounts {
-				for index := range args {
-					args[index] = strings.ReplaceAll(args[index], `"`+mount.Target, `"`+mount.Source)
-				}
-			}
-		}
-		var out, errs bytes.Buffer
-		code := helper.Main(args, stdin, &out, &errs)
-		stdout(out.Bytes())
-		stderr(errs.Bytes())
-		return code
-	}
+	engine.RunHelpers(nil)
 	return engine, docker.New(engine.Socket)
 }
 

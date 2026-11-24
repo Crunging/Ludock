@@ -2,7 +2,6 @@ package jobs
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -71,46 +70,24 @@ func setup(t *testing.T) *fixture {
 	helper.HostRoot = "/"
 	t.Cleanup(func() { helper.HostRoot = "/host" })
 	engine.AddImage(image)
-	engine.OnStart = func(c *fakedocker.Container) {
-		if c.CreateRequest.Labels["ludock.internal"] == "mount-validator" {
-			var out bytes.Buffer
-			helper.RunMountProof(c.CreateRequest.Cmd[2], "1", &out)
-			engine.Update(c.ID, func(c *fakedocker.Container) { c.Logs = []string{strings.TrimSpace(out.String())} })
-		}
-	}
-	engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+	engine.RunHelpers(func(_ *fakedocker.Container, cmd, args []string, _ *bufio.Reader, _, _ func([]byte)) (int, bool) {
 		f.mu.Lock()
+		defer f.mu.Unlock()
 		f.commands = append(f.commands, strings.Join(cmd, " "))
-		failStep := f.failStep
-		f.mu.Unlock()
-		if len(cmd) > 2 && cmd[0] == helper.Binary {
-			args := append([]string(nil), cmd[2:]...)
-			if failStep != "" && strings.Contains(strings.Join(args, " "), `"operation":"`+failStep+`"`) {
-				f.mu.Lock()
-				fail := f.failTimes >= 0
-				if f.failTimes > 0 {
-					if f.failTimes--; f.failTimes == 0 {
-						f.failTimes = -1
-					}
-				}
-				f.mu.Unlock()
-				if fail {
-					return 1
-				}
-			}
-			for _, mount := range c.CreateRequest.HostConfig.Mounts {
-				for index := range args {
-					args[index] = strings.ReplaceAll(args[index], `"`+mount.Target, `"`+mount.Source)
-				}
-			}
-			var out, errs bytes.Buffer
-			code := helper.Main(args, stdin, &out, &errs)
-			stdout(out.Bytes())
-			return code
+		if args == nil {
+			// Game console commands behind the bounded wrapper succeed.
+			return 0, true
 		}
-		// Game console commands behind the bounded wrapper succeed.
-		return 0
-	}
+		if f.failStep == "" || !strings.Contains(strings.Join(args, " "), `"operation":"`+f.failStep+`"`) || f.failTimes < 0 {
+			return 0, false
+		}
+		if f.failTimes > 0 {
+			if f.failTimes--; f.failTimes == 0 {
+				f.failTimes = -1
+			}
+		}
+		return 1, true
+	})
 	base := t.TempDir()
 	f.data = filepath.Join(base, "game")
 	os.MkdirAll(filepath.Join(f.data, "world"), 0o755)
