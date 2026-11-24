@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/logging"
 )
 
@@ -87,7 +88,7 @@ type change struct {
 func stateChange(event dockerEvent) (change, bool) {
 	// Ludock's own helpers come and go with every file listing and console
 	// query; none of them is a server.
-	if !StateActions[event.Action] || event.Actor.Attributes["ludock.internal"] != "" {
+	if !StateActions[event.Action] || event.Actor.Attributes[launch.InternalLabel] != "" {
 		return change{}, false
 	}
 	id := event.Actor.ID
