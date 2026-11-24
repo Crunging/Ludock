@@ -986,16 +986,21 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 	}
 	// Space is measured again after each removal, and only archives in the
 	// current folder free room on its disk.
-	for index, backup := range spare {
-		// Other servers' archives are looked for only once a spare could go.
-		if index == 0 && settings.MaxBytes > 0 {
+	scanned := false
+	for _, backup := range spare {
+		room, need := s.room(ctx, list, settings, unconfirmed)
+		// Other servers' archives are looked for only when they could decide
+		// whether a spare goes.
+		if room < need && !scanned && settings.MaxBytes > 0 {
+			scanned = true
 			others, err := s.unconfirmedBytes(ctx, serverID)
 			if err != nil {
 				return err
 			}
 			unconfirmed += others
+			room, need = s.room(ctx, list, settings, unconfirmed)
 		}
-		if room, need := s.room(ctx, list, settings, unconfirmed); room >= need {
+		if room >= need {
 			break
 		}
 		if backup.destination != settings.Destination {
