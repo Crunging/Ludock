@@ -147,7 +147,7 @@ func TestSnapshotArchiveLayout(t *testing.T) {
 }
 
 // A restore puts the data back into an empty folder, where Ludock opens it
-// with its own key and no saved work left to run. It refuses a folder that already has data, an archive
+// with its own key, no saved work left to run, and no restore left to undo. It refuses a folder that already has data, an archive
 // with anything else in it, a key from another installation, and a beta's copy.
 func TestRestoreSnapshot(t *testing.T) {
 	d, _ := openTemp(t)
@@ -162,6 +162,15 @@ func TestRestoreSnapshot(t *testing.T) {
 	for _, status := range []string{"queued", "running", "succeeded"} {
 		if _, err := d.Exec(`INSERT INTO operations(id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at)
       VALUES(?,'server','actor','restart',?,'queued','{}',1,1,1)`, status, status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One restore was moving data, one had stopped partway, one was undone.
+	for id, row := range map[string][2]string{"restore-running": {"running", `{"status":"replacing","roots":[]}`},
+		"restore-failed": {"failed", `{"status":"rolling_back","roots":[]}`}, "restore-undone": {"failed", `{"status":"rolled_back"}`}} {
+		if _, err := d.Exec(`INSERT INTO operations(id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at)
+      VALUES(?,'server','actor','restore',?,'x','{}',json_object('restore',json(?),'dataUnsafe',json('true')),1,1,1)`,
+			id, row[0], row[1]); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -182,8 +191,17 @@ func TestRestoreSnapshot(t *testing.T) {
 	// Work waiting or running when the data was saved isn't run again.
 	var statuses string
 	restored.QueryRow("SELECT group_concat(id||'='||status, ' ') FROM (SELECT id,status FROM operations ORDER BY id)").Scan(&statuses)
-	if statuses != "queued=interrupted running=interrupted succeeded=succeeded" {
+	if statuses != "queued=interrupted restore-failed=failed restore-running=interrupted restore-undone=failed running=interrupted succeeded=succeeded" {
 		t.Fatal("restored operations", statuses)
+	}
+	// No restore's journal can be undone from the copy, and Activity says
+	// where its data may be.
+	var journals string
+	restored.QueryRow(`SELECT group_concat(id||'='||COALESCE(json_extract(recovery_json,'$.restore.status'),'none')||
+    CASE WHEN instr(COALESCE(result_json,''),'.ludock-restore-'||id) > 0 THEN ' guided' ELSE '' END, ' ')
+    FROM (SELECT * FROM operations WHERE kind='restore' ORDER BY id)`).Scan(&journals)
+	if journals != "restore-failed=none guided restore-running=none guided restore-undone=rolled_back" {
+		t.Fatal("restored journals", journals)
 	}
 	restored.Close()
 	if _, err := RestoreSnapshot(archive, target); !apperr.Is(err, "RESTORE_DATA_EXISTS") {

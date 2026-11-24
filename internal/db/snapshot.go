@@ -118,7 +118,10 @@ func (d *DB) Snapshot(ctx context.Context) (*Snapshot, error) {
 // settleOperations ends the copy's queued and running operations: restored
 // later, they would stop servers long after they were asked for, or recover
 // work whose result the copy never saw, such as an archive recorded since.
-// The copy also leaves WAL mode, so the database is one file.
+// A restore's journal is dropped unless it is final: by the time the copy is
+// restored, the restore may have gone on, so undoing it from this copy could
+// remove the data it left in place. The copy also leaves WAL mode, so the
+// database is one file.
 func settleOperations(ctx context.Context, path string) error {
 	conn, err := sql.Open("sqlite", fileURI(path, nil))
 	if err != nil {
@@ -132,6 +135,17 @@ func settleOperations(ctx context.Context, path string) error {
 	_, err = conn.ExecContext(ctx, `UPDATE operations SET status='interrupted', phase='interrupted', updated_at=?,
     error='Ludock’s data was saved while this was waiting or running, and it wasn’t run again after the data was restored.'
     WHERE status IN ('queued','running')`, Now())
+	if err != nil {
+		return err
+	}
+	// The guidance names the restore's stage folder (helper.StageName).
+	_, err = conn.ExecContext(ctx, `UPDATE operations SET recovery_json=json_remove(recovery_json,'$.restore','$.dataUnsafe'),
+    result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.guidance',?||id||?)
+    WHERE kind='restore' AND json_valid(recovery_json) AND json_extract(recovery_json,'$.restore.status') IN ('staging','replacing','rolling_back','committed')`,
+		"Ludock’s data was saved before this restore finished, so this copy doesn’t know how it ended, and Ludock won’t change the server’s data for it. "+
+			"If one of the server’s data folders still has a folder named .ludock-restore-",
+		", it holds what the restore was moving: the server’s previous data in its old folder and the backup’s in new. "+
+			"Put back what you need, then delete that folder; the server can’t be backed up while it is there.")
 	return err
 }
 

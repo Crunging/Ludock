@@ -207,8 +207,9 @@ func holdsLive(entry journal) bool { return entry.Phase != "staging" && entry.Ph
 // rollbackRestore undoes a restore, newest root first. The game never reads
 // a stage folder, so a root that holds no live restore data is cleaned up
 // even if the server was started elsewhere; the others wait until it is
-// stopped, and the error says why.
-func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper) error {
+// stopped, and the error says why. beforeLive, when set, runs before the
+// first step that changes live data is sent.
+func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper, beforeLive func() error) error {
 	state, err := restoreState(job)
 	if err != nil {
 		return err
@@ -219,6 +220,18 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 		entries, setAside = state.Roots, state.SetAside
 	}
 	if err := saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries, SetAside: setAside}, ""); err != nil {
+		return err
+	}
+	// The helper's callback runs once its command exists, just before it
+	// is sent: a command Docker never created moved nothing.
+	live := func() error {
+		if beforeLive == nil {
+			return nil
+		}
+		err := beforeLive()
+		if err == nil {
+			beforeLive = nil
+		}
 		return err
 	}
 	var blocked error
@@ -241,7 +254,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 			if setAside {
 				clean = "setAside"
 			}
-			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, clean, nil); err != nil {
+			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, clean, live); err != nil {
 				return err
 			}
 		}
@@ -257,7 +270,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 			if blocked = j.assertStopped(ctx, server, job); blocked != nil {
 				continue
 			}
-			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, "rollbackOld", nil); err != nil {
+			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, "rollbackOld", live); err != nil {
 				return err
 			}
 			current, _ = journals(job)
@@ -754,7 +767,7 @@ func (j *Jobs) rollbackAfterFailure(ctx context.Context, server *servers.Context
 			return err
 		}
 	}
-	return j.rollbackRestore(ctx, server, job, *data)
+	return j.rollbackRestore(ctx, server, job, *data, nil)
 }
 
 // cleanupAfterFailure removes a committed restore's staging folders through
@@ -840,7 +853,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string
 			if state != nil && state.Status == "committed" {
 				err = j.cleanupRestore(ctx, server, job, data)
 			} else {
-				err = j.rollbackRestore(ctx, server, job, data)
+				err = j.rollbackRestore(ctx, server, job, data, nil)
 			}
 			data.Cleanup()
 			if err != nil {

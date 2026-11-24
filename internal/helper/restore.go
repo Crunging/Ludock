@@ -279,6 +279,9 @@ func (h *restoreHelper) run() (any, error) {
 			return nil, err
 		}
 		return map[string]any{"availableBytes": bytes, "device": strconv.FormatUint(uint64(info.Dev), 10)}, nil
+	case "stageExists":
+		stage, err := h.pinStage(root, true)
+		return map[string]bool{"exists": stage >= 0}, err
 	case "stage":
 		if err := unix.Mkdirat(int(root), h.request.Stage, 0o700); err != nil {
 			return nil, err

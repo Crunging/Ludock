@@ -497,7 +497,7 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
 			}, journal: "rolling_back rolling_back unsafe", guidance: pending,
 			trace: []string{"rollbackClean game: rolling_back old_moved unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
-				"rollbackOld game: rolling_back rolling_back unsafe"}},
+				"stageExists game: rolling_back rolling_back unsafe", "rollbackOld game: rolling_back rolling_back unsafe"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := setup(t)
