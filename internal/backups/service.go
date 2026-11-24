@@ -976,13 +976,6 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 			}
 		}
 	}
-	if settings.MaxBytes > 0 {
-		others, err := s.unconfirmedBytes(ctx, serverID)
-		if err != nil {
-			return err
-		}
-		unconfirmed += others
-	}
 	expired, spare := planRetention(list, time.Local, func(id string) bool {
 		return slices.Contains(protected, id) || s.Storage.Reading(id)
 	}, func(id string) bool { return readable[id] })
@@ -993,7 +986,15 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 	}
 	// Space is measured again after each removal, and only archives in the
 	// current folder free room on its disk.
-	for _, backup := range spare {
+	for index, backup := range spare {
+		// Other servers' archives are looked for only once a spare could go.
+		if index == 0 && settings.MaxBytes > 0 {
+			others, err := s.unconfirmedBytes(ctx, serverID)
+			if err != nil {
+				return err
+			}
+			unconfirmed += others
+		}
 		if room, need := s.room(ctx, list, settings, unconfirmed); room >= need {
 			break
 		}
