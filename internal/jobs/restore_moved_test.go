@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -68,7 +69,7 @@ func TestRestoreRefusesOtherFolders(t *testing.T) {
 	if job.Status != ops.Failed || !strings.Contains(job.Error, "which the server no longer has") || !f.running() {
 		t.Fatalf("%+v", job)
 	}
-	if strings.Contains(strings.Join(f.commands, "\n"), `"operation":"moveOld"`) {
+	if strings.Contains(strings.Join(f.commands, "\n"), `"operation":"`+helper.RestoreMoveOld+`"`) {
 		t.Fatal("replaced data")
 	}
 }

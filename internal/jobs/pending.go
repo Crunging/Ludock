@@ -142,7 +142,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 				if err != nil {
 					return err
 				}
-				found, err := j.restoreStep(ctx, data, rootPath, "", restore, "stageExists", nil)
+				found, err := j.restoreStep(ctx, data, rootPath, "", restore, helper.RestoreStageExists, nil)
 				if err != nil {
 					return err
 				}
@@ -233,11 +233,19 @@ func (j *Jobs) finishStoppedRestores(ctx context.Context) {
 	var ids []string
 	for rows.Next() {
 		var id string
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
+		if err = rows.Scan(&id); err != nil {
+			break
 		}
+		ids = append(ids, id)
 	}
 	rows.Close()
+	if err == nil {
+		err = rows.Err()
+	}
+	if err != nil {
+		log.Warn("Could not list restores that stopped partway")
+		return
+	}
 	for _, id := range ids {
 		pending, err := j.pendingRestores(ctx, id)
 		if err != nil || len(pending) == 0 {

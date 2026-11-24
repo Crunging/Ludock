@@ -32,6 +32,20 @@ type RestoreRequest struct {
 	Base string `json:"base,omitempty"`
 }
 
+// The restore helper's operations, named by RestoreRequest.Operation.
+const (
+	RestoreCheck         = "check"
+	RestoreSpace         = "space"
+	RestoreStageExists   = "stageExists"
+	RestoreStage         = "stage"
+	RestoreCleanup       = "cleanup"
+	RestoreMoveOld       = "moveOld"
+	RestoreMoveNew       = "moveNew"
+	RestoreRollbackClean = "rollbackClean"
+	RestoreSetAside      = "setAside"
+	RestoreRollbackOld   = "rollbackOld"
+)
+
 // RestoreFailure is the only error text the restore helper prints.
 const RestoreFailure = "Restore data changed, is unsafe, or cannot be accessed. Keep the server stopped and review recovery."
 
@@ -251,10 +265,10 @@ func (h *restoreHelper) run() (any, error) {
 	}
 	if h.request.Aside != "" {
 		id, ok := strings.CutPrefix(h.request.Aside, SetAsidePrefix)
-		if !ok || !ValidID(id) || h.request.Operation != "setAside" {
+		if !ok || !ValidID(id) || h.request.Operation != RestoreSetAside {
 			return nil, errUnsafe
 		}
-	} else if h.request.Operation == "setAside" {
+	} else if h.request.Operation == RestoreSetAside {
 		return nil, errUnsafe
 	}
 	root, err := h.pinRoot()
@@ -267,53 +281,20 @@ func (h *restoreHelper) run() (any, error) {
 		if item, err = itemParts(h.request.Item); err != nil {
 			return nil, err
 		}
-		if h.request.Operation == "check" {
+		if h.request.Operation == RestoreCheck {
 			return h.checkItem(root, item)
 		}
 	}
 	switch h.request.Operation {
-	case "space":
-		var stat unix.Statfs_t
-		if err := unix.Fstatfs(int(root), &stat); err != nil {
-			return nil, err
-		}
-		bytes := FreeBytes(&stat)
-		if bytes > 1<<53-1 {
-			return nil, errUnsafe
-		}
-		// The device identifies roots that share a filesystem and its space.
-		var info unix.Stat_t
-		if err := unix.Fstat(int(root), &info); err != nil {
-			return nil, err
-		}
-		return map[string]any{"availableBytes": bytes, "device": strconv.FormatUint(uint64(info.Dev), 10)}, nil
-	case "stageExists":
+	case RestoreSpace:
+		return h.space(root)
+	case RestoreStageExists:
 		stage, err := h.pinStage(root, true)
 		return map[string]bool{"exists": stage >= 0}, err
-	case "stage":
-		if err := unix.Mkdirat(int(root), h.request.Stage, 0o700); err != nil {
-			return nil, err
-		}
-		stage, err := h.pinStage(root, false)
-		if err != nil {
-			return nil, err
-		}
-		for _, name := range []string{"new", "old"} {
-			if err := unix.Mkdirat(int(stage), name, 0o700); err != nil {
-				return nil, err
-			}
-		}
-		next, err := h.t.openAt(stage, "new", directoryFlags, 0)
-		if err != nil {
-			return nil, err
-		}
-		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
-		if err != nil {
-			return nil, err
-		}
-		return ok, syncAll(next, old, stage, root)
+	case RestoreStage:
+		return ok, h.makeStage(root)
 	}
-	stage, err := h.pinStage(root, h.request.Operation == "cleanup")
+	stage, err := h.pinStage(root, h.request.Operation == RestoreCleanup)
 	if err != nil {
 		return nil, err
 	}
@@ -321,129 +302,194 @@ func (h *restoreHelper) run() (any, error) {
 		// An earlier cleanup may have removed the stage and failed to sync.
 		return ok, syncAll(root)
 	}
-	if item != nil && h.request.Operation != "cleanup" {
+	if item != nil && h.request.Operation != RestoreCleanup {
 		return ok, h.runItem(root, stage, item)
 	}
 	switch h.request.Operation {
-	case "cleanup":
-		if err := h.unchanged(root, h.request.Stage, stage); err != nil {
-			return nil, err
-		}
-		if same, err := sameMount(root, stage); err != nil || !same {
-			return nil, errUnsafe
-		}
-		children, err := names(stage)
-		if err != nil {
-			return nil, err
-		}
-		for _, name := range children {
-			if err := h.removeEntry(stage, name, 0); err != nil {
-				return nil, err
-			}
-		}
-		if err := syncAll(stage); err != nil {
-			return nil, err
-		}
-		if err := h.unchanged(root, h.request.Stage, stage); err != nil {
-			return nil, err
-		}
-		if err := unix.Unlinkat(int(root), h.request.Stage, unix.AT_REMOVEDIR); err != nil {
-			return nil, err
-		}
-		return ok, syncAll(root)
-	case "moveOld":
-		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
-		if err != nil {
-			return nil, err
-		}
-		// Cleanup could never remove a mount that moved into the stage, which
-		// would leave the old data there with the live paths changed.
-		if err := ownMount(h.request.Base, h.request.Root); err != nil {
-			return nil, err
-		}
-		if err := h.ownTree(root); err != nil {
-			return nil, err
-		}
-		if err := h.recordRoot(root, stage); err != nil {
-			return nil, err
-		}
-		err = h.moveContents(root, old, h.request.Stage)
-		if err != nil {
-			return nil, err
-		}
-	case "moveNew":
-		next, err := h.t.openAt(stage, "new", directoryFlags, 0)
-		if err != nil {
-			return nil, err
-		}
-		if err := h.moveContents(next, root); err != nil {
-			return nil, err
-		}
-		// The extractor gave new the archived root's owner and permissions.
-		// Archives hold no setgid or sticky bit, so the root keeps its own.
-		archived, err := fstat(next)
-		if err != nil {
-			return nil, err
-		}
-		current, err := fstat(root)
-		if err != nil {
-			return nil, err
-		}
-		archived.Mode = archived.Mode&0o777 | current.Mode&0o7000
-		if err := ownRoot(root, archived); err != nil {
-			return nil, err
-		}
-	case "rollbackClean":
-		// Prove the old data exists before deleting a failed replacement.
-		if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
-			return nil, err
-		}
-		children, err := names(root)
-		if err != nil {
-			return nil, err
-		}
-		for _, name := range children {
-			if Reserved(name) {
-				continue
-			}
-			if err := h.removeEntry(root, name, 0); err != nil {
-				return nil, err
-			}
-		}
-	case "setAside":
-		// Like rollbackClean, but what is live is kept: a server started
-		// elsewhere may have written there.
-		if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
-			return nil, err
-		}
-		aside, err := h.pinAside(root)
-		if err != nil {
-			return nil, err
-		}
-		if err := h.moveContents(root, aside, h.request.Stage, h.request.Aside); err != nil {
-			return nil, err
-		}
-		return ok, syncAll(aside, stage, root)
-	case "rollbackOld":
-		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
-		if err != nil {
-			return nil, err
-		}
-		if err := h.moveContents(old, root); err != nil {
-			return nil, err
-		}
-		// Absent, moveOld never ran, so the root's own metadata never changed.
-		previous, err := lstatAt(stage, rootRecord)
-		if err == nil && isRegular(previous) {
-			err = ownRoot(root, previous)
-		}
-		if err != nil && !isNotExist(err) {
-			return nil, err
-		}
+	case RestoreCleanup:
+		return ok, h.cleanup(root, stage)
+	case RestoreMoveOld:
+		err = h.moveOld(root, stage)
+	case RestoreMoveNew:
+		err = h.moveNew(root, stage)
+	case RestoreRollbackClean:
+		err = h.rollbackClean(root, stage)
+	case RestoreSetAside:
+		return ok, h.setAside(root, stage)
+	case RestoreRollbackOld:
+		err = h.rollbackOld(root, stage)
 	default:
 		return nil, errUnsafe
 	}
+	if err != nil {
+		return nil, err
+	}
 	return ok, syncAll(stage, root)
+}
+
+func (h *restoreHelper) space(root fd) (any, error) {
+	var stat unix.Statfs_t
+	if err := unix.Fstatfs(int(root), &stat); err != nil {
+		return nil, err
+	}
+	bytes := FreeBytes(&stat)
+	if bytes > 1<<53-1 {
+		return nil, errUnsafe
+	}
+	// The device identifies roots that share a filesystem and its space.
+	var info unix.Stat_t
+	if err := unix.Fstat(int(root), &info); err != nil {
+		return nil, err
+	}
+	return map[string]any{"availableBytes": bytes, "device": strconv.FormatUint(uint64(info.Dev), 10)}, nil
+}
+
+func (h *restoreHelper) makeStage(root fd) error {
+	if err := unix.Mkdirat(int(root), h.request.Stage, 0o700); err != nil {
+		return err
+	}
+	stage, err := h.pinStage(root, false)
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{"new", "old"} {
+		if err := unix.Mkdirat(int(stage), name, 0o700); err != nil {
+			return err
+		}
+	}
+	next, err := h.t.openAt(stage, "new", directoryFlags, 0)
+	if err != nil {
+		return err
+	}
+	old, err := h.t.openAt(stage, "old", directoryFlags, 0)
+	if err != nil {
+		return err
+	}
+	return syncAll(next, old, stage, root)
+}
+
+func (h *restoreHelper) cleanup(root, stage fd) error {
+	if err := h.unchanged(root, h.request.Stage, stage); err != nil {
+		return err
+	}
+	if same, err := sameMount(root, stage); err != nil || !same {
+		return errUnsafe
+	}
+	children, err := names(stage)
+	if err != nil {
+		return err
+	}
+	for _, name := range children {
+		if err := h.removeEntry(stage, name, 0); err != nil {
+			return err
+		}
+	}
+	if err := syncAll(stage); err != nil {
+		return err
+	}
+	if err := h.unchanged(root, h.request.Stage, stage); err != nil {
+		return err
+	}
+	if err := unix.Unlinkat(int(root), h.request.Stage, unix.AT_REMOVEDIR); err != nil {
+		return err
+	}
+	return syncAll(root)
+}
+
+func (h *restoreHelper) moveOld(root, stage fd) error {
+	old, err := h.t.openAt(stage, "old", directoryFlags, 0)
+	if err != nil {
+		return err
+	}
+	// Cleanup could never remove a mount that moved into the stage, which
+	// would leave the old data there with the live paths changed.
+	if err := ownMount(h.request.Base, h.request.Root); err != nil {
+		return err
+	}
+	if err := h.ownTree(root); err != nil {
+		return err
+	}
+	if err := h.recordRoot(root, stage); err != nil {
+		return err
+	}
+	return h.moveContents(root, old, h.request.Stage)
+}
+
+func (h *restoreHelper) moveNew(root, stage fd) error {
+	next, err := h.t.openAt(stage, "new", directoryFlags, 0)
+	if err != nil {
+		return err
+	}
+	if err := h.moveContents(next, root); err != nil {
+		return err
+	}
+	// The extractor gave new the archived root's owner and permissions.
+	// Archives hold no setgid or sticky bit, so the root keeps its own.
+	archived, err := fstat(next)
+	if err != nil {
+		return err
+	}
+	current, err := fstat(root)
+	if err != nil {
+		return err
+	}
+	archived.Mode = archived.Mode&0o777 | current.Mode&0o7000
+	return ownRoot(root, archived)
+}
+
+func (h *restoreHelper) rollbackClean(root, stage fd) error {
+	// Prove the old data exists before deleting a failed replacement.
+	if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
+		return err
+	}
+	children, err := names(root)
+	if err != nil {
+		return err
+	}
+	for _, name := range children {
+		if Reserved(name) {
+			continue
+		}
+		if err := h.removeEntry(root, name, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *restoreHelper) setAside(root, stage fd) error {
+	// Like rollbackClean, but what is live is kept: a server started
+	// elsewhere may have written there.
+	if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
+		return err
+	}
+	aside, err := h.pinAside(root)
+	if err != nil {
+		return err
+	}
+	if err := h.moveContents(root, aside, h.request.Stage, h.request.Aside); err != nil {
+		return err
+	}
+	return syncAll(aside, stage, root)
+}
+
+func (h *restoreHelper) rollbackOld(root, stage fd) error {
+	old, err := h.t.openAt(stage, "old", directoryFlags, 0)
+	if err != nil {
+		return err
+	}
+	if err := h.moveContents(old, root); err != nil {
+		return err
+	}
+	// Absent, moveOld never ran, so the root's own metadata never changed.
+	previous, err := lstatAt(stage, rootRecord)
+	if err == nil && isRegular(previous) {
+		err = ownRoot(root, previous)
+	}
+	if err != nil && !isNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // rootRecord is the file in a stage whose owner and mode are the root's
@@ -712,7 +758,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 	}
 	name := parts[len(parts)-1]
 	switch h.request.Operation {
-	case "moveOld":
+	case RestoreMoveOld:
 		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 		if err != nil {
 			return err
@@ -734,7 +780,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			}
 		}
 		return move(parent, name, old, "item", info)
-	case "moveNew":
+	case RestoreMoveNew:
 		next, err := h.t.openAt(stage, "new", directoryFlags, 0)
 		if err != nil {
 			return err
@@ -755,7 +801,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		return move(staged, name, parent, name, info)
-	case "rollbackClean":
+	case RestoreRollbackClean:
 		// The replacement goes back into the stage rather than being deleted,
 		// so nothing outside the stage is ever removed.
 		if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
@@ -788,7 +834,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		return move(parent, name, stage, "returned", info)
-	case "setAside":
+	case RestoreSetAside:
 		if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
 			return err
 		}
@@ -805,7 +851,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		return move(parent, name, aside, name, info)
-	case "rollbackOld":
+	case RestoreRollbackOld:
 		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 		if err != nil {
 			return err
@@ -843,8 +889,7 @@ func RunRestore(argument string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// ExtractRequest is restore-extract's argument. Its fields, and
-// ExtractRecord's, stay in key order: the encoding is the one a map gave.
+// ExtractRequest is restore-extract's argument.
 type ExtractRequest struct {
 	MaxBytes     int64  `json:"maxBytes"`
 	ReserveBytes *int64 `json:"reserveBytes"`

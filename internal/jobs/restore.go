@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -42,7 +43,7 @@ func restoreState(job *ops.Context) (*restoreRecovery, error) {
 		return nil, nil
 	}
 	var state restoreRecovery
-	decoder := json.NewDecoder(bytesReader(job.Job.Recovery.Restore))
+	decoder := json.NewDecoder(bytes.NewReader(job.Job.Recovery.Restore))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&state) != nil {
 		return nil, errJournal
@@ -115,11 +116,11 @@ const removalLimit = 30 * time.Minute
 
 func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, item string, job *ops.Context, operation string, assertAccess func() error) (map[string]any, error) {
 	limit := 2 * time.Minute
-	if operation == "cleanup" || operation == "rollbackClean" || operation == "setAside" {
+	if operation == helper.RestoreCleanup || operation == helper.RestoreRollbackClean || operation == helper.RestoreSetAside {
 		limit = removalLimit
 	}
 	request := helper.RestoreRequest{Root: root, Stage: stageName(job), Operation: operation, Item: item, Base: backups.HelperBaseOf(root)}
-	if operation == "setAside" {
+	if operation == helper.RestoreSetAside {
 		request.Aside = helper.SetAsideName(job.Job.ID)
 	}
 	out, err := j.Backups.Helpers.ExecWithin(ctx, data.Container, helper.Command("restore", request), assertAccess, limit)
@@ -167,7 +168,7 @@ func (j *Jobs) assertStagingRoom(ctx context.Context, server *servers.Context, j
 	if err != nil {
 		return err
 	}
-	checked, err := j.restoreStep(ctx, data, destination, item, job, "check", assertAccess)
+	checked, err := j.restoreStep(ctx, data, destination, item, job, helper.RestoreCheck, assertAccess)
 	if err != nil {
 		return fail("RESTORE_ITEM_UNSAFE", "The current copy can’t be replaced safely: something on its path is a link, a special file, or another disk.")
 	}
@@ -187,7 +188,7 @@ func (j *Jobs) stagingRoom(ctx context.Context, data *backups.DataHelper, server
 		if err != nil {
 			return err
 		}
-		space, err := j.restoreStep(ctx, data, destination, "", job, "space", assertAccess)
+		space, err := j.restoreStep(ctx, data, destination, "", job, helper.RestoreSpace, assertAccess)
 		if err != nil {
 			return err
 		}
@@ -264,9 +265,9 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 			return err
 		}
 		if entry.Phase == "old_moved" || entry.Phase == "replaced" {
-			clean := "rollbackClean"
+			clean := helper.RestoreRollbackClean
 			if setAside {
-				clean = "setAside"
+				clean = helper.RestoreSetAside
 			}
 			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, clean, live); err != nil {
 				return err
@@ -284,7 +285,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 			if blocked = j.assertStopped(ctx, server, job); blocked != nil {
 				continue
 			}
-			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, "rollbackOld", live); err != nil {
+			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, helper.RestoreRollbackOld, live); err != nil {
 				return err
 			}
 			current, _ = journals(job)
@@ -292,7 +293,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 				return err
 			}
 		}
-		if _, err := j.restoreStep(ctx, data, rootPath, "", job, "cleanup", nil); err != nil {
+		if _, err := j.restoreStep(ctx, data, rootPath, "", job, helper.RestoreCleanup, nil); err != nil {
 			return err
 		}
 	}
@@ -312,7 +313,7 @@ func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job 
 		if err != nil {
 			return err
 		}
-		if _, err := j.restoreStep(ctx, data, rootPath, "", job, "cleanup", nil); err != nil {
+		if _, err := j.restoreStep(ctx, data, rootPath, "", job, helper.RestoreCleanup, nil); err != nil {
 			return err
 		}
 	}
@@ -585,7 +586,7 @@ func (r *restoreRun) stage() error {
 		if err := r.assertAccess(); err != nil {
 			return err
 		}
-		if _, err := r.j.restoreStep(r.ctx, r.data, target.Path, "", r.job, "stage", r.assertAccess); err != nil {
+		if _, err := r.j.restoreStep(r.ctx, r.data, target.Path, "", r.job, helper.RestoreStage, r.assertAccess); err != nil {
 			return err
 		}
 	}
@@ -641,7 +642,7 @@ func (r *restoreRun) restage() error {
 		return err
 	}
 	for _, target := range r.targets {
-		for _, operation := range []string{"cleanup", "stage"} {
+		for _, operation := range []string{helper.RestoreCleanup, helper.RestoreStage} {
 			if _, err := r.j.restoreStep(r.ctx, r.data, target.Path, "", r.job, operation, r.assertAccess); err != nil {
 				return err
 			}
@@ -663,7 +664,7 @@ func (r *restoreRun) replace(index int, root backups.Root) error {
 	if err := persistJournal(r.job, index, "moving_old"); err != nil {
 		return err
 	}
-	if _, err := r.j.restoreStep(r.ctx, r.data, destination, r.item, r.job, "moveOld", r.assertAccess); err != nil {
+	if _, err := r.j.restoreStep(r.ctx, r.data, destination, r.item, r.job, helper.RestoreMoveOld, r.assertAccess); err != nil {
 		return err
 	}
 	if err := persistJournal(r.job, index, "old_moved"); err != nil {
@@ -674,7 +675,7 @@ func (r *restoreRun) replace(index int, root backups.Root) error {
 	if err := r.stillSafe(); err != nil {
 		return err
 	}
-	if _, err := r.j.restoreStep(r.ctx, r.data, destination, r.item, r.job, "moveNew", r.assertAccess); err != nil {
+	if _, err := r.j.restoreStep(r.ctx, r.data, destination, r.item, r.job, helper.RestoreMoveNew, r.assertAccess); err != nil {
 		return err
 	}
 	return persistJournal(r.job, index, "replaced")
@@ -829,7 +830,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string
 	// What recovery leaves the data as, for Activity: a committed restore is
 	// finished, one that began replacing is undone.
 	outcome := restoreNothing
-	finished := false
+	finished, touched := false, false
 	if state, _ := restoreState(job); state != nil {
 		switch state.Status {
 		case "committed", "cleaned":
@@ -837,14 +838,11 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string
 		case "replacing", "rolling_back", "rolled_back":
 			outcome = restoreUndone
 		}
+		touched = slices.ContainsFunc(state.Roots, holdsLive)
 	}
 	if !finished {
 		defer j.notifyInterrupted(ctx, job, notify.Results, "restore-result:"+job.Job.ID,
 			"Ludock restarted during a restore. Its Activity says what the data was left as.")
-	}
-	touched := false
-	if state, _ := restoreState(job); state != nil {
-		touched = slices.ContainsFunc(state.Roots, holdsLive)
 	}
 	err := j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
 		entries, err := journals(job)

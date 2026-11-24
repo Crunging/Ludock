@@ -132,7 +132,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 		if !j.backupCompleted(ctx, job) {
 			defer j.notifyInterrupted(ctx, job, notify.FailedWork, "backup-failed:"+job.Job.ID, backupInterrupted)
 		}
-		return nil, j.recoverBackup(ctx, job, true)
+		return nil, j.recoverBackup(ctx, job)
 	}})
 	// An interrupted command is reported as interrupted and never sent again.
 	// It is sent on time or not at all, so it doesn't wait for Docker.
@@ -157,7 +157,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 		if resumable(job) {
 			return nil, ops.ErrResume
 		}
-		return nil, j.recoverBackup(ctx, job, true)
+		return nil, j.recoverBackup(ctx, job)
 	}})
 	runner.Register("update", ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		result, err := j.runUpdate(ctx, job)

@@ -1,7 +1,6 @@
 package jobs
 
 import (
-	"bytes"
 	"context"
 	"slices"
 	"time"
@@ -98,8 +97,8 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 		if err := job.Progress("stopping", func(r *ops.Recovery) {
 			recordStop(r, info)
 			if r.InitialRunning == nil {
-				running := r.StopStarted
-				r.InitialRunning = &running
+				initial := r.StopStarted
+				r.InitialRunning = &initial
 			}
 			r.ContainerID, r.Fingerprint, r.LockKeys = server.Container.ID, server.Logical.BindingFingerprint, server.LockKeys
 			r.DataUnsafe = false
@@ -128,7 +127,7 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 	if err != nil {
 		return err
 	}
-	if stopped.State.Running || stopped.State.Status == "running" {
+	if running(stopped) {
 		return fail("SERVER_DID_NOT_STOP", "The server did not stop; no data was copied.")
 	}
 	if err := job.Progress("stopped", func(r *ops.Recovery) {
@@ -185,11 +184,22 @@ func (j *Jobs) assertStillStopped(ctx context.Context, server *servers.Context, 
 	if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observed.Observation, server.Logical.BindingRevision); err != nil {
 		return err
 	}
-	if info.State.Running || info.State.Status == "running" || info.State.Paused || info.State.Restarting ||
+	if running(info) || info.State.Paused || info.State.Restarting ||
 		info.State.StartedAt != job.Job.Recovery.StoppedStartedAt {
 		return changed
 	}
 	return nil
+}
+
+// running is the same test servers.StopRecoveryState makes, which decides
+// Recovery.InitialRunning.
+func running(info *docker.ContainerInspect) bool {
+	return info.State.Running || info.State.Status == "running"
+}
+
+func wasRunning(job *ops.Context) bool {
+	initial := job.Job.Recovery.InitialRunning
+	return initial != nil && *initial
 }
 
 func stopPending(job *ops.Context) bool {
@@ -265,17 +275,8 @@ func settleStop(r *ops.Recovery) { r.StopSettled = true }
 // stopped it, once its data is safe. A start that reached Docker is never
 // repeated.
 func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context, job *ops.Context) error {
-	dataSafe := !job.Job.Recovery.DataUnsafe && !job.Job.Recovery.PendingUndo
-	if job.Job.Kind == "restore" {
-		restore, err := restoreState(job)
-		if err != nil {
-			return err
-		}
-		if restore != nil {
-			dataSafe = restore.Status != "replacing" && restore.Status != "rolling_back"
-		}
-	}
-	if initial := job.Job.Recovery.InitialRunning; initial == nil || !*initial || !dataSafe || job.Job.Recovery.StateRestored {
+	recovery := job.Job.Recovery
+	if !wasRunning(job) || recovery.DataUnsafe || recovery.PendingUndo || recovery.StateRestored {
 		return nil
 	}
 	observed, err := j.settleInterruptedStop(ctx, server, job)
@@ -416,5 +417,3 @@ func (j *Jobs) withRecoveryLocks(ctx context.Context, job *ops.Context, action f
 	}
 	return action(server)
 }
-
-func bytesReader(data []byte) *bytes.Reader { return bytes.NewReader(data) }
