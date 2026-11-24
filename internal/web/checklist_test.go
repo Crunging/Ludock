@@ -182,6 +182,10 @@ func TestChecklistBackupsSkipSuspendedSchedules(t *testing.T) {
 		strings.Contains(body, `hx-post="/checklist/backups"`) {
 		t.Fatal(body)
 	}
+	// With nothing else to schedule, the item's button is its one link.
+	if strings.Count(body, "?tab=schedules") != 1 || !strings.Contains(body, "Review schedule") {
+		t.Fatal(body)
+	}
 	values := url.Values{"_csrf": {CSRFToken(p.admin.Token)}, "timezone": {"UTC"}, "server": {p.server}}
 	p.do("POST", "/checklist/backups", p.admin, strings.NewReader(values.Encode()), map[string]string{"HX-Request": "true"})
 	if list, err := p.app.Schedules.List(ctx, &p.admin.User, p.server); err != nil || len(list) != 1 {

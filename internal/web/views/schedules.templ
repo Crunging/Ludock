@@ -493,20 +493,24 @@ templ ScheduleEditor(f ScheduleForm) {
 			<input type="hidden" name="revision" value={ strconv.FormatInt(f.Revision, 10) }/>
 			<input type="hidden" name="enabled" value={ strconv.FormatBool(input.Enabled) }/>
 			<p class="schedule-form-note">
-				This schedule stays
-				if input.Enabled {
-					enabled
+				if f.TakesOver && input.Enabled {
+					Its owner’s account was deleted, so it is suspended; saving makes it yours and lets it run again.
 				} else {
-					paused
-				}
-				when saved.
-				if input.Enabled && f.Suspended && !f.TakesOver {
-					It is suspended and won’t run until what’s shown in its row is put right.
-				}
-				if f.TakesOver {
-					Its owner’s account was deleted, so saving makes it yours.
-				} else {
-					Its owner is unchanged.
+					This schedule stays
+					if input.Enabled {
+						enabled
+					} else {
+						paused
+					}
+					when saved.
+					if input.Enabled && f.Suspended {
+						It is suspended and won’t run until what’s shown in its row is put right.
+					}
+					if f.TakesOver {
+						Its owner’s account was deleted, so saving makes it yours.
+					} else {
+						Its owner is unchanged.
+					}
 				}
 			</p>
 			if f.TakesOver {
