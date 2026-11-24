@@ -822,8 +822,10 @@ func (s *Service) AssertReady(ctx context.Context, server *servers.Context, prot
 // MakeRoom applies retention to a server's backups right before a backup
 // stops it, as Prune does after one, then refuses a backup that can't fit
 // even empty data folders. A removal that fails leaves the backup to try.
-// The caller holds the server and storage locks.
-func (s *Service) MakeRoom(ctx context.Context, server *servers.Context, protected ...string) error {
+// No new backup exists yet to justify a removal, so assertAccess is asked
+// before each one, and losing access ends the work. The caller holds the
+// server and storage locks.
+func (s *Service) MakeRoom(ctx context.Context, server *servers.Context, assertAccess func() error, protected ...string) error {
 	plan, err := s.planRoots(ctx, server)
 	if err != nil {
 		return err
@@ -832,7 +834,10 @@ func (s *Service) MakeRoom(ctx context.Context, server *servers.Context, protect
 	if err != nil {
 		return err
 	}
-	_ = s.Prune(ctx, server.Logical.ID, settings, protected...)
+	_ = s.prune(ctx, server.Logical.ID, settings, assertAccess, protected...)
+	if err := assertAccess(); err != nil {
+		return err
+	}
 	return s.assertRoom(ctx, settings, smallestArchive(plan.Roots), 0)
 }
 
@@ -1101,6 +1106,10 @@ func (s *Service) Exists(ctx context.Context, id string, complete bool) (bool, e
 // source) stay, and so does any archive open for reading. The caller holds
 // the server and storage locks.
 func (s *Service) Prune(ctx context.Context, serverID string, settings Settings, protected ...string) error {
+	return s.prune(ctx, serverID, settings, nil, protected...)
+}
+
+func (s *Service) prune(ctx context.Context, serverID string, settings Settings, assertAccess func() error, protected ...string) error {
 	list, err := s.List(ctx, serverID)
 	if err != nil {
 		return err
@@ -1119,7 +1128,7 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 	}
 	expired, spare, unconfirmed := s.retention(list, protected)
 	for _, backup := range expired {
-		if err := s.removeIdle(ctx, backup); failed(backup, err) {
+		if err := s.removeIdle(ctx, backup, assertAccess); failed(backup, err) {
 			return err
 		}
 	}
@@ -1145,7 +1154,7 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 		if room >= need {
 			break
 		}
-		if err := s.removeIdle(ctx, backup); failed(backup, err) {
+		if err := s.removeIdle(ctx, backup, assertAccess); failed(backup, err) {
 			return err
 		}
 	}
@@ -1195,7 +1204,7 @@ func (s *Service) removable(ctx context.Context, serverID string, settings Setti
 // kept since it was listed. One whose archive isn't in its folder stays: an
 // unmounted disk can leave its folder empty, and the second copy may then be
 // the only one.
-func (s *Service) removeIdle(ctx context.Context, backup Backup) error {
+func (s *Service) removeIdle(ctx context.Context, backup Backup, assertAccess func() error) error {
 	release, idle := s.Storage.claimIdle(backup.ID)
 	if !idle {
 		return nil
@@ -1204,7 +1213,7 @@ func (s *Service) removeIdle(ctx context.Context, backup Backup) error {
 	if found, err := s.look(backup.destination, &backup, errFolderStalled); err != nil || !found {
 		return err
 	}
-	if err := s.remove(ctx, &backup, nil, false); !errors.Is(err, errKept) {
+	if err := s.remove(ctx, &backup, assertAccess, false); !errors.Is(err, errKept) {
 		return err
 	}
 	return nil

@@ -841,8 +841,10 @@ func TestBackupMakesRoomBeforeTheStop(t *testing.T) {
 		room float64
 		// other: another server's backup first takes one backup's room.
 		other, keep bool
-		want        string
-		failed      bool
+		// revoked: access is lost after the first removal.
+		revoked bool
+		want    string
+		failed  bool
 	}{
 		{name: "backup", kind: "backup", room: 0.95, want: "1 2 3 4 5"},
 		{name: "lowered limit", kind: "restart", input: func([]string) map[string]any { return map[string]any{"createBackup": true} },
@@ -855,6 +857,7 @@ func TestBackupMakesRoomBeforeTheStop(t *testing.T) {
 		}, room: 0.95, want: "0 2 3 4 5"},
 		{name: "other server", kind: "backup", room: 1.95, other: true, want: "1 2 3 4 5"},
 		{name: "nothing removable", kind: "backup", room: 0.5, keep: true, want: "0 1 2 3 4 5", failed: true},
+		{name: "access lost while making room", room: 0, revoked: true, want: "1 2 3 4 5"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -904,20 +907,36 @@ func TestBackupMakesRoomBeforeTheStop(t *testing.T) {
 			if preflight := f.jobs.Backups.Preflight(ctx, server); !preflight.Ready {
 				t.Errorf("not ready: %+v", preflight.Issues)
 			}
-			var mu sync.Mutex
-			var trace []string
-			f.engine.OnStop = func(container *fakedocker.Container) {
-				if container.ID != f.game {
-					return
-				}
+			left := func() string {
 				var left []string
 				for index, id := range ids {
 					if _, err := os.Stat(filepath.Join(f.backupTo, id+".tar")); err == nil {
 						left = append(left, strconv.Itoa(index))
 					}
 				}
+				return strings.Join(left, " ")
+			}
+			if c.revoked {
+				checks := 0
+				err := f.jobs.Backups.MakeRoom(ctx, server, func() error {
+					if checks++; checks > 1 {
+						return apperr.New("FORBIDDEN", 403, "You can’t do that on this server")
+					}
+					return nil
+				})
+				if !apperr.Is(err, "FORBIDDEN") || left() != c.want {
+					t.Errorf("%v, left %q, want %q", err, left(), c.want)
+				}
+				return
+			}
+			var mu sync.Mutex
+			var trace []string
+			f.engine.OnStop = func(container *fakedocker.Container) {
+				if container.ID != f.game {
+					return
+				}
 				mu.Lock()
-				trace = append(trace, strings.Join(left, " "))
+				trace = append(trace, left())
 				mu.Unlock()
 			}
 			var input map[string]any
