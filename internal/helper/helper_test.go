@@ -151,6 +151,9 @@ func TestDownloadsAndBackupsAreReadableTar(t *testing.T) {
 	os.Remove(filepath.Join(root, "escape"))
 	long := strings.Repeat("ü", 80)
 	os.WriteFile(filepath.Join(root, "world", long), []byte("unicode"), 0o644)
+	// A backup keeps a folder's setgid but never a file's setuid or setgid.
+	os.Chmod(filepath.Join(root, "world"), 0o755|os.ModeSetgid)
+	os.Chmod(filepath.Join(root, "world", "level.dat"), 0o644|os.ModeSetuid|os.ModeSetgid)
 	for _, request := range []FileRequest{{Operation: "download", Root: root, Path: "world"}, {Operation: "backup", Root: root, Base: root}} {
 		out, code := runFile(t, request, nil)
 		if code != 0 {
@@ -184,6 +187,9 @@ func TestDownloadsAndBackupsAreReadableTar(t *testing.T) {
 			}
 			if request.Operation == "backup" && header.Uid != os.Getuid() {
 				t.Fatal("backup lost ownership")
+			}
+			if want := map[string]int64{"source/world/": 0o2755, "source/world/level.dat": 0o644}[header.Name]; want != 0 && header.Mode != want {
+				t.Fatalf("%s is archived as %o", header.Name, header.Mode)
 			}
 		}
 		prefix := "world/"
