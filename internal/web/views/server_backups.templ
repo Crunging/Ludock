@@ -21,6 +21,9 @@ type BackupsView struct {
 	CanDelete            bool
 	// Blocked: the binding needs review or Docker state is unavailable.
 	Blocked bool
+	// Gone: the server's container is missing, so nothing backs it up or
+	// removes its backups for retention.
+	Gone   bool
 	Active  bool
 	// NoData: the server has no data folder Ludock can back up.
 	NoData       bool
@@ -105,6 +108,8 @@ templ backupsTabBody(b BackupsView) {
 	</div>
 	if b.NoData {
 		@noDataFolders(b.Admin)
+	} else if b.Gone {
+		<p class="section-lede">Its backups stay here until you delete them.</p>
 	} else if !b.DeletedOnStop {
 		<p class="section-lede">The server stops while a backup copies, then goes back to how it was.</p>
 	}
@@ -144,7 +149,7 @@ templ backupsTabBody(b BackupsView) {
 	} else if b.Admin && !b.archives() {
 		<p class="section-note">The list of backups can’t be shown right now.</p>
 	}
-	if !b.NoData {
+	if !b.NoData && !b.Gone {
 		<details class="disclosure" id="backup-retention">
 			<summary>Which backups Ludock keeps</summary>
 			<p>The 3 newest, plus the last one of each of the 7 most recent days, 4 weeks, and 6 months with backups. The rest are removed after each new backup, so backing up rarely never loses old ones.</p>
@@ -355,8 +360,8 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 							<a class="action-menu__action" href={ templ.SafeURL("/servers/" + b.ServerID + "/backups/" + backup.ID + "/download") } download>Download</a>
 						}
 						// Keeping protects an archive from being removed; one that is
-						// missing is never removed.
-						if complete && (kept || !backup.Missing) {
+						// missing, or whose server is gone, is never removed.
+						if complete && (kept || (!backup.Missing && !b.Gone)) {
 							if kept {
 								<button
 									class="action-menu__action"
@@ -580,7 +585,11 @@ templ BackupBrowserView(b BackupBrowser) {
 			</h2>
 			<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups") } { inPage()... }>All backups</a>
 		</div>
-		<p class="section-lede">Download a file, or put one file or folder back the way it was in this backup.</p>
+		if b.CanRestore {
+			<p class="section-lede">Download a file, or put one file or folder back the way it was in this backup.</p>
+		} else {
+			<p class="section-lede">Download a file from this backup.</p>
+		}
 		if b.Backup.FromCopy {
 			@Alert("warning", "This backup is missing or damaged in the backup folder, so Ludock is reading the second copy.")
 		}

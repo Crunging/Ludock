@@ -110,6 +110,25 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
     await page.reload();
     await expect(rows).toHaveCount(2, { timeout: 1_000 });
   }).toPass({ timeout: 45_000 });
+
+  // With the server's container gone, its backups stay within reach: an
+  // administrator can still download and delete them, and nothing offers a
+  // new backup or a restore.
+  await fake("/fake/remove", { container: ownServer.container });
+  await expect(async () => {
+    await page.reload();
+    await expect(page.locator("main")).toContainText("Its backups stay here until you delete them.", { timeout: 1_000 });
+  }).toPass({ timeout: 30_000 });
+  await expect(rows).toHaveCount(2);
+  await expect(page.locator("#create-backup")).toHaveCount(0);
+  await expect(rows.getByRole("link", { name: "Restore…" })).toHaveCount(0);
+  const kept = await menuItem(rows.first(), "link", "Download");
+  const [left] = await Promise.all([page.waitForEvent("download"), kept.click()]);
+  expect(readFileSync(await left.path()).subarray(257, 262).toString()).toBe("ustar");
+  await (await menuItem(rows.last(), "button", "Delete")).click();
+  await page.getByRole("dialog", { name: "Delete this backup?" }).getByRole("button", { name: "Delete backup" }).click();
+  await expect(page.locator("#detail-status")).toHaveText("Backup deleted.");
+  await expect(rows).toHaveCount(1);
 });
 
 test("browsing a backup, downloading one file, and restoring it alone", async ({ page, session, ownServer }) => {
