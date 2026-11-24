@@ -432,8 +432,8 @@ time limits are in the [reference](REFERENCE.md#limits).
 - **Safety backups** taken before a restore or update follow the same
   retention rule and are labeled in the list.
 - **Records:** Ludock lists only archives it made, from records in
-  [its own data](REFERENCE.md#ludocks-own-data); other archives, such as a
-  beta's, can't be imported, and Ludock never changes or removes them.
+  [its own data](REFERENCE.md#ludocks-own-data); other archives can't be
+  imported, and Ludock never changes or removes them.
 - **Who:** members with **Full access** can create backups. Browsing,
   downloading, restoring, keeping, and deleting are for administrators, since
   archives can hold configuration secrets.
