@@ -59,6 +59,13 @@ func withSave(job *ops.Context, result map[string]any) map[string]any {
 // stopForData stops the server, recording its initial state and the locks
 // it needs before the stop is dispatched.
 func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *ops.Context) error {
+	// Refused while the game still runs, rather than once its stop has
+	// kicked players for nothing.
+	if job.Job.Recovery.InitialRunning == nil {
+		if err := j.assertPendingUndoable(ctx, server, job, func() error { return j.dataAuthority(ctx, server, job) }); err != nil {
+			return err
+		}
+	}
 	// The copy is only as fresh as the game's last save. A job that already
 	// saved, or resumes after its stop, doesn't save again.
 	if job.Job.Recovery.InitialRunning == nil && job.Job.Recovery.SaveStatus == "" {

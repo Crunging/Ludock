@@ -164,6 +164,10 @@ func (j *Jobs) Register(queue *ops.Runner) {
 		return warnedResult(job, result, err)
 	}, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		if resumable(job) {
+			// A check before the stop may have left a helper.
+			if err := j.removeOperationHelpers(ctx, job); err != nil {
+				return nil, err
+			}
 			return nil, ops.ErrResume
 		}
 		return j.recoverUpdate(ctx, job)

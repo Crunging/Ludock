@@ -131,45 +131,9 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 			}
 		}
 		if state.Status != "committed" {
-			// A root whose stage folder is gone has nothing to put back, for
-			// whatever removed it, such as the restore finishing after
-			// Ludock's data was saved.
-			for index, entry := range state.Roots {
-				if !holdsLive(entry) {
-					continue
-				}
-				rootPath, err := backups.HelperRoot(server, entry.Root)
-				if err != nil {
-					return err
-				}
-				found, err := j.restoreStep(ctx, data, rootPath, "", restore, helper.RestoreStageExists, nil)
-				if err != nil {
-					return err
-				}
-				// Only a helper that says so proves the stage is gone.
-				switch found["exists"] {
-				case true:
-					live = true
-				case false:
-					state.Roots[index].Phase, missing = "rolled_back", true
-				default:
-					return errJournal
-				}
-			}
-			// Undoing moves live data that may hold another restore's stage,
-			// so that is refused before anything moves and the server can
-			// start again.
-			for _, entry := range state.Roots {
-				if entry.Phase != "old_moved" && entry.Phase != "replaced" {
-					continue
-				}
-				stages, err := j.Backups.Helpers.AssertOwnMounts(ctx, server, &backups.DataHelper{Container: data.Container, Roots: []backups.Root{entry.Root}}, entry.Item, nil)
-				if err != nil {
-					return err
-				}
-				if len(stages) > 0 {
-					return backups.StageInside(stages[0].Holder())
-				}
+			var err error
+			if live, missing, err = j.checkUndo(ctx, server, data, restore, state, nil); err != nil {
+				return err
 			}
 		}
 		// A server started since the restore stopped it may have written into
@@ -234,6 +198,93 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	result["guidance"] = note
 	restore.Progress("", nil, result)
 	return note, nil
+}
+
+// checkUndo marks the journal's roots whose stage folder is gone as having
+// nothing to put back, and refuses an undo that would move live data holding
+// another restore's stage. It reports whether any root has a stage to put
+// back and whether any had none.
+func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *backups.DataHelper, restore *ops.Context, state *restoreRecovery,
+	assertAccess func() error) (live, missing bool, err error) {
+	// A root whose stage folder is gone has nothing to put back, for
+	// whatever removed it, such as the restore finishing after
+	// Ludock's data was saved.
+	for index, entry := range state.Roots {
+		if !holdsLive(entry) {
+			continue
+		}
+		rootPath, err := backups.HelperRoot(server, entry.Root)
+		if err != nil {
+			return false, false, err
+		}
+		found, err := j.restoreStep(ctx, data, rootPath, "", restore, helper.RestoreStageExists, assertAccess)
+		if err != nil {
+			return false, false, err
+		}
+		// Only a helper that says so proves the stage is gone.
+		switch found["exists"] {
+		case true:
+			live = true
+		case false:
+			state.Roots[index].Phase, missing = "rolled_back", true
+		default:
+			return false, false, errJournal
+		}
+	}
+	// Undoing moves live data that may hold another restore's stage,
+	// so that is refused before anything moves and the server can
+	// start again.
+	for _, entry := range state.Roots {
+		if entry.Phase != "old_moved" && entry.Phase != "replaced" {
+			continue
+		}
+		stages, err := j.Backups.Helpers.AssertOwnMounts(ctx, server, &backups.DataHelper{Container: data.Container, Roots: []backups.Root{entry.Root}}, entry.Item, assertAccess)
+		if err != nil {
+			return false, false, err
+		}
+		if len(stages) > 0 {
+			return false, false, backups.StageInside(stages[0].Holder())
+		}
+	}
+	return live, missing, nil
+}
+
+// assertPendingUndoable refuses, before players are warned or the server
+// stops, work whose stop would finish a restore that ended partway when its
+// undo would move another restore's stage. finishPending checks the same
+// once the server is stopped; anything else it refuses is left to it.
+func (j *Jobs) assertPendingUndoable(ctx context.Context, server *servers.Context, job *ops.Context, assertAccess func() error) error {
+	pending, err := j.pendingRestores(ctx, server.Logical.ID)
+	if err != nil {
+		return nil
+	}
+	var data *backups.DataHelper
+	defer func() {
+		if data != nil {
+			data.Cleanup()
+		}
+	}()
+	for _, restore := range pending {
+		state, err := restoreState(restore)
+		if err != nil || state == nil || !journalMatches(state.Roots, server) || restore.Job.Recovery.Fingerprint != server.Logical.BindingFingerprint {
+			return nil
+		}
+		if state.Status == "committed" {
+			continue
+		}
+		if data == nil {
+			if data, err = j.Backups.Helpers.NewDataHelper(ctx, server, true, job.Job.ID); err != nil {
+				return nil
+			}
+		}
+		if _, _, err := j.checkUndo(ctx, server, data, restore, state, assertAccess); err != nil {
+			if apperr.Is(err, backups.StageInside("").Code) {
+				return err
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 // finishStoppedRestores runs at startup: a restore that ended partway on a
