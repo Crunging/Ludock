@@ -515,10 +515,7 @@ func toContainer(info *docker.ContainerInspect, own self.Info) (*Container, erro
 		return nil, err
 	}
 	labels := info.Config.Labels
-	gameType := strings.TrimSpace(labels[games.LabelGame])
-	if gameType == "" {
-		gameType = games.InferGameType(info.Config.Image)
-	}
+	gameType := games.TypeFor(info.Config.Image, labels)
 	var bindings []binding
 	for containerPort, published := range info.NetworkSettings.Ports {
 		port, kind, _ := strings.Cut(containerPort, "/")
@@ -962,11 +959,7 @@ func StopTimeoutSeconds(info *docker.ContainerInspect) int {
 	if configured != nil && *configured == -1 {
 		return -1
 	}
-	gameType := strings.TrimSpace(info.Config.Labels[games.LabelGame])
-	if gameType == "" {
-		gameType = games.InferGameType(info.Config.Image)
-	}
-	preset := games.Lookup(gameType).StopTimeout()
+	preset := games.Lookup(games.TypeFor(info.Config.Image, info.Config.Labels)).StopTimeout()
 	if configured != nil && *configured > preset {
 		return *configured
 	}

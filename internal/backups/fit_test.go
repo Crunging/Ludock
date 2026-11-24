@@ -24,6 +24,7 @@ func TestCompareFit(t *testing.T) {
 		{"same paths, other sources", "now", "minecraft", []Root{data, world}, true, ""},
 		{"a folder missing", "now", "minecraft", []Root{data}, false, "This backup has the folder /world, which the server no longer has."},
 		{"an extra folder", "now", "minecraft", []Root{data, world, config}, false, "The server now has the folder /config, which this backup doesn’t."},
+		{"another spelling of the game", "now", "Minecraft", []Root{data, world}, true, ""},
 		{"another game", "now", "valheim", []Root{data, world}, false, "This backup holds Minecraft data, but the server now runs Valheim."},
 		{"a forged root ID", "now", "minecraft", []Root{data, {ID: world.ID, Path: "/elsewhere"}}, false,
 			"This backup has the folder /world, which the server no longer has. The server now has the folder /elsewhere, which this backup doesn’t."},
@@ -31,6 +32,12 @@ func TestCompareFit(t *testing.T) {
 		fit := CompareFit(backup, test.fingerprint, test.game, test.roots)
 		if fit.Moved != test.moved || fit.Refusal != test.refusal {
 			t.Errorf("%s: %+v", test.name, fit)
+		}
+	}
+	bedrock := &Backup{Roots: []Root{data}, GameType: "bedrock"}
+	for _, game := range []string{"minecraft-bedrock", "Minecraft: Bedrock Edition", "BEDROCK"} {
+		if fit := CompareFit(bedrock, "now", game, []Root{data}); !fit.Moved || fit.Refusal != "" {
+			t.Errorf("bedrock as %s: %+v", game, fit)
 		}
 	}
 	unknown := &Backup{Roots: []Root{data}, fingerprint: "taken"}
