@@ -1,9 +1,10 @@
 package docker
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Crunging/Ludock/internal/mountinfo"
 )
 
 // SocketReplaced reports whether the Docker socket at path is a bind mount of
@@ -16,19 +17,18 @@ func SocketReplaced(path string) bool {
 	if err != nil {
 		return false
 	}
-	mountinfo, err := os.ReadFile("/proc/self/mountinfo")
-	return err == nil && mountDeleted(string(mountinfo), resolved)
+	mounts, err := mountinfo.Read()
+	return err == nil && mountDeleted(mounts, resolved)
 }
 
-// mountDeleted reports whether the mount at target, in /proc/self/mountinfo
-// form, has a source the kernel marks deleted.
-func mountDeleted(mountinfo, target string) bool {
+// mountDeleted reports whether the mount at target has a source the kernel
+// marks deleted.
+func mountDeleted(mounts []mountinfo.Mount, target string) bool {
 	deleted := false
-	for line := range strings.Lines(mountinfo) {
-		fields := strings.Fields(line)
+	for _, mount := range mounts {
 		// Later mounts at the same point hide earlier ones.
-		if len(fields) >= 5 && fields[4] == target {
-			deleted = strings.HasSuffix(fields[3], "//deleted")
+		if mount.Point == target {
+			deleted = strings.HasSuffix(mount.Root, "//deleted")
 		}
 	}
 	return deleted

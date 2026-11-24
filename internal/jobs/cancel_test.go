@@ -86,7 +86,17 @@ func TestCancelledStaysCancelledAcrossRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(next.Stop)
-	time.Sleep(200 * time.Millisecond)
+	// A start queued behind it ends once the new runner has been through its
+	// queue; the server is running, so the start changes nothing.
+	server, _ := f.jobs.Identity.Get(ctx, f.serverID)
+	behind, err := next.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: ops.KindStart,
+		BindingRevision: server.BindingRevision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job := finished(t, next, behind.ID); job.Status != ops.Succeeded {
+		t.Fatalf("%+v", job)
+	}
 	if job, _ := next.Get(ctx, id); job.Status != ops.Cancelled || f.startedAt() != before || !f.running() {
 		t.Fatalf("%+v", job)
 	}

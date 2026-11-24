@@ -55,7 +55,7 @@ func TestApprovedDirectories(t *testing.T) {
 	os.MkdirAll(filepath.Join(root, "ludock"), 0o755)
 	os.Symlink(base, filepath.Join(root, "link"))
 	os.Symlink(root, filepath.Join(base, "rootlink"))
-	storage := &Storage{Roots: root}
+	storage := &Storage{Roots: []string{root}}
 	if got, err := storage.ApprovedDirectory(filepath.Join(root, "ludock")); err != nil || got != filepath.Join(root, "ludock") {
 		t.Fatal(got, err)
 	}
@@ -64,7 +64,7 @@ func TestApprovedDirectories(t *testing.T) {
 			t.Errorf("%s: %v", directory, err)
 		}
 	}
-	if _, err := (&Storage{Roots: filepath.Join(base, "rootlink")}).ApprovedDirectory(filepath.Join(base, "rootlink")); !apperr.Is(err, "BACKUP_DESTINATION") {
+	if _, err := (&Storage{Roots: []string{filepath.Join(base, "rootlink")}}).ApprovedDirectory(filepath.Join(base, "rootlink")); !apperr.Is(err, "BACKUP_DESTINATION") {
 		t.Fatal("symlinked root accepted", err)
 	}
 	if _, err := (&Storage{}).ApprovedDirectory(root); !apperr.Is(err, "BACKUP_DESTINATION") {
@@ -99,7 +99,7 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	os.WriteFile(filepath.Join(data, "server.properties"), []byte("motd=hi"), 0o640)
 	destination := filepath.Join(base, "backups")
 	os.MkdirAll(destination, 0o755)
-	storage := &Storage{Roots: destination, Own: self.New(nil, "")}
+	storage := &Storage{Roots: []string{destination}, Own: self.New(nil, "")}
 	images := &launch.Images{Configured: image}
 	helpers := &Helpers{Docker: client, Images: images, Storage: storage, pollInterval: 1}
 	context := serverContext(data)
@@ -190,7 +190,7 @@ func TestSnapshotRejectsSymlinksInData(t *testing.T) {
 	os.Symlink("/etc/passwd", filepath.Join(data, "escape"))
 	destination := filepath.Join(base, "backups")
 	os.MkdirAll(destination, 0o755)
-	storage := &Storage{Roots: destination, Own: self.New(nil, "")}
+	storage := &Storage{Roots: []string{destination}, Own: self.New(nil, "")}
 	helpers := &Helpers{Docker: client, Images: &launch.Images{Configured: image}, Storage: storage, pollInterval: 1}
 	context := serverContext(data)
 	dataHelper, err := helpers.NewDataHelper(ctx, context, true, "op-3")
@@ -219,7 +219,7 @@ func TestStalledArchiveStart(t *testing.T) {
 	os.MkdirAll(data, 0o755)
 	destination := filepath.Join(base, "backups")
 	os.MkdirAll(destination, 0o755)
-	storage := &Storage{Roots: destination, Own: self.New(nil, "")}
+	storage := &Storage{Roots: []string{destination}, Own: self.New(nil, "")}
 	helpers := &Helpers{Docker: client, Images: &launch.Images{Configured: image}, Storage: storage,
 		pollInterval: 1, openLimit: 200 * time.Millisecond}
 	context := serverContext(data)
@@ -258,7 +258,7 @@ func TestSnapshotTimeLimit(t *testing.T) {
 	os.WriteFile(filepath.Join(data, "world.dat"), make([]byte, 1<<20), 0o644)
 	destination := filepath.Join(base, "backups")
 	os.MkdirAll(destination, 0o755)
-	storage := &Storage{Roots: destination, Own: self.New(nil, "")}
+	storage := &Storage{Roots: []string{destination}, Own: self.New(nil, "")}
 	helpers := &Helpers{Docker: client, Images: &launch.Images{Configured: image}, Storage: storage,
 		pollInterval: 1, readLimit: time.Nanosecond}
 	context := serverContext(data)
@@ -299,7 +299,7 @@ func TestSnapshotEntryLimitSpansRoots(t *testing.T) {
 	// The header and each root's folder and two files: seven in all.
 	maxEntries = 6
 	t.Cleanup(func() { maxEntries = previous })
-	helpers := &Helpers{Docker: client, Images: &launch.Images{Configured: image}, Storage: &Storage{Roots: destination, Own: self.New(nil, "")},
+	helpers := &Helpers{Docker: client, Images: &launch.Images{Configured: image}, Storage: &Storage{Roots: []string{destination}, Own: self.New(nil, "")},
 		pollInterval: 1}
 	dataHelper, err := helpers.NewDataHelper(ctx, context, true, "op-6")
 	if err != nil {

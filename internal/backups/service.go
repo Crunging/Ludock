@@ -390,7 +390,7 @@ func (s *Service) enable(ctx context.Context) error {
 	if testHook != nil {
 		testHook("initializing")
 	}
-	roots := RootList(s.Storage.Roots)
+	roots := s.Storage.Roots
 	if len(roots) == 0 {
 		return nil
 	}

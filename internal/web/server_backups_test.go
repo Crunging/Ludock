@@ -202,7 +202,7 @@ func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 		t.Fatal(response.Code)
 	}
 	folder := t.TempDir()
-	p.app.Backups.Storage.Roots = folder
+	p.app.Backups.Storage.Roots = []string{folder}
 	const id = "22222222-2222-4222-8222-222222222222"
 	if err := os.WriteFile(filepath.Join(folder, id+".tar"), []byte("archive"), 0o600); err != nil {
 		t.Fatal(err)

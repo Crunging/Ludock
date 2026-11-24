@@ -3,11 +3,12 @@ package helper
 import (
 	"encoding/json"
 	"io"
-	"os"
 	"path"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Crunging/Ludock/internal/mountinfo"
 )
 
 // MountSource is a bind source to prove, keyed by its helper destination.
@@ -108,10 +109,6 @@ func RunIdle(timeoutMs string) int {
 	return 0
 }
 
-// MountTable is the helper's own mount table; tests replace it, since they
-// can't mount.
-var MountTable = func() ([]byte, error) { return os.ReadFile("/proc/self/mountinfo") }
-
 // ownMount refuses a root that has another mount on it, inside it, or on the
 // path down to it from base, the helper's mount of the data: a backup or
 // restore would read, write, or move another disk's data. The table needs no
@@ -121,36 +118,14 @@ func ownMount(base, root string) error {
 	if !strings.HasPrefix(base, "/") || base == "/" || !Within(root, base) {
 		return errUnsafe
 	}
-	table, err := MountTable()
+	mounts, err := mountinfo.Read()
 	if err != nil {
 		return err
 	}
-	for _, line := range strings.Split(string(table), "\n") {
-		// The fifth field is the mount point, with space, tab, newline, and
-		// backslash escaped as octal.
-		fields := strings.Split(line, " ")
-		if len(fields) < 5 {
-			continue
-		}
-		point := unescapeMount(fields[4])
-		if point != base && Within(point, base) && (Within(point, root) || Within(root, point)) {
+	for _, mount := range mounts {
+		if point := mount.Point; point != base && Within(point, base) && (Within(point, root) || Within(root, point)) {
 			return errMounted
 		}
 	}
 	return nil
-}
-
-func unescapeMount(value string) string {
-	var out strings.Builder
-	for index := 0; index < len(value); index++ {
-		if value[index] == '\\' && index+4 <= len(value) {
-			if code, err := strconv.ParseUint(value[index+1:index+4], 8, 8); err == nil {
-				out.WriteByte(byte(code))
-				index += 3
-				continue
-			}
-		}
-		out.WriteByte(value[index])
-	}
-	return out.String()
 }

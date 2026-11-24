@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/Crunging/Ludock/internal/mountinfo"
 	"github.com/Crunging/Ludock/internal/tarstream"
 )
 
@@ -612,12 +613,13 @@ func TestRestoreRefusesUnremovableData(t *testing.T) {
 	os.RemoveAll(other)
 	table := func(point string) {
 		escaped := strings.ReplaceAll(point, " ", `\040`)
-		MountTable = func() ([]byte, error) {
+		mountinfo.Table = func() ([]byte, error) {
 			return []byte("22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n" +
 				"36 22 98:0 /mnt1 " + escaped + " rw,noatime master:1 - ext3 /dev/root rw,errors=continue\n"), nil
 		}
 	}
-	t.Cleanup(func() { MountTable = func() ([]byte, error) { return os.ReadFile("/proc/self/mountinfo") } })
+	previous := mountinfo.Table
+	t.Cleanup(func() { mountinfo.Table = previous })
 	for point, refused := range map[string]bool{
 		filepath.Join(root, "world/mods/cache"): true,
 		// On the path down to the data folder, as when ludock.files picks a
@@ -626,6 +628,8 @@ func TestRestoreRefusesUnremovableData(t *testing.T) {
 		// The helper's own mount, and a sibling the item doesn't reach.
 		base:                          false,
 		filepath.Join(root, "config"): false,
+		// The kernel leaves a non-breaking space unescaped.
+		root + "\u00a0copy": false,
 	} {
 		table(point)
 		if got := step(RestoreCheck) == RestoreMounted; got != refused {
@@ -826,10 +830,11 @@ func TestChangesNeverCrossAMount(t *testing.T) {
 	}
 	intact("file")
 	mountOf = mountID
-	MountTable = func() ([]byte, error) {
+	previous := mountinfo.Table
+	t.Cleanup(func() { mountinfo.Table = previous })
+	mountinfo.Table = func() ([]byte, error) {
 		return []byte("40 22 0:45 / " + mods + " rw - nfs4 server:/share rw\n"), nil
 	}
-	t.Cleanup(func() { MountTable = func() ([]byte, error) { return os.ReadFile("/proc/self/mountinfo") } })
 	for _, request := range []FileRequest{requests["back up"], {Operation: "mounts", Root: root, Base: root},
 		{Operation: "mounts", Root: root, Path: "world", Base: root}} {
 		if _, code := runFile(t, request, nil); code != FileMounted {
@@ -839,7 +844,7 @@ func TestChangesNeverCrossAMount(t *testing.T) {
 	if _, code := runFile(t, FileRequest{Operation: "mounts", Root: root, Path: "private", Base: root}, nil); code != 0 {
 		t.Error("refused a path the mount isn't on")
 	}
-	MountTable = func() ([]byte, error) { return nil, nil }
+	mountinfo.Table = func() ([]byte, error) { return nil, nil }
 	if _, code := runFile(t, requests["delete the folder"], nil); code != 0 {
 		t.Fatal("refused a folder on one mount", code)
 	}

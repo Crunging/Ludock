@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Crunging/Ludock/internal/mountinfo"
 )
 
 func clearEnv(t *testing.T) {
@@ -14,7 +16,7 @@ func clearEnv(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	t.Setenv("HOSTNAME", "ludock-1")
-	mountinfoPath = "/nonexistent"
+	mountinfo.Table = func() ([]byte, error) { return nil, os.ErrNotExist }
 	os.Unsetenv("LUDOCK_TRUSTED_PROXIES")
 }
 
@@ -84,7 +86,7 @@ func TestValuesAndErrors(t *testing.T) {
 // /etc/hostname, which a custom hostname or host networking doesn't change.
 func TestContainerIDFromMountinfo(t *testing.T) {
 	id := strings.Repeat("0123456789abcdef", 4)
-	for _, c := range []struct{ mountinfo, want string }{
+	for _, c := range []struct{ table, want string }{
 		{"612 590 254:1 /var/lib/docker/containers/" + id + "/hostname /etc/hostname rw,relatime - ext4 /dev/vda1 rw", id},
 		{"612 590 0:45 /containers/storage/overlay-containers/" + id + "/userdata/hostname /etc/hostname rw - tmpfs tmpfs rw", id},
 		{"612 590 254:1 /var/lib/docker/containers/" + id + "/hosts /etc/hosts rw - ext4 /dev/vda1 rw", ""},
@@ -92,16 +94,14 @@ func TestContainerIDFromMountinfo(t *testing.T) {
 		{"612 590 254:1 /etc/hostname /etc/hostname rw - ext4 /dev/vda1 rw", ""},
 		{"", ""},
 	} {
-		if got := containerID(c.mountinfo); got != c.want {
-			t.Errorf("containerID(%q) = %q, want %q", c.mountinfo, got, c.want)
+		if got := containerID(mountinfo.Parse(c.table)); got != c.want {
+			t.Errorf("containerID(%q) = %q, want %q", c.table, got, c.want)
 		}
 	}
 	clearEnv(t)
-	path := t.TempDir() + "/mountinfo"
-	if err := os.WriteFile(path, []byte("612 590 254:1 /var/lib/docker/containers/"+id+"/hostname /etc/hostname rw - ext4 /dev/vda1 rw\n"), 0o600); err != nil {
-		t.Fatal(err)
+	mountinfo.Table = func() ([]byte, error) {
+		return []byte("612 590 254:1 /var/lib/docker/containers/" + id + "/hostname /etc/hostname rw - ext4 /dev/vda1 rw\n"), nil
 	}
-	mountinfoPath = path
 	if cfg, _ := Load(); cfg.SelfContainer != id {
 		t.Fatal(cfg.SelfContainer)
 	}

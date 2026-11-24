@@ -27,6 +27,7 @@ import (
 	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/mountinfo"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/self"
@@ -109,7 +110,7 @@ func setup(t *testing.T) *fixture {
 	observer := &servers.Observer{Docker: client, Own: self.New(nil, "")}
 	service := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: observer}
 	images := &launch.Images{Configured: image}
-	storage := &backups.Storage{Roots: f.backupTo, Own: self.New(client, "ludock")}
+	storage := &backups.Storage{Roots: []string{f.backupTo}, Own: self.New(client, "ludock")}
 	backupService := &backups.Service{DB: d, Storage: storage, Docker: client, Observer: observer, Locks: table,
 		Helpers: &backups.Helpers{Docker: client, Images: images, Storage: storage}}
 	f.runner = &ops.Runner{DB: d, Locks: table}
@@ -793,8 +794,9 @@ func TestImpossibleBackupNeverStopsServer(t *testing.T) {
 	})
 	refused("declared", "One of the server’s data folders has another mount inside it, which Ludock can’t back up as one folder. List folders without one inside in the ludock.files label, then try again.")
 	redefine(func(c *fakedocker.Container) { c.Mounts = c.Mounts[:1] })
-	helper.MountTable = func() ([]byte, error) { return []byte("40 22 0:45 / " + mods + " rw - nfs4 server:/share rw\n"), nil }
-	t.Cleanup(func() { helper.MountTable = func() ([]byte, error) { return os.ReadFile("/proc/self/mountinfo") } })
+	previous := mountinfo.Table
+	t.Cleanup(func() { mountinfo.Table = previous })
+	mountinfo.Table = func() ([]byte, error) { return []byte("40 22 0:45 / " + mods + " rw - nfs4 server:/share rw\n"), nil }
 	refused("host", backups.ErrHostMount.Message)
 	server, err := f.jobs.Servers.ResolveAuthorized(ctx, f.admin, f.serverID, authz.BackupsCreate, -1)
 	if err != nil {
@@ -812,7 +814,7 @@ func TestImpossibleBackupNeverStopsServer(t *testing.T) {
 	}
 	// A mount first met while copying leaves a restart that backs up first
 	// stopped, and is reported too.
-	helper.MountTable = func() ([]byte, error) {
+	mountinfo.Table = func() ([]byte, error) {
 		if f.running() {
 			return nil, nil
 		}

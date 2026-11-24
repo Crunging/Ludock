@@ -44,7 +44,7 @@ func writeArchive(t *testing.T, directory, id string, entries map[string]string,
 // reads back on its own, and an item's staged size counts only what it holds.
 func TestListFolderAndReadFile(t *testing.T) {
 	directory := t.TempDir()
-	storage := &Storage{Roots: directory}
+	storage := &Storage{Roots: []string{directory}}
 	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
 	roots := []Root{{ID: "root-0", Path: "/data"}}
 	big := strings.Repeat("x", 70000)
@@ -102,7 +102,7 @@ func TestListFolderAndReadFile(t *testing.T) {
 // Truncating an archive inside a skipped file body still fails the listing.
 func TestListFolderTruncatedArchive(t *testing.T) {
 	directory := t.TempDir()
-	storage := &Storage{Roots: directory}
+	storage := &Storage{Roots: []string{directory}}
 	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
 	writeArchive(t, directory, id, map[string]string{"snapshot/root-0/big": strings.Repeat("x", 200000)},
 		[]string{"snapshot/", "snapshot/root-0/", "snapshot/root-0/big"})
