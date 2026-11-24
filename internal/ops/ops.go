@@ -492,7 +492,7 @@ func (r *Runner) persist(ctx context.Context, what string, write func() error) b
 		if ctx.Err() != nil {
 			return false
 		}
-		log.Warn("Could not save an operation's state; retrying", logging.F("step", what), logging.F("error", err.Error()))
+		log.Warn("Could not save an operation's state; retrying", append([]logging.Field{logging.F("step", what)}, logging.Cause(err, 0)...)...)
 		if testHook != nil {
 			testHook("retry " + what)
 		}

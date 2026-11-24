@@ -41,4 +41,5 @@ builds and aren't supported.
   them. Anyone who can read the backup folder or the second copy can read
   these, so keep them as private as Ludock's data volume.
 - **File access:** approve narrow folders with `ludock.files` where you can, and
-  keep registry and webhook credentials out of game folders.
+  keep registry and webhook credentials out of game folders. A game folder that
+  holds, or is inside, Ludock's own data or backup folders is never offered.

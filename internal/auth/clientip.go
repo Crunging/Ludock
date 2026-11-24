@@ -158,11 +158,10 @@ func (c *ClientIP) Resolve(forwardedFor, peerAddress string) string {
 		return peer.address
 	}
 	hops := strings.Split(forwardedFor, ",")
-	if len(hops) > 32 {
-		return peer.address
-	}
 	current := peer
-	for index := len(hops) - 1; index >= 0 && c.isTrusted(current); index-- {
+	// Only the rightmost hops can come from trusted proxies; anything further
+	// left was written by the client.
+	for index := len(hops) - 1; index >= max(0, len(hops)-maxForwardedHops) && c.isTrusted(current); index-- {
 		next, ok := parseIP(strings.TrimSpace(hops[index]))
 		// Malformed trusted metadata cannot select an attacker-chosen source.
 		if !ok {
@@ -173,6 +172,12 @@ func (c *ClientIP) Resolve(forwardedFor, peerAddress string) string {
 	return current.address
 }
 
+// maxForwardedHops bounds the proxies one request may pass through.
+const maxForwardedHops = 32
+
+// Request resolves r's client. Some proxies, such as HAProxy, add their own
+// X-Forwarded-For line instead of appending to the client's, so every line
+// counts, in order.
 func (c *ClientIP) Request(r *http.Request) string {
-	return c.Resolve(r.Header.Get("X-Forwarded-For"), peerHost(r))
+	return c.Resolve(strings.Join(r.Header.Values("X-Forwarded-For"), ","), peerHost(r))
 }

@@ -56,7 +56,48 @@ func SafeWritableDataMount(mount identity.Mount) bool {
 			return false
 		}
 	}
-	return true
+	return !sharesOwnMount(mount)
+}
+
+var (
+	ownMounts  atomic.Pointer[[]identity.Mount]
+	ownUnknown atomic.Bool
+)
+
+// SetOwnMounts records the mounts of Ludock's own container. Its data and
+// backup folders hold password hashes and keys, so no game folder that
+// overlaps them is offered.
+func SetOwnMounts(mounts []identity.Mount) {
+	mounts = slices.Clone(mounts)
+	ownMounts.Store(&mounts)
+	ownUnknown.Store(false)
+}
+
+// WithholdDataMounts offers no game folder at all, for when Ludock's own
+// container exists but its mounts can't be read: any folder could overlap them.
+func WithholdDataMounts() { ownUnknown.Store(true) }
+
+func sharesOwnMount(mount identity.Mount) bool {
+	if ownUnknown.Load() {
+		return true
+	}
+	own := ownMounts.Load()
+	if own == nil {
+		return false
+	}
+	source := path.Clean(mount.Source)
+	for _, other := range *own {
+		if mount.Type == "volume" && other.Type == "volume" && mount.Name != "" && mount.Name == other.Name {
+			return true
+		}
+		// A volume's source is its folder on the host, which a bind can reach
+		// when Docker keeps volumes outside /var/lib/docker.
+		if otherSource := path.Clean(other.Source); strings.HasPrefix(source, "/") && strings.HasPrefix(otherSource, "/") &&
+			(Within(source, otherSource) || Within(otherSource, source)) {
+			return true
+		}
+	}
+	return false
 }
 
 var protectedPaths = []string{"/proc", "/sys", "/dev", "/run", "/var/run", "/var/lib/docker", "/var/lib/containerd",

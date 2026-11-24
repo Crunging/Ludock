@@ -27,6 +27,9 @@ import (
 // formLimit bounds form bodies; uploads stream separately.
 const formLimit = 64 * 1024
 
+// formDeadline bounds reading a form; tests shorten it.
+var formDeadline = 30 * time.Second
+
 type Request struct {
 	Principal *auth.Principal
 	Client    auth.Client
@@ -106,15 +109,22 @@ func readForm(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 	controller := http.NewResponseController(w)
-	controller.SetReadDeadline(time.Now().Add(30 * time.Second))
-	defer controller.SetReadDeadline(time.Time{})
+	if r.ContentLength != 0 {
+		controller.SetReadDeadline(time.Now().Add(formDeadline))
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, formLimit)
 	if err := r.ParseForm(); err != nil {
+		// The deadline stays: Go reads the rest of the body before answering.
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			return apperr.New("BODY_TOO_LARGE", 413, "Request body exceeds 64 KiB")
 		}
 		return apperr.New("INVALID_REQUEST", 400, "Invalid request")
+	}
+	// Only a URL-encoded body is read to its end, after which a passing
+	// deadline would cancel the request.
+	if r.ContentLength != 0 && kind == "application/x-www-form-urlencoded" {
+		controller.SetReadDeadline(time.Time{})
 	}
 	return nil
 }

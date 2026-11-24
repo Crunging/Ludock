@@ -1,15 +1,18 @@
 package web
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/logging"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
@@ -69,5 +72,37 @@ func TestCauseFieldsOmitMessages(t *testing.T) {
 	encoded := string(logging.EncodeFields(causeFields(err)))
 	if strings.Contains(encoded, "/srv/secret") || !strings.Contains(encoded, "*docker.APIError") || !strings.Contains(encoded, `"dockerStatus":500`) {
 		t.Fatal(encoded)
+	}
+}
+
+// A visitor who declares a small body and then stalls gets an answer once the
+// read deadline passes, both where a handler answers without reading the body
+// and where reading the form times out. Go reads such a leftover body before
+// it answers, so without a deadline the connection stays open for good.
+func TestStalledBodiesAreAnswered(t *testing.T) {
+	bodyDeadline, formDeadline = 200*time.Millisecond, 100*time.Millisecond
+	t.Cleanup(func() { bodyDeadline, formDeadline = 60*time.Second, 30*time.Second })
+	clientIP, _ := auth.NewClientIP("")
+	server := httptest.NewServer((&Server{DB: dbtest.Open(t), ClientIP: clientIP}).Handler())
+	t.Cleanup(server.Close)
+	for _, c := range []struct{ path, kind string }{
+		{"/logout", "application/x-www-form-urlencoded"},
+		{"/login", "application/x-www-form-urlencoded"},
+		{"/login", "text/plain"},
+	} {
+		path := c.path + " " + c.kind
+		conn, err := net.Dial("tcp", server.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: panel\r\nContent-Type: %s\r\nContent-Length: 200000\r\n\r\nu", c.path, c.kind)
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		line, err := bufio.NewReader(conn).ReadString('\n')
+		conn.Close()
+		if err != nil {
+			t.Errorf("%s: no answer: %v", path, err)
+		} else if !strings.HasPrefix(line, "HTTP/1.1 ") {
+			t.Errorf("%s: %q", path, line)
+		}
 	}
 }

@@ -95,7 +95,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	table := locks.Default
 	store := &identity.Store{DB: database}
 	authorization := &authz.Service{DB: database, Servers: store}
-	observer := &servers.Observer{Docker: client, Choices: store}
+	observer := &servers.Observer{Docker: client, Choices: store, Self: cfg.SelfContainer}
 	serverService := &servers.Service{DB: database, Identity: store, Authz: authorization, Observer: observer}
 	notifications := &notify.Service{DB: database}
 	images := launch.NewImages(client, cfg.HelperImage, cfg.SelfContainer)

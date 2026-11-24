@@ -408,7 +408,6 @@ func (s *Server) fileSave(w http.ResponseWriter, r *http.Request, request *Reque
 	controller := http.NewResponseController(w)
 	controller.SetReadDeadline(time.Now().Add(time.Minute))
 	body, err := io.ReadAll(io.LimitReader(r.Body, files.PreviewLimit+1))
-	controller.SetReadDeadline(time.Time{})
 	if err != nil {
 		s.fail(w, r, request, apperr.New("INVALID_REQUEST", 400, "Invalid save request"))
 		return
@@ -420,6 +419,8 @@ func (s *Server) fileSave(w http.ResponseWriter, r *http.Request, request *Reque
 		s.fail(w, r, request, tooLarge)
 		return
 	}
+	// The whole body is read; a passing deadline would cancel the save.
+	controller.SetReadDeadline(time.Time{})
 	if !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0 {
 		s.fail(w, r, request, apperr.New("INVALID_TEXT", 400, "The text can’t be saved as a text file."))
 		return
@@ -571,6 +572,8 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 		return
 	}
 	defer action.Done()
+	// The upload helper stops after 30 minutes or 60 seconds without data.
+	http.NewResponseController(w).SetReadDeadline(time.Now().Add(31 * time.Minute))
 	details := map[string]any{"root": root, "path": path, "name": name, "size": size}
 	if err := s.App.Files.Upload(action.Ctx, fileTarget(action), root, path, name, size, r.Body, action.Assert); err != nil {
 		if !unconfirmed(err) {

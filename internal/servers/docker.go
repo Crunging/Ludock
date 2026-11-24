@@ -126,6 +126,11 @@ type Observer struct {
 	Choices *identity.Store
 	// Now returns the current time; tests replace it.
 	Now func() time.Time
+	// Self names Ludock's own container, whose folders no server may offer.
+	Self string
+
+	ownMu    sync.Mutex
+	ownKnown bool
 
 	mu          sync.Mutex
 	inspections map[string]inspection
@@ -222,6 +227,9 @@ func isImageID(image string) bool {
 // than a vanished or forbidden container fails the whole listing, so callers
 // never reconcile a partial snapshot.
 func (o *Observer) List(ctx context.Context) ([]Observed, error) {
+	if err := o.learnOwnMounts(ctx); err != nil {
+		return nil, err
+	}
 	containers, err := o.listContainers(ctx)
 	if err != nil {
 		return nil, err
@@ -360,6 +368,9 @@ func (o *Observer) Inspect(ctx context.Context, id string) (*Observed, *docker.C
 	if _, err := validContainerID(id); err != nil {
 		return nil, nil, err
 	}
+	if err := o.learnOwnMounts(ctx); err != nil {
+		return nil, nil, err
+	}
 	info, err := o.Docker.Inspect(ctx, id)
 	if err != nil {
 		return nil, nil, err
@@ -369,6 +380,33 @@ func (o *Observer) Inspect(ctx context.Context, id string) (*Observed, *docker.C
 		return nil, nil, err
 	}
 	return observe(o.ownLabels(ctx, info), choices)
+}
+
+// learnOwnMounts reads Ludock's own mounts once, before any server's folders
+// are worked out; a container's mounts never change.
+func (o *Observer) learnOwnMounts(ctx context.Context) error {
+	o.ownMu.Lock()
+	defer o.ownMu.Unlock()
+	if o.ownKnown || o.Self == "" {
+		return nil
+	}
+	info, err := o.Docker.Inspect(ctx, o.Self)
+	switch docker.StatusCode(err) {
+	case http.StatusNotFound:
+		// Not in a container, such as a development build.
+		o.ownKnown = true
+		return nil
+	case http.StatusForbidden:
+		files.WithholdDataMounts()
+		o.ownKnown = true
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	files.SetOwnMounts(identity.DockerMounts(info.Mounts))
+	o.ownKnown = true
+	return nil
 }
 
 func observe(info *docker.ContainerInspect, choices map[string]identity.Choice) (*Observed, *docker.ContainerInspect, error) {
