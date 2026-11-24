@@ -975,7 +975,8 @@ func TestStalledBackupFolderIsGivenUp(t *testing.T) {
 func TestStalledRemovalIsGivenUp(t *testing.T) {
 	f := newCopyFixture(t)
 	backup := f.add(t, "world data", 60_000)
-	defer func(stall time.Duration) { copyStall = stall }(copyStall)
+	stall := copyStall
+	defer func() { copyStall = stall }()
 	copyStall = 50 * time.Millisecond
 	release := make(chan struct{})
 	var looks atomic.Int32
@@ -989,6 +990,8 @@ func TestStalledRemovalIsGivenUp(t *testing.T) {
 	if _, err := f.s.Delete(ctx, f.serverID, backup.ID, false, allowed); !errors.Is(err, errFolderStalled) {
 		t.Fatal(err)
 	}
+	// The second deletion isn't timed: a slow machine isn't a stalled folder.
+	copyStall = stall
 	close(release)
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		if f.s.Storage.folders.busyIn(f.main, laneLook) == 0 {
