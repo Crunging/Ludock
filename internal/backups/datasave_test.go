@@ -2,6 +2,7 @@ package backups
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"database/sql"
 	"io"
@@ -145,11 +146,17 @@ func TestDataKeeps(t *testing.T) {
 
 // A save interrupted by a restart left a partial file in the backup folder
 // and a work folder beside the database. Neither looks like a save; the next
-// save removes both. A save stopped by shutdown records no failure.
+// save removes both, and not another's partial file. A save stopped by
+// shutdown records no failure.
 func TestSaveDataInterrupted(t *testing.T) {
 	f := newCopyFixture(t)
 	partial := filepath.Join(f.main, "ludock-data-20261119-010203.tar.1a2b3c4d.partial")
 	os.WriteFile(partial, []byte("half"), 0o600)
+	if err := f.s.DB.SetSetting(ctx, nil, dataSaveKey, dataTrack{Writing: "ludock-data-20261119-010203.tar", WritingIn: f.main}); err != nil {
+		t.Fatal(err)
+	}
+	another := filepath.Join(f.main, "ludock-data-20261118-010203.tar.5e6f7a8b.partial")
+	os.WriteFile(another, []byte("half"), 0o600)
 	var seq int
 	var name, database string
 	f.s.DB.QueryRow("PRAGMA database_list").Scan(&seq, &name, &database)
@@ -187,7 +194,7 @@ func TestSaveDataInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := dataFiles(t, f.main)
-	if len(names) != 1 || !dataName.MatchString(names[0]) || exists(work) {
+	if len(names) != 2 || names[0] != filepath.Base(another) || !dataName.MatchString(names[1]) || exists(work) {
 		t.Fatal("after the interrupted save", names, exists(work))
 	}
 }
@@ -254,15 +261,59 @@ func TestSaveDataKeepsTheReserve(t *testing.T) {
 	}
 }
 
+// ownSave writes a save of this installation's data into folder as name.
+func (f *copyFixture) ownSave(t *testing.T, folder, name string) {
+	t.Helper()
+	snapshot, err := f.s.DB.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+	file, err := os.OpenFile(filepath.Join(folder, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := io.Copy(file, snapshot); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// otherSave is a save with another installation's key, as a beta's is.
+func otherSave(t *testing.T) []byte {
+	t.Helper()
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	for name, body := range map[string][]byte{"ludock.db": []byte("beta"), "ludock.db.identity-key/key": bytes.Repeat([]byte{7}, 32)} {
+		writer.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: 0o600, Size: int64(len(body))})
+		writer.Write(body)
+	}
+	writer.Close()
+	return archive.Bytes()
+}
+
 // The second folder gets each save, verified, and keeps the same saves the
-// backup folder does. With the backup folder lost, the copies stay.
+// backup folder does. Files this installation didn't write, such as a
+// beta's saves, game backups, and partial files in a folder a fresh install
+// was given, stay as they were. With the backup folder lost, the copies stay.
 func TestCopyDataFollowsSaves(t *testing.T) {
 	f := newCopyFixture(t)
 	old := time.Now().Add(-30 * 24 * time.Hour)
+	others := map[string][]byte{
+		dataFileName(old.Add(-48 * time.Hour)):                     otherSave(t),
+		dataFileName(old.Add(-47 * time.Hour)):                     otherSave(t),
+		dataFileName(old.Add(-46*time.Hour)) + ".0a1b2c3d.partial": []byte("half"),
+		"0c6f3f5e-6a7b-4c1d-9e2f-3a4b5c6d7e8f.tar":                 []byte("a game backup"),
+	}
+	for _, folder := range []string{f.main, f.copies} {
+		for name, body := range others {
+			os.WriteFile(filepath.Join(folder, name), body, 0o600)
+		}
+	}
 	for index := range 4 {
 		name := dataFileName(old.Add(time.Duration(index) * time.Minute))
 		for _, folder := range []string{f.main, f.copies} {
-			os.WriteFile(filepath.Join(folder, name), []byte("old"), 0o600)
+			f.ownSave(t, folder, name)
 		}
 	}
 	for range 2 {
@@ -275,7 +326,17 @@ func TestCopyDataFollowsSaves(t *testing.T) {
 		f.forceDue(t, dataSaveKey)
 		nextSecond(t)
 	}
-	main, copies := dataFiles(t, f.main), dataFiles(t, f.copies)
+	for _, folder := range []string{f.main, f.copies} {
+		for name, body := range others {
+			if kept, err := os.ReadFile(filepath.Join(folder, name)); err != nil || !bytes.Equal(kept, body) {
+				t.Fatal("changed a file Ludock didn’t write", folder, name, err)
+			}
+		}
+	}
+	ours := func(folder string) []string {
+		return slices.DeleteFunc(dataFiles(t, folder), func(name string) bool { _, other := others[name]; return other })
+	}
+	main, copies := ours(f.main), ours(f.copies)
 	if !slices.Equal(main, copies) || len(main) != dataKeepNewest || main[0] != dataFileName(old.Add(3*time.Minute)) {
 		t.Fatalf("backup folder has %v, second folder %v", main, copies)
 	}
@@ -300,7 +361,7 @@ func TestCopyDataFollowsSaves(t *testing.T) {
 	if err := f.s.CopyData(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if after := dataFiles(t, f.copies); !slices.Equal(after, copies) {
+	if after := ours(f.copies); !slices.Equal(after, copies) {
 		t.Fatal("losing the backup folder removed copies", after)
 	}
 	if track, _ := f.s.dataTrack(ctx, dataCopyKey, f.copies); track.Failures != 1 || track.Problem != errCopySource.Message {

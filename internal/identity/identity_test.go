@@ -284,38 +284,3 @@ func TestIDChecks(t *testing.T) {
 		}
 	}
 }
-
-// The first discovery after upgrading from 0.6.0, whose fingerprints counted
-// more of the container, takes a server running the same game in the same
-// container as it is now: its revision and sharing stay as they were and its
-// backups move to the new fingerprint, gaining its game. A server whose game
-// changed meanwhile is a change like any other.
-func TestLegacyFingerprintIsReplaced(t *testing.T) {
-	for _, game := range []string{"minecraft", "factorio"} {
-		s := &Store{DB: dbtest.Open(t)}
-		addUser(t, s, "admin", db.RoleAdmin)
-		addUser(t, s, "other-admin", db.RoleAdmin)
-		original := reconcile(t, s, 0, observation(nil))[0]
-		share(t, s, "other-admin", original.ID)
-		if _, err := s.DB.Exec(`UPDATE logical_servers SET binding_fingerprint = 'legacy:old-0.6.0', last_seen_at = 0`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := s.DB.Exec(`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
-      VALUES('b',?,'old-0.6.0','/b','[]',1,'x',1,'complete')`, original.ID); err != nil {
-			t.Fatal(err)
-		}
-		upgraded := reconcile(t, s, 0, observation(func(o *Observation) { o.GameType = game }))[0]
-		var backup string
-		s.DB.QueryRow("SELECT binding_fingerprint || ',' || game_type FROM backups").Scan(&backup)
-		if game == "minecraft" {
-			if upgraded.BindingFingerprint != original.BindingFingerprint || upgraded.BindingRevision != original.BindingRevision ||
-				upgraded.SharingPaused || backup != original.BindingFingerprint+",minecraft" {
-				t.Fatalf("%+v, backup %s", upgraded, backup)
-			}
-			continue
-		}
-		if !upgraded.SharingPaused || upgraded.BindingRevision != original.BindingRevision+1 || backup != "old-0.6.0," {
-			t.Fatalf("%+v, backup %s", upgraded, backup)
-		}
-	}
-}

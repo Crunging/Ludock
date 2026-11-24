@@ -3,7 +3,6 @@ package backups
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"io"
 	"os"
 	"regexp"
@@ -25,6 +24,8 @@ import (
 // never see them; only the free-space reserve applies. Each folder keeps
 // its own newest saves, pruned only right after a newer save is verified
 // there, so a lost backup folder never removes the copies in the second.
+// Only saves holding this installation's identity key are pruned: a folder
+// can hold another's, such as a beta's.
 
 const (
 	dataEvery = 24 * time.Hour
@@ -37,11 +38,7 @@ const (
 	dataCopyKey    = "data-save-copy"
 )
 
-var (
-	dataName = regexp.MustCompile(`^ludock-data-\d{8}-\d{6}\.tar$`)
-	// dataPartial is a partial file CopyFile left writing a save.
-	dataPartial = regexp.MustCompile(`^ludock-data-\d{8}-\d{6}\.tar\.[0-9a-f]{8}\.partial$`)
-)
+var dataName = regexp.MustCompile(`^ludock-data-\d{8}-\d{6}\.tar$`)
 
 const dataStamp = "20060102-150405"
 
@@ -66,6 +63,37 @@ type dataTrack struct {
 	Problem      string `json:"problem,omitempty"`
 	NextAt       int64  `json:"nextAt,omitempty"`
 	Alerted      bool   `json:"alerted,omitempty"`
+	// Writing is a save being written into WritingIn, so after a restart
+	// only its partial files are removed.
+	Writing   string `json:"writing,omitempty"`
+	WritingIn string `json:"writingIn,omitempty"`
+}
+
+// dataOwner is what a save knows of this installation's files in a folder.
+type dataOwner struct {
+	// leftover is a save an interrupted attempt was writing there.
+	leftover string
+	// begin records the save about to be written.
+	begin func() error
+	// ours recognizes this installation's saves.
+	ours func(io.Reader) bool
+}
+
+// owner is the dataOwner for writing done, whose track is saved under key.
+func (s *Service) owner(ctx context.Context, key string, track, done dataTrack) dataOwner {
+	owner := dataOwner{ours: s.DB.IsOwnSave}
+	if track.WritingIn == done.Folder {
+		owner.leftover = track.Writing
+	}
+	// A stalled folder can return the attempt before this runs, so it sets
+	// only its own fields, never a failure recorded since.
+	owner.begin = func() error {
+		_, err := s.DB.ExecContext(ctx, `INSERT INTO settings(key,value_json) VALUES(?,json_object('writing',?,'writingIn',?))
+      ON CONFLICT(key) DO UPDATE SET value_json=json_set(value_json,'$.writing',excluded.value_json->>'writing',
+        '$.writingIn',excluded.value_json->>'writingIn')`, key, done.Name, done.Folder)
+		return err
+	}
+	return owner
 }
 
 // dataTrack reads a track for folder: failures in another folder don't
@@ -152,7 +180,7 @@ func (s *Service) SaveData(ctx context.Context) error {
 		return err
 	}
 	done := dataTrack{At: now.UnixMilli(), Name: dataFileName(now), Folder: settings.Destination}
-	err = s.writeData(ctx, *settings, &done)
+	err = s.writeData(ctx, *settings, &done, s.owner(ctx, dataSaveKey, track, done))
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -172,7 +200,7 @@ func (s *Service) SaveData(ctx context.Context) error {
 // writeData snapshots the data and publishes it as done.Name, setting
 // done's size and checksum. The folder is checked like a game backup's,
 // and kept apart from game data, whose file helpers could read it.
-func (s *Service) writeData(ctx context.Context, settings Settings, done *dataTrack) error {
+func (s *Service) writeData(ctx context.Context, settings Settings, done *dataTrack, owner dataOwner) error {
 	snapshot, err := s.DB.Snapshot(ctx)
 	if err != nil {
 		return errDataSnapshot
@@ -190,7 +218,7 @@ func (s *Service) writeData(ctx context.Context, settings Settings, done *dataTr
 			return err
 		}
 		progress()
-		return s.Storage.publishData(ctx, snapshot, settings.Destination, done.Name, snapshot.Size, snapshot.Checksum, settings.ReserveBytes, progress)
+		return s.Storage.publishData(ctx, snapshot, settings.Destination, done.Name, snapshot.Size, snapshot.Checksum, settings.ReserveBytes, progress, owner)
 	})
 }
 
@@ -214,6 +242,7 @@ func (s *Service) CopyData(ctx context.Context) error {
 	if track.Folder == settings.CopyTo && track.Name == saved.Name || now.UnixMilli() < track.NextAt {
 		return nil
 	}
+	owner := s.owner(ctx, dataCopyKey, track, dataTrack{Name: saved.Name, Folder: settings.CopyTo})
 	err = s.isolate(ctx, settings.CopyTo, func(ctx context.Context, progress func()) error {
 		if err := s.assertCopyFolder(ctx, settings.CopyTo, settings.Destination); err != nil {
 			if apperr.Is(err, "BACKUP_DESTINATION") {
@@ -237,7 +266,7 @@ func (s *Service) CopyData(ctx context.Context) error {
 			return errCopySource
 		}
 		defer source.Close()
-		return s.Storage.publishData(ctx, source, settings.CopyTo, saved.Name, saved.Size, saved.Checksum, settings.ReserveBytes, progress)
+		return s.Storage.publishData(ctx, source, settings.CopyTo, saved.Name, saved.Size, saved.Checksum, settings.ReserveBytes, progress, owner)
 	})
 	if ctx.Err() != nil {
 		return nil
@@ -310,13 +339,17 @@ func (s *Service) dataStatus(ctx context.Context, settings Settings) (savedAt in
 	return savedAt, ""
 }
 
-// publishData writes a save into directory through CopyFile, then removes
-// the older saves there that dataKeeps doesn't keep, and leftovers of
-// interrupted saves.
+// publishData removes the partial files of owner's leftover, writes a save
+// into directory through CopyFile, then removes the older saves of owner's
+// there that dataKeeps doesn't keep. A record of the save is kept while it is
+// written: CopyFile removes its partial file unless Ludock stops partway.
 func (s *Storage) publishData(ctx context.Context, source io.Reader, directory, name string, size int64, checksum string,
-	reserve int64, progress func()) error {
-	if err := s.removeDataLeftovers(directory); err != nil {
+	reserve int64, progress func(), owner dataOwner) error {
+	if err := s.removeDataLeftovers(directory, owner.leftover); err != nil {
 		return errCopyFailed
+	}
+	if err := owner.begin(); err != nil {
+		return err
 	}
 	if err := s.CopyFile(ctx, source, directory, name, size, checksum, reserve, progress, time.Time{}); err != nil {
 		return err
@@ -325,6 +358,7 @@ func (s *Storage) publishData(ctx context.Context, source io.Reader, directory, 
 	if err != nil {
 		return nil
 	}
+	names = slices.DeleteFunc(names, func(saved string) bool { return saved != name && !s.isOwnSave(directory, saved, owner.ours) })
 	keep := dataKeeps(names, time.Local)
 	for _, saved := range names {
 		// Only saves older than the one just verified make way for it.
@@ -347,26 +381,27 @@ func (s *Storage) dataSaves(directory string) ([]string, error) {
 	return names, nil
 }
 
-// removeDataLeftovers removes the partial files of interrupted saves. Saves
-// into one folder run one at a time, so none is being written.
-func (s *Storage) removeDataLeftovers(directory string) error {
-	names, err := s.list(directory)
+func (s *Storage) isOwnSave(directory, name string, ours func(io.Reader) bool) bool {
+	file, err := s.openNamed(directory, name)
 	if err != nil {
-		return err
+		return false
+	}
+	defer file.Close()
+	return ours(file)
+}
+
+// removeDataLeftovers removes the partial files of the save leftover. Saves
+// into one folder run one at a time, so none is being written.
+func (s *Storage) removeDataLeftovers(directory, leftover string) error {
+	if !dataName.MatchString(leftover) {
+		return nil
 	}
 	dir, err := s.pin(directory)
 	if err != nil {
 		return err
 	}
 	defer dir.close()
-	for _, name := range names {
-		if dataPartial.MatchString(name) {
-			if err := unix.Unlinkat(dir.fd, name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-				return err
-			}
-		}
-	}
-	return nil
+	return removePartials(dir, leftover)
 }
 
 func (s *Storage) list(directory string) ([]string, error) {

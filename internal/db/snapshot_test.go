@@ -148,7 +148,7 @@ func TestSnapshotArchiveLayout(t *testing.T) {
 
 // A restore puts the data back into an empty folder, where Ludock opens it
 // with its own key and no saved work left to run. It refuses a folder that already has data, an archive
-// with anything else in it, and a key from another installation.
+// with anything else in it, a key from another installation, and a beta's copy.
 func TestRestoreSnapshot(t *testing.T) {
 	d, _ := openTemp(t)
 	if err := d.SetSetting(context.Background(), nil, "restore-check", "kept"); err != nil {
@@ -198,9 +198,22 @@ func TestRestoreSnapshot(t *testing.T) {
 	extra := filepath.Join(t.TempDir(), "extra.tar")
 	writeArchive(t, extra, map[string][]byte{"ludock.db": entryOf(t, archive, "ludock.db"),
 		"ludock.db.identity-key/key": entryOf(t, archive, "ludock.db.identity-key/key"), "../escape": []byte("x")})
-	for name, bad := range map[string]string{"another key": mixed, "an extra entry": extra} {
+	// A beta's copy has the same layout but its database carries the beta's marker.
+	betaDB := filepath.Join(t.TempDir(), "beta.db")
+	os.WriteFile(betaDB, entryOf(t, archive, "ludock.db"), 0o600)
+	raw, _ := sql.Open("sqlite", betaDB)
+	if _, err := raw.Exec("PRAGMA application_id = 1279542091"); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+	betaDBBytes, _ := os.ReadFile(betaDB)
+	beta := filepath.Join(t.TempDir(), "beta.tar")
+	writeArchive(t, beta, map[string][]byte{"ludock.db": betaDBBytes, "ludock.db.identity-key/key": entryOf(t, archive, "ludock.db.identity-key/key")})
+	for name, test := range map[string]struct{ archive, code string }{
+		"another key": {mixed, "RESTORE_ARCHIVE"}, "an extra entry": {extra, "RESTORE_ARCHIVE"}, "a beta's copy": {beta, "RESTORE_BETA"},
+	} {
 		folder := t.TempDir()
-		if _, err := RestoreSnapshot(bad, filepath.Join(folder, "ludock.db")); !apperr.Is(err, "RESTORE_ARCHIVE") {
+		if _, err := RestoreSnapshot(test.archive, filepath.Join(folder, "ludock.db")); !apperr.Is(err, test.code) {
 			t.Fatalf("restore accepted %s: %v", name, err)
 		}
 		if entries, _ := os.ReadDir(folder); len(entries) != 0 {

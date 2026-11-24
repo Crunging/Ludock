@@ -402,25 +402,15 @@ docker compose pull ludock
 docker compose up -d ludock
 ```
 
-Its data and your servers stay as they are. Let running work, such as a
-backup, finish first: work Ludock is stopped in the middle of is recovered at
-the next start, but not across a change in how it records servers.
+Its data and your servers stay as they are. Work Ludock is stopped in the
+middle of is recovered at the next start.
 
-From 0.6.0, the first start upgrades Ludock's data in place:
-
-- Operators and viewers become members. Operators keep the access shared with
-  them; viewers keep only seeing a server, its logs, and its files.
-- Backups are kept by a fixed rule, so the number of backups to keep goes from
-  **Settings**. The backup folder and its limits stay.
-- Ludock records what makes a server the same one differently now. It takes
-  each server running the same game in the same container as it finds it at
-  that start, so sharing isn't paused and backups made before still restore
-  as usual.
-
-A data folder from before 0.6.0 can't be upgraded. Ludock says so in its log
+Data from a beta can't be used: 1.0 starts fresh (see
+[Coming from a beta](../README.md#coming-from-a-beta)). Neither can data from
+a newer version than the one starting. Either way, Ludock says why in its log
 and on its address, then waits instead of exiting, so a container that
-restarts on its own doesn't repeat the message. Start it with a new data
-volume.
+restarts on its own doesn't repeat the message, and it leaves the data as it
+was.
 
 ### Remove Ludock
 
@@ -457,7 +447,9 @@ an administrator's change. Nothing stops while it saves.
 - Each save is `ludock-data-<date>-<time>.tar` (UTC), a plain tar of the
   database and its identity key. It never appears in a server's **Backups**.
 - Ludock keeps the 3 newest saves and the newest of each of the last 7 days
-  with one, and removes older ones only after a newer save is checked.
+  with one, and removes older ones only after a newer save is checked. It
+  removes only its own saves, which hold its identity key; saves from another
+  installation or a beta stay as they are.
 - With a second copy chosen, the newest save is copied there too, and that
   folder keeps saves by the same rule.
 - **Settings → Backups** shows when Ludock's data was last saved, or why
@@ -531,7 +523,9 @@ sudo mkdir restored
 sudo tar -xpf backup.tar --numeric-owner -C restored --strip-components=1 "snapshot/$id"
 ```
 
-Run these as root so owners stay as they were. Stop the game, then replace the
+A backup from a beta may number its folders instead, `snapshot/root-0/` and
+so on, in the order the server listed them; `tar -tf` shows which `$id` to
+use. Run these as root so owners stay as they were. Stop the game, then replace the
 contents of its data folder with those of `restored/$id/`, still as root and
 keeping owners and permissions, such as with
 `sudo cp -a "restored/$id/." <folder>/` after emptying the folder. For a data
@@ -585,8 +579,9 @@ its database in `/data` and backups in `/backups`, in separate volumes.
   the one-time code Ludock prints to its log at startup. A new code is printed
   at each restart until setup is done. A code set with `LUDOCK_SETUP_CODE`
   isn't printed and stays the same. Failed attempts are limited per address.
-- **Existing data:** Ludock refuses to start on an unrelated database or an
-  unsupported schema, and leaves it unchanged.
+- **Existing data:** Ludock refuses to start on a database it can't use, such
+  as another program's, a beta's, or a newer version's, says which, and leaves
+  it unchanged.
 
 ### Remote access
 

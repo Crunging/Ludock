@@ -93,13 +93,7 @@ func HelperRoot(context *servers.Context, root Root) (string, error) {
 	if mount == nil {
 		return "", fail("BACKUP_ROOT_CHANGED", "One of the server’s data folders changed. Reload the page and try again.")
 	}
-	// A backup from 0.6.0 numbered its roots instead; the helper mounts each
-	// under the server's own ID for its path.
-	id := root.ID
-	if index := slices.IndexFunc(context.Container.FileRoots, func(current files.Root) bool { return current.Path == root.Path }); index >= 0 {
-		id = context.Container.FileRoots[index].ID
-	}
-	return "/mounts/" + id + root.Path[len(mount.Destination):], nil
+	return "/mounts/" + root.ID + root.Path[len(mount.Destination):], nil
 }
 
 type DataHelper struct {
