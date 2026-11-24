@@ -560,7 +560,9 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 		return nil, err
 	}
 	if err := j.startReplacement(ctx, job); err != nil {
-		if apperr.Is(err, errReplacementDown.Code) || apperr.Is(err, errReplacementNotStarted.Code) {
+		// Reported by the update itself, so outage tracking stays quiet.
+		if apperr.Is(err, errReplacementDown.Code) || apperr.Is(err, errReplacementNotStarted.Code) ||
+			apperr.Is(err, errReplacementRemoved.Code) {
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, true))
 		}
 		return nil, err
