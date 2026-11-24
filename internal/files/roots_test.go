@@ -47,10 +47,18 @@ func TestLabelsCannotOpenUnsafeRoots(t *testing.T) {
 	if Roots("custom", nil, nil, notInContainer) != nil {
 		t.Fatal("roots without mounts")
 	}
-	SetSensitivePaths([]string{"/srv/game", "/other"})
-	t.Cleanup(func() { SetSensitivePaths(nil) })
-	if got := Roots("custom", nil, []identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data", Writable: true}}, notInContainer); got != nil {
-		t.Fatal("configured sensitive source offered", got)
+	game := []identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data", Writable: true}}
+	// The host's root mounted into Ludock overlaps every game folder.
+	hostRoot := self.Info{Answer: self.Found, Mounts: []identity.Mount{{Type: "bind", Source: "/", Destination: "/host"}}}
+	if got := Roots("custom", nil, game, hostRoot); got != nil {
+		t.Fatal("offered a folder inside Ludock's own mount of /", got)
+	}
+	for _, sensitive := range [][]string{{"/srv/game", "/other"}, {"/"}} {
+		SetSensitivePaths(sensitive)
+		t.Cleanup(func() { SetSensitivePaths(nil) })
+		if got := Roots("custom", nil, game, notInContainer); got != nil {
+			t.Fatal("configured sensitive source offered", sensitive, got)
+		}
 	}
 	// When Ludock can't read its own mounts, any folder could hold its data.
 	if got := Roots("custom", nil, []identity.Mount{{Type: "bind", Source: "/srv/other", Destination: "/data", Writable: true}}, self.Info{Answer: self.Refused}); got != nil {

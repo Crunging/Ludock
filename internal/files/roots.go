@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/Crunging/Ludock/internal/games"
+	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/textutil"
@@ -33,10 +34,7 @@ func normalizedMountPath(value string) string {
 }
 
 // Within reports whether value is root or inside it.
-func Within(value, root string) bool {
-	// Discovery calls this for every mount and system path; no concatenation.
-	return strings.HasPrefix(value, root) && (len(value) == len(root) || value[len(root)] == '/')
-}
+func Within(value, root string) bool { return helper.Within(value, root) }
 
 var socketSuffix = regexp.MustCompile(`(?i)\.sock$`)
 
@@ -191,7 +189,9 @@ func Roots(gameType string, labels map[string]string, mounts []identity.Mount, o
 // HoldsMount reports a Docker mount inside rootPath, which a backup can't
 // take as one folder.
 func HoldsMount(rootPath string, mounts []identity.Mount) bool {
-	return slices.ContainsFunc(mounts, func(mount identity.Mount) bool { return strings.HasPrefix(mount.Destination, rootPath+"/") })
+	return slices.ContainsFunc(mounts, func(mount identity.Mount) bool {
+		return mount.Destination != rootPath && Within(mount.Destination, rootPath)
+	})
 }
 
 // RootMount is the deepest mount that holds rootPath.

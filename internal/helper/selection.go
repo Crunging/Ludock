@@ -99,7 +99,7 @@ func partial(done int, err error) error {
 func (h *fileHelper) mountOf(value string) string {
 	owner := ""
 	for _, mount := range h.request.Mounts {
-		if within(value, mount) && len(mount) > len(owner) {
+		if Within(value, mount) && len(mount) > len(owner) {
 			owner = mount
 		}
 	}
@@ -127,7 +127,7 @@ func (h *fileHelper) move(root, parent fd, items []selected) error {
 	}
 	for _, item := range items {
 		absolute := h.absolute(item.relative)
-		if isSymlink(item.info) || within(destination, item.relative) || item.info.Dev != targetInfo.Dev ||
+		if isSymlink(item.info) || Within(destination, item.relative) || item.info.Dev != targetInfo.Dev ||
 			h.mountOf(absolute) != h.mountOf(h.absolute(destination)) {
 			return errUnsafe
 		}

@@ -788,7 +788,7 @@ func writableOwnerMount(mounts []identity.Mount, rootPath string) *identity.Moun
 	for index := range mounts {
 		mount := &mounts[index]
 		if mount.Writable && (mount.Type == "bind" || mount.Type == "volume") &&
-			(rootPath == mount.Destination || strings.HasPrefix(rootPath, mount.Destination+"/")) &&
+			helper.Within(rootPath, mount.Destination) &&
 			(owner == nil || len(mount.Destination) > len(owner.Destination)) {
 			owner = mount
 		}
