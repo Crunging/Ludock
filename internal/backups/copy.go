@@ -101,7 +101,7 @@ type nameClaim struct {
 // name.
 func (s *Storage) copyFile(ctx context.Context, source io.Reader, directory, name string, size int64, checksum string,
 	reserve int64, progress func(), modified time.Time, claim *nameClaim) (string, error) {
-	if !fileName.MatchString(name) || strings.HasSuffix(name, ".partial") {
+	if !copyName(name) {
 		return "", fail("INVALID_REQUEST", "Invalid file name.")
 	}
 	dir, err := s.pin(directory)
@@ -115,7 +115,7 @@ func (s *Storage) copyFile(ctx context.Context, source io.Reader, directory, nam
 	// Partial files of interrupted attempts don't count against the space
 	// this one needs. No earlier attempt is still writing: isolate starts no
 	// I/O in a folder where one hasn't returned.
-	partial := name + "." + identity.NewUUID()[:8] + ".partial"
+	partial := partialName(name)
 	if claim != nil {
 		partial = claim.partial
 	} else if err := removePartials(dir, name); err != nil {
@@ -238,6 +238,34 @@ func publish(ctx context.Context, dir pinned, partial, name string, size int64, 
 	}
 }
 
+// A copy is written as <name>.<tag>.partial, tag being 8 lowercase hex
+// digits, so concurrent attempts don't share a file. The format is fixed
+// from 1.0: leftovers written by any release must stay recognizable.
+const partialTag = 8
+
+func partialName(name string) string {
+	return name + "." + identity.NewUUID()[:partialTag] + ".partial"
+}
+
+// partialOf returns the name a partial file was written for.
+func partialOf(entry string) (string, bool) {
+	base, ok := strings.CutSuffix(entry, ".partial")
+	cut := len(base) - partialTag - 1
+	if !ok || cut < 1 || base[cut] != '.' {
+		return "", false
+	}
+	for _, c := range base[cut+1:] {
+		if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f') {
+			return "", false
+		}
+	}
+	return base[:cut], true
+}
+
+func copyName(name string) bool {
+	return fileName.MatchString(name) && !strings.HasSuffix(name, ".partial")
+}
+
 // removePartials removes the partial files of name's earlier attempts.
 func removePartials(dir pinned, name string) error {
 	listing, err := unix.Dup(dir.fd)
@@ -251,7 +279,7 @@ func removePartials(dir pinned, name string) error {
 		return err
 	}
 	for _, entry := range names {
-		if strings.HasPrefix(entry, name+".") && strings.HasSuffix(entry, ".partial") {
+		if of, ok := partialOf(entry); ok && of == name {
 			if err := unix.Unlinkat(dir.fd, entry, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 				return err
 			}
@@ -263,7 +291,7 @@ func removePartials(dir pinned, name string) error {
 // RemoveCopy removes a copy named name from directory, with the partial
 // files of its attempts. Only a regular file is removed.
 func (s *Storage) RemoveCopy(directory, name string) error {
-	if !fileName.MatchString(name) || strings.HasSuffix(name, ".partial") {
+	if !copyName(name) {
 		return fail("INVALID_REQUEST", "Invalid file name.")
 	}
 	if err := s.removeFile(directory, name, nil); err != nil {

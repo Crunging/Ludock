@@ -1,7 +1,6 @@
 package backups
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -62,9 +61,7 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 			return nil, fail("BACKUP_ROOT_CHANGED", "Ludock couldn’t tell where one of the server’s data folders is on the host. Check how the server is defined, such as its Compose file, then try again.")
 		}
 		physical := path.Clean(path.Join(source.Source, source.Subpath) + root.Path[len(source.Destination):])
-		if slices.ContainsFunc(physicalRoots, func(other string) bool {
-			return physical == other || strings.HasPrefix(physical, other+"/") || strings.HasPrefix(other, physical+"/")
-		}) {
+		if slices.ContainsFunc(physicalRoots, func(other string) bool { return overlaps(physical, other) }) {
 			return nil, fail("OVERLAPPING_BACKUP_ROOTS", "Two of the server’s data folders are the same folder on the host, or one is inside the other. List each folder once in the ludock.files label, then try again.")
 		}
 		physicalRoots = append(physicalRoots, physical)
@@ -179,12 +176,13 @@ func (h *Helpers) NewDataHelper(ctx context.Context, context *servers.Context, r
 	if readOnly {
 		capabilities = []string{"DAC_OVERRIDE"}
 	}
+	labels := launch.HelperLabels(launch.BackupHelper)
+	labels["ludock.operation"] = operationID
+	host := launch.HelperHost(plan.Mounts, capabilities...)
+	// Only its operation removes it, or recovery after a restart.
+	host.AutoRemove = false
 	id, err := h.Docker.CreateHelper(ctx, docker.ContainerCreate{Image: image, User: "0", Entrypoint: []string{helper.Binary},
-		Cmd: []string{"helper", "idle", "0"}, Env: launch.HelperEnv,
-		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "backup-helper", "ludock.operation": operationID},
-		HostConfig: &docker.HostConfig{Mounts: plan.Mounts, NetworkMode: "none", ReadonlyRootfs: true, PidsLimit: 64,
-			Memory: 256 * 1024 * 1024, NanoCpus: 1_000_000_000, CapDrop: []string{"ALL"}, CapAdd: capabilities,
-			SecurityOpt: []string{"no-new-privileges"}, LogConfig: launch.NoLogs}})
+		Cmd: []string{"helper", "idle", "0"}, Env: launch.HelperEnv, Labels: labels, HostConfig: host})
 	if err != nil {
 		proof.Cleanup()
 		return nil, launch.HelperFailed(err)
@@ -301,7 +299,7 @@ func (h *Helpers) archive(ctx context.Context, id, base, root string, assertAcce
 		if err == nil && !result.Running && result.ExitCode != nil && *result.ExitCode == helper.FileMounted {
 			return ErrHostMount
 		}
-		if err == nil && !result.Running && result.ExitCode != nil && *result.ExitCode != 0 && !stderr.contains(helper.FileFailure) {
+		if err == nil && !result.Running && result.ExitCode != nil && *result.ExitCode != 0 && !strings.Contains(stderr.String(), helper.FileFailure) {
 			return docker.ErrRequestFailed
 		}
 		if err != nil || result.Running || result.ExitCode == nil || *result.ExitCode != 0 {
@@ -327,10 +325,10 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (b *limitedBuffer) contains(text string) bool {
+func (b *limitedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return strings.Contains(string(b.data), text)
+	return string(b.data)
 }
 
 type closeFunc struct {
@@ -357,7 +355,7 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 	if err != nil {
 		return 0, "", err
 	}
-	partial := id + ".tar.partial"
+	partial := archivePartial(id)
 	fd, err := unix.Openat(dir.fd, partial, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
 		return 0, "", err
@@ -671,8 +669,8 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		items[target.Root.ID] = target.Item
 		mu.Unlock()
 		go func() {
-			var out boundedBuffer
-			err := docker.Demux(conn, &out, nil)
+			out := &limitedBuffer{limit: 64}
+			err := docker.Demux(conn, out, nil)
 			result := launch.WaitForExit(h.Docker, helperID, execID, h.pollInterval, expired)
 			switch {
 			case result == nil:
@@ -822,15 +820,4 @@ func writableOwnerMount(mounts []identity.Mount, rootPath string) *identity.Moun
 		}
 	}
 	return owner
-}
-
-// boundedBuffer keeps the first bytes a helper prints, enough for its
-// short report.
-type boundedBuffer struct{ bytes.Buffer }
-
-func (b *boundedBuffer) Write(p []byte) (int, error) {
-	if room := 64 - b.Len(); room > 0 {
-		b.Buffer.Write(p[:min(len(p), room)])
-	}
-	return len(p), nil
 }

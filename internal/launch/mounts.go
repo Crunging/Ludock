@@ -58,8 +58,34 @@ type Proof struct {
 // start several threads, so the PID limit leaves room for them.
 const (
 	helperPids    = 64
+	helperMemory  = 256 * 1024 * 1024
 	helperCPUNano = 1_000_000_000
 )
+
+// InternalLabel marks Ludock's helper containers, which discovery ignores,
+// with the kind of helper as its value.
+const InternalLabel = "ludock.internal"
+
+const (
+	BackupHelper   = "backup-helper"
+	FileHelper     = "file-helper"
+	ConsoleHelper  = "console-helper"
+	MountValidator = "mount-validator"
+)
+
+// HelperLabels are the labels of a helper of kind.
+func HelperLabels(kind string) map[string]string {
+	return map[string]string{"ludock.enable": "false", InternalLabel: kind}
+}
+
+// HelperHost is the hardened host configuration of a helper: no network, a
+// read-only root, every capability dropped but caps, no privilege gain,
+// bounded resources, no stored output, and removal once it exits.
+func HelperHost(mounts []docker.MountSettings, caps ...string) *docker.HostConfig {
+	return &docker.HostConfig{Mounts: mounts, NetworkMode: "none", ReadonlyRootfs: true, AutoRemove: true,
+		CapDrop: []string{"ALL"}, CapAdd: caps, SecurityOpt: []string{"no-new-privileges"},
+		PidsLimit: helperPids, Memory: helperMemory, NanoCpus: helperCPUNano, LogConfig: NoLogs}
+}
 
 // HelperEnv keeps helper Go runtimes small.
 var HelperEnv = []string{"GOMAXPROCS=1", "GOMEMLIMIT=96MiB"}
@@ -122,7 +148,7 @@ func MountProof(ctx context.Context, client *docker.Client, images *Images, moun
 		return nil, err
 	}
 	timeout := strconv.Itoa(35 * 60 * 1000)
-	labels := map[string]string{"ludock.enable": "false", "ludock.internal": "mount-validator"}
+	labels := HelperLabels(MountValidator)
 	if operationID != "" {
 		timeout = "0"
 		labels["ludock.operation"] = operationID
@@ -132,16 +158,13 @@ func MountProof(ctx context.Context, client *docker.Client, images *Images, moun
 	// created without answering.
 	name := "ludock-validator-" + randomSuffix()
 	creating, cancel := context.WithTimeout(context.WithoutCancel(ctx), createLimit)
+	host := HelperHost([]docker.MountSettings{{Type: "bind", Source: "/", Target: helper.HostRoot, ReadOnly: true,
+		BindOptions: &docker.BindOptions{ReadOnlyForceRecursive: true}}}, "DAC_READ_SEARCH")
+	// Its result is read through its logs.
+	host.Memory, host.LogConfig = 128*1024*1024, nil
 	id, err := client.CreateHelper(creating, docker.ContainerCreate{Name: name,
 		Image: image, Entrypoint: []string{helper.Binary}, Cmd: helper.Command("mount-proof", sources, timeout)[1:],
-		User: "0", Labels: labels, Env: HelperEnv,
-		HostConfig: &docker.HostConfig{
-			Mounts:      []docker.MountSettings{{Type: "bind", Source: "/", Target: helper.HostRoot, ReadOnly: true, BindOptions: &docker.BindOptions{ReadOnlyForceRecursive: true}}},
-			NetworkMode: "none", ReadonlyRootfs: true, AutoRemove: true, CapDrop: []string{"ALL"},
-			CapAdd: []string{"DAC_READ_SEARCH"}, SecurityOpt: []string{"no-new-privileges"},
-			PidsLimit: helperPids, Memory: 128 * 1024 * 1024, NanoCpus: helperCPUNano,
-		},
-	})
+		User: "0", Labels: labels, Env: HelperEnv, HostConfig: host})
 	timedOut := creating.Err() != nil && ctx.Err() == nil
 	cancel()
 	if err != nil {

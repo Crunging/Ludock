@@ -19,15 +19,13 @@ type folderGuard struct {
 }
 
 // lane is which earlier calls make a call fail at once: those in its own
-// lane. The lanes were separate mechanisms before the guard, and merging any
-// would change which calls fail fast.
+// lane.
 type lane int
 
 const (
 	laneWork    lane = iota // file work: copies, saves, removing copies
 	laneMeasure             // checks of a second folder's free space
 	laneLook                // looks into a folder, validation, removal
-	laneArchive             // archive reads; no call consults it
 	laneCount
 )
 

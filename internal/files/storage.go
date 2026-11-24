@@ -300,10 +300,8 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 	}
 	id, err := s.Docker.CreateHelper(ctx, docker.ContainerCreate{
 		Image: image, Entrypoint: []string{helper.Binary}, Cmd: []string{"helper", "idle", "2100000"}, User: "0",
-		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "file-helper"}, Env: launch.HelperEnv,
-		HostConfig: &docker.HostConfig{Mounts: projections, NetworkMode: "none", ReadonlyRootfs: true, AutoRemove: true,
-			CapDrop: []string{"ALL"}, CapAdd: capabilities, SecurityOpt: []string{"no-new-privileges"},
-			PidsLimit: 64, Memory: 256 * 1024 * 1024, NanoCpus: 1_000_000_000, LogConfig: launch.NoLogs},
+		Labels: launch.HelperLabels(launch.FileHelper), Env: launch.HelperEnv,
+		HostConfig: launch.HelperHost(projections, capabilities...),
 	})
 	if err != nil {
 		proof.Cleanup()
@@ -407,13 +405,13 @@ func (s *Service) Close() {
 // One Ludock runs per Docker host, so at startup every one is left over.
 // Startup keeps the lock fence until this succeeds.
 func (s *Service) RemoveLeftovers(ctx context.Context) error {
-	for _, kind := range []string{"file-helper", "mount-validator"} {
-		helpers, err := s.Docker.ListContainers(ctx, true, docker.Filters{"label": {"ludock.internal=" + kind}})
+	for _, kind := range []string{launch.FileHelper, launch.MountValidator} {
+		helpers, err := s.Docker.ListContainers(ctx, true, docker.Filters{"label": {launch.InternalLabel + "=" + kind}})
 		if err != nil {
 			return err
 		}
 		for _, candidate := range helpers {
-			if candidate.Labels["ludock.internal"] != kind {
+			if candidate.Labels[launch.InternalLabel] != kind {
 				continue
 			}
 			if err := s.Docker.RemoveHelper(ctx, candidate.ID); err != nil {

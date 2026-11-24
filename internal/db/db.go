@@ -69,7 +69,7 @@ func inspect(path string) error {
 		return err
 	}
 	defer existing.Close()
-	return AssertCompatible(bg, existing, BaseSchemaVersion, LatestVersion())
+	return AssertCompatible(bg, existing, LatestVersion())
 }
 
 func readHeader(path string) (header [100]byte, err error) {
@@ -83,11 +83,7 @@ func readHeader(path string) (header [100]byte, err error) {
 }
 
 // Open opens or initializes the database at path (":memory:" for tests).
-func Open(path string) (*DB, error) {
-	return open(path, Migrations)
-}
-
-func open(path string, migrations []Migration) (result *DB, err error) {
+func Open(path string) (result *DB, err error) {
 	memory := path == ":memory:"
 	if !memory {
 		if info, ok := exists(path); ok && info.Size() > 0 {
@@ -131,7 +127,7 @@ func open(path string, migrations []Migration) (result *DB, err error) {
 		return nil, err
 	}
 	defer conn.Close()
-	if err := AssertCompatible(bg, conn, BaseSchemaVersion, LatestVersion()); err != nil {
+	if err := AssertCompatible(bg, conn, LatestVersion()); err != nil {
 		return nil, err
 	}
 	version, err := pragmaInt(bg, conn, "user_version")
@@ -147,7 +143,7 @@ func open(path string, migrations []Migration) (result *DB, err error) {
 			return nil, err
 		}
 	}
-	if err := ApplyMigrations(bg, conn, migrations, key); err != nil {
+	if err := ApplyMigrations(bg, conn, Migrations, key); err != nil {
 		return nil, err
 	}
 	if _, err := conn.ExecContext(bg, "PRAGMA journal_mode = WAL"); err != nil {
