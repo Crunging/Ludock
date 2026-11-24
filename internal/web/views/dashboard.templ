@@ -705,8 +705,8 @@ templ needsAttention(view AttentionView) {
 		</div>
 		if view.Error != "" {
 			<div class="needs-attention__error" role="alert">
-				<p>Unable to load attention items: { view.Error }</p>
-				<button class="secondary-btn" type="button" hx-get="/fragments/attention" hx-target="#attention">Retry attention check</button>
+				<p>{ view.Error }</p>
+				<button class="secondary-btn" type="button" hx-get="/fragments/attention" hx-target="#attention">Check again</button>
 			</div>
 		}
 		if view.DiscoveryUnavailable {
@@ -733,7 +733,7 @@ templ needsAttention(view AttentionView) {
 						if item.CanStart && !view.DiscoveryUnavailable {
 							<div class="needs-attention__actions">
 								<button class="secondary-btn secondary-btn--accent" type="button" hx-post={ "/servers/" + item.ServerID + "/start" } hx-target="#action-error" data-busy-label="Working…" aria-label={ "Start " + item.ServerName }>Start</button>
-								<a href={ templ.SafeURL(info.Link) } class="text-link" aria-label={ "Details: " + item.ServerName + " — " + info.Title }>Details</a>
+								<a href={ templ.SafeURL(info.Link) } class="text-link" aria-label={ "Details: " + item.ServerName + ", " + info.Title }>Details</a>
 							</div>
 						} else if item.Kind == "restore" && !view.DiscoveryUnavailable {
 							<div class="needs-attention__actions">
@@ -747,10 +747,10 @@ templ needsAttention(view AttentionView) {
 									data-confirm-action="Undo the restore"
 									data-busy-label="Working…"
 								>Undo the restore</button>
-								<a href={ templ.SafeURL(info.Link) } class="text-link" aria-label={ "Details: " + item.ServerName + " — " + info.Title }>Details</a>
+								<a href={ templ.SafeURL(info.Link) } class="text-link" aria-label={ "Details: " + item.ServerName + ", " + info.Title }>Details</a>
 							</div>
 						} else {
-							<a href={ templ.SafeURL(info.Link) } class="text-link needs-attention__action" aria-label={ info.Action + ": " + attentionSubject(item) + " — " + info.Title }>{ info.Action }</a>
+							<a href={ templ.SafeURL(info.Link) } class="text-link needs-attention__action" aria-label={ info.Action + ": " + attentionSubject(item) + ", " + info.Title }>{ info.Action }</a>
 						}
 					</li>
 				}

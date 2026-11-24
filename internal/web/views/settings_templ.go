@@ -277,7 +277,7 @@ func fixedByDeployment(variable string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</code> in Ludock’s Compose file, which wins over this page.</p>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</code> in Ludock’s environment, which wins over this page.</p>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1947,8 +1947,8 @@ func destinationHealth(n NotificationDestinationView) templ.Component {
 func alertDescription(a notify.Alert) string {
 	return map[notify.Alert]string{
 		notify.ServerProblems: "A server goes down or recovers, its game stops answering, or it runs low on disk or memory.",
-		notify.FailedWork:     "A backup fails, or a scheduled action fails or can’t run.",
-		notify.Results:        "A restore or update finishes or fails.",
+		notify.FailedWork:     "A backup, second copy, save of Ludock’s data, or scheduled action fails or can’t run.",
+		notify.Results:        "A restore or update fails. Ones that succeed show their result in the panel.",
 		notify.NewerImages:    "A newer image is published for a server. The server list shows this too.",
 	}[a]
 }
@@ -2582,9 +2582,9 @@ func secretField(n NotificationDestinationView, name, label, placeholder, help s
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var93 string
-		templ_7745c5c3_Var93, templ_7745c5c3_Err = templruntime.NewAttributeExpression(map[bool]string{true: "Saved — leave blank to keep it", false: placeholder}[n.Saved[name]]).Resolve(ctx)
+		templ_7745c5c3_Var93, templ_7745c5c3_Err = templruntime.NewAttributeExpression(map[bool]string{true: "Saved (leave blank to keep it)", false: placeholder}[n.Saved[name]]).Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 766, Col: 109}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 766, Col: 107}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var93)
 		if templ_7745c5c3_Err != nil {

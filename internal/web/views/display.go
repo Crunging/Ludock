@@ -193,7 +193,7 @@ func SaveDetail(result map[string]any) string {
 		case "saves_on_stop":
 			return "The game saves its world when it stops."
 		case "unsupported":
-			return "No save command is configured for this game."
+			return "This game doesn’t have a save command."
 		}
 		return "Save skipped; shutdown continued."
 	}

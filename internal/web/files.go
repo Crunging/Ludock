@@ -131,7 +131,7 @@ func (s *Server) filesView(r *http.Request, request *Request) views.FilesView {
 		f.Root = f.Roots[index]
 	} else if query.Get("root") != "" && r.Header.Get("HX-Request") != "" {
 		// A stale page's refresh keeps showing only the folder it showed.
-		f.ListError = "This storage location is no longer available. Reload the page."
+		f.ListError = "This data folder is no longer available. Reload the page."
 		return f
 	}
 	action, err := s.startAction(r, request, f.ServerID, authz.FilesRead)

@@ -159,7 +159,7 @@ func TestSetupCodeThrottling(t *testing.T) {
 			code = wrong
 		}
 		_, err := s.CompleteSetup(ctx, "x", "short", code, Client{IP: "192.0.2.10"})
-		if !apperr.Is(err, "SETUP_AUTHORIZATION_REQUIRED") || err.Error() != "Initial setup authorization failed" {
+		if !apperr.Is(err, "SETUP_AUTHORIZATION_REQUIRED") || err.Error() != "That setup code didn’t work. Check the latest code in docker compose logs ludock and try again." {
 			t.Fatal(err)
 		}
 	}

@@ -305,7 +305,7 @@ func (s *Server) configureAvailability(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	invalid := apperr.New("INVALID_REQUEST", 400,
-		"Enter a grace period of 10 to 86400 seconds, alert levels of 50 to 99%, and a memory time of 1 to 60 minutes.")
+		"Enter a wait before alerting of 10 to 86400 seconds, alert levels of 50 to 99%, and a memory time of 1 to 60 minutes.")
 	values := map[string]any{"enabled": r.PostFormValue("enabled") == "true", "maintenance": r.PostFormValue("maintenance") == "true",
 		"diskAlert": r.PostFormValue("diskAlert") == "true", "memoryAlert": r.PostFormValue("memoryAlert") == "true",
 		"recover": r.PostFormValue("recover") == "true"}

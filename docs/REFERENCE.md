@@ -193,7 +193,9 @@ Variables whose names look like credentials, such as `RCON_PASSWORD`,
 is hidden only where it's printed exactly as set; a game that changes it, such
 as by encoding or shortening it, can still show it.
 
-**Which containers Ludock manages**, in order:
+### Which containers Ludock manages
+
+In order:
 
 1. A `ludock.enable` label decides. Any value other than `true` or `false`
    leaves the container out.
@@ -309,12 +311,13 @@ free space left. Under **Settings → Advanced → Backup folder and limits**:
 - **Total limit for all backups (GiB):** off by default.
 - **Also copy backups to:** the [second copy](#a-second-copy-of-backups).
 
-Once these settings are saved, including turning storage off, Ludock never
-sets them up again by itself.
+Once these settings are saved, Ludock never changes them by itself (including
+turning the second copy back on if you chose **No second copy**). To turn
+backups off completely, set `LUDOCK_BACKUP_ROOTS` to empty.
 
 ### Backups on another disk
 
-Replace the `backups` volume in `compose.yaml` with a folder on that disk,
+Replace the `ludock-backups` volume in `compose.yaml` with a folder on that disk,
 created first, writable, and separate from game data. If you already have
 backups, stop Ludock and copy the old volume's files into the new folder
 first, including the `ludock-data-*.tar` saves; Ludock can't use archives left
@@ -656,18 +659,26 @@ a scheduled run that waited for players to leave.
 ### After an interruption
 
 Work is recorded before it runs. When Ludock starts after a crash or restart,
-it removes helpers left behind before anything else runs, waits for a stop that
-was in progress instead of sending it again, finishes or rolls back an
-interrupted restore from its journal, removes unpacking leftovers, and starts
-a server that a backup, a restart with a backup first, or an update had
-stopped, without taking the backup again. An update interrupted before its new
-container ran didn't happen; one interrupted while its new container was being
-checked is undone and the server left stopped, since the new version may have
-changed the game data; one that had begun removing the original is finished.
-**Activity** says which. Work it can't safely finish is marked interrupted,
-never repeated, and scheduled runs missed by more than five minutes are
-recorded as missed. Cancelled work stays
-cancelled, and a warning Ludock resumes can still be cancelled.
+it removes helpers left behind before anything else runs, then reconciles
+anything that was in progress:
+
+- **Stops:** waits for a stop that was in progress instead of sending it again.
+- **Backups and restarts with a backup first:** starts a server that was
+  stopped for a backup, without taking the backup again.
+- **Restores and unpacking:** finishes or rolls back an interrupted restore
+  from its journal, and removes leftovers from interrupted archive unpacks.
+- **Updates:** an update interrupted before its new container ran didn't
+  happen, and the server is returned to how it was; one interrupted while its
+  new container was being checked is undone and the server left stopped (since
+  the new version may have changed the game data); one that had begun removing
+  the original is finished.
+- **Everything else:** work Ludock can't safely finish is marked interrupted,
+  never repeated. Cancelled work stays cancelled, and a warning Ludock resumes
+  can still be cancelled. One-time scheduled runs missed by more than 5 minutes
+  are recorded as missed, and repeating ones missed by more than 15 minutes
+  skip that time.
+
+**Activity** says what happened to each piece of work.
 
 A restore that stops partway, because something outside Ludock started the
 server or a step failed, always ends in one of these states, which its entry

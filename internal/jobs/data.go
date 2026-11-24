@@ -287,7 +287,7 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 // keepStoppedAfterFailedBackup leaves the server stopped, since starting
 // could update the game and change the world, and says so once stopped.
 func (j *Jobs) keepStoppedAfterFailedBackup(ctx context.Context, server *servers.Context, job *ops.Context) error {
-	return j.keepStopped(ctx, server, job, notify.FailedWork, "the backup failed, so the server was left stopped. Review the operation, then start it.")
+	return j.keepStopped(ctx, server, job, notify.FailedWork, "the backup failed, so the server was left stopped. Check its Activity, then start it.")
 }
 
 func (j *Jobs) keepStopped(ctx context.Context, server *servers.Context, job *ops.Context, alert notify.Alert, reason string) error {

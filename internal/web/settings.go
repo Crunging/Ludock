@@ -310,7 +310,7 @@ func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, requ
 	}
 	b.CopyTo, copyChosen = copyBeside(b.Destination, b.CopyTo, copyChosen)
 	invalid := apperr.New("INVALID_REQUEST", 400,
-		"Check the backup settings: choose a folder, a free-space reserve of zero or more, and a total limit above zero or none.")
+		"Check the backup settings: choose a backup folder, a minimum free space of 0 or more, and a total limit above 0 (or leave it empty).")
 	maxGiB, maxErr := 0.0, error(nil)
 	if b.MaxGiB != "" {
 		maxGiB, maxErr = strconv.ParseFloat(b.MaxGiB, 64)

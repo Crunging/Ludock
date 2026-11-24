@@ -78,7 +78,7 @@ func ValidateEntry(header *tarstream.Header, roots []Root) error {
 		return fail("UNSAFE_ARCHIVE", "The archive contains an unsafe path.")
 	}
 	if name != "snapshot" && (!strings.HasPrefix(name, "snapshot/") || !slices.ContainsFunc(roots, func(root Root) bool { return parts[1] == root.ID })) {
-		return fail("UNSAFE_ARCHIVE", "The archive contains a path outside its recorded roots.")
+		return fail("UNSAFE_ARCHIVE", "The archive has a file outside the server’s data folders.")
 	}
 	if header.Type != "file" && header.Type != "directory" {
 		return fail("UNSAFE_ARCHIVE", "Ludock backs up and restores only ordinary files and folders, and found something else, such as a symbolic link, a hard link, or a device file.")
@@ -158,7 +158,7 @@ func validateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func(
 	}
 	for _, root := range roots {
 		if !found[root.ID] {
-			return nil, fail("INVALID_BACKUP", "The archive is missing a recorded data root.")
+			return nil, fail("INVALID_BACKUP", "The archive is missing one of the server’s data folders.")
 		}
 	}
 	return staged, nil
@@ -183,7 +183,7 @@ func (s *Storage) Validate(directory, id string, roots []Root, maxBytes int64, c
 		return nil, err
 	}
 	if hex.EncodeToString(hash.Sum(nil)) != checksum {
-		return nil, fail("BACKUP_CHECKSUM", "The backup checksum does not match. Restore was stopped before changing game data.")
+		return nil, fail("BACKUP_CHECKSUM", "The backup archive is damaged (its checksum doesn’t match). Nothing was changed.")
 	}
 	return staged, nil
 }

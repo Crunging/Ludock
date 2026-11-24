@@ -131,7 +131,7 @@ func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, 
 	return result, nil
 }
 
-var errRestoreCapacity = fail("RESTORE_CAPACITY", "The server’s disk doesn’t have room to unpack the backup next to the current data and still keep its free-space reserve. Free up space on that disk, then try again.")
+var errRestoreCapacity = fail("RESTORE_CAPACITY", "The server’s disk doesn’t have room to unpack the backup next to the current data and still keep its minimum free space. Free up space on that disk, then try again.")
 
 // assertStagingRoom refuses, before the server stops, a restore that cannot
 // fit: roots on one filesystem must fit together above the reserve. Staging

@@ -206,7 +206,7 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 }
 
 const failedReplacement = "the update did not finish after its new container started, which may have changed the game data, " +
-	"so the previous container was restored and left stopped. Review the operation, then start it."
+	"so the previous container was restored and left stopped. Check its Activity, then start it."
 
 // Stages of a swap, in order. Each is saved before the step it names, so
 // recovery knows how far Docker may have got.
@@ -297,7 +297,7 @@ var (
 	errUpdateState        = apperr.New("INVALID_OPERATION_STATE", 409, "Saved update state is invalid; administrator review is required.")
 	errUnnamedReplacement = apperr.New("REPLACEMENT_UNNAMED", 409,
 		"The updated container replaced the previous one but could not take its name and restart policy. Rename it and set its restart policy in Docker.")
-	errImageChanged         = apperr.New("IMAGE_CHANGED", 409, "Another manager changed the selected image during the update")
+	errImageChanged         = apperr.New("IMAGE_CHANGED", 409, "Something outside Ludock changed the server’s image during the update. Check the server before trying again.")
 	errReplacementUnhealthy = apperr.New("REPLACEMENT_UNHEALTHY", 409,
 		"The updated container reported itself unhealthy. The previous container is restored and left stopped, since the new version may have changed the game data.")
 )

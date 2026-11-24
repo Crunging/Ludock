@@ -31,9 +31,9 @@ You need Docker with Compose, on Linux (AMD64 or ARM64).
 
 3. Open `http://<your-host>:3000`, enter the code, and create your account.
 
-4. Follow the short **Finish setting up** list on the first page. It takes
-   you to where alerts are sent, and turns on nightly backups and automatic
-   restarts in a click each.
+4. Follow the short **Finish setting up** list on the first page. It helps you
+   set up alerts, and turns on nightly backups and automatic restarts in a click
+   each.
 
 ![The Finish setting up list above the server list](./docs/screenshots/setup.png)
 
@@ -44,25 +44,24 @@ server list.
 ## What it does
 
 - **Start, stop, and restart**, saving the world first on games that can.
+  Taking a running server down (to stop, restart, back up, restore, or update)
+  can warn players in the game a minute ahead and be cancelled until then; if
+  you cancel, players hear it's off.
 - **Consoles and logs** in the browser, and a list of who is online, with kick,
   ban, and the Minecraft allowlist.
 - **Files:** upload, edit, unpack, and download a server's data.
 - **Backups** as plain tar archives, on a schedule, with weeks to months kept
   and an optional second copy on another disk. Restore a whole backup or one
   file.
-- **Schedules** for starts, stops, restarts, backups, and console commands.
-  Scheduled stops, restarts, and backups wait a while for players to leave
-  where Ludock can tell who is online, and warn anyone still on with a
-  countdown where the game allows, unless you say otherwise.
-  Restart, Stop, backups, restores, and updates offer to warn whoever is online
-  when the work starts, a minute ahead, and can be cancelled until then; players
-  hear when it's off.
+- **Schedules** for starts, stops, restarts, backups, and console commands. By
+  default, scheduled stops, restarts, and backups wait for players to leave and
+  warn anyone still online with a countdown, where the game allows.
 - **Alerts** to Discord, ntfy, Gotify, Telegram, email, or a webhook when a
-  server goes down, its game stops answering, or a disk fills up, and an
-  automatic restart when a game hangs. If alerts stop getting through, Ludock
-  says so.
-- **Image updates**, with a backup first and the old container put back if the
-  new one fails.
+  server goes down, its game stops answering, a backup fails, or a disk fills
+  up, plus automatic restarts when a game hangs. If alerts stop getting through,
+  Ludock says so.
+- **Image updates**, with a backup first and the previous version put back if
+  the new one fails to start.
 - **Sharing** a server with a friend by invite link, letting them see it, run
   it, or also change its files and make backups. Restoring and updates stay
   with administrators.

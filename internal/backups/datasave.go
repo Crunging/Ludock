@@ -88,7 +88,7 @@ func dataProblem(err error) string {
 	case apperr.Is(err, "BACKUP_DATA_SNAPSHOT"):
 		return errDataSnapshot.Message
 	case apperr.Is(err, "BACKUP_COPY_SPACE"), apperr.Is(err, codeDisk):
-		return "The backup folder is down to its free-space reserve."
+		return "The backup folder is down to its minimum free space."
 	case apperr.Is(err, "BACKUP_COPY_STALLED"):
 		return "The backup folder stopped responding."
 	case apperr.Is(err, "BACKUP_SOURCE_OVERLAP"):

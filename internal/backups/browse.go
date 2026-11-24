@@ -236,7 +236,7 @@ func (s *Storage) ValidateItem(directory, id string, roots []Root, maxBytes int6
 		return 0, err
 	}
 	if hex.EncodeToString(hash.Sum(nil)) != checksum {
-		return 0, fail("BACKUP_CHECKSUM", "The backup checksum does not match. Restore was stopped before changing game data.")
+		return 0, fail("BACKUP_CHECKSUM", "The backup archive is damaged (its checksum doesn’t match). Nothing was changed.")
 	}
 	if !found {
 		return 0, errPathNotFound

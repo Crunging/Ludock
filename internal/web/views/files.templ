@@ -111,13 +111,13 @@ templ FilesPage(page Page, f FilesView) {
 								@ServerState(f.State, f.Health, f.Exit)
 							}
 						</div>
-						<p class="page__subtitle">Worlds, configuration, backups, and mods</p>
+						<p class="page__subtitle">Worlds, configuration, and mods</p>
 					</div>
 				</div>
 				if len(f.Roots) > 1 {
 					<form class="files-root" method="get" action={ templ.SafeURL("/files/" + f.ServerID) }>
 						<label>
-							Storage location
+							Data folder
 							<select name="root" data-autosubmit>
 								for _, root := range f.Roots {
 									<option value={ root.ID } selected?={ root.ID == f.Root.ID }>{ root.Name } ({ root.Path })</option>
@@ -214,7 +214,7 @@ templ FilesPage(page Page, f FilesView) {
 						@FileList(f)
 					</form>
 					if !f.CanManage {
-						<p class="file-manager__note">Your account can browse and download files but cannot change them.</p>
+						<p class="file-manager__note">You can browse and download files, but not change them.</p>
 					}
 				</section>
 			}
