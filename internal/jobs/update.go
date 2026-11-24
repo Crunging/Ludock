@@ -135,12 +135,13 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 // for one is started again even if the backup didn't complete, and the
 // backup is not taken again.
 func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[string]any, error) {
-	if job.Job.Recovery.InitialRunning == nil {
-		return nil, nil
-	}
 	completed := j.backupCompleted(ctx, job)
 	if !completed {
 		defer j.notifyInterrupted(ctx, job, notify.FailedWork, "backup-failed:"+job.Job.ID, backupInterrupted)
+	}
+	// Cut before the stop, such as while the world saved: nothing changed.
+	if job.Job.Recovery.InitialRunning == nil {
+		return nil, nil
 	}
 	if err := j.recoverBackup(ctx, job, true); err != nil {
 		return nil, err

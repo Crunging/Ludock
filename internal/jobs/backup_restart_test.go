@@ -53,3 +53,27 @@ func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 		})
 	}
 }
+
+// Ludock is killed while a restart that backs up first waits for the world
+// to save, before anything stopped. Recovery leaves the server running and
+// alerts once that there's no new backup.
+func TestBackupRestartInterruptedBeforeStop(t *testing.T) {
+	f := setup(t)
+	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
+	f.runner.Stop()
+	job, err := f.runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: "restart",
+		BindingRevision: logical.BindingRevision, Input: map[string]any{"createBackup": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.jobs.DB.Exec("UPDATE operations SET status='running',phase='waiting_for_save' WHERE id=?", job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runner.Start(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	recovered, _ := f.runner.Get(ctx, job.ID)
+	if want := []string{"mc: " + backupInterrupted}; recovered.Status != ops.Interrupted || !f.running() || !slices.Equal(f.alerts, want) {
+		t.Fatalf("%+v, alerts %v", recovered, f.alerts)
+	}
+}
