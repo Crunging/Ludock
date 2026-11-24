@@ -1,9 +1,11 @@
 package jobs
 
 import (
+	"bufio"
 	"encoding/json"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
@@ -82,5 +84,28 @@ func TestBackupRestartInterruptedBeforeStop(t *testing.T) {
 	}
 	if f.engine.Container(left) != nil {
 		t.Fatal("the check's helper was left")
+	}
+}
+
+// Something outside Ludock stops the server after a restart that backs up
+// first found it running, while it checks the data before the stop. The
+// backup is still taken, and the server stays stopped, as its owner left it
+// and as recovery would leave it.
+func TestBackupRestartKeepsServerStoppedElsewhere(t *testing.T) {
+	f := setup(t)
+	run := f.engine.Exec
+	var stopped sync.Once
+	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+		if c.ID != f.game {
+			stopped.Do(func() {
+				f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.Status, c.State.Running = "exited", false })
+			})
+		}
+		return run(c, cmd, stdin, stdout, stderr)
+	}
+	job := f.run(t, "restart", map[string]any{"createBackup": true})
+	if backups, _ := f.jobs.Backups.List(ctx, f.serverID); job.Status != ops.Succeeded || f.running() || len(backups) != 1 ||
+		job.Result["backupId"] != backups[0].ID || job.Result["guidance"] != stoppedElsewhere {
+		t.Fatalf("%+v, running %v, backups %v", job, f.running(), backups)
 	}
 }
