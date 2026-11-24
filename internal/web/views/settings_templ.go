@@ -413,7 +413,7 @@ func LoggingForm(l LoggingSettings) templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "<form class=\"stack-form settings-group\" id=\"logging-form\" hx-post=\"/settings/logging\" hx-target=\"this\" hx-swap=\"outerHTML\" hx-sync=\"this:replace\"><h3>Verbose logging</h3>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "<form class=\"stack-form settings-group\" id=\"logging-form\" hx-post=\"/settings/logging\" hx-target=\"this\" hx-swap=\"outerHTML\" hx-disable=\"find input\"><h3>Verbose logging</h3>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -716,7 +716,7 @@ func ImageUpdateSettingsForm(u ImageUpdateSettings) templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "<form class=\"stack-form\" id=\"image-update-settings-form\" hx-post=\"/settings/image-updates\" hx-target=\"this\" hx-swap=\"outerHTML\" hx-sync=\"this:replace\"><label class=\"check-label\"><input type=\"checkbox\" id=\"image-update-enabled\" name=\"enabled\" value=\"true\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "<form class=\"stack-form\" id=\"image-update-settings-form\" hx-post=\"/settings/image-updates\" hx-target=\"this\" hx-swap=\"outerHTML\" hx-disable=\"find input\"><label class=\"check-label\"><input type=\"checkbox\" id=\"image-update-enabled\" name=\"enabled\" value=\"true\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

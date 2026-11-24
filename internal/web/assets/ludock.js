@@ -516,9 +516,18 @@
 
   // data-autosubmit submits its form on change (a GET form keeps working
   // without scripts through its submit button).
+  // A field its form disables while saving loses focus; it gets it back after.
+  var refocus = null;
   document.addEventListener("change", function (event) {
     var field = event.target;
-    if (field.matches && field.matches("[data-autosubmit]") && field.form) field.form.requestSubmit();
+    if (!field.matches || !field.matches("[data-autosubmit]") || !field.form) return;
+    refocus = field.id || null;
+    field.form.requestSubmit();
+  });
+  document.addEventListener("htmx:finally:request", function () {
+    var field = refocus && document.getElementById(refocus);
+    refocus = null;
+    if (field && (!document.activeElement || document.activeElement === document.body)) field.focus();
   });
 
   // Dialogs swapped in with data-open-on-load open as modals and leave the
