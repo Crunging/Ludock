@@ -15,9 +15,9 @@ After the first administrator is created, the server list shows a **Finish
 setting up** list with only what's still undone. Each item does its job in one
 click, and goes away once done.
 
-- **Get alerts** opens the notification settings. It stays until a destination
-  is on and working. If every alert sent to it so far has failed, the item says
-  why and links straight to its settings.
+- **Get alerts** opens the notification settings. It goes away once a
+  destination is on. If every alert sent to that destination so far has
+  failed, it stays, says why, and links straight to its settings.
 - **Back up your servers** offers **Back up every night**: after you confirm,
   each server that has data folders and no repeating schedule that backs it up
   (a backup, or a restart with **Back up first**; a paused schedule still
