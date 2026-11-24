@@ -30,6 +30,8 @@ type Server struct {
 	ClientIP *auth.ClientIP
 	// Docker checks the Docker connection for /api/v1/health.
 	Docker HealthCheck
+	// Version is this build's version, shown on the System page.
+	Version string
 
 	mux      *http.ServeMux
 	healthMu sync.Mutex

@@ -99,7 +99,7 @@ func serve() int {
 		return 1
 	}
 	accounts := services.Auth
-	server := &web.Server{App: services, DB: database, Auth: accounts, ClientIP: services.ClientIP, Docker: services.Docker.Ping}
+	server := &web.Server{App: services, DB: database, Auth: accounts, ClientIP: services.ClientIP, Docker: services.Docker.Ping, Version: version}
 
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
