@@ -710,12 +710,13 @@ A Compose server is identified by its project, service, and replica, and a
 standalone container by its name, so renaming a standalone container or a
 Compose service, or moving a Compose project to another folder (its default
 project name), makes a new server. The old one is listed as missing, and its
-backups stay on its Backups tab for administrators to download or delete; Ludock
-never removes them on its own. Recreating it with a new password, port, label, or environment
-variable keeps its panel choices, history, sharing, and schedules. A change to
-its game or to the data folders Ludock reads and backs up pauses the access of
-everyone it's shared with, and their schedules, until an administrator chooses
-**Confirm and restore access**, since what they were given has changed.
+backups stay on its Backups tab for administrators to download or delete;
+Ludock never removes them on its own. Recreating it with a new password, port,
+label, or environment variable keeps its panel choices, history, sharing, and
+schedules. A change to its game or to the data folders Ludock reads and backs
+up pauses the access of everyone it's shared with, and their schedules, until
+an administrator chooses **Confirm and restore access**, since what they were
+given has changed.
 
 ### Helpers
 
