@@ -109,7 +109,9 @@ func readForm(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 	controller := http.NewResponseController(w)
-	controller.SetReadDeadline(time.Now().Add(formDeadline))
+	if r.ContentLength != 0 {
+		controller.SetReadDeadline(time.Now().Add(formDeadline))
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, formLimit)
 	if err := r.ParseForm(); err != nil {
 		// The deadline stays: Go reads the rest of the body before answering.
@@ -119,8 +121,11 @@ func readForm(w http.ResponseWriter, r *http.Request) error {
 		}
 		return apperr.New("INVALID_REQUEST", 400, "Invalid request")
 	}
-	// Once the body is read, a passing deadline would cancel the request.
-	controller.SetReadDeadline(time.Time{})
+	// Only a URL-encoded body is read to its end, after which a passing
+	// deadline would cancel the request.
+	if r.ContentLength != 0 && kind == "application/x-www-form-urlencoded" {
+		controller.SetReadDeadline(time.Time{})
+	}
 	return nil
 }
 

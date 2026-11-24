@@ -466,7 +466,7 @@ func TestIdentityFollowsDataFolders(t *testing.T) {
 }
 
 // A game folder that holds Ludock's own backup folder, or a volume Ludock
-// keeps its data in, is never offered in Files or backups: a member with file
+// keeps its data in (by name or by its folder on the host), is never offered in Files or backups: a member with file
 // access could otherwise download Ludock's password hashes and keys.
 func TestFileRootsLeaveOutLudocksOwnFolders(t *testing.T) {
 	engine, s := setup(t)
@@ -474,13 +474,14 @@ func TestFileRootsLeaveOutLudocksOwnFolders(t *testing.T) {
 	engine.AddContainer(fakedocker.GameOptions{ID: "ludock-self", Name: "ludock-self", Image: "ghcr.io/crunging/ludock:1", Running: true,
 		Mounts: []docker.MountPoint{
 			{Type: "bind", Source: "/srv/games/ludock-backups", Destination: "/backups", RW: true},
-			{Type: "volume", Name: "ludock-data", Source: "/var/lib/docker/volumes/ludock-data/_data", Destination: "/data", RW: true},
+			{Type: "volume", Name: "ludock-data", Source: "/srv/docker/volumes/ludock-data/_data", Destination: "/data", RW: true},
 		}})
 	s.Observer.Self = "ludock-self"
 	id := engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
 		Mounts: []docker.MountPoint{
 			{Type: "bind", Source: "/srv/games", Destination: "/data", RW: true},
-			{Type: "volume", Name: "ludock-data", Source: "/var/lib/docker/volumes/ludock-data/_data", Destination: "/shared", RW: true},
+			{Type: "volume", Name: "ludock-data", Source: "/srv/docker/volumes/ludock-data/_data", Destination: "/shared", RW: true},
+			{Type: "bind", Source: "/srv/docker/volumes", Destination: "/volumes", RW: true},
 			{Type: "bind", Source: "/srv/mods", Destination: "/mods", RW: true},
 		}})
 	want := []files.Root{{ID: files.RootID("/mods"), Name: "mods", Path: "/mods"}}
@@ -488,10 +489,17 @@ func TestFileRootsLeaveOutLudocksOwnFolders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	found := false
 	for _, observed := range listed {
-		if observed.Container.ID == id && !reflect.DeepEqual(observed.Container.FileRoots, want) {
-			t.Fatal("listed", observed.Container.FileRoots)
+		if observed.Container.ID == id {
+			found = true
+			if !reflect.DeepEqual(observed.Container.FileRoots, want) {
+				t.Fatal("listed", observed.Container.FileRoots)
+			}
 		}
+	}
+	if !found {
+		t.Fatal("game not listed")
 	}
 	if got := inspectTest(t, s, id).Container.FileRoots; !reflect.DeepEqual(got, want) {
 		t.Fatal("inspected", got)

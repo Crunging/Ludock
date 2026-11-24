@@ -573,9 +573,17 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 	}
 	defer action.Done()
 	// The upload helper stops after 30 minutes or 60 seconds without data.
-	http.NewResponseController(w).SetReadDeadline(time.Now().Add(31 * time.Minute))
+	controller := http.NewResponseController(w)
+	controller.SetReadDeadline(time.Now().Add(31 * time.Minute))
 	details := map[string]any{"root": root, "path": path, "name": name, "size": size}
-	if err := s.App.Files.Upload(action.Ctx, fileTarget(action), root, path, name, size, r.Body, action.Assert); err != nil {
+	body := &countingReader{reader: r.Body}
+	if err := s.App.Files.Upload(action.Ctx, fileTarget(action), root, path, name, size, body, action.Assert); err != nil {
+		if body.read < size {
+			// Answer without waiting for the rest of a body nothing will read.
+			// A body read to its end must keep its deadline: a passing one
+			// cancels the request.
+			controller.SetReadDeadline(time.Now())
+		}
 		if !unconfirmed(err) {
 			s.fail(w, r, request, err)
 			return
@@ -588,4 +596,15 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 	}
 	s.audit(r, request, "server.file.uploaded", action.Logical.ID, details)
 	w.WriteHeader(http.StatusCreated)
+}
+
+type countingReader struct {
+	reader io.Reader
+	read   int64
+}
+
+func (c *countingReader) Read(buffer []byte) (int, error) {
+	n, err := c.reader.Read(buffer)
+	c.read += int64(n)
+	return n, err
 }

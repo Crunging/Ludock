@@ -85,18 +85,23 @@ func TestStalledBodiesAreAnswered(t *testing.T) {
 	clientIP, _ := auth.NewClientIP("")
 	server := httptest.NewServer((&Server{DB: dbtest.Open(t), ClientIP: clientIP}).Handler())
 	t.Cleanup(server.Close)
-	for _, path := range []string{"/logout", "/login"} {
+	for _, c := range []struct{ path, kind string }{
+		{"/logout", "application/x-www-form-urlencoded"},
+		{"/login", "application/x-www-form-urlencoded"},
+		{"/login", "text/plain"},
+	} {
+		path := c.path + " " + c.kind
 		conn, err := net.Dial("tcp", server.Listener.Addr().String())
 		if err != nil {
 			t.Fatal(err)
 		}
-		fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: panel\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 200000\r\n\r\nu", path)
+		fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: panel\r\nContent-Type: %s\r\nContent-Length: 200000\r\n\r\nu", c.path, c.kind)
 		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		line, err := bufio.NewReader(conn).ReadString('\n')
 		conn.Close()
 		if err != nil {
 			t.Errorf("%s: no answer: %v", path, err)
-		} else if !strings.HasPrefix(line, "HTTP/1.1 4") {
+		} else if !strings.HasPrefix(line, "HTTP/1.1 ") {
 			t.Errorf("%s: %q", path, line)
 		}
 	}
