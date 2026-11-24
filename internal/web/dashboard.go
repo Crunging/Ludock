@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/events"
@@ -276,6 +277,9 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 		if err == nil && createBackup {
 			if _, err = s.App.Authz.Assert(r.Context(), user, resolved.Logical.ID, authz.BackupsCreate); err == nil {
 				err = jobs.AssertRunningForBackupRestart(resolved.Container.State)
+			}
+			if err == nil && len(resolved.Container.FileRoots) == 0 {
+				err = backups.ErrNoRoots
 			}
 		}
 		if err != nil {

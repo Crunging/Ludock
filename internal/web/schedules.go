@@ -36,11 +36,22 @@ func scheduleActions(view *servers.View) []string {
 // the schedule uses, and a server its action can run on. The service checks
 // again.
 func canRunSchedule(view *servers.View, input schedules.Input) bool {
-	if !can(view, authz.SchedulesManage) || view.Refuses(input.Action) ||
-		((input.Action == "backup" || input.CreateBackup) && !canBeBackedUp(view)) {
+	if !can(view, authz.SchedulesManage) || scheduleRefusal(view, input) != nil {
 		return false
 	}
 	return !slices.ContainsFunc(input.Capabilities(), func(capability authz.Capability) bool { return !can(view, capability) })
+}
+
+// scheduleRefusal is why a schedule can't run on this server at all: Docker
+// deletes the server when it stops, or it has no data folders to back up.
+func scheduleRefusal(view *servers.View, input schedules.Input) error {
+	if err := view.Refusal(input.Action); err != nil {
+		return err
+	}
+	if (input.Action == "backup" || input.CreateBackup) && view.NoDataFolders {
+		return backups.ErrNoRoots
+	}
+	return nil
 }
 
 // scheduleForm opens on a daily restart, backing up first when this person
@@ -258,10 +269,7 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 		err = apperr.New("INVALID_REQUEST", 400, "This server's game console doesn't accept commands")
 	}
 	if err == nil {
-		err = d.Row.Server.Refusal(input.Action)
-	}
-	if err == nil && (input.Action == "backup" || input.CreateBackup) && d.Row.Server.NoDataFolders {
-		err = backups.ErrNoRoots
+		err = scheduleRefusal(&d.Row.Server, input)
 	}
 	if err == nil {
 		if scheduleID == "" {
@@ -309,6 +317,14 @@ func (s *Server) toggleSchedule(w http.ResponseWriter, r *http.Request, request 
 		return
 	}
 	enabled := r.PostFormValue("enabled") == "true"
+	// Resuming is refused like saving, for a list shown before the server
+	// changed or a forged request.
+	if enabled {
+		if err := s.resumeRefusal(r, request); err != nil {
+			s.fail(w, r, request, err)
+			return
+		}
+	}
 	_, err = s.App.Schedules.SetEnabled(r.Context(), request.User(), request.Principal.TokenHash, r.PathValue("id"), r.PathValue("schedule"), revision, enabled)
 	// A stale list reloads either way.
 	w.Header().Set("HX-Trigger", "schedules-changed")
@@ -321,6 +337,23 @@ func (s *Server) toggleSchedule(w http.ResponseWriter, r *http.Request, request 
 		message = "Schedule resumed."
 	}
 	s.scheduleOutcome(w, r, request, message)
+}
+
+func (s *Server) resumeRefusal(r *http.Request, request *Request) error {
+	d, err := s.detail(r, request, r.PathValue("id"), "schedules", false)
+	if err != nil {
+		return err
+	}
+	list, err := s.App.Schedules.List(r.Context(), request.User(), r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	for _, item := range list {
+		if item.ID == r.PathValue("schedule") {
+			return scheduleRefusal(&d.Row.Server, item.Input)
+		}
+	}
+	return nil
 }
 
 // scheduleOutcome sends a change's notice with the refreshed list, so no row
