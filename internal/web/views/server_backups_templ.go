@@ -334,7 +334,7 @@ func backupsTabBody(b BackupsView) templ.Component {
 			}
 		}
 		if !b.NoData && !b.Gone {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "<details class=\"disclosure\" id=\"backup-retention\"><summary>Which backups Ludock keeps</summary><p>The 3 newest, plus the last one of each of the 7 most recent days, 4 weeks, and 6 months with backups. The rest are removed after each new backup, so backing up rarely never loses old ones.</p><p>Safety backups taken before a restore or update are counted apart: Ludock keeps the 3 newest of them, and they never take the place of your own backups.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "<details class=\"disclosure\" id=\"backup-retention\"><summary>Which backups Ludock keeps</summary><p>The 3 newest, plus the last one of each of the 7 most recent days, 4 weeks, and 6 months with backups. The rest are removed after each new backup. Nothing is removed for its age alone, so a server that is rarely backed up keeps its old backups.</p><p>Safety backups taken before a restore or update are counted apart: Ludock keeps the 3 newest of them, and they never take the place of your own backups.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

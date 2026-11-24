@@ -296,6 +296,9 @@ var healthNotes = map[string]string{"starting": "Health check is starting", "hea
 var healthStates = map[string]string{"starting": "Starting", "healthy": "Passing", "unhealthy": "Failing"}
 
 func resourcesUnavailable(d ServerDetail) string {
+	if d.DockerProblem != "" {
+		return "Shown once Ludock can use Docker"
+	}
 	if d.DiscoveryUnavailable {
 		return "Shown once Ludock can reach Docker"
 	}
