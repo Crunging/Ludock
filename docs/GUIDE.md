@@ -136,7 +136,9 @@ Backups need nothing set up: the example `compose.yaml` mounts a
 itself. **Settings → Backups** shows where backups go and how much space they
 use. Each server keeps the 3 newest backups plus the last of each of the 7
 most recent days, 4 weeks, and 6 months that have one; Ludock removes the rest
-after each new backup. Only backups that can be restored count: one whose
+after each new backup. Safety backups taken before a restore or update are
+counted apart: Ludock keeps the 3 newest of them, and they never take the
+place of your own backups. Only backups that can be restored count: one whose
 archive is gone from the backup folder or isn't the size it was saved at, with
 no second copy, stays listed as missing or damaged and takes no place, and while Ludock can't reach a backup's folder it
 removes none of the backups there. To keep one for good, choose **Keep…** from
@@ -418,8 +420,9 @@ time limits are in the [reference](REFERENCE.md#limits).
   that runs out of room fails and says why; one without room for even empty
   data folders, under the total limit or above the free space kept, is
   refused before the server stops. After each successful backup, if the next
-  one might not fit, Ludock removes the server's oldest backups, never the 3
-  newest that can be restored or kept ones. A backup whose archive is gone or
+  one might not fit, Ludock removes the server's safety backups first, then
+  its oldest other backups, never its newest backup, the 3 newest of your own
+  that can be restored, or kept ones. A backup whose archive is gone or
   damaged doesn't count toward the total limit, so it never stops new
   backups; one in a folder Ludock can't reach counts toward the limit for new
   backups, but never makes Ludock remove others.
@@ -432,8 +435,10 @@ time limits are in the [reference](REFERENCE.md#limits).
   **Backups** tab says which.
   [Shared and nested mounts](REFERENCE.md#shared-and-nested-mounts) has the
   exact rule.
-- **Safety backups** taken before a restore or update follow the same
-  retention rule and are labeled in the list.
+- **Safety backups** taken before a restore or update are labeled in the
+  list and counted apart: Ludock keeps the 3 newest of them, they never take
+  the place of your own backups, and they are the first to go when space runs
+  short.
 - **Records:** Ludock lists only archives it made, from records in
   [its own data](REFERENCE.md#ludocks-own-data); other archives can't be
   imported, and Ludock never changes or removes them.
