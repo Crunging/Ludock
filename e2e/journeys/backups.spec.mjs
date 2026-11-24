@@ -56,7 +56,8 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   await expect(page.locator("#backup-readiness")).toBeEmpty();
 
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("link", { name: "Download backup" }).click()]);
-  expect(download.suggestedFilename()).toMatch(/^ludock-.*\.tar$/);
+  // The name says which server and when, for finding it without Ludock.
+  expect(download.suggestedFilename()).toMatch(new RegExp(`^${ownServer.name}-backup-\\d{8}-\\d{6}\\.tar$`));
   const archive = readFileSync(await download.path());
   expect(archive.subarray(257, 262).toString()).toBe("ustar");
 
@@ -423,7 +424,7 @@ test("a backup Docker fails says so plainly, and the Backups tab shows it until 
     }
     await page.getByRole("link", { name: "Dismiss" }).click();
     const failed = page.locator("#backup-last-failed");
-    await expect(failed).toContainText("The last backup failed");
+    await expect(failed).toContainText(/^The last backup failed \S/);
     await failed.getByRole("link", { name: "See what happened" }).click();
     await expect(page).toHaveURL(/\?tab=activity&operation=/);
     await expect(page.locator("#selected-operation")).toContainText("Docker reported an error");

@@ -386,8 +386,21 @@ func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request, request 
 	defer archive.Close()
 	s.audit(r, request, "backup.downloaded", id, map[string]any{"backupId": backupID})
 	w.Header().Set("Content-Type", "application/x-tar")
-	w.Header().Set("Content-Disposition", `attachment; filename="ludock-`+backupID+`.tar"`)
+	w.Header().Set("Content-Disposition", contentDisposition(s.backupFilename(ctx, id, backupID)))
 	copyChecked(w, archive, check)
+}
+
+// backupFilename names a downloaded archive after its server and when it was
+// taken, in UTC like Ludock's own saves.
+func (s *Server) backupFilename(ctx context.Context, serverID, backupID string) string {
+	backup, err := s.App.Backups.Get(ctx, serverID, backupID)
+	logical, lookup := s.App.Identity.Get(ctx, serverID)
+	if err != nil || lookup != nil || logical == nil || logical.DisplayName == "" {
+		return "ludock-" + backupID + ".tar"
+	}
+	// A display name may hold a path separator, which browsers cut at.
+	name := strings.NewReplacer("/", "-", "\\", "-").Replace(logical.DisplayName)
+	return name + "-backup-" + time.UnixMilli(backup.CreatedAt).UTC().Format("20060102-150405") + ".tar"
 }
 
 // updatePanel shows what updating a server would do (administrators only).

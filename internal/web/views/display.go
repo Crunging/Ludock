@@ -11,6 +11,7 @@ import (
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/history"
 	"github.com/Crunging/Ludock/internal/jobs"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -108,7 +109,22 @@ func Capitalize(value string) string {
 
 var phaseLabels = map[string]string{"saving_world": "Saving world", "waiting_for_save": "Waiting for save", "save_skipped": "Save skipped",
 	"checking_players": "Checking who is online", "warning_players": "Warning players", "warning": "Giving players 1 minute", "warned": "Going ahead", "stopping": "Waiting for server to stop", "verifying_stop": "Checking shutdown", "starting": "Starting server",
-	"sending_command": "Sending command", "pulling": "Downloading the new image", "creating": "Preparing the updated server", "replacing": "Swapping in the updated server"}
+	"sending_command": "Sending command", "pulling": "Downloading the new image", "creating": "Preparing the updated server", "replacing": "Swapping in the updated server",
+	"restore_staging": "Unpacking the backup", "restore_moving_old": "Moving the current data aside", "restore_old_moved": "Putting the backup in place",
+	"restore_replacing": "Putting the backup in place", "restore_replaced": "Putting the backup in place", "restore_committed": "Backup in place",
+	"restore_cleaned": "Cleaning up", "restore_rolling_back": "Putting the previous data back",
+	"restore_rolled_back": "Previous data back in place"}
+
+// testDelivered says where a delivered test can be seen.
+func testDelivered(destination notify.Destination) string {
+	switch destination {
+	case notify.Email:
+		return "Delivered. The test message should be in your inbox now."
+	case notify.Webhook:
+		return "Delivered. The webhook accepted the test message."
+	}
+	return "Delivered. The test message should be in " + destination.Label() + " now."
+}
 
 // OperationLabel describes an operation's progress, or its result once it
 // has finished.

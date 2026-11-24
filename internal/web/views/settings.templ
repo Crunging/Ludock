@@ -706,7 +706,7 @@ templ NotificationTestResult(n NotificationDestinationView) {
 	>
 		switch {
 			case n.Test.State == "delivered":
-				@Alert("success", "Delivered. The test message should be in "+label+" now.")
+				@Alert("success", testDelivered(n.Destination))
 			case n.Test.State == "failed" || n.Test.LastFailure != "":
 				@Alert("error", "The test didn’t arrive. "+n.Test.LastFailure)
 			case n.Test.Paused:
