@@ -42,9 +42,10 @@ func (c *GameSource) Read(ctx context.Context, server identity.Server, ask Ask) 
 	ctx, cancel := context.WithTimeout(ctx, readLimit)
 	defer cancel()
 	if !ask.Held {
+		released := c.Locks.NextRelease()
 		release, err := c.Locks.Acquire([]string{locks.ServerKey(server.ID)}, cancel)
 		if err != nil {
-			return nil, err
+			return nil, &Busy{Released: released}
 		}
 		// Held until the console helper, if any, is removed.
 		defer release()

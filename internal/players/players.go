@@ -5,6 +5,7 @@ package players
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"time"
@@ -27,8 +28,13 @@ const (
 	early        = 5 * time.Second
 	// readLimit bounds one reading, including a console helper's setup.
 	readLimit = 30 * time.Second
-	// parallel readings across the fleet.
+	// parallel readings across the fleet, besides the one lane for games
+	// whose last reading hung.
 	parallel = 4
+	// retryFor is how long a reading a page waits for, skipped because other
+	// work held the server, is tried again as work releases it: about one
+	// tick, after which a pass starts it again if the page is still open.
+	retryFor = 15 * time.Second
 	// Fresh is how long a reading counts toward Online.
 	Fresh = 2 * Interval
 	// answerFresh is how long a game's answer counts, which spans an idle
@@ -37,7 +43,9 @@ const (
 )
 
 // passWait is how long Poll waits for its readings, so a game that doesn't
-// answer holds up no other server's next reading.
+// answer holds up no other server's next reading. A reading still running
+// after it has hung: it gives up its slot, and the game's later readings take
+// the hung lane, one game at a time, until one ends within passWait.
 var passWait = 5 * time.Second
 
 // Reading is one server's players as Ludock last read them.
@@ -207,9 +215,16 @@ type Source interface {
 	// Lists reports whether the source can read the container's players.
 	Lists(container servers.Container) bool
 	// Read returns a reading of the server's current container run, nil when
-	// it no longer lists players, or an error when it took no reading.
+	// it no longer lists players, or an error when it took no reading: a
+	// *Busy one when other work held the server.
 	Read(ctx context.Context, server identity.Server, ask Ask) (*Reading, error)
 }
+
+// Busy is a reading skipped because other work held the server; Released
+// closes when that work may have ended.
+type Busy struct{ Released <-chan struct{} }
+
+func (*Busy) Error() string { return "server busy" }
 
 // Ask is what a reading asks for.
 type Ask struct {
@@ -253,9 +268,24 @@ type Service struct {
 	healthy map[string]healthRun
 	// recalled holds the answers Recall was told of.
 	recalled map[string]healthRun
-	slots    chan struct{}
-	work     sync.WaitGroup
-	stopped  bool
+	// hung holds the games whose last reading ran past passWait, which
+	// take the hung lane instead of a slot.
+	hung  map[string]bool
+	slots chan struct{}
+	lane  chan struct{}
+	// retries holds the servers whose reading a page waits for and other
+	// work held: when that chain of retries ends, and whether one is waiting
+	// for a release.
+	retries map[string]*retry
+	quit    chan struct{}
+	work    sync.WaitGroup
+	stopped bool
+}
+
+type retry struct {
+	until   time.Time
+	waiting bool
+	fresh   bool
 }
 
 // Get is the latest reading of a server's current container run, or nil.
@@ -346,9 +376,15 @@ func (s *Service) Poll(ctx context.Context, watched func(serverID string) bool) 
 		s.start(ctx, server, watched, false, &wait)
 	}
 	s.mu.Lock()
+	s.ready()
 	for id := range s.readings {
 		if !listed[id] {
 			delete(s.readings, id)
+		}
+	}
+	for id := range s.hung {
+		if !listed[id] {
+			delete(s.hung, id)
 		}
 	}
 	s.mu.Unlock()
@@ -421,6 +457,10 @@ func (s *Service) ReadHeld(ctx context.Context, server identity.Server) *Reading
 // Stop waits for readings to finish; none start after it.
 func (s *Service) Stop() {
 	s.mu.Lock()
+	s.ready()
+	if !s.stopped {
+		close(s.quit)
+	}
 	s.stopped = true
 	for id, waiter := range s.waiters {
 		close(waiter)
@@ -434,6 +474,7 @@ func (s *Service) ready() {
 	if s.reading == nil {
 		s.reading, s.readings, s.again, s.slots = map[string]bool{}, map[string]*Reading{}, map[string]rerun{},
 			make(chan struct{}, parallel)
+		s.hung, s.lane, s.retries, s.quit = map[string]bool{}, make(chan struct{}, 1), map[string]*retry{}, make(chan struct{})
 	}
 }
 
@@ -461,12 +502,18 @@ func (s *Service) start(ctx context.Context, server identity.Server, players, fr
 		waiter = s.waiters[server.ID]
 		delete(s.waiters, server.ID)
 	}
+	// A pass doesn't wait for a game that hung last time.
+	hung := s.hung[server.ID]
+	if hung {
+		wait = nil
+	}
 	s.work.Add(1)
 	if wait != nil {
 		wait.Add(1)
 	}
 	s.mu.Unlock()
 	go func() {
+		var busy *Busy
 		defer func() {
 			s.mu.Lock()
 			delete(s.reading, server.ID)
@@ -476,6 +523,10 @@ func (s *Service) start(ctx context.Context, server identity.Server, players, fr
 			if waiter != nil {
 				close(waiter)
 			}
+			// Armed only now, so its wake finds no reading in flight.
+			if busy != nil && players {
+				s.retry(ctx, server, fresh, busy.Released)
+			}
 			if again {
 				s.start(ctx, next.server, true, next.fresh, nil)
 			}
@@ -484,19 +535,110 @@ func (s *Service) start(ctx context.Context, server identity.Server, players, fr
 			}
 			s.work.Done()
 		}()
+		held := s.slots
+		if hung {
+			held = s.lane
+		}
 		select {
-		case s.slots <- struct{}{}:
+		case held <- struct{}{}:
 		case <-ctx.Done():
 			return
 		}
-		defer func() { <-s.slots }()
+		limit := passWait
+		var moving sync.Mutex
+		// A reading past passWait gives its slot to the games that answer.
+		// It takes the lane if that is free; otherwise it runs out its limit
+		// holding nothing, which each game does at most once before its
+		// readings wait for the lane.
+		timer := time.AfterFunc(limit, func() {
+			moving.Lock()
+			defer moving.Unlock()
+			if held == s.slots {
+				<-s.slots
+				select {
+				case s.lane <- struct{}{}:
+					held = s.lane
+				default:
+					held = nil
+				}
+			}
+		})
+		begun := time.Now()
 		reading, err := s.Source.Read(ctx, server, ask)
+		timer.Stop()
+		moving.Lock()
+		if held != nil {
+			<-held
+		}
+		// A callback already running must not move a slot it no longer holds.
+		held = nil
+		moving.Unlock()
+		// A busy server says nothing about the game.
+		if !errors.As(err, &busy) {
+			s.mu.Lock()
+			delete(s.retries, server.ID)
+			if time.Since(begun) >= limit {
+				s.hung[server.ID] = true
+			} else {
+				delete(s.hung, server.ID)
+			}
+			s.mu.Unlock()
+		}
 		if err != nil {
 			log.Debug("Skipped a player reading", logging.F("serverId", server.ID))
 			return
 		}
 		if reading != nil {
 			s.store(server.ID, reading)
+		}
+	}()
+}
+
+// retry reads a server a page waits for once the work that held it may
+// have ended, such as startup recovery or a disk measurement, instead of at
+// the next pass.
+func (s *Service) retry(ctx context.Context, server identity.Server, fresh bool, released <-chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	state := s.retries[server.ID]
+	if state == nil {
+		state = &retry{until: now.Add(retryFor)}
+		s.retries[server.ID] = state
+	}
+	state.fresh = state.fresh || fresh
+	if s.stopped || now.After(state.until) {
+		delete(s.retries, server.ID)
+		return
+	}
+	if state.waiting {
+		return
+	}
+	state.waiting = true
+	quit := s.quit
+	s.work.Add(1)
+	go func() {
+		defer s.work.Done()
+		expired := time.NewTimer(time.Until(state.until))
+		defer expired.Stop()
+		select {
+		case <-released:
+		case <-expired.C:
+		case <-quit:
+		case <-ctx.Done():
+		}
+		s.mu.Lock()
+		// A reading that ended meanwhile, or a later chain, owns the entry.
+		current := s.retries[server.ID] == state
+		woken := current && !s.stopped && ctx.Err() == nil && time.Now().Before(state.until)
+		if current && !woken {
+			delete(s.retries, server.ID)
+		}
+		state.waiting = false
+		fresh := state.fresh
+		s.mu.Unlock()
+		if woken {
+			s.start(ctx, server, true, fresh, nil)
 		}
 	}()
 }
