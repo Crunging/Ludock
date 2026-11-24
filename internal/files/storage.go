@@ -168,7 +168,14 @@ type Access struct {
 	// replacement, which a running helper's bind mount would not see.
 	signature string
 	startedAt string
+	// created is when the helper started; its idle command exits after
+	// helperLife.
+	created time.Time
 }
+
+// helperLife is how long a helper's idle command runs. A helper is reused
+// only while that leaves the longest command, 30 minutes, time to finish.
+const helperLife = 35 * time.Minute
 
 // Cleanup removes the helper and its validator. retry keeps trying until
 // Docker confirms removal, for work that may still be writing.
@@ -318,7 +325,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		capabilities = []string{"DAC_OVERRIDE"}
 	}
 	id, err := s.Docker.CreateHelper(ctx, docker.ContainerCreate{
-		Image: image, Entrypoint: []string{helper.Binary}, Cmd: []string{"helper", "idle", "2100000"}, User: "0",
+		Image: image, Entrypoint: []string{helper.Binary}, Cmd: []string{"helper", "idle", strconv.FormatInt(helperLife.Milliseconds(), 10)}, User: "0",
 		Labels: launch.HelperLabels(launch.FileHelper), Env: launch.HelperEnv,
 		HostConfig: launch.HelperHost(projections, capabilities...),
 	})
@@ -326,7 +333,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		proof.Cleanup()
 		return nil, launch.HelperFailed(err)
 	}
-	access := &Access{service: s, container: id, blocked: blocked, mounts: nested, assertAccess: assertAccess, proof: proof}
+	access := &Access{service: s, container: id, blocked: blocked, mounts: nested, assertAccess: assertAccess, proof: proof, created: time.Now()}
 	if err := s.prepare(ctx, access, root, inspection); err != nil {
 		access.Cleanup(false)
 		return nil, err
@@ -356,9 +363,9 @@ func (s *Service) acquireIdle(ctx context.Context, target Target, root Root, rea
 	s.mu.Unlock()
 	if idle != nil {
 		// Taken from the map, the helper is this caller's to reuse or remove.
-		if idle.timer.Stop() && s.reusable(ctx, target, root, idle.access) {
+		if idle.timer.Stop() && time.Since(idle.access.created) < helperLife-31*time.Minute && s.reusable(ctx, target, root, idle.access) {
 			idle.access.assertAccess = assertAccess
-			return idle.access, s.releaser(key, idle.access), nil
+			return idle.access, s.idleReleaser(key, idle.access, readOnly), nil
 		}
 		idle.access.Cleanup(false)
 	}
@@ -366,11 +373,14 @@ func (s *Service) acquireIdle(ctx context.Context, target Target, root Root, rea
 	if err != nil {
 		return nil, nil, err
 	}
-	release := s.releaser(key, access)
-	if !readOnly {
-		release = s.releaserFor(key, access, writerIdle)
+	return access, s.idleReleaser(key, access, readOnly), nil
+}
+
+func (s *Service) idleReleaser(key string, access *Access, readOnly bool) func(ok bool) {
+	if readOnly {
+		return s.releaser(key, access)
 	}
-	return access, release, nil
+	return s.releaserFor(key, access, writerIdle)
 }
 
 func (s *Service) reusable(ctx context.Context, target Target, root Root, access *Access) bool {

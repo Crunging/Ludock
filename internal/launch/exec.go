@@ -47,6 +47,7 @@ var fileErrors = &ExecErrors{Timeout: ErrTimeout, Failed: ErrFailed, Unsafe: Err
 	helper.FileNotArchive:  apperr.New("NOT_AN_ARCHIVE", 415, "This file isn’t a zip, tar, or tar.gz archive, or it is damaged."),
 	// A 5xx status reports the result as unconfirmed.
 	helper.FilePartial:      apperr.New("FILE_PARTIAL", 500, "Only part of the selection was changed"),
+	helper.FileUncertain:    apperr.New("FILE_UNCERTAIN", 500, "The file change may have completed"),
 	helper.FileMounted:      apperr.New("MOUNTED_FOLDER", 409, "This is, or holds, a folder mounted into the server separately, which Ludock won’t delete, rename, or move. Change what’s inside that folder instead."),
 	helper.FileHoldsRestore: apperr.New("RESTORE_FOLDER_INSIDE", 409, "This folder holds a hidden .ludock-restore-… folder, where a restore keeps the server’s previous data, so Ludock won’t delete, rename, or move it. Finish or undo that restore from Activity or Needs attention; if no restore needs the folder, keep what you need from it and delete it on the host."),
 }}

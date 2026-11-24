@@ -210,6 +210,13 @@
           window.location.assign("/login");
           return;
         }
+        if (response.status >= 500) {
+          // A proxy's error can come after the server wrote some of the batch.
+          stop = "The results for " + (batch.length === 1 ? "“" + batch[0].name + "”" : batch.length + " files from “" + batch[0].name + "”") +
+            " could not be confirmed: " + errorText(response.status, response.body) + " Review the folder before uploading again.";
+          offset += batch.length;
+          break;
+        }
         if (response.status !== 200) {
           stop = "Could not upload “" + batch[0].name + "”: " + errorText(response.status, response.body);
           offset += 1;
@@ -242,8 +249,8 @@
       if (left > 0) lines.push(left === 1 ? "The remaining file wasn’t uploaded." : "The remaining " + left + " files weren’t uploaded.");
       if (controller.signal.aborted) {
         kind = "success";
-        message = "Upload cancelled. " + completed + " of " + chosen.length + " files finished. Check “" + current +
-          "” before trying again; cancelling doesn’t undo data already written.";
+        message = "Upload cancelled. " + completed + " of " + chosen.length + " files finished. Check the folder before trying again; " +
+          "files sent with “" + current + "” may have been written, and cancelling doesn’t undo them.";
         lines = [];
       } else if (completed === chosen.length) {
         kind = "success";

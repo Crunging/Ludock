@@ -56,11 +56,17 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 	root, folder := query.Get("root"), query.Get("path")
 	body := &progressBody{body: r.Body, controller: http.NewResponseController(w)}
 	defer body.close()
+	// Writing a response reads what is left of a short body first, which
+	// waits on a stalled client unless reading has ended.
+	fail := func(err error) {
+		body.close()
+		s.fail(w, r, request, err)
+	}
 	reader := bufio.NewReader(body)
 	line, err := readManifest(reader)
 	var manifest uploadManifest
 	if err != nil || root == "" || json.Unmarshal(line, &manifest) != nil || len(manifest.Files) == 0 || len(manifest.Files) > files.MaxBatch {
-		s.fail(w, r, request, invalid)
+		fail(invalid)
 		return
 	}
 	limit, _ := s.App.Advanced.UploadLimit(r.Context())
@@ -68,7 +74,7 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 	total := int64(len(line))
 	for index, file := range manifest.Files {
 		if file.Size < 0 || file.Size > 1<<53-1 {
-			s.fail(w, r, request, invalid)
+			fail(invalid)
 			return
 		}
 		entries[index] = files.UploadEntry{Name: file.Name, Size: file.Size}
@@ -78,12 +84,12 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 		total += file.Size
 	}
 	if r.ContentLength != total {
-		s.fail(w, r, request, invalid)
+		fail(invalid)
 		return
 	}
 	action, err := s.startAction(r, request, r.PathValue("id"), authz.FilesWrite)
 	if err != nil {
-		s.fail(w, r, request, err)
+		fail(err)
 		return
 	}
 	defer action.Done()
@@ -108,9 +114,10 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 		answer.Results[index] = result
 	}
 	if public, ok := apperr.As(err); ok && public.Status == http.StatusUnauthorized {
-		s.fail(w, r, request, err)
+		fail(err)
 		return
 	}
+	body.close()
 	writeJSON(w, http.StatusOK, answer)
 }
 

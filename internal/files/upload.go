@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sync"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/datasize"
@@ -106,6 +107,10 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	acks := &uploadAcks{limit: len(files)}
 	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized, Files: files},
 		launch.ExecOptions{Input: input, Stdout: acks})
+	// Exec can return while its input is still being read; once stopped, no
+	// further trailer is handed on, so sent covers every file that may be
+	// committed.
+	sent := input.stop()
 	if err == nil && len(acks.results) != len(files) {
 		err = launch.ErrUnsafe
 	}
@@ -113,7 +118,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		switch {
 		case position < len(acks.results):
 			results[index] = acks.result(acks.results[position], entries[index].Size)
-		case input.sent[index]:
+		case sent[index]:
 			results[index] = ErrUploadUnconfirmed
 		case err != nil && isRefusal(err):
 			results[index] = err
@@ -125,14 +130,14 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		release(true)
 		return results, nil
 	}
-	// The helper writes one file at a time, the first it did not answer for,
-	// and removes its staging file unless it was cut off. Cleanup has no
-	// user-controlled input and runs even after cancellation or revocation.
+	// The helper removes its staging file unless it was cut off, and answers
+	// that may be lost don't say how far it got, so every unanswered file's
+	// is removed. Cleanup has no user-controlled input and runs even after
+	// cancellation or revocation.
 	if len(acks.results) < len(accepted) {
-		index := accepted[len(acks.results)]
 		cleanup := &Access{service: s, container: access.container, blocked: access.blocked}
-		if _, cleanupErr := cleanup.request(context.WithoutCancel(ctx), helper.FileRequest{Operation: "upload-cleanup",
-			Root: root.Path, Path: joinRelative(normalized, entries[index].Name), UploadID: input.ids[index]}, nil, nil); cleanupErr != nil {
+		if _, cleanupErr := cleanup.request(context.WithoutCancel(ctx), helper.FileRequest{Operation: "upload-files-cleanup",
+			Root: root.Path, Path: normalized, Files: files[len(acks.results):]}, nil, nil); cleanupErr != nil {
 			log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
 		}
 	}
@@ -156,12 +161,25 @@ type batchInput struct {
 	check   func() error
 	entries []UploadEntry
 	ids     []string
-	// sent marks entries whose trailer was handed on, which may be committed.
-	sent    []bool
 	index   int
 	left    int64
 	started bool
 	trailer []byte
+
+	mu sync.Mutex
+	// sent marks entries whose trailer was handed on, which may be committed.
+	sent    []bool
+	stopped bool
+}
+
+var errInputStopped = errors.New("upload input stopped")
+
+// stop hands on no more trailers and returns which entries were sent.
+func (b *batchInput) stop() []bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stopped = true
+	return slices.Clone(b.sent)
 }
 
 func (b *batchInput) Read(p []byte) (int, error) {
@@ -198,12 +216,19 @@ func (b *batchInput) Read(p []byte) (int, error) {
 			}
 			continue
 		}
-		if b.check != nil {
-			if err := b.check(); err != nil {
-				return 0, err
+		b.mu.Lock()
+		err := errInputStopped
+		if !b.stopped {
+			if err = nil; b.check != nil {
+				err = b.check()
 			}
+			b.sent[b.index] = err == nil
 		}
-		b.sent[b.index], b.trailer = true, []byte(b.ids[b.index])
+		b.mu.Unlock()
+		if err != nil {
+			return 0, err
+		}
+		b.trailer = []byte(b.ids[b.index])
 		b.index, b.started = b.index+1, false
 	}
 }
@@ -241,6 +266,8 @@ func (a *uploadAcks) result(result helper.UploadResult, size int64) error {
 		return nil
 	case result.Code == helper.FileNoSpace && result.Space != nil:
 		return uploadNoSpace(*result.Space, size)
+	case result.Code == helper.FileUncertain:
+		return ErrUploadUnconfirmed
 	case result.Code == helper.FileNoSpace:
 		return apperr.New("NOT_ENOUGH_SPACE", 507, "Not enough free space on the server’s disk.")
 	}

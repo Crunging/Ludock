@@ -106,6 +106,8 @@ const (
 	// FileNoSpace refuses a file of a batch upload that would leave the disk
 	// less than UploadSpare.
 	FileNoSpace = 12
+	// FileUncertain is an upload that failed after its file took its name.
+	FileUncertain = 13
 )
 
 type fileHelper struct {
@@ -705,10 +707,13 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 			return err
 		}
 		if err := unix.Unlinkat(int(parent), temporary, 0); err != nil {
-			return err
+			return errPublished
 		}
 	}
-	return unix.Fsync(int(parent))
+	if err := unix.Fsync(int(parent)); err != nil {
+		return errPublished
+	}
+	return nil
 }
 
 // UploadSpare is the free space an upload leaves on the server's disk: 1 GiB,
@@ -732,7 +737,7 @@ type UploadResult struct {
 // follow the previous one's. A file that fails is skipped in step and
 // reported; only a broken stream ends the batch, and each line is flushed
 // once its file is committed or refused.
-func (h *fileHelper) uploadFiles(folder fd, relative string) error {
+func (h *fileHelper) uploadFiles(root, folder fd, relative string) error {
 	for _, file := range h.request.Files {
 		if file.Size < 0 || file.Size > 1<<53-1 {
 			return errors.New("invalid upload size")
@@ -745,8 +750,17 @@ func (h *fileHelper) uploadFiles(folder fd, relative string) error {
 		if parts, partsErr := ownParts(file.Name); err == nil && (partsErr != nil || len(parts) != 1 || parts[0] != file.Name) {
 			err = errUnsafe
 		}
+		// The folder is found again for each file, as for a single upload, in
+		// case it was moved meanwhile.
+		current := folder
+		if err == nil && relative != "" {
+			current, err = h.pinDirectory(root, relative)
+		}
 		if err == nil {
-			err = h.upload(folder, file.Name, file.Size, file.UploadID, nil)
+			err = h.upload(current, file.Name, file.Size, file.UploadID, nil)
+		}
+		if current != folder && current >= 0 {
+			h.t.close(current)
 		}
 		if errors.Is(err, errUploadStream) || h.uploadAborted() {
 			return errUploadStream
@@ -952,7 +966,22 @@ func (h *fileHelper) run() error {
 		if err != nil {
 			return err
 		}
-		return h.uploadFiles(folder, relative)
+		return h.uploadFiles(root, folder, relative)
+	case "upload-files-cleanup":
+		folder, err := h.pinDirectory(root, relative)
+		if err != nil {
+			return err
+		}
+		for _, file := range h.request.Files {
+			temporary, err := uploadName(file.UploadID)
+			if err != nil {
+				return err
+			}
+			if err := unix.Unlinkat(int(folder), temporary, 0); err != nil && !isNotExist(err) {
+				return err
+			}
+		}
+		return h.json(map[string]bool{"ok": true})
 	}
 	parent, name, err := h.parentOf(root, relative)
 	// A folder that is gone took its staging folder with it.
@@ -1168,6 +1197,8 @@ func fileExit(err error) int {
 		return FileMounted
 	case errors.Is(err, errHoldsRestore):
 		return FileHoldsRestore
+	case errors.Is(err, errPublished):
+		return FileUncertain
 	}
 	return 1
 }
@@ -1178,6 +1209,7 @@ var (
 	errPartial      = errors.New("part of the selection changed")
 	errMounted      = errors.New("the folder is or holds a separate mount")
 	errHoldsRestore = errors.New("the folder holds a restore's stage folder")
+	errPublished    = errors.New("the upload failed after it took its name")
 )
 
 func nameTaken(err error) error {
