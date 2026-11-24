@@ -136,7 +136,7 @@ func TestOperationFragmentScope(t *testing.T) {
 // such as from the server list, in Activity instead.
 func TestOperationLinkFallsBackToActivity(t *testing.T) {
 	t.Parallel()
-	p := newPages(t)
+	p := newDataPages(t)
 	viewer := p.user("u-viewer", "viewer", db.RoleMember)
 	p.grant(viewer, authz.ServerView)
 	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusOK {
@@ -155,7 +155,7 @@ func TestOperationLinkFallsBackToActivity(t *testing.T) {
 // operation the page links to.
 func TestLiveHeaderAnnouncesFinishedWork(t *testing.T) {
 	t.Parallel()
-	p := newPages(t)
+	p := newDataPages(t)
 	live := func(query string) string {
 		response := p.do("GET", "/fragments/servers/"+p.server+"/live?"+query, p.admin, nil, map[string]string{"HX-Request": "true"})
 		if response.Code != http.StatusOK {

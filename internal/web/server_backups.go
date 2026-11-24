@@ -249,6 +249,10 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request, request *R
 		s.fail(w, r, request, err)
 		return
 	}
+	if len(resolved.Container.FileRoots) == 0 {
+		s.fail(w, r, request, backups.ErrNoRoots)
+		return
+	}
 	var input map[string]any
 	if r.PostFormValue(jobs.WarnInput) == "true" && warnOffer(resolved.Container) {
 		input = map[string]any{jobs.WarnInput: true}

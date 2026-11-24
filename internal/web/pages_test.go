@@ -18,6 +18,7 @@ import (
 	"github.com/Crunging/Ludock/internal/config"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
+	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 )
 
@@ -32,14 +33,21 @@ type pages struct {
 	admin   *auth.Principal
 }
 
-func newPages(t *testing.T) *pages {
+func newPages(t *testing.T) *pages { return newPagesWith(t, nil) }
+
+// newDataPages is newPages for a server with a data folder, as backups need.
+func newDataPages(t *testing.T) *pages {
+	return newPagesWith(t, []docker.MountPoint{{Type: "volume", Name: "valheim-data", Destination: "/config", RW: true}})
+}
+
+func newPagesWith(t *testing.T, mounts []docker.MountPoint) *pages {
 	t.Helper()
 	engine, err := fakedocker.Start(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { engine.Close() })
-	dockerID := engine.AddContainer(fakedocker.GameOptions{Name: "valheim", Image: "lloesche/valheim-server"})
+	dockerID := engine.AddContainer(fakedocker.GameOptions{Name: "valheim", Image: "lloesche/valheim-server", Mounts: mounts})
 	d := dbtest.Open(t)
 	services, err := app.New(config.Config{DockerSocket: engine.Socket}, d, nil)
 	if err != nil {
