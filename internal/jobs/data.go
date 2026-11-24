@@ -59,9 +59,17 @@ func withSave(job *ops.Context, result map[string]any) map[string]any {
 func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *ops.Context) error {
 	// The copy is only as fresh as the game's last save. A job that already
 	// saved, or resumes after its stop, doesn't save again.
-	if server.Container.State == "running" && job.Job.Recovery.InitialRunning == nil && job.Job.Recovery.SaveStatus == "" {
-		if err := j.saveWorld(ctx, job, server, func() error { return j.dataAuthority(ctx, server, job) }); err != nil {
+	if job.Job.Recovery.InitialRunning == nil && job.Job.Recovery.SaveStatus == "" {
+		// Decided by the server as it is now: it may have been started or
+		// stopped elsewhere since the work resolved it.
+		current, err := j.current(ctx, server)
+		if err != nil {
 			return err
+		}
+		if current.Container.State == "running" {
+			if err := j.saveWorld(ctx, job, current, func() error { return j.dataAuthority(ctx, current, job) }); err != nil {
+				return err
+			}
 		}
 	}
 	// dispatching is set once the checks before a stop request pass, and
@@ -137,6 +145,20 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 		return fail("UNCLEAN_SHUTDOWN", "The server didn’t shut down by itself and had to be forced to stop, so Ludock went no further: its last save may be incomplete. Give it more time to stop where it is defined (its stop timeout), then try again.")
 	}
 	return nil
+}
+
+// current is server as Docker shows it now, under the same binding.
+func (j *Jobs) current(ctx context.Context, server *servers.Context) (*servers.Context, error) {
+	observed, _, err := j.Servers.Observer.Inspect(ctx, server.Container.ID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observed.Observation, server.Logical.BindingRevision); err != nil {
+		return nil, err
+	}
+	current := *server
+	current.Container, current.Observation = observed.Container, observed.Observation
+	return &current, nil
 }
 
 // assertStopped confirms the server is still the stopped instance and that

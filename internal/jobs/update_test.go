@@ -579,8 +579,9 @@ func TestUpdateCheckSkipsConsoleHelpers(t *testing.T) {
 
 // Something outside Ludock starts or stops the server while the update
 // pulls its image. The update goes by the state it found when it stopped
-// the server: one started meanwhile comes back running on the new
-// container, and one stopped meanwhile stays stopped, as its owner left it.
+// the server: one started meanwhile is saved, or says why not, before the stop and comes back
+// running on the new container, and one stopped meanwhile stays stopped, as
+// its owner left it.
 func TestUpdateKeepsStateChangedDuringPull(t *testing.T) {
 	for _, startedElsewhere := range []bool{true, false} {
 		f := setup(t)
@@ -605,7 +606,7 @@ func TestUpdateKeepsStateChangedDuringPull(t *testing.T) {
 		var stopped bool
 		f.jobs.DB.QueryRow("SELECT intentionally_stopped FROM availability WHERE server_id=?", f.serverID).Scan(&stopped)
 		if job.Status != ops.Succeeded || current == nil || current.ID == f.game || current.State.Running != startedElsewhere ||
-			job.Result["running"] != startedElsewhere || stopped == startedElsewhere {
+			job.Result["running"] != startedElsewhere || stopped == startedElsewhere || (job.Result["saveStatus"] != nil) != startedElsewhere {
 			t.Fatalf("started elsewhere %v: %+v, running %v, intentionally stopped %v", startedElsewhere, job, current.State.Running, stopped)
 		}
 	}
