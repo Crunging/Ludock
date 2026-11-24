@@ -36,9 +36,8 @@ The console port is where Ludock sends commands, inside the container. The
 status check asks the game whether it answers; when the image documents a
 variable for its port, listed after the port, that variable's value wins.
 The Steam server query is Valve's A2S, which Valheim answers only when the
-server is public: with `SERVER_PUBLIC` off, the server's page says the check is off.
-If your server answers one that isn't listed, set `ludock.query: a2s` and
-`ludock.query.port`.
+server is public. If your server answers one that isn't listed, set
+`ludock.query: a2s` and `ludock.query.port`.
 
 A supported game without a status check of its own uses its image's Docker
 health check, when the image has one: healthy is answering, and unhealthy
@@ -79,8 +78,9 @@ What each game gets beyond start, stop, files, and backups:
 | Minecraft: Bedrock Edition | Names | Kick | ✓ | ✓ |
 | Satisfactory, Don't Starve Together, Core Keeper | | | | ✓ |
 
-Names need the console's password; a count comes from the status check. "Restart updates the game" holds unless the
-image's own settings pin a version or skip updates.
+Names need the console's password; a count comes from the status check.
+"Restart updates the game" holds unless the image's own settings pin a version
+or skip updates.
 
 Project Zomboid and Conan Exiles get no kick or ban buttons: Zomboid's names
 can hold spaces its commands need quoted, and Conan's kick takes a row number
@@ -94,114 +94,61 @@ images' default.
 ### Checked on real servers
 
 These games were run on their real images, under Compose, with Ludock beside
-them. Players joined Minecraft Java and Terraria, with scripted clients that
-need no account; on the others, who's online was read on an empty server, and
-the replies with players come from the game's own text. The rest follow
-their images' documentation.
+them. What each needs, and what files and backups take:
 
-- **Minecraft** (`itzg/minecraft-server`, vanilla 1.21.11): with zero, one,
-  and two players online, Ludock opened RCON, which the game logs, only when
-  a page opened or someone joined; the status check's player sample vouched
-  for the list the rest of the time.
-- **Terraria** (`hexlo/terraria-server-docker`, 1.4.5.8): its console needs
-  `stdin_open: true`, with or without `tty`. Ludock saves with `save` before a
-  stop and then types `exit`, since the images never pass Docker's stop
-  signal on to the game. `say` warns players. Files and backups take the
-  worlds folder Ludock finds mounted. With two players online, Ludock listed
-  both from `playing`, and kicked and banned them; the list follows within a
-  few seconds. A ban also bans the player's address, and the ban list lives
-  in `/root/.local/share/Terraria/banlist.txt`, outside the worlds folder, so
-  backups don't include it. The image has no health check, so Terraria gets
-  no automatic restart. `ryshe/terraria` and `beardedio/terraria` were only
-  inspected: both also keep the game from Docker's stop signal.
-- **Factorio** (`factoriotools/factorio`): the console works by itself with the
-  password the image generates. Who's online, kick, and ban answer as
-  expected; warnings appear in chat from `<server>`; `/server-save` saves, and
-  the game saves again when it stops. The image's health check asks the game
-  over RCON, so a hung game is not answering and can be restarted; that was
-  checked on Bedrock, not again on Factorio.
-- **Valheim** (`lloesche/valheim-server`): no console. The game saves its world
-  when it stops. Files and backups take `/config`, not the server the image
-  downloads into `/opt/valheim`. The count and the status check need
-  `SERVER_PUBLIC` on, its default, which lists the server publicly; with it
-  off, the page says the status check is off for that setup, and automatic
-  restart isn't offered. With it on, Ludock restarted a hung server by itself
-  once automatic restart was turned on.
-- **Vintage Story** (`zsuatem/vintagestory`): its console needs
-  `stdin_open: true`. `/autosavenow` saves before a stop, `/announce` warns
-  players, and the game saves again when it stops. Ludock reads who's online
-  from `/list clients`, and kicks with `/kick`. Its health check only checks
-  that the server process exists. `devidian/vintagestory` wasn't run.
-- **Minecraft: Bedrock Edition** (`itzg/minecraft-bedrock-server`): its console
-  needs `stdin_open: true`. The image saves the world when Docker stops it.
-  From 1.26.50 the server takes players on TCP 19132 only, so publish
-  `19132:19132/tcp` for its address to show. Ludock reads who's online from
-  `list` and kicks with `kick`; Bedrock has no `ban`. Its health check asks
-  the game: with the game process frozen, Docker called it unhealthy within
-  two minutes, and Ludock restarted it and said it answered again. Joining to
-  see warnings needs a Microsoft account, so that wasn't checked.
-- **Palworld** (`thijsvanloef/palworld-server-docker`, 1.0.5): its console needs
-  `RCON_ENABLED=true` and `ADMIN_PASSWORD`. Who's online, kick, and ban answer
-  as expected; kick and ban send `steam_<ID>`, the only form Palworld 1.0
-  takes. `Save` saves before a stop. Warnings go to the REST API's announce,
-  which the server logged as accepted; seeing them in game needs the game.
-  Files and backups take the saves in `/palworld/Pal/Saved`, about 0.3 MB on
-  a new world, not the 3.5 GB server download around them; a backup and its
-  restore each took about 15 s. `ludock.files: "/palworld"` takes the whole
-  folder again.
-- **Core Keeper** (`escaping/core-keeper-dedicated`): no console or status
-  check, and no address, since the game connects through Steam's relay
-  unless `SERVER_PORT` is set. The game saves its world when Docker stops it,
-  within a few seconds. Files and backups take the world in
-  `/home/steam/core-keeper-data`, about 0.1 MB on a new world, not the
-  570 MB server download in `/home/steam/core-keeper-dedicated`. A backup
-  and its restore brought back the same world.
-- **V Rising** (`trueosiris/vrising`, 1.1): its console needs RCON on, with
-  `HOST_SETTINGS_Rcon__Enabled=true` and `HOST_SETTINGS_Rcon__Password`, the
-  variable Ludock reads the password from. `announce` warns players: the game
-  took Ludock's restart warning. RCON has no save command or player list, so
-  who's online isn't shown. Docker's stop ends the game without saving, so a
+- **Minecraft** (`itzg/minecraft-server`): nothing; Ludock reads the RCON
+  password the image generates.
+- **Terraria** (`hexlo/terraria-server-docker`): `stdin_open: true`, with or
+  without `tty`. Files and backups take the worlds folder mounted. The ban
+  list, which also bans each player's address, lives in
+  `/root/.local/share/Terraria/banlist.txt`, outside it, so backups don't
+  include it. The image has no health check, so Terraria gets no automatic
+  restart. `ryshe/terraria` and `beardedio/terraria` were only inspected.
+- **Factorio** (`factoriotools/factorio`): nothing; the console uses the
+  password the image generates.
+- **Valheim** (`lloesche/valheim-server`): `SERVER_PUBLIC` on, its default,
+  which lists the server publicly; without it there is no count, status check,
+  or automatic restart. Files and backups take `/config`, not the server the
+  image downloads into `/opt/valheim`.
+- **Vintage Story** (`zsuatem/vintagestory`): `stdin_open: true`.
+  `devidian/vintagestory` wasn't run.
+- **Minecraft: Bedrock Edition** (`itzg/minecraft-bedrock-server`):
+  `stdin_open: true`, and its port published as
+  [TCP 19132](#addresses).
+- **Palworld** (`thijsvanloef/palworld-server-docker`): `RCON_ENABLED=true` and
+  `ADMIN_PASSWORD`. Files and backups take the saves in `/palworld/Pal/Saved`,
+  not the server download around them; `ludock.files: "/palworld"` takes the
+  whole folder.
+- **Core Keeper** (`escaping/core-keeper-dedicated`): no address unless
+  `SERVER_PORT` is set, since the game otherwise connects through Steam's
+  relay. Files and backups take `/home/steam/core-keeper-data`, not the server
+  download.
+- **V Rising** (`trueosiris/vrising`): `HOST_SETTINGS_Rcon__Enabled=true` and
+  `HOST_SETTINGS_Rcon__Password`, where Ludock reads the password. The game
+  has no player list or save command, and Docker's stop doesn't save it, so a
   stop or backup keeps its last autosave, every 2 minutes by default
-  (`AutoSaveInterval` in `ServerHostSettings.json`); the game's own
-  `shutdown` saves but waits at least a minute. Files and backups take
-  `/mnt/vrising/persistentdata`, about 20 MB, not the 1.9 GB server in
-  `/mnt/vrising/server`. A backup and its restore brought back the same
-  saves, and the game loaded the latest.
-- **Enshrouded** (`sknnr/enshrouded-dedicated-server` and
-  `mornedhels/enshrouded-server`): no console. The status check and the count
-  answer on 15637. The game saves its world when Docker stops it, within a
-  few seconds. With sknnr's image, files and backups take the `savegame`
-  volume; mornedhels' keeps the 8 GB server download in `/opt/enshrouded`
-  with the world inside it, and files and backups take only its default
-  `/opt/enshrouded/server/savegame`; with another `SERVER_SAVE_DIR`, name it
-  in `ludock.files`. On both, a backup and its restore
-  brought back the same world.
-- **7 Days to Die** (`vinanrra/7dtd-server`, 3.4): the image leaves
-  `TelnetPassword` empty in `sdtdserver.xml`, so the game takes Telnet
-  without a password, only from inside its container, where Ludock connects;
-  a password set there is read from that file. Who's online comes from
-  `listplayers`, read on an empty server; `saveworld` saves before a stop,
-  and `say` warns players: the game posted Ludock's message in global chat.
-  The image stops the game through LinuxGSM, which saves and shuts it down
-  in about 10 seconds. Files and backups take the saves in
-  `/home/sdtdserver/.local/share/7DaysToDie`, about 17 MB on Navezgane, and
-  LinuxGSM's config. They leave out the 17 GB server in
-  `/home/sdtdserver/serverfiles` (where `sdtdserver.xml` also lives),
-  LinuxGSM's own backups, and its logs, whose `steam` link stopped every
-  backup; `ludock.files` takes them back. A backup and its restore brought
-  back the same saves. With the README's `START_MODE=1` a restart doesn't
-  update the game.
-- **Project Zomboid** (`renegademaster/zomboid-dedicated-server`) couldn't be
-  checked: the image, last updated in 2024, passes empty arguments that the
-  current game, Build 42, refuses, and so does Build 41.78 on the image's
-  `GAME_VERSION=legacy41`. Files and backups leave out the server download
-  in `/home/steam/ZomboidDedicatedServer`, as the image's README mounts it.
+  (`AutoSaveInterval` in `ServerHostSettings.json`). Files and backups take
+  `/mnt/vrising/persistentdata`, not the server in `/mnt/vrising/server`.
+- **Enshrouded** (`sknnr/enshrouded-dedicated-server`,
+  `mornedhels/enshrouded-server`): nothing. Files and backups take sknnr's
+  `savegame` volume, or mornedhels' `/opt/enshrouded/server/savegame` inside
+  its server download; with another `SERVER_SAVE_DIR`, name it in
+  `ludock.files`.
+- **7 Days to Die** (`vinanrra/7dtd-server`): nothing. The image leaves
+  `TelnetPassword` empty in `sdtdserver.xml`, so Ludock connects without one
+  from inside the container; a password set there is read from that file. With
+  the image README's `START_MODE=1`, a restart doesn't update the game. Files
+  and backups take `/home/sdtdserver/.local/share/7DaysToDie` and LinuxGSM's
+  config, not the server in `/home/sdtdserver/serverfiles`, LinuxGSM's
+  backups, or its logs; `ludock.files` takes them back.
+- **Project Zomboid** (`renegademaster/zomboid-dedicated-server`) didn't run:
+  the image, last updated in 2024, fails on the current game and on Build
+  41.78. Files and backups leave out the server download in
+  `/home/steam/ZomboidDedicatedServer`.
 
-Not run, because this test machine (8 GB of memory, a 25 GB download limit)
-couldn't hold them: Counter-Strike 2 (60 GB of disk), Conan Exiles (8 GB of
-memory at least), Rust (12 GB), Satisfactory (8 to 16 GB), and both ARKs (6
-to 13 GB). Don't Starve Together needs a server token from Klei, so it
-wasn't run either.
+Not run on a real server, so they follow their images' documentation only:
+Counter-Strike 2, Conan Exiles, Rust, Satisfactory, both ARKs, and Don't
+Starve Together.
 
 ## Labels
 
@@ -231,17 +178,21 @@ services:
 | `ludock.console.password-env` | The **name** of the container's environment variable that holds the console password, never the password |
 | `ludock.query` | `minecraft-ping` or `a2s`; `disabled` or `none` turns the status check off |
 | `ludock.query.port` | The status check port inside the container |
-| `ludock.files` | Comma-separated container folders for files and backups, such as `"/data/worlds,/data/config"`; empty turns both off. A folder that holds, or is inside, one of Ludock's own folders or volumes is never offered, and none is when Docker won't let Ludock inspect its own container |
+| `ludock.files` | Comma-separated container folders for files and backups, such as `"/data/worlds,/data/config"`; empty turns both off |
 | `ludock.secret-env` | Comma-separated **names** of more environment variables to hide from logs and consoles |
 
 A `ludock.game` label alone doesn't add an unsupported image; add the
 container in the panel or with `ludock.enable`. Invalid label values are
 ignored. **Settings → System → Container label problems** lists an invalid
 `ludock.enable` or `ludock.address` and incomplete Compose labels.
-Variables whose names look like credentials, such as `RCON_PASSWORD`,
-`DB_PASS`, or `API_KEY`, and passwords inside URLs are hidden already. A value
-is hidden only where it's printed exactly as set; a game that changes it, such
-as by encoding or shortening it, can still show it.
+
+`ludock.files` never offers a folder that holds, or is inside, one of Ludock's
+own folders or volumes, and offers none while Ludock can't inspect its own
+container. Variables whose names look like credentials, such as
+`RCON_PASSWORD`, `DB_PASS`, or `API_KEY`, and passwords inside URLs are hidden
+already, without `ludock.secret-env`. A value is hidden only where it's
+printed exactly as set; a game that changes it, such as by encoding or
+shortening it, can still show it.
 
 ### Which containers Ludock manages
 
@@ -259,10 +210,8 @@ In order:
 4. A container added in the panel is managed; one removed there is left out.
 5. Containers on supported images are managed; others are left out.
 
-Ludock remembers panel choices, sharing, and schedules by Compose project,
-service, and replica, or by container name for a standalone container, so they
-survive the container being recreated. Renaming a standalone container makes a
-new server.
+Panel choices, sharing, and schedules survive the container being recreated
+([how a server is recognized](#when-a-servers-container-changes)).
 
 ## Addresses
 
@@ -320,9 +269,9 @@ container:
   seconds if the image has no health check; one whose health check is still
   starting after 3 minutes is accepted. Only then does Ludock remove the
   original and give the new one its name. Until then neither restarts on its
-  own, so Docker can't run both. A stopped server stays stopped. Running or
-  stopped means as Ludock found the server when it stopped it, after the
-  download: a server started or stopped elsewhere meanwhile is kept that way.
+  own, so Docker can't run both. The server ends running or stopped as Ludock
+  found it when it stopped it, after the download, even if another tool
+  started or stopped it meanwhile.
 - If the new container stops, restarts, or turns unhealthy before then, Ludock
   removes it and restores the original, stopped. Check **Activity**, restore
   the backup if needed, then start the server.
@@ -340,24 +289,25 @@ container:
   update. Before `down -v`, list the server's volumes with
   `docker inspect -f '{{range .Mounts}}{{.Name}} {{.Destination}}{{"\n"}}{{end}}' <container>`,
   then, once you no longer want its data, remove the one left over with
-  `docker volume rm <name>`. Naming the volume
-  in the Compose file avoids this for a new server; an existing server's data
-  stays in its unnamed volume, so copy it into a named one before switching,
-  or the server starts with an empty one.
+  `docker volume rm <name>`. Naming the volume in the Compose file avoids this
+  for a new server; an existing server's data stays in its unnamed volume, so
+  copy it into a named one before switching, or the server starts with an
+  empty one.
 - **Advanced → Update even if the image is already up to date** recreates the
   container anyway, such as to pick up a game update that installs on startup.
 
-Not supported: images pinned by digest or ID, containers Docker removes when
-they stop (`--rm`, which Ludock never stops at all), Swarm services, and servers whose network, process, or IPC
-namespace another container joins. Update those with the tool that made them.
+Not supported: images pinned by digest or ID, [`--rm` containers](#servers-started-with---rm),
+Swarm services, and servers whose network, process, or IPC namespace another
+container joins. Update those with the tool that made them.
 
 **Newer image checks:** about every six hours Ludock asks each image tag's
 registry, through Docker and without pulling, whether the tag points to a newer
 image. Administrators then see **Update available** on the server list and
-**A newer image is available.** on the **Update** tab. A registry that can't be reached isn't an alert; the
-tab says the last check failed. Images built or loaded locally can't be
-compared. Docker Hub counts each check against its pull rate limit. Turn the
-checks off in **Settings → Advanced → Image updates**.
+**A newer image is available.** on the **Update** tab. A registry that can't
+be reached isn't an alert; the tab says the last check failed. Images built or
+loaded locally can't be compared. Docker Hub counts each check against its
+pull rate limit. Turn the checks off in **Settings → Advanced → Image
+updates**.
 
 ## Backup storage
 
@@ -372,8 +322,7 @@ free space left. Under **Settings → Advanced → Backup folder and limits**:
   **Settings → Backups** still includes every backup Ludock lists.
 - **Also copy backups to:** the [second copy](#a-second-copy-of-backups).
 
-Once these settings are saved, Ludock never changes them by itself (including
-turning the second copy back on if you chose **No second copy**). To turn
+Once these settings are saved, Ludock never changes them by itself. To turn
 backups off completely, set `LUDOCK_BACKUP_ROOTS` to empty.
 
 ### Backups on another disk
@@ -444,6 +393,38 @@ the original before it's named `<id>.tar`.
   until then a backup shows **Second copy waiting**. Old copies stay where they
   were, and Ludock no longer tracks them.
 
+## Unusual setups
+
+### Servers started with `--rm`
+
+Docker deletes a container started with `--rm` (Compose doesn't do this) the
+moment it stops, together with any unnamed volume its world may be in. Ludock
+never stops one: its page says so, and Stop, Restart, backups, restores,
+updates, scheduled stops and restarts, and automatic restarts aren't offered
+for it. Watching it, its console, logs, players, and files work as usual.
+Recreate it without `--rm` to manage it fully.
+
+### Shared and nested mounts
+
+- **One folder of a volume** (`volume-subpath`, or `volume.subpath` in
+  Compose): Files and backups show just that folder, and servers on separate
+  folders of one volume don't hold up each other's backups.
+- **`--volumes-from`:** a volume shared this way isn't offered, since Docker
+  doesn't show which folder of it the server has.
+- **A mount inside a data folder:** a backup needs each data folder inside a
+  writable directory mount, with no other mount nested inside it and no
+  overlap with another data folder. That includes a disk or network share the
+  host mounted inside the folder Docker mounts, which Docker doesn't show: the
+  backup finds it before stopping the server and refuses, and the **Backups**
+  tab then says so until you choose **Check again**. Use `ludock.files` to
+  pick folders that qualify. Files never deletes, renames, or moves a folder
+  that is, or holds, a folder mounted separately, such as `./mods:/data/mods`
+  inside `./data:/data`.
+- **What a backup keeps:** permissions, owners, and modification times, and a
+  whole restore gives each data folder its own owner and permissions back.
+  Single-file mounts, links, and special files are refused; ACLs, extended
+  attributes, and sparse files aren't kept.
+
 ## Ludock itself
 
 ### Update Ludock
@@ -459,12 +440,11 @@ docker compose up -d ludock
 Its data and your servers stay as they are. Work Ludock is stopped in the
 middle of is recovered at the next start.
 
-Data from a beta can't be used: 1.0 starts fresh (see
-[Coming from a beta](../README.md#coming-from-a-beta)). Neither can data from
-a newer version than the one starting. Either way, Ludock says why in its log
-and on its address, then waits instead of exiting, so a container that
-restarts on its own doesn't repeat the message, and it leaves the data as it
-was.
+Ludock can't use data from a beta (1.0 starts fresh, see
+[Coming from a beta](../README.md#coming-from-a-beta)), from a newer version
+than the one starting, or from another program. It says which in its log and
+on its address, leaves the data as it was, and waits instead of exiting, so a
+container that restarts on its own doesn't repeat the message.
 
 ### Remove Ludock
 
@@ -499,10 +479,9 @@ the backup folder: once a day, and within about 10 minutes of a new backup or
 an administrator's change. Nothing stops while it saves.
 
 - Each save is `ludock-data-<date>-<time>.tar` (UTC), a plain tar of the
-  database and its identity key. It never appears in a server's **Backups**.
-  A save never replaces a different save, this installation's or another's,
-  as in a folder two share; if one with other contents already has that name,
-  the save takes the next free second.
+  database and its identity key. It never appears in a server's **Backups**,
+  and never replaces another save, even another installation's in a shared
+  folder: it takes the next free second instead.
 - Ludock keeps the 3 newest saves and the newest of each of the last 7 days
   with one, and removes older ones only after a newer save is checked. It
   removes only its own saves, which hold its identity key; saves from another
@@ -541,36 +520,24 @@ database before putting anything in place.
 
 If the whole host was lost, set up Docker and Ludock's `compose.yaml` on the
 new host, mount the second folder (or a copy of its files) at `/backups`, and
-run the commands above, ending with `docker compose up -d`.
-
-Without Ludock, `tar -xpf` a save into an empty data folder, as the user Ludock
-runs as.
-
-A save taken while a restore was running, or before an unfinished one was
-undone, doesn't know how that restore ended, so Ludock never undoes it from the
-restored data: its **Activity** entry says so and which `.ludock-restore-<id>`
-folder to look for.
+run the commands above, ending with `docker compose up -d`. If you mounted the
+second folder as the backup folder, choose a new second folder in
+**Settings**. Without Ludock, `tar -xpf` a save into an empty data folder, as
+the user Ludock runs as.
 
 Afterwards, game backups are listed again and read from the backup folder as
 before. Archives made after the save aren't listed, and records of archives
 removed since show them as missing. Game servers recreated with the same
 Compose project and service are recognized with their sharing and schedules.
-If a server's data now lives on a different volume or host folder, Ludock asks
-an administrator to confirm the change before people it's shared with can use
-it again. Then, to bring a server's game data back:
-
-1. Open the server's **Backups**. Backups taken on the old host say **Taken
-   when the server's data lived somewhere else**.
-2. Choose **Restore…** on the one you want, type the server's name, and
-   confirm. Ludock stops the server, backs up what is there now, puts the
-   backup's files in the server's data folders where they are now, and returns
-   the server to how it was. Activity notes that the backup was taken before
-   the data moved.
-
-This works when the server runs the same game with the same data folders
-inside the container, such as `/data`. A backup that doesn't match says why;
-[restore it by hand](#restore-a-backup-without-ludock). If you mounted the
-second folder as the backup folder, choose a new second folder in **Settings**.
+A server whose data now lives on a different volume or host folder waits for
+an administrator to [confirm the change](#when-a-servers-container-changes);
+its older backups then [restore as usual](GUIDE.md#restore-a-backup-or-one-file)
+when the server runs the same game with the same data folders inside the
+container, such as `/data`. A backup that doesn't match says why;
+[restore it by hand](#restore-a-backup-without-ludock). A restore that was
+running, or not yet undone, when the save was taken is never undone from the
+restored data: its **Activity** entry says so and which `.ludock-restore-<id>`
+folder to look for.
 
 ### Restore a backup without Ludock
 
@@ -587,17 +554,16 @@ sudo tar -xpf backup.tar --numeric-owner -C restored --strip-components=1 "snaps
 
 A backup from a beta may number its folders instead, `snapshot/root-0/` and
 so on, in the order the server listed them; `tar -tf` shows which `$id` to
-use. Run these as root so owners stay as they were. Stop the game, then replace the
-contents of its data folder with those of `restored/$id/`, still as root and
-keeping owners and permissions, such as with
+use. Run these as root so owners stay as they were. Stop the game, then
+replace the contents of its data folder with those of `restored/$id/`, still
+as root and keeping owners and permissions, such as with
 `sudo cp -a "restored/$id/." <folder>/` after emptying the folder. For a data
 folder that is a whole named volume, the folder is the one
 `docker volume inspect -f '{{.Mountpoint}}' <volume>` prints; for one inside a
 volume, add the rest of its container path to that.
 
-With rootless Docker
-the host's root is not the containers' root, so do the same from inside a
-container, which keeps owners as the game sees them. It needs no path on the
+With rootless Docker the host's root is not the containers' root, so do the
+same from inside a container, which keeps owners as the game sees them. It needs no path on the
 host for a volume, and room on Docker's own disk to unpack the backup:
 
 ```bash
@@ -641,17 +607,15 @@ its database in `/data` and backups in `/backups`, in separate volumes.
   the one-time code Ludock prints to its log at startup. A new code is printed
   at each restart until setup is done. A code set with `LUDOCK_SETUP_CODE`
   isn't printed and stays the same. Failed attempts are limited per address.
-- **Existing data:** Ludock refuses to start on a database it can't use, such
-  as another program's, a beta's, or a newer version's, says which, and leaves
-  it unchanged.
+- **Existing data:** Ludock refuses data it [can't use](#update-ludock).
 
 ### Remote access
 
 The Docker socket gives control of the whole host, so expose Ludock beyond a
 trusted network only through an HTTPS reverse proxy, and keep port 3000 itself
 reachable only from the proxy or your own network: the example `compose.yaml`
-publishes it on every interface. The proxy must keep the
-public host name, forward the original protocol, pass WebSocket upgrades and
+publishes it on every interface. The proxy must keep the public host name,
+forward the original protocol, pass WebSocket upgrades and
 server-sent events without buffering, overwrite any client-supplied
 `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-Port` headers, and
 add the visitor's address at the end of `X-Forwarded-For`, on the same line
@@ -710,15 +674,12 @@ Updates and newer image checks then use it.
 ### When a server's container changes
 
 A Compose server is identified by its project, service, and replica, and a
-standalone container by its name. Recreating it with a new password, port,
-label, or environment variable keeps its history, sharing, and schedules. A
-change to its game or to the data folders Ludock reads and backs up pauses the
-access of everyone it's shared with, and their schedules, until an
-administrator chooses **Confirm and restore access**, since what they were
-given has changed. Backups taken before the change still restore when the game
-and the data folders' paths inside the container are the same, after an
-administrator confirms that the data now lives somewhere else; otherwise the
-backup says what differs.
+standalone container by its name, so renaming a standalone container makes a
+new server. Recreating it with a new password, port, label, or environment
+variable keeps its panel choices, history, sharing, and schedules. A change to
+its game or to the data folders Ludock reads and backs up pauses the access of
+everyone it's shared with, and their schedules, until an administrator chooses
+**Confirm and restore access**, since what they were given has changed.
 
 ### Helpers
 
@@ -726,9 +687,10 @@ Ludock runs short-lived helper containers from its own image:
 
 - **File and backup helpers** mount only approved data, run as root with no
   network, and are removed afterward; idle ones exit after 35 minutes. Bind
-  mounts need validated host paths and recursive read-only bind support; symlinked sources and Docker Desktop path aliases can prevent
-  access. Named volumes must use the `local` driver without options that remap
-  the host path.
+  mounts need validated host paths and recursive read-only bind support;
+  symlinked sources and Docker Desktop path aliases can prevent access. Named
+  volumes must use the `local` driver without options that remap the host
+  path.
 - **Console, player, and status-check helpers** share the game container's
   network and connect on `127.0.0.1`, so console and query ports needn't be
   published. A console password reaches its helper over standard input.
@@ -740,28 +702,21 @@ Every name that starts with `.ludock-`, in any letter case, is Ludock's:
 
 | Name | What it is | When it goes |
 | --- | --- | --- |
-| `.ludock-restore-<id>` | A restore's staging folder, at the top of a data folder: the backup's data before it moves in, then the data it replaced | When the restore ends; one that stopped partway stays until it is finished or undone |
+| `.ludock-restore-<id>` | A restore's staging folder, at the top of a data folder: the backup's data before it moves in, then the data it replaced | When the restore ends, or once [one that stopped partway](#a-restore-that-stopped-partway) is finished or undone |
 | `.ludock-unpack-<id>` | An unpack in progress, beside the archive | When the unpack ends, or at Ludock's next start |
 | `.ludock-upload-<id>.tmp` | An upload or edit in progress, beside the file | When the upload ends |
 
 Files doesn't show these names, and no one can create, rename, move, upload,
-unpack, download, or delete one there. A folder holding an unpack's or
-upload's folder can still be deleted as a whole, but not one holding a
-restore's: it can be below the top of what Files shows, when two servers show
-different folders of shared storage or `ludock.files` was widened, and
-Files names it instead. Backups leave them out, and a restore leaves those at the top of a data folder
-where they are, so one left over, or made by hand, never blocks a backup or a
-restore. To
-remove one Ludock no longer needs, delete it on the host. The previous data of
-a restore that stopped partway is in its `.ludock-restore-<id>/old`.
+unpack, download, or delete one there. A folder holding one can be deleted as
+a whole, except one holding a restore's, which Files names instead; that one
+can sit below what Files shows when `ludock.files` was widened or two servers
+share storage. Backups leave them out and restores leave them in place, so one
+left over, or made by hand, never blocks either. To remove one Ludock no
+longer needs, delete it on the host.
 
 `ludock-set-aside-<id>`, without the leading dot, holds what a server wrote
 while a stopped restore waited to be undone. It is ordinary data: Files shows
 it, backups include it, and you can delete it once you've kept what you need.
-
-Ludock never deletes, renames, or moves a folder that is, or holds, a folder
-mounted into the server separately, such as `./mods:/data/mods` inside
-`./data:/data`; it says so instead. Delete what's inside that folder.
 
 ### Activity results
 
@@ -779,11 +734,9 @@ Each piece of work in **Activity** shows one result:
 | Cancelled | Called off while it was queued or warning players, before it changed anything, by the person named |
 
 An automatic restart is listed as by "Ludock, because the game stopped
-answering". Only queued work and work warning players can be cancelled, from
-its row in **Activity** or on the server's page, by an
-administrator or anyone who may start that action on the server; a cancelled
-run doesn't pause its schedule. **Show → Everything** also records cancelling
-a scheduled run that waited for players to leave.
+answering". [Cancelling](GUIDE.md#stopping-and-restarting) a scheduled run
+doesn't pause its schedule, and **Show → Everything** also records cancelling
+a run that waited for players to leave.
 
 ### After an interruption
 
@@ -798,16 +751,13 @@ anything that was in progress:
   from its journal, and removes leftovers from interrupted archive unpacks.
 - **Updates:** an update interrupted before its new container ran didn't
   happen, and the server is returned to how it was; one interrupted while its
-  new container was being checked is undone and the server left stopped (since
-  the new version may have changed the game data); one that had begun removing
-  the original is finished, and its new container is started, once, if the
-  server was running and Docker stopped it meanwhile. Ludock then checks that
-  it keeps running for the same 10 seconds. If it won't start, stops again, or
-  was found stopped after the update had started it, the server is left
-  stopped, an alert is sent, it is listed in **Needs attention**, and its entry
-  says so. If Docker doesn't answer for that check, the entry says Ludock
-  couldn't confirm the server is running, and outage alerts report it if it
-  is down.
+  new container was being checked is undone and the server left stopped, since
+  the new version may have changed the game data. One that had begun removing
+  the original is finished: if the server was running, its new container is
+  started once if needed and must keep running for 10 seconds, or the server
+  is left stopped, an alert is sent, and it is listed in **Needs attention**.
+  If Docker doesn't answer for that check, the entry says Ludock couldn't
+  confirm the server is running.
 - **Everything else:** work Ludock can't safely finish is marked interrupted,
   never repeated. Cancelled work stays cancelled, and a warning Ludock resumes
   can still be cancelled. One-time scheduled runs missed by more than 5 minutes
@@ -815,6 +765,13 @@ anything that was in progress:
   skip that time.
 
 **Activity** says what happened to each piece of work.
+
+Asked to stop, Ludock gives running work about six seconds to finish, inside
+the ten Docker waits before killing it. Work still running then, such as a
+backup or a warned restart's minute, is left as a crash would leave it and is
+resumed or checked on the next start.
+
+### A restore that stopped partway
 
 A restore that stops partway, because something outside Ludock started the
 server or a step failed, always ends in one of these states, which its entry
@@ -838,10 +795,11 @@ first finishes the undo the same way before its own work, and so does Ludock's
 next start if the server is stopped then. If the `.ludock-restore-<id>` folder
 is gone, there is nothing to put back: the data is left as it is and the
 entry says so. A state Ludock can't finish safely, such as data folders that
-changed since, makes those refuse instead; a backup, restore, or update that
-stopped a running server for it starts it again, unless the undo had already
-begun moving data. A restart with a backup first, while Ludock keeps running,
-starts it only once its backup is taken.
+changed since, makes that work refuse instead, and a running server it stopped
+for the undo starts again (for a restart with a backup first, once its backup
+is taken) unless the undo had begun moving data.
+
+### When Docker restarts
 
 If Docker itself restarts while work runs, such as for an upgrade, Ludock's
 requests to it wait up to 90 seconds for it to answer again, and the work's
@@ -871,8 +829,3 @@ themselves for about two minutes.
 Docker coming back with the server started on its own still counts as a
 change outside Ludock. After 90 seconds, or when Ludock can't tell what Docker
 did, the work stops and says Ludock couldn't reach Docker.
-
-Asked to stop, Ludock gives running work about six seconds to finish, inside
-the ten Docker waits before killing it. Work still running then, such as a
-backup or a warned restart's minute, is left as a crash would leave it and is
-resumed or checked on the next start.

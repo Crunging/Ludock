@@ -168,6 +168,60 @@ live in named volumes, since the temporary folder may be kept in memory.
 Images stay after `down`; `LUDOCK_RIG_JAVA_IMAGE` picks another Minecraft
 image, such as an older tag to try an update.
 
+#### What the rig has checked
+
+The reference's "Checked on real servers" lists what owners need. What was
+seen on each, on a machine with 8 GB of memory and a 25 GB download limit:
+
+- **Minecraft** (vanilla 1.21.11): players joined with the bot. With zero, one,
+  and two online, Ludock opened RCON, which the game logs, only when a page
+  opened or someone joined; the status check's player sample stood in the rest
+  of the time.
+- **Terraria** (1.4.5.8): with two bots online, Ludock listed both from
+  `playing` and kicked and banned them; the list follows within a few seconds.
+  `save` before a stop, then `exit`, and `say` warns players.
+- **Factorio:** who's online, kick, and ban answer as expected; warnings appear
+  in chat from `<server>`; `/server-save` saves, and the game saves again when
+  it stops.
+- **Valheim:** with `SERVER_PUBLIC` on, Ludock restarted a hung server by
+  itself once automatic restart was on.
+- **Vintage Story:** `/autosavenow` saves before a stop, and the game saves
+  again when it stops; `/announce` warns, `/list clients` lists, and `/kick`
+  kicks.
+- **Minecraft: Bedrock Edition:** `list` and `kick` work, and the image saves
+  the world when Docker stops it. With the game process
+  frozen, Docker called it unhealthy within two minutes, and Ludock restarted
+  it and said it answered again. Warnings weren't seen in game, since joining
+  needs a Microsoft account.
+- **Palworld** (1.0.5): who's online, kick, and ban (as `steam_<ID>`) work;
+  the REST API logged the warning as accepted. The saves are about 0.3 MB on a
+  new world beside a 3.5 GB server; a backup and its restore each took about
+  15 s.
+- **Core Keeper:** Docker's stop saves within a few seconds. The world is about
+  0.1 MB beside a 570 MB server; a backup and its restore brought back the
+  same world.
+- **V Rising** (1.1): the game took Ludock's restart warning. Its own
+  `shutdown` saves but waits at least a minute. The saves are about 20 MB
+  beside a 1.9 GB server; a backup and its restore brought them back, and the
+  game loaded the latest.
+- **Enshrouded:** status check and count on 15637; Docker's stop saves within
+  a few seconds. On both images a backup and its restore brought back the same
+  world.
+- **7 Days to Die** (3.4): `listplayers` was read on an empty server;
+  `saveworld` saves before a stop, `say` posts in global chat, and LinuxGSM
+  saves and shuts down in about 10 seconds. The saves are about 17 MB on
+  Navezgane beside a 17 GB server; LinuxGSM's logs hold a `steam` link that
+  stopped every backup until they were left out. A backup and its restore
+  brought back the same saves.
+- **Project Zomboid:** the image passes empty arguments that Build 42 refuses,
+  and so does Build 41.78 on `GAME_VERSION=legacy41`.
+
+On games other than Minecraft and Terraria, who's online was read on an empty
+server, and the replies with players come from the game's own text. Not run:
+Counter-Strike 2 (60 GB of disk), Conan Exiles (at least 8 GB of memory), Rust
+(12 GB), Satisfactory (8 to 16 GB), both ARKs (6 to 13 GB), and Don't Starve
+Together, which needs a server token from Klei.
+
 ## CI and releases
 
 The image cross-compiles a static binary (`CGO_ENABLED=0`) and copies it into

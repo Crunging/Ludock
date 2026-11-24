@@ -22,9 +22,9 @@ click, and goes away once done.
   each server that has data folders and no repeating schedule that backs it up
   (a backup, or a restart with **Back up first**; a paused schedule still
   counts) gets a daily backup between 04:00 and 06:00 in your browser's time
-  zone, spaced a few minutes apart. Like
-  a new schedule, each waits for players to leave and warns anyone still on
-  where the game allows. It appears once backup storage is on.
+  zone, spaced a few minutes apart. Like a new schedule, each waits for
+  players to leave and warns anyone still on where the game allows. It
+  appears once backup storage is on.
 - **Restart servers that stop answering** offers **Restart automatically** for
   servers whose game Ludock can check (see
   [Restart a game that hangs](#restart-a-game-that-hangs)).
@@ -117,10 +117,9 @@ gets; all but **Newer images available** are on by default. Saved tokens,
 topics, passwords, and webhook URLs are never shown again; leave a field blank
 to keep it. What triggers each alert is in [Monitoring](#monitoring).
 
-If alerts stop arriving, the destination reads **Failing** with when it was
-last tried and why, and
-**Needs attention** on the server list tells administrators, with a link to
-fix it. Both clear once a delivery gets through.
+If alerts stop arriving, the destination reads **Failing** and says why, and
+**Needs attention** on the server list links to it
+([details](#notifications)).
 
 ### Back up a server, or every night
 
@@ -134,16 +133,15 @@ To back up on a schedule, use **Back up every night** in
 
 Backups need nothing set up: the example `compose.yaml` mounts a
 `ludock-backups` volume at `/backups`, and Ludock turns storage on there by
-itself. **Settings → Backups**
-shows where backups go and how much space they use. Each server
-keeps the 3 newest backups plus the last of each of the 7 most recent days,
-4 weeks, and 6 months that have one; Ludock removes the rest after each new
-backup. Only backups that can be restored count: one whose archive is gone
-from the backup folder, with no second copy, stays listed as missing and
-takes no place, and while Ludock can't reach a backup's folder it removes
-none of the backups there. To keep one for good, choose **Keep…** from its
-menu. When the latest backup failed or was interrupted, the **Backups** tab says so, with a link to
-what happened, until the next one succeeds.
+itself. **Settings → Backups** shows where backups go and how much space they
+use. Each server keeps the 3 newest backups plus the last of each of the 7
+most recent days, 4 weeks, and 6 months that have one; Ludock removes the rest
+after each new backup. Only backups that can be restored count: one whose
+archive is gone from the backup folder, with no second copy, stays listed as
+missing and takes no place, and while Ludock can't reach a backup's folder it
+removes none of the backups there. To keep one for good, choose **Keep…** from
+its menu. When the latest backup failed or was interrupted, the **Backups**
+tab says so, with a link to what happened, until the next one succeeds.
 
 A server whose data isn't in a writable volume or bind mount can't be backed
 up; its **Backups** tab says so. Give its data a volume where you define the
@@ -211,11 +209,11 @@ stands in for one, Ludock can restart it:
 When the game stops answering for the **Wait before alerting** time (two
 minutes by default), Ludock restarts it the way **Restart** does and sends an
 alert. It leaves alone a server that is stopped, still starting, hasn't
-answered since it last started, or is paused for maintenance. If the game still doesn't answer after the restart (within five times **Wait
-before alerting**, at most 30 minutes), or after 3 restarts in 6 hours, Ludock
-alerts you and stops trying to restart it for that outage.
-**Activity** lists each of these restarts as by "Ludock, because the game
-stopped answering". A server
+answered since it last started, or is paused for maintenance. If the game
+still doesn't answer after the restart (within five times **Wait before
+alerting**, at most 30 minutes), or after 3 restarts in 6 hours, Ludock alerts
+you and stops trying to restart it for that outage. **Activity** lists each of
+these restarts as by "Ludock, because the game stopped answering". A server
 whose container exits is left to the restart policy set in the tool that runs
 it, such as Compose.
 
@@ -256,9 +254,9 @@ owner or an administrator can change one.
 waits for players to leave, the schedule, the server's overview, and its
 **Activity** tab show **Cancel this run**: that run ends without acting, the
 schedule's last result says who cancelled it, and the next run happens as
-planned. A scheduled run that is queued or warning players can be cancelled
-from **Activity** too; a cancelled run doesn't count as a failure or send an
-alert.
+planned. A run that is queued or warning players
+[can be cancelled](#stopping-and-restarting) like any other work. A cancelled
+run doesn't count as a failure or send an alert.
 
 Once players have been warned, a run that won't happen as announced is called
 off in the game, once: they hear "Server restart cancelled." (or the like)
@@ -294,23 +292,16 @@ schedules stay. Only a change to the server's game or data folders asks
 anything: the server shows **This server changed in Docker**, and the people
 it's shared with can't use it, and their schedules wait, until an
 administrator chooses **Confirm and restore access**. Administrators keep using
-it meanwhile.
-
-A server started with `--rm` (Compose doesn't do this) is one Docker deletes
-the moment it stops, together with any unnamed volume its world may be in.
-Ludock never stops one: its page says so, and Stop, Restart, backups,
-restores, updates, scheduled stops and restarts, and automatic restarts
-aren't offered for it. Watching it, its console, logs, players, and files
-work as usual. Recreate it without `--rm` to manage it fully.
+it meanwhile. A server started with `--rm` can be watched but
+[never stopped](REFERENCE.md#servers-started-with---rm).
 
 ### Stopping and restarting
 
 When the game's console has a **Save world** shortcut, Ludock sends it and
 waits five seconds before stopping, including for a backup, restore, or
-update. Docker then gives the game 120 seconds to
-shut down (more for slow savers such as ARK, Palworld, Valheim, 7 Days to Die,
-and Don't Starve Together), or the container's own `stop_grace_period` if it
-is longer. Terraria's images never pass Docker's stop signal on to the game,
+update. Docker then gives the game 120 seconds to shut down (more for slow
+savers such as ARK, Palworld, Valheim, 7 Days to Die, and Don't Starve
+Together), or the container's own `stop_grace_period` if it is longer. Terraria's images never pass Docker's stop signal on to the game,
 so Ludock also types its `exit` command, which saves and quits.
 
 The Stop and Restart dialogs say how many players are online when Ludock
@@ -336,24 +327,27 @@ alone and says so in **Activity**.
 Until the minute is up, the server's page, its row on the server list, and its
 rows in **Activity** show **Cancel restart** (or stop, backup, restore, or
 update) to anyone who may start it. Cancelling changes nothing on the server
-and tells the players in the game that it's off. Work queued behind other work on the same server
-can be cancelled the same way while it waits. Cancel is there only while
-the work is queued or waiting out the minute: once it saves, stops, or replaces
-anything, the work finishes. An update downloads the new image before it warns
-players, so it can still be cancelled during that minute. If the cancel and the end of the wait happen at once, the page says
+and tells the players in the game that it's off. Work queued behind other work
+on the same server can be cancelled the same way while it waits. Cancel is
+there only while the work is queued or waiting out the minute: once it saves,
+stops, or replaces anything, the work finishes. An update downloads the new
+image before it warns players, so it can still be cancelled during that
+minute. If the cancel and the end of the wait happen at once, the page says
 which won.
 
 **Back up first** in the Restart dialog checks the backup folder, stops
-the server, backs it up, and starts it once. If the backup fails, the server
-stays stopped and Ludock sends an alert, since starting may update the game
-with no backup to go back to. If Ludock itself restarts during the backup, the
-server is started again when Ludock is back, without the backup, and
-**Activity** says so.
+the server, backs it up, and starts it once, unless something outside Ludock
+stopped it first, which leaves it stopped after the backup. If the backup
+fails, the server stays stopped and Ludock sends an alert, since starting may
+update the game with no backup to go back to. If Ludock itself restarts during
+the backup, the server is started again when Ludock is back, without the
+backup, and **Activity** says so.
 
 Every stop, restart, backup, restore, and update is listed in **Activity**,
-with who started it. If Docker itself restarts for a few seconds while work runs,
-such as for an upgrade, the work waits for it and carries on; the
-[reference](REFERENCE.md#after-an-interruption) has the details.
+with who started it. If Docker itself restarts for a few seconds while work
+runs, such as for an upgrade, the work waits for it and carries on. What
+happens to work when Ludock or Docker restarts is in the
+[reference](REFERENCE.md#after-an-interruption).
 
 ### Consoles
 
@@ -370,12 +364,13 @@ Network consoles (RCON, WebRCON, Telnet) need the console turned on in the
 game. Ludock finds its password in the variables images usually use, such as
 `RCON_PASSWORD`, `ADMIN_PASSWORD`, or `TELNET_PASSWORD`, and for Minecraft and
 Factorio also the one the image generates. If yours uses another name, set
-[`ludock.console.password-env`](REFERENCE.md#labels). Terraria, Bedrock, and Vintage Story read commands
-from the server's input, which needs `stdin_open: true` on the container (and
-`StdinOnce` off, outside Compose) and an image that passes input to the game;
-their replies appear only in **Logs**, which is also where Ludock reads who's
-online. Ludock reaches consoles from inside the
-container's network, so the console port needn't be published.
+[`ludock.console.password-env`](REFERENCE.md#labels). Terraria, Bedrock, and
+Vintage Story read commands from the server's input, which needs
+`stdin_open: true` on the container (and `StdinOnce` off, outside Compose) and
+an image that passes input to the game; their replies appear only in
+**Logs**, which is also where Ludock reads who's online, so the list command
+it sends shows there each time. Ludock reaches consoles from inside the container's
+network, so the console port needn't be published.
 
 ### Files
 
@@ -399,17 +394,14 @@ Stop a game before replacing a world or configuration it has open. Many
 images write some settings from their environment variables each time they
 start, such as `MOTD` into Minecraft's `server.properties` on
 `itzg/minecraft-server`, so an edit to one of those is undone at the next
-start; change it where you define the server instead. Ludock
-never follows symbolic links, and blocks system and sensitive paths and Docker
-sockets. A server given one folder of a volume (`volume-subpath`, or
-`volume.subpath` in Compose) shows just that folder, here and in its backups,
-and servers on separate folders of one volume don't hold up each other's
-backups.
-A volume shared with `--volumes-from` isn't offered, since Docker doesn't show
-which folder of it the server has. To limit access to some folders, set
-[`ludock.files`](REFERENCE.md#labels). Ludock's own working folders, named
-`.ludock-…`, [stay out of Files](REFERENCE.md#ludocks-folders-in-server-data).
-Size and time limits are in the [reference](REFERENCE.md#limits).
+start; change it where you define the server instead. Ludock never follows
+symbolic links, and blocks system and sensitive paths and Docker sockets.
+Volume subpaths and `--volumes-from` are in
+[Unusual setups](REFERENCE.md#shared-and-nested-mounts). To limit access to
+some folders, set [`ludock.files`](REFERENCE.md#labels). Ludock's own working
+folders, named `.ludock-…`,
+[stay out of Files](REFERENCE.md#ludocks-folders-in-server-data). Size and
+time limits are in the [reference](REFERENCE.md#limits).
 
 ### Backups
 
@@ -431,16 +423,12 @@ Size and time limits are in the [reference](REFERENCE.md#limits).
 - **Cancelled backups:** a forced stop, a start from another tool, a replaced
   container, or another running container writing the same data cancels the
   copy.
-- **Contents:** each data folder must be inside a writable directory mount,
-  with no other mount nested inside it and no overlap with another data
-  folder; single-file mounts, links, and special files are refused. That
-  includes a disk or network share the host mounted inside the folder Docker
-  mounts, which Docker doesn't show: the backup finds it before stopping the
-  server and refuses, and the **Backups** tab then says so until you choose
-  **Check again**. Use `ludock.files` to pick folders that qualify.
-  Permissions, owners, and modification times are kept, and restoring a whole
-  backup also gives each data folder its own owner and permissions back;
-  ACLs, extended attributes, and sparse files aren't kept.
+- **Contents:** the data folders' ordinary files and folders, with their
+  permissions, owners, and modification times. Links and special files are
+  refused, and so is a data folder with another mount inside it; the
+  **Backups** tab says which.
+  [Shared and nested mounts](REFERENCE.md#shared-and-nested-mounts) has the
+  exact rule.
 - **Safety backups** taken before a restore or update follow the same
   retention rule and are labeled in the list.
 - **Records:** Ludock lists only archives it made, from records in
@@ -451,22 +439,12 @@ Size and time limits are in the [reference](REFERENCE.md#limits).
   archives can hold configuration secrets.
 
 If a restore fails, check **Activity**: its entry says what the data was left
-as. Usually the restore was undone and the data is as it was.
-
-If something outside Ludock started the server partway, the restore stops there
-and leaves the server running. If the server's previous data had already been
-moved out, it waits, safe but not in place, in the restore's
-`.ludock-restore-*` folder, which Files doesn't show and no one can change
-there. **Needs attention**
-offers administrators **Undo the restore**, which stops the server (warning
-players first when it can), puts the previous data back, and starts it again if
-it was running. Anything the game wrote meanwhile is kept in a
-`ludock-set-aside-*` folder beside the data, not deleted. Otherwise Ludock
-finishes the undo itself the next time it stops that server for a backup, a
-restore, or an update, or when it starts and finds the server stopped, and that
-work's **Activity** entry says so. An interrupted restore is finished or rolled
-back when Ludock starts again in the same way, and its entry in **Activity**
-says which.
+as. Usually the restore was undone and the data is as it was. If something
+outside Ludock started the server partway, the restore stops and leaves it
+running; when the previous data was already moved out, **Needs attention**
+offers administrators **Undo the restore**, which keeps anything the game wrote
+meanwhile. [A restore that stopped partway](REFERENCE.md#a-restore-that-stopped-partway)
+has every case.
 
 ### Schedules
 
@@ -479,17 +457,16 @@ says which.
   time; a one-time schedule runs within five minutes and otherwise is recorded
   as missed. A daylight-saving hour that doesn't exist is skipped, and a
   repeated one runs once.
-- **Back up first** needs the server running when the schedule runs. If the
-  backup fails, the server stays stopped; if Ludock restarts during it, the
-  server is started again.
+- **Back up first** needs the server running when the schedule runs, and then
+  works as in the [Restart dialog](#stopping-and-restarting).
 - **Wait until no one is online** works on restarts, stops, and backups on
   servers whose players Ludock can read, and waits 1 to 360 minutes. A player
   count Ludock can't read counts as players online. Warnings need **Go ahead
   anyway** and count down to the end of the wait.
 - **Warnings** need a game that can message its players (see
-  [Supported games](REFERENCE.md#supported-games)) and the owner's permission to send console commands.
-  They are best effort: each is sent at most once, and skipped when the
-  console doesn't answer.
+  [Supported games](REFERENCE.md#supported-games)) and the owner's permission
+  to send console commands. They are best effort: each is sent at most once,
+  and skipped when the console doesn't answer.
 - **Send command** sends one line, up to 500 characters, through the game
   console. It doesn't start a stopped server. Anyone who can see the schedule
   and send console commands can read the command, so leave passwords out.
@@ -508,8 +485,6 @@ unchanged, since games such as Minecraft log every console connection: once the
 console has listed the players, a status check that names the same players, or
 says nobody is online, stands in for it. Games with a working status check but
 no player list, or no console password, still show how many are online.
-Terraria, Bedrock, and Vintage Story have no status check, so their list
-command and its reply show in their **Logs** each time Ludock reads them.
 
 A kick or ban targets the player by the name or ID the game's latest list
 gave, and only when it is wholly in the game's own form, so it can't carry
@@ -539,8 +514,8 @@ found it stays quiet until it runs. A game still starting, or whose status
 check is off or wrong, never counts as not answering. Ludock remembers that a
 game answered, so one that hangs while Ludock itself restarts is still caught;
 the wait starts again when Ludock is back, unless the alert was already sent.
-Disks are measured about
-every 10 minutes while someone has Ludock open and every 30 otherwise.
+Disks are measured about every 10 minutes while someone has Ludock open and
+every 30 otherwise.
 
 ### Notifications
 
@@ -565,10 +540,10 @@ never images or host paths. Each alert is tried up to five times, over about
 
 A destination that is on reads **Failing** when its alerts aren't getting
 through: an alert has failed three times in a row (about three minutes after
-it was raised), or a test failed, with nothing delivered since. It says when it
-was last tried and why, and **Needs attention** shows it to administrators. It reads
-**On** again once any delivery to it succeeds, and the warning goes once it's
-turned off.
+it was raised), or a test failed, with nothing delivered since. It says when
+it was last tried and why, and **Needs attention** shows it to administrators
+with a link to fix it. It reads **On** again once any delivery to it
+succeeds, and the warning goes once it's turned off.
 
 **Settings → Advanced → Recent deliveries** lists the latest 50, each with the
 alert as it was sent, its type, and when it was queued, and offers **Retry** on
@@ -593,8 +568,8 @@ chooses **Turn off two-factor** on **Users**.
 
 Invite and reset links work once, expire after 24 hours, and point at the
 address you're using Ludock at, so make them from the address the user will
-open. **Users** shows a link that hasn't been used yet, with **Revoke link**. Too many wrong passwords or codes from one address are refused for a
-while.
+open. **Users** shows a link that hasn't been used yet, with **Revoke link**.
+Too many wrong passwords or codes from one address are refused for a while.
 
 ### Activity
 
@@ -602,9 +577,11 @@ while.
 each piece of work with its latest result. **Filter** opens filters for
 server, person, action, result, and dates; it says how many are on, and a link
 to a filtered page opens with them showing. Each server's **Activity** tab
-lists its own, with filters for the results and kinds of work it has had. Work that is queued or warning players shows **Cancel restart**
-(or backup, and so on) on its row in both, to anyone who may cancel it, and
-rows update while work runs. Administrators can choose **Show → Everything** to add sign-ins, account
+lists its own, with filters for the results and kinds of work it has had.
+Rows update while work runs, and work that
+[can still be cancelled](#stopping-and-restarting) offers **Cancel** on its
+row.
+Administrators can choose **Show → Everything** to add sign-ins, account
 changes, and settings changes.
 
 **Needs attention** on the server list shows recent failures until the same
