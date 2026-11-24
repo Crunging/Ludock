@@ -616,12 +616,12 @@ func TestPublishNeverReplacesAValidCopy(t *testing.T) {
 	os.WriteFile(final, []byte("world data"), 0o600)
 	kept := inode()
 	os.WriteFile(filepath.Join(f.copies, "copy.tar.a.partial"), []byte("world data"), 0o600)
-	if err := publish(ctx, dir, "copy.tar.a.partial", "copy.tar", 10, checksum); err != nil || inode() != kept {
+	if _, err := publish(ctx, dir, "copy.tar.a.partial", "copy.tar", 10, checksum, nil); err != nil || inode() != kept {
 		t.Fatal("replaced a valid copy", err)
 	}
 	os.WriteFile(final, []byte("WORLD DATA"), 0o600)
 	os.WriteFile(filepath.Join(f.copies, "copy.tar.b.partial"), []byte("world data"), 0o600)
-	if err := publish(ctx, dir, "copy.tar.b.partial", "copy.tar", 10, checksum); err != nil {
+	if _, err := publish(ctx, dir, "copy.tar.b.partial", "copy.tar", 10, checksum, nil); err != nil {
 		t.Fatal(err)
 	}
 	if content, _ := os.ReadFile(final); string(content) != "world data" {

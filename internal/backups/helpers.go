@@ -140,7 +140,9 @@ func (h *Helpers) NewDataHelper(ctx context.Context, context *servers.Context, r
 	if err != nil {
 		return nil, err
 	}
-	capabilities := []string{"DAC_OVERRIDE", "CHOWN", "FOWNER"}
+	// FSETID keeps a restored root's setgid bit, which chmod by a helper
+	// outside the root's group would otherwise clear.
+	capabilities := []string{"DAC_OVERRIDE", "CHOWN", "FOWNER", "FSETID"}
 	if readOnly {
 		capabilities = []string{"DAC_OVERRIDE"}
 	}
@@ -680,14 +682,17 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 			return fail("UNSAFE_ARCHIVE", "The archive contains duplicate paths or too many entries.")
 		}
 		names[name] = true
-		rootID, entry, found := strings.Cut(strings.TrimPrefix(name, "snapshot/"), "/")
+		rootID, entry, _ := strings.Cut(strings.TrimPrefix(name, "snapshot/"), "/")
 		extraction := extractions[rootID]
-		if !found || extraction == nil {
+		if extraction == nil {
 			return nil
 		}
-		if item := items[rootID]; item != "" && entry != item && !strings.HasPrefix(entry, item+"/") {
+		item := items[rootID]
+		if item != "" && entry != item && !strings.HasPrefix(entry, item+"/") {
 			return nil
 		}
+		// A whole root's own entry, which comes first and which validation
+		// requires, gives the root its owner and permissions as it commits.
 		uid, gid, mtime, err := EntryMetadata(header)
 		if err != nil {
 			return err

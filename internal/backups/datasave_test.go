@@ -146,17 +146,20 @@ func TestDataKeeps(t *testing.T) {
 
 // A save interrupted by a restart left a partial file in the backup folder
 // and a work folder beside the database. Neither looks like a save; the next
-// save removes both, and not another's partial file. A save stopped by
-// shutdown records no failure.
+// save removes both, and not other partial files, even one of another
+// installation's save in the same second. A save stopped by shutdown records
+// no failure.
 func TestSaveDataInterrupted(t *testing.T) {
 	f := newCopyFixture(t)
 	partial := filepath.Join(f.main, "ludock-data-20261119-010203.tar.1a2b3c4d.partial")
 	os.WriteFile(partial, []byte("half"), 0o600)
-	if err := f.s.DB.SetSetting(ctx, nil, dataSaveKey, dataTrack{Writing: "ludock-data-20261119-010203.tar", WritingIn: f.main}); err != nil {
+	if err := f.s.DB.SetSetting(ctx, nil, dataSaveKey, dataTrack{Writing: filepath.Base(partial), WritingIn: f.main}); err != nil {
 		t.Fatal(err)
 	}
 	another := filepath.Join(f.main, "ludock-data-20261118-010203.tar.5e6f7a8b.partial")
 	os.WriteFile(another, []byte("half"), 0o600)
+	sameSecond := filepath.Join(f.main, "ludock-data-20261119-010203.tar.9c8d7e6f.partial")
+	os.WriteFile(sameSecond, []byte("half"), 0o600)
 	var seq int
 	var name, database string
 	f.s.DB.QueryRow("PRAGMA database_list").Scan(&seq, &name, &database)
@@ -194,7 +197,7 @@ func TestSaveDataInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := dataFiles(t, f.main)
-	if len(names) != 2 || names[0] != filepath.Base(another) || !dataName.MatchString(names[1]) || exists(work) {
+	if len(names) != 3 || names[0] != filepath.Base(another) || names[1] != filepath.Base(sameSecond) || !dataName.MatchString(names[2]) || exists(work) {
 		t.Fatal("after the interrupted save", names, exists(work))
 	}
 }
@@ -434,5 +437,38 @@ func TestSaveDataNewFolderSavesAtOnce(t *testing.T) {
 	}
 	if status := f.s.Status(ctx); status.DataSavedAt == 0 || status.DataProblem != "" {
 		t.Fatal("status", status.DataSavedAt, status.DataProblem)
+	}
+}
+
+// Another installation saving into the same folders saved in the same
+// second: its save keeps its name and contents, and this save, and its
+// second copy, take the next free second instead.
+func TestSaveDataKeepsAnotherInstallationsSave(t *testing.T) {
+	f := newCopyFixture(t)
+	at := time.Date(2026, 11, 20, 3, 15, 0, 0, time.UTC)
+	before := dataNow
+	t.Cleanup(func() { dataNow = before })
+	dataNow = func() time.Time { return at }
+	other := otherSave(t)
+	for _, folder := range []string{f.main, f.copies} {
+		os.WriteFile(filepath.Join(folder, dataFileName(at)), other, 0o600)
+	}
+	os.WriteFile(filepath.Join(f.copies, dataFileName(at.Add(time.Second))), other, 0o600)
+	if err := f.s.SaveData(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.CopyData(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for folder, own := range map[string]string{f.main: dataFileName(at.Add(time.Second)), f.copies: dataFileName(at.Add(2 * time.Second))} {
+		if body, _ := os.ReadFile(filepath.Join(folder, dataFileName(at))); !bytes.Equal(body, other) {
+			t.Fatal("replaced another installation's save in", folder)
+		}
+		if !f.s.Storage.isOwnSave(folder, own, f.s.DB.IsOwnSave) {
+			t.Fatal("no save of this installation's at", folder, own, dataFiles(t, folder))
+		}
+	}
+	if status := f.s.Status(ctx); status.DataProblem != "" {
+		t.Fatal(status.DataProblem)
 	}
 }

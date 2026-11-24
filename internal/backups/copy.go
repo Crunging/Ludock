@@ -83,33 +83,55 @@ var fileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
 // never publishes; progress is called after each write.
 func (s *Storage) CopyFile(ctx context.Context, source io.Reader, directory, name string, size int64, checksum string,
 	reserve int64, progress func(), modified time.Time) error {
+	_, err := s.copyFile(ctx, source, directory, name, size, checksum, reserve, progress, modified, nil)
+	return err
+}
+
+// nameClaim lets a copy keep off a name another writer of the folder holds.
+type nameClaim struct {
+	// ours recognizes a file at the name that this copy may replace.
+	ours func(io.Reader) bool
+	// next is the name to try when another's file holds name.
+	next func(name string) string
+	// partial is the copy's partial file, recorded before it is written: a
+	// same-second writer's partial shares its prefix, so none is removed.
+	partial string
+}
+
+// copyFile is CopyFile, returning the name the copy was published as: with
+// claim, a different file at name that isn't ours is kept, and the copy
+// takes claim's next name.
+func (s *Storage) copyFile(ctx context.Context, source io.Reader, directory, name string, size int64, checksum string,
+	reserve int64, progress func(), modified time.Time, claim *nameClaim) (string, error) {
 	if !fileName.MatchString(name) || strings.HasSuffix(name, ".partial") {
-		return fail("INVALID_REQUEST", "Invalid file name.")
+		return "", fail("INVALID_REQUEST", "Invalid file name.")
 	}
 	dir, err := s.pin(directory)
 	if err != nil {
-		return errCopyMissing
+		return "", errCopyMissing
 	}
 	defer dir.close()
 	if unix.Faccessat(dir.fd, ".", unix.W_OK|unix.X_OK, 0) != nil {
-		return errCopyReadOnly
+		return "", errCopyReadOnly
 	}
 	// Partial files of interrupted attempts don't count against the space
 	// this one needs. No earlier attempt is still writing: isolate starts no
 	// I/O in a folder where one hasn't returned.
-	if err := removePartials(dir, name); err != nil {
-		return errCopyFailed
+	partial := name + "." + identity.NewUUID()[:8] + ".partial"
+	if claim != nil {
+		partial = claim.partial
+	} else if err := removePartials(dir, name); err != nil {
+		return "", errCopyFailed
 	}
 	if _, err := budget(dir, reserve, size); err != nil {
-		return errCopySpace
+		return "", errCopySpace
 	}
-	partial := name + "." + identity.NewUUID()[:8] + ".partial"
 	fd, err := unix.Openat(dir.fd, partial, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
 		if errors.Is(err, unix.EROFS) || errors.Is(err, unix.EACCES) {
-			return errCopyReadOnly
+			return "", errCopyReadOnly
 		}
-		return errCopyFailed
+		return "", errCopyFailed
 	}
 	file := os.NewFile(uintptr(fd), partial)
 	published := false
@@ -132,10 +154,10 @@ func (s *Storage) CopyFile(ctx context.Context, source io.Reader, directory, nam
 		return nil
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 	if written != size || sum != checksum {
-		return errCopySource
+		return "", errCopySource
 	}
 	// A copy keeps its backup's time, so the newest file in either folder is
 	// the newest backup. Best effort: some network folders refuse it.
@@ -144,58 +166,92 @@ func (s *Storage) CopyFile(ctx context.Context, source io.Reader, directory, nam
 		unix.Futimes(fd, []unix.Timeval{stamp, stamp})
 	}
 	if file.Sync() != nil {
-		return errCopyFailed
+		return "", errCopyFailed
 	}
 	// Dropping the cached pages makes the check below read the disk.
 	unix.Fadvise(fd, 0, 0, unix.FADV_DONTNEED)
 	if err := verifyFile(ctx, dir, partial, size, checksum); err != nil {
-		return err
+		return "", err
 	}
 	if ctx.Err() != nil {
-		return errCopyStalled
+		return "", errCopyStalled
 	}
-	if err := publish(ctx, dir, partial, name, size, checksum); err != nil {
-		return err
+	name, err = publish(ctx, dir, partial, name, size, checksum, claim)
+	if err != nil {
+		return "", err
 	}
 	published = true
 	if unix.Fsync(dir.fd) != nil {
-		return errCopyFailed
+		return "", errCopyFailed
 	}
-	return nil
+	return name, nil
 }
 
-// publish gives a verified partial file its final name. A valid file
-// already there is kept, so an attempt that wakes after a newer one never
-// replaces its file; an invalid one is replaced.
-func publish(ctx context.Context, dir pinned, partial, name string, size int64, checksum string) error {
-	err := unix.Renameat2(dir.fd, partial, dir.fd, name, unix.RENAME_NOREPLACE)
-	if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOSYS) {
-		// Network filesystems often lack RENAME_NOREPLACE; a hard link never
-		// replaces either.
-		if err = unix.Linkat(dir.fd, partial, dir.fd, name, 0); err == nil {
-			unix.Unlinkat(dir.fd, partial, 0)
+// publish gives a verified partial file its final name and returns it. A
+// valid file already there is kept, so an attempt that wakes after a newer
+// one never replaces its file; an invalid one is replaced, unless claim says
+// it is another's, which moves the copy on to claim's next name.
+func publish(ctx context.Context, dir pinned, partial, name string, size int64, checksum string, claim *nameClaim) (string, error) {
+	for attempt := 0; ; attempt++ {
+		err := unix.Renameat2(dir.fd, partial, dir.fd, name, unix.RENAME_NOREPLACE)
+		if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOSYS) {
+			// Network filesystems often lack RENAME_NOREPLACE; a hard link never
+			// replaces either.
+			if err = unix.Linkat(dir.fd, partial, dir.fd, name, 0); err == nil {
+				unix.Unlinkat(dir.fd, partial, 0)
+			}
 		}
-	}
-	if errors.Is(err, unix.EEXIST) {
-		if verifyFile(ctx, dir, name, size, checksum) == nil {
-			unix.Unlinkat(dir.fd, partial, 0)
-			return nil
+		if claim != nil && err != nil && !errors.Is(err, unix.EEXIST) && !errors.Is(err, unix.ENOENT) {
+			// Without either, an exclusive create claims the name, so another
+			// writer's file is never renamed over.
+			var placeholder int
+			if placeholder, err = unix.Openat(dir.fd, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600); err == nil {
+				unix.Close(placeholder)
+				err = unix.Renameat(dir.fd, partial, dir.fd, name)
+			}
 		}
-		if ctx.Err() != nil {
-			return errCopyStalled
-		}
-		err = unix.Renameat(dir.fd, partial, dir.fd, name)
-	} else if err != nil && !errors.Is(err, unix.ENOENT) {
-		// No exclusive way to publish here: rename only onto nothing.
-		var stat unix.Stat_t
-		if unix.Fstatat(dir.fd, name, &stat, unix.AT_SYMLINK_NOFOLLOW) != nil && ctx.Err() == nil {
+		if errors.Is(err, unix.EEXIST) {
+			if verifyFile(ctx, dir, name, size, checksum) == nil {
+				unix.Unlinkat(dir.fd, partial, 0)
+				return name, nil
+			}
+			if ctx.Err() != nil {
+				return "", errCopyStalled
+			}
+			if claim != nil && !claim.holds(dir, name) {
+				if attempt == 60 {
+					return "", errCopyFailed
+				}
+				name = claim.next(name)
+				continue
+			}
 			err = unix.Renameat(dir.fd, partial, dir.fd, name)
+		} else if err != nil && !errors.Is(err, unix.ENOENT) && claim == nil {
+			// No exclusive way to publish here: rename only onto nothing.
+			var stat unix.Stat_t
+			if unix.Fstatat(dir.fd, name, &stat, unix.AT_SYMLINK_NOFOLLOW) != nil && ctx.Err() == nil {
+				err = unix.Renameat(dir.fd, partial, dir.fd, name)
+			}
 		}
+		if err != nil {
+			return "", errCopyFailed
+		}
+		return name, nil
 	}
+}
+
+// holds reports whether the file at name is one claim may replace.
+func (c *nameClaim) holds(dir pinned, name string) bool {
+	fd, err := unix.Openat(dir.fd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return errCopyFailed
+		return false
 	}
-	return nil
+	file := os.NewFile(uintptr(fd), name)
+	defer file.Close()
+	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	return c.ours(file)
 }
 
 // removePartials removes the partial files of name's earlier attempts.

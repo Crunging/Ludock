@@ -496,6 +496,8 @@ an administrator's change. Nothing stops while it saves.
 
 - Each save is `ludock-data-<date>-<time>.tar` (UTC), a plain tar of the
   database and its identity key. It never appears in a server's **Backups**.
+  A save never replaces another installation's, as in a folder two share; if
+  one already has that name, the save takes the next free second.
 - Ludock keeps the 3 newest saves and the newest of each of the last 7 days
   with one, and removes older ones only after a newer save is checked. It
   removes only its own saves, which hold its identity key; saves from another

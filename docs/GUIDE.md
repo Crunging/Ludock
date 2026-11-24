@@ -423,8 +423,9 @@ Size and time limits are in the [reference](REFERENCE.md#limits).
   with no other mount nested inside it and no overlap with another data
   folder; single-file mounts, links, and special files are refused. Use
   `ludock.files` to pick folders that qualify.
-  Permissions, owners, and modification times are kept; ACLs, extended
-  attributes, and sparse files aren't.
+  Permissions, owners, and modification times are kept, and restoring a whole
+  backup also gives each data folder its own owner and permissions back;
+  ACLs, extended attributes, and sparse files aren't kept.
 - **Safety backups** taken before a restore or update follow the same
   retention rule and are labeled in the list.
 - **Records:** Ludock lists only archives it made, from records in

@@ -345,6 +345,9 @@ func (h *restoreHelper) run() (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := h.recordRoot(root, stage); err != nil {
+			return nil, err
+		}
 		err = h.moveContents(root, old, h.request.Stage)
 		if err != nil {
 			return nil, err
@@ -355,6 +358,20 @@ func (h *restoreHelper) run() (any, error) {
 			return nil, err
 		}
 		if err := h.moveContents(next, root); err != nil {
+			return nil, err
+		}
+		// The extractor gave new the archived root's owner and permissions.
+		// Archives hold no setgid or sticky bit, so the root keeps its own.
+		archived, err := fstat(next)
+		if err != nil {
+			return nil, err
+		}
+		current, err := fstat(root)
+		if err != nil {
+			return nil, err
+		}
+		archived.Mode = archived.Mode&0o777 | current.Mode&0o7000
+		if err := ownRoot(root, archived); err != nil {
 			return nil, err
 		}
 	case "rollbackClean":
@@ -396,10 +413,74 @@ func (h *restoreHelper) run() (any, error) {
 		if err := h.moveContents(old, root); err != nil {
 			return nil, err
 		}
+		// Absent, moveOld never ran, so the root's own metadata never changed.
+		previous, err := lstatAt(stage, rootRecord)
+		if err == nil && isRegular(previous) {
+			err = ownRoot(root, previous)
+		}
+		if err != nil && !isNotExist(err) {
+			return nil, err
+		}
 	default:
 		return nil, errUnsafe
 	}
 	return ok, syncAll(stage, root)
+}
+
+// rootRecord is the file in a stage whose owner and mode are the root's
+// own from before the restore, which undoing it puts back.
+const rootRecord = "root"
+
+// recordRoot saves the root's owner and mode in the stage once, before
+// anything moves: a repeated moveOld finds the root still as it was.
+func (h *restoreHelper) recordRoot(root, stage fd) error {
+	if _, err := lstatAt(stage, rootRecord); err == nil || !isNotExist(err) {
+		return err
+	}
+	info, err := fstat(root)
+	if err != nil {
+		return err
+	}
+	temporary := rootRecord + ".new"
+	if err := unix.Unlinkat(int(stage), temporary, 0); err != nil && !isNotExist(err) {
+		return err
+	}
+	file, err := h.t.openAt(stage, temporary, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := unix.Fchown(int(file), int(info.Uid), int(info.Gid)); err != nil {
+		return err
+	}
+	if err := unix.Fchmod(int(file), info.Mode&0o7777); err != nil {
+		return err
+	}
+	if err := unix.Fsync(int(file)); err != nil {
+		return err
+	}
+	if err := unix.Renameat(int(stage), temporary, int(stage), rootRecord); err != nil {
+		return err
+	}
+	return syncAll(stage)
+}
+
+// ownRoot gives the root the owner and mode of from, changing only what
+// differs, so a filesystem that refuses ownership changes refuses only real
+// ones.
+func ownRoot(root fd, from *unix.Stat_t) error {
+	current, err := fstat(root)
+	if err != nil {
+		return err
+	}
+	if current.Uid != from.Uid || current.Gid != from.Gid {
+		if err := unix.Fchown(int(root), int(from.Uid), int(from.Gid)); err != nil {
+			return err
+		}
+	}
+	if current.Mode&0o7777 != from.Mode&0o7777 {
+		return unix.Fchmod(int(root), from.Mode&0o7777)
+	}
+	return nil
 }
 
 // sameMount reports whether two open directories are on one mount, which
@@ -924,6 +1005,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		mtime          *float64
 	}
 	var directories []directoryRecord
+	var rootMeta *directoryRecord
 	reader := bufio.NewReaderSize(stdin, 64*1024)
 	chunk := make([]byte, copyChunk)
 	count := 0
@@ -957,6 +1039,14 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		total += float64(size)
 		if total > float64(request.MaxBytes) {
 			return errUnsafe
+		}
+		// The root's own record, first if sent, is the stage's new folder.
+		if record.Name == "" {
+			if count != 1 || record.Type != "directory" || size != 0 {
+				return errUnsafe
+			}
+			rootMeta = &directoryRecord{nil, uid, gid, mode & 0o777, nil}
+			continue
 		}
 		names, err := recordParts(record.Name)
 		if err != nil || len(names) > 64 {
@@ -1034,6 +1124,14 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		}
 		x.t.close(directory)
 		delete(x.dirty, strings.Join(record.names, "/"))
+	}
+	if rootMeta != nil {
+		if err := unix.Fchown(int(x.destination), int(rootMeta.uid), int(rootMeta.gid)); err != nil {
+			return err
+		}
+		if err := unix.Fchmod(int(x.destination), uint32(rootMeta.mode)); err != nil {
+			return err
+		}
 	}
 	for key, names := range x.dirty {
 		if key == "" {
