@@ -116,7 +116,8 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
 			return withSave(job, map[string]any{"action": "restart", "backupId": job.Job.Recovery.BackupID}), nil
 		}()
-		if err != nil {
+		// Work cut by shutdown is recovered, and reported, on the next start.
+		if err != nil && ctx.Err() == nil {
 			// A recorded stop may have reached Docker even if its result was
 			// lost; reconcile it before reporting the server left stopped.
 			if job.Job.Recovery.InitialRunning != nil && !j.backupCompleted(ctx, job) {
@@ -138,6 +139,9 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[
 		return nil, nil
 	}
 	completed := j.backupCompleted(ctx, job)
+	if !completed {
+		defer j.notifyInterrupted(ctx, job, notify.FailedWork, "backup-failed:"+job.Job.ID, backupInterrupted)
+	}
 	if err := j.recoverBackup(ctx, job, true); err != nil {
 		return nil, err
 	}
@@ -146,7 +150,6 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[
 		result["backupId"] = job.Job.Recovery.BackupID
 	} else {
 		result["guidance"] = "Ludock restarted before the backup finished, so there’s no new backup. The server was started again."
-		j.notifyInterrupted(ctx, job, notify.FailedWork, "backup-failed:"+job.Job.ID, backupInterrupted)
 	}
 	return withSave(job, result), nil
 }

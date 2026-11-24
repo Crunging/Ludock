@@ -97,8 +97,8 @@ type Engine struct {
 	HangExecStarts int
 	// FailExecStart reports whether Docker fails to run an exec of cmd once
 	// its stream is open, as a daemon whose containerd times out does: Docker
-	// writes its error unframed on the stream and ends the exec with code 128
-	// without running it.
+	// ends the exec with code 128 without running it, then writes its error
+	// on the stream's stdout.
 	FailExecStart func(cmd []string) bool
 	// ExitDelay records each exec's exit this long after its stream closes,
 	// as Docker sometimes does.
@@ -1430,11 +1430,11 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 	}
 	e.hijack(w, r, func(conn net.Conn, reader *bufio.Reader) {
 		if failStart {
-			conn.Write([]byte("DeadlineExceeded: failed to start io pipe copy\r\n"))
 			unknown := 128
 			e.mu.Lock()
 			instance.running, instance.exitCode = false, &unknown
 			e.mu.Unlock()
+			conn.Write(Frame(1, []byte("DeadlineExceeded: failed to start io pipe copy\r\n")))
 			return
 		}
 		var mu sync.Mutex
