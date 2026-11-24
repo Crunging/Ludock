@@ -90,16 +90,28 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 	// doesn't keep as the phase: nobody heard one yet, so it is sent now.
 	r := job.Job.Recovery
 	sending := until != 0 && !r.WarnSent && !r.WarnFailed && CanWarn(server.Container)
-	// A backup that can't be taken is refused before anyone is warned, and
-	// checked again before the stop. Work that holds its locks while it warns
-	// checks before calling this.
-	if until == 0 && !locked && backsUpFirst(job) {
-		if _, err := job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), func() (map[string]any, error) {
+	// A backup that can't be taken, or an earlier restore that the stop
+	// can't finish, is refused before anyone is warned, and checked again
+	// before the stop. Work that holds its locks while it warns checks its
+	// backup before calling this.
+	if until == 0 && (backsUpFirst(job) || slices.Contains([]string{ops.KindRestore, ops.KindUndoRestore, ops.KindUpdate}, job.Job.Kind)) {
+		check := func() (map[string]any, error) {
 			if err := assertAccess(); err != nil {
 				return nil, err
 			}
-			return nil, j.assertBackupPossible(ctx, server, job)
-		}); err != nil {
+			if !locked && backsUpFirst(job) {
+				if err := j.assertBackupPossible(ctx, server, job); err != nil {
+					return nil, err
+				}
+			}
+			return nil, j.assertPendingUndoable(ctx, server, job, assertAccess)
+		}
+		if locked {
+			_, err = check()
+		} else {
+			_, err = job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), check)
+		}
+		if err != nil {
 			return err
 		}
 	}

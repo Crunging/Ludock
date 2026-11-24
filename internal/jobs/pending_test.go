@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
@@ -69,8 +70,8 @@ func (f *fixture) checkUndone(t *testing.T, restoreID string, later *ops.Job) {
 	}
 }
 
-// After a restore stopped partway, the next backup stops the server,
-// finishes undoing the restore before its own copy, keeping what the game
+// After a restore stopped partway, the next backup checks the undo can be
+// finished, stops the server, finishes undoing the restore before its own copy, keeping what the game
 // wrote meanwhile, backs up, and returns the server to running.
 func TestNextBackupFinishesStoppedRestore(t *testing.T) {
 	f := setup(t)
@@ -80,8 +81,10 @@ func TestNextBackupFinishesStoppedRestore(t *testing.T) {
 	if backup.Status != ops.Succeeded || !f.running() {
 		t.Fatalf("%+v", backup)
 	}
-	if got := trace.lines()[before:]; !slices.Equal(got, undoneLines) {
-		t.Errorf("trace:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(undoneLines, "\n"))
+	// The undo is checked once before the stop and again once stopped.
+	want := append([]string{undoneLines[0]}, undoneLines...)
+	if got := trace.lines()[before:]; !slices.Equal(got, want) {
+		t.Errorf("trace:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	f.checkUndone(t, restore.ID, backup)
 	if pending, _ := f.jobs.pendingRestores(ctx, f.serverID); len(pending) != 0 {
@@ -167,27 +170,42 @@ func TestNextBackupAfterStaleRestoreJournal(t *testing.T) {
 	}
 }
 
-// Finishing a restore that stopped partway fails before any live data moves,
-// because a step fails or the data holds another restore's stage folder:
-// the backup fails, but the server it stopped is running again and the undo
-// is left for the next operation.
+// Finishing a restore that stopped partway would move live data holding
+// another restore's stage folder: a backup, a restart with a backup first,
+// and an undo, each asked to warn players, are refused before anyone is
+// warned or the server stops. A step that fails after the stop, before any
+// live data moves, fails the backup, but the server it stopped is running
+// again and the undo is left for the next operation.
 func TestFailedUndoReturnsServerToRunning(t *testing.T) {
 	f := setup(t)
 	restore, _ := f.stoppedRestore(t)
 	region := filepath.Join(f.data, "world", "region")
 	other := filepath.Join(region, helper.StageName("2f9619ff-8b86-4011-b42d-00c04fc964ff"))
 	os.MkdirAll(filepath.Join(other, "old"), 0o700)
-	backup := f.run(t, "backup", nil)
-	if backup.Status != ops.Failed || backup.Error != backups.StageInside(region).Message || !f.running() ||
-		f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" {
-		t.Fatalf("%+v, running %v, journal %s", backup, f.running(), f.savedJournal(restore.ID))
+	f.jobs.WarningLead = 100 * time.Millisecond
+	for _, work := range []struct {
+		kind  string
+		input map[string]any
+	}{
+		{ops.KindBackup, map[string]any{WarnInput: true}},
+		{ops.KindRestart, map[string]any{"createBackup": true, WarnInput: true}},
+		{ops.KindUndoRestore, map[string]any{WarnInput: true}},
+	} {
+		before := len(f.engine.Requests)
+		job := f.run(t, work.kind, work.input)
+		stopped := slices.ContainsFunc(f.engine.Requests[before:], func(request string) bool { return strings.Contains(request, f.game+"/stop") })
+		if job.Status != ops.Failed || job.Error != backups.StageInside(region).Message || job.Recovery.WarnUntil != 0 || stopped || !f.running() ||
+			f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" {
+			t.Errorf("%s: %s %q, warned %v, stopped %v, running %v, journal %s", work.kind, job.Status, job.Error,
+				job.Recovery.WarnUntil != 0, stopped, f.running(), f.savedJournal(restore.ID))
+		}
 	}
 	if _, err := os.Stat(filepath.Join(other, "old")); err != nil {
 		t.Fatal("moved the other stage")
 	}
 	os.RemoveAll(region)
 	f.failStep, f.failTimes = helper.RestoreCleanup, 1
-	backup = f.run(t, "backup", nil)
+	backup := f.run(t, "backup", nil)
 	if backup.Status != ops.Failed || !f.running() || f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" {
 		t.Fatalf("%+v, running %v, journal %s", backup, f.running(), f.savedJournal(restore.ID))
 	}
