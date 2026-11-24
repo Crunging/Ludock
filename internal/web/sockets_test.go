@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -209,6 +210,28 @@ func TestEventStreamLimit(t *testing.T) {
 	}
 	for _, response := range streams[1:] {
 		response.Body.Close()
+	}
+}
+
+// Members who fill every event stream they may open still leave room for an
+// administrator's live updates.
+func TestEventStreamsKeepAdminReserve(t *testing.T) {
+	var counts streamCounts
+	for member := 0; ; member++ {
+		refused := false
+		for session := range maxStreamsPerUser / maxStreamsPerSession {
+			if status, _ := counts.admit(fmt.Sprint("member", member), fmt.Sprint(member, "/", session), false); status != 0 {
+				refused = true
+			}
+		}
+		if refused {
+			break
+		}
+	}
+	for range maxStreamsPerUser {
+		if status, message := counts.admit("admin", "admin-session-"+fmt.Sprint(counts.total), true); status != 0 {
+			t.Fatal(message)
+		}
 	}
 }
 

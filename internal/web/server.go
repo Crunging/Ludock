@@ -133,6 +133,10 @@ func loggedPath(r *http.Request) string {
 	return r.URL.Path
 }
 
+// bodyDeadline bounds reading a request body unless its handler sets
+// another deadline; tests shorten it.
+var bodyDeadline = 60 * time.Second
+
 func safeMethod(method string) bool {
 	return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
 }
@@ -141,6 +145,11 @@ func safeMethod(method string) bool {
 func (s *Server) policy(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
+		if r.ContentLength != 0 {
+			// Go reads what a handler leaves of a body before it answers, with
+			// no deadline of its own.
+			http.NewResponseController(w).SetReadDeadline(started.Add(bodyDeadline))
+		}
 		id := requestID()
 		header := w.Header()
 		header.Set("X-Request-ID", id)

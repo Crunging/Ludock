@@ -331,15 +331,18 @@ const (
 	maxStreams           = 512
 	maxStreamsPerUser    = 32
 	maxStreamsPerSession = 16
+	// reservedAdminStreams stay free for administrators, so members can't
+	// take every stream.
+	reservedAdminStreams = maxStreamsPerUser
 )
 
 type streamCounts struct {
-	mu            sync.Mutex
-	total         int
-	user, session map[string]int
+	mu             sync.Mutex
+	total, members int
+	user, session  map[string]int
 }
 
-func (c *streamCounts) admit(userID, tokenHash string) (int, string) {
+func (c *streamCounts) admit(userID, tokenHash string, admin bool) (int, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.user == nil {
@@ -352,17 +355,25 @@ func (c *streamCounts) admit(userID, tokenHash string) (int, string) {
 		return http.StatusTooManyRequests, "Event stream user limit reached"
 	case c.total >= maxStreams:
 		return http.StatusServiceUnavailable, "Event stream limit reached"
+	case !admin && c.members >= maxStreams-reservedAdminStreams:
+		return http.StatusServiceUnavailable, "Event stream capacity reserved for administrators"
 	}
 	c.total++
+	if !admin {
+		c.members++
+	}
 	c.user[userID]++
 	c.session[tokenHash]++
 	return 0, ""
 }
 
-func (c *streamCounts) release(userID, tokenHash string) {
+func (c *streamCounts) release(userID, tokenHash string, admin bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.total--
+	if !admin {
+		c.members--
+	}
 	if c.user[userID]--; c.user[userID] == 0 {
 		delete(c.user, userID)
 	}
@@ -380,11 +391,12 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, request *Request
 		return
 	}
 	user := request.User()
-	if status, message := s.openStreams.admit(user.ID, request.Principal.TokenHash); status != 0 {
+	admin := user.Role == db.RoleAdmin
+	if status, message := s.openStreams.admit(user.ID, request.Principal.TokenHash, admin); status != 0 {
 		http.Error(w, message, status)
 		return
 	}
-	defer s.openStreams.release(user.ID, request.Principal.TokenHash)
+	defer s.openStreams.release(user.ID, request.Principal.TokenHash, admin)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("X-Accel-Buffering", "no")
 	messages := make(chan string, 64)
