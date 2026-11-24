@@ -718,6 +718,9 @@ func (s *Service) makeCopy(ctx context.Context, backup *Backup, reserve int64) e
 		// The previous second copy stands in for an archive missing from the
 		// backup folder; CopyFile checks it against the original's checksum.
 		folder, err := s.ArchiveFolder(backup)
+		if errors.Is(err, errArchiveMissing) {
+			return errCopySource
+		}
 		if err != nil {
 			return err
 		}
@@ -825,25 +828,31 @@ func lookOptions(stalled error, limit time.Duration) guardOptions {
 	return guardOptions{lane: laneLook, limit: limit, check: min(limit/4, time.Second), stalled: stalled, hook: "reaching"}
 }
 
-// look reports whether a backup's archive is in folder, within measureWait.
-func (s *Service) look(folder, id string, stalled error) (bool, error) {
+// look reports whether a backup's archive is intact in folder, within
+// measureWait.
+func (s *Service) look(folder string, backup *Backup, stalled error) (bool, error) {
 	var found bool
 	err := s.reach(folder, stalled, measureWait, func(func()) error {
 		var err error
-		found, err = s.Storage.present(folder, id)
+		found, err = s.Storage.present(folder, backup.ID, backup.Size)
 		return err
 	})
 	return err == nil && found, err
 }
 
+// errArchiveMissing is a backup whose archive is missing or the wrong size
+// in its folder, with no intact second copy found.
+var errArchiveMissing = fail("INVALID_BACKUP", "This backup’s archive is missing or damaged, so it can’t be read or restored.")
+
 // ArchiveFolder is where a backup's archive is read from: its own folder,
-// or a second copy when the archive is missing there, preferring the one in
-// the chosen folder. It sets FromCopy, FolderAway (also when that folder
-// isn't responding), and Missing, and fails when a folder it must look into
-// isn't.
+// or a second copy when the archive is missing or the wrong size there,
+// preferring the one in the chosen folder. It sets FromCopy, FolderAway
+// (also when that folder isn't responding), and Missing, and fails when a
+// folder it must look into isn't, or with errArchiveMissing when its own
+// folder was looked into and nothing intact was found.
 func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 	backup.FromCopy, backup.Missing, backup.found = false, false, false
-	found, err := s.look(backup.destination, backup.ID, errFolderStalled)
+	found, err := s.look(backup.destination, backup, errFolderStalled)
 	backup.FolderAway = err != nil
 	if errors.Is(err, errFolderStalled) {
 		return "", err
@@ -861,7 +870,7 @@ func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 		if folder == "" {
 			continue
 		}
-		found, err := s.look(folder, backup.ID, errCopyStalled)
+		found, err := s.look(folder, backup, errCopyStalled)
 		if errors.Is(err, errCopyStalled) {
 			return "", err
 		}
@@ -872,6 +881,9 @@ func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 		looked = looked && err == nil
 	}
 	backup.Missing = looked
+	if !backup.FolderAway {
+		return "", errArchiveMissing
+	}
 	return backup.destination, nil
 }
 
@@ -891,7 +903,7 @@ func (s *Service) Locate(list []Backup) error {
 		backup := &list[index]
 		switch backup.State {
 		case "complete":
-			if _, err := s.ArchiveFolder(backup); err != nil && stalled == nil {
+			if _, err := s.ArchiveFolder(backup); err != nil && !errors.Is(err, errArchiveMissing) && stalled == nil {
 				stalled = err
 			}
 			backup.Copying = s.Copying(backup.ID)

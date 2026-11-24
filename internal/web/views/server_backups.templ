@@ -382,7 +382,7 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 							} else if backup.Missing {
 								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
 								hx-confirm="Delete this backup?"
-								data-confirm-detail="Its archive is already missing from the backup folder. If it comes back, it is deleted permanently."
+								data-confirm-detail="Its archive is already missing or damaged in the backup folder. What is left of it, or the archive if it comes back, is deleted permanently."
 								data-confirm-action="Delete backup"
 							} else {
 								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
@@ -406,11 +406,11 @@ templ copyState(backup backups.Backup) {
 		case backup.FromCopy && backup.FolderAway:
 			<small class="table-detail backup-copy backup-copy--warning">Its backup folder can’t be reached; using the second copy</small>
 		case backup.FromCopy:
-			<small class="table-detail backup-copy backup-copy--warning">Missing from the backup folder; using the second copy</small>
+			<small class="table-detail backup-copy backup-copy--warning">Missing or damaged in the backup folder; using the second copy</small>
 		case backup.FolderAway:
 			<small class="table-detail backup-copy backup-copy--warning">Its backup folder can’t be reached</small>
 		case backup.Missing:
-			<small class="table-detail backup-copy backup-copy--warning">Its archive is missing from the backup folder, so it can’t be restored</small>
+			<small class="table-detail backup-copy backup-copy--warning">Its archive is missing or damaged in the backup folder, so it can’t be restored</small>
 		case backup.CopyState == "complete":
 			<small class="table-detail backup-copy">Second copy saved</small>
 		case backup.Copying:
@@ -453,7 +453,7 @@ templ RestoreForm(b BackupsView) {
 			<p>{ note }</p>
 		}
 		if b.Restore.FromCopy {
-			@Alert("warning", "This backup is missing from the backup folder, so Ludock restores it from the second copy.")
+			@Alert("warning", "This backup is missing or damaged in the backup folder, so Ludock restores it from the second copy.")
 		}
 		<details class="disclosure">
 			<summary>More about restoring</summary>
@@ -577,7 +577,7 @@ templ BackupBrowserView(b BackupBrowser) {
 		</div>
 		<p class="section-lede">Download a file, or put one file or folder back the way it was in this backup.</p>
 		if b.Backup.FromCopy {
-			@Alert("warning", "This backup is missing from the backup folder, so Ludock is reading the second copy.")
+			@Alert("warning", "This backup is missing or damaged in the backup folder, so Ludock is reading the second copy.")
 		}
 		if b.Fit.Moved {
 			@Alert("info", "This backup was taken when the server’s data lived somewhere else. Restoring from it puts files where the server keeps its data now.")

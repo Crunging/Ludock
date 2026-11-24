@@ -564,10 +564,10 @@ func (s *Storage) removeFile(directory, name string, assertAccess func() error) 
 	return unix.Fsync(dir.fd)
 }
 
-// present reports whether a published archive is a regular file in
-// directory, or errFolderAway when directory can't be opened or the file
-// can't be checked.
-func (s *Storage) present(directory, id string) (bool, error) {
+// present reports whether a published archive is in directory, intact as
+// far as its size tells, or errFolderAway when directory can't be opened or
+// the file can't be checked.
+func (s *Storage) present(directory, id string, size int64) (bool, error) {
 	if directory == "" || checkID(id) != nil {
 		return false, nil
 	}
@@ -583,7 +583,49 @@ func (s *Storage) present(directory, id string) (bool, error) {
 		}
 		return false, errFolderAway
 	}
-	return stat.Mode&unix.S_IFMT == unix.S_IFREG, nil
+	return intact(&stat, size), nil
+}
+
+// intact is whether stat is an archive Ludock published at size bytes. A
+// file of another size was cut short or replaced, and can't be restored.
+func intact(stat *unix.Stat_t, size int64) bool {
+	return stat.Mode&unix.S_IFMT == unix.S_IFREG && stat.Size == size
+}
+
+// archives lists the intact-looking archives in directory: each regular
+// .tar file's size by name.
+func (s *Storage) archives(directory string) (map[string]int64, error) {
+	dir, err := s.pin(directory)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.close()
+	listing, err := unix.Dup(dir.fd)
+	if err != nil {
+		return nil, err
+	}
+	folder := os.NewFile(uintptr(listing), ".")
+	defer folder.Close()
+	names, err := folder.Readdirnames(-1)
+	if err != nil {
+		return nil, err
+	}
+	sizes := map[string]int64{}
+	for _, name := range names {
+		if !strings.HasSuffix(name, ".tar") {
+			continue
+		}
+		var stat unix.Stat_t
+		if err := unix.Fstatat(dir.fd, name, &stat, unix.AT_SYMLINK_NOFOLLOW); errors.Is(err, unix.ENOENT) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		if stat.Mode&unix.S_IFMT == unix.S_IFREG {
+			sizes[name] = stat.Size
+		}
+	}
+	return sizes, nil
 }
 
 // reachable is errFolderAway when directory can't be opened.

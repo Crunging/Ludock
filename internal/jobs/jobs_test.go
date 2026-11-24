@@ -763,8 +763,9 @@ func TestImpossibleBackupNeverStopsServer(t *testing.T) {
 			}
 		}
 	}
-	// Backups fill the total limit. Retention makes room only after a new
-	// backup is written, so there is none for it.
+	// Backups fill the total limit, or leave less than an empty archive
+	// needs. Retention makes room only after a new backup is written, so
+	// there is none for it.
 	limit := func(bytes int64) {
 		t.Helper()
 		if _, err := f.jobs.Backups.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, MaxBytes: bytes}, f.admin, f.adminSession); err != nil {
@@ -775,8 +776,10 @@ func TestImpossibleBackupNeverStopsServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	limit(found)
-	refused("full", "Backups have reached their total size limit. Delete backups you no longer need, or raise the limit in Settings.")
+	for _, room := range []int64{0, 2560} {
+		limit(found + room)
+		refused("full", "Backups have reached their total size limit. Delete backups you no longer need, or raise the limit in Settings.")
+	}
 	limit(1 << 30)
 	// Docker can't change a container's mounts; a label changed with them
 	// stands in for the new container a real change makes.

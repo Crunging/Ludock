@@ -319,8 +319,9 @@ free space left. Under **Settings → Advanced → Backup folder and limits**:
 - **Minimum free space (GiB):** kept free on the backup disk, and on game-data
   disks during restores and unpacking. 5 GiB by default.
 - **Total limit for all backups (GiB):** off by default. Backups whose
-  archives are gone don't count toward it, though the space used in
-  **Settings → Backups** still includes every backup Ludock lists.
+  archives are gone, or aren't the size they were saved at, don't count
+  toward it, though the space used in **Settings → Backups** still includes
+  every backup Ludock lists.
 - **Also copy backups to:** the [second copy](#a-second-copy-of-backups).
 
 Once these settings are saved, Ludock never changes them by itself. To turn
@@ -378,9 +379,10 @@ the original before it's named `<id>.tar`.
 - **Removal:** when a backup is removed, its copy is removed too; the second
   folder needs no limits of its own.
 - **Using the copy:** if a backup's archive is missing from the backup folder,
-  downloading, browsing, and restoring read the copy. If the backup disk is
-  lost, choose the second folder as the backup folder. If the whole host is
-  lost, [restore Ludock's data](#restore-ludocks-data) from it first.
+  or isn't the size it was saved at, downloading, browsing, and restoring read
+  the copy. If the backup disk is lost, choose the second folder as the backup
+  folder. If the whole host is lost, [restore Ludock's data](#restore-ludocks-data)
+  from it first.
 - **A folder that's away:** retention never removes or hides a backup whose
   folder can't be reached, since a disk may only be unmounted for now. The
   **Backups** tab marks it, and deleting it asks first, then removes it from

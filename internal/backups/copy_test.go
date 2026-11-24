@@ -200,18 +200,22 @@ func TestCopyFailingFolder(t *testing.T) {
 	}
 }
 
-// A copy counts only when it matches the original: an archive changed since
-// it was made, a written copy that reads back differently, and a copy that
+// A copy counts only when it matches the original: an archive changed or
+// cut short since it was made, a written copy that reads back differently, and a copy that
 // stops making progress all leave nothing behind.
 func TestCopyVerification(t *testing.T) {
 	f := newCopyFixture(t)
 	backup := f.add(t, "world data", 1)
+	cut := f.add(t, "world data", 2)
 	os.WriteFile(filepath.Join(f.main, backup.ID+".tar"), []byte("WORLD DATA"), 0o600)
+	os.Truncate(filepath.Join(f.main, cut.ID+".tar"), 0)
 	if err := f.s.CopyDue(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if state, _, _, problem := f.row(t, backup.ID); state != "pending" || problem != errCopySource.Message {
-		t.Fatal(state, problem)
+	for _, changed := range []Backup{backup, cut} {
+		if state, _, _, problem := f.row(t, changed.ID); state != "pending" || problem != errCopySource.Message {
+			t.Fatal(state, problem)
+		}
 	}
 	if entries, _ := os.ReadDir(f.copies); len(entries) != 0 {
 		t.Fatal("left a copy of a changed archive", entries)
@@ -824,13 +828,14 @@ func TestCopyDueSkipsBusyServers(t *testing.T) {
 	}
 }
 
-// Two of a day's backups lost their archives, as a hand-cleaned folder
-// would leave them; one still has its second copy, and another server's
-// kept backup lost its archive too. Retention keeps the newest three that can be restored,
-// so the earlier ones stay, and the total limit doesn't count the lost
-// archives. The lost ones stay listed, marked missing. With the second
-// folder unreachable, the backup read from it can't be confirmed and takes
-// no place in the rule either.
+// Two of a day's backups lost their archives, one cut to nothing and one
+// gone, as a hand-cleaned folder would leave them; the cut one's second copy
+// is now a folder, and the other still has its second copy. Another server's
+// kept backup lost its archive too. Retention keeps the newest three that
+// can be restored, so the earlier ones stay, and the total limit doesn't
+// count the lost archives. The lost ones stay listed, marked missing, and
+// can't be read. With the second folder unreachable, the backup read from it
+// can't be confirmed and takes no place in the rule either.
 func TestRetentionCountsReadableBackups(t *testing.T) {
 	f := newCopyFixture(t)
 	at := func(day, hour int) int64 { return time.Date(2026, 1, day, hour, 0, 0, 0, time.Local).UnixMilli() }
@@ -852,11 +857,17 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 	}
 	kept := f.add(t, "world data", at(8, 12))
 	f.s.DB.Exec("UPDATE backups SET kept_at=1, server_id=? WHERE id=?", other, kept.ID)
-	for _, path := range []string{filepath.Join(f.main, b.ID+".tar"), filepath.Join(f.copies, b.ID+".tar"), filepath.Join(f.main, c.ID+".tar"),
+	for _, path := range []string{filepath.Join(f.copies, b.ID+".tar"), filepath.Join(f.main, c.ID+".tar"),
 		filepath.Join(f.main, kept.ID+".tar")} {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.Truncate(filepath.Join(f.main, b.ID+".tar"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(f.copies, b.ID+".tar"), 0o700); err != nil {
+		t.Fatal(err)
 	}
 	newest := f.add(t, "world data", at(10, 13))
 	// Six rows of 10 bytes, four archives: the next needs 11 bytes, and room
@@ -895,12 +906,22 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 	if issues := f.s.Status(ctx).Issues; len(issues) != 0 {
 		t.Fatal(issues)
 	}
+	if total, _, err := f.s.FoundBytes(ctx); err != nil || total != 40 {
+		t.Fatal(total, err)
+	}
+	// The cut archive is never read.
+	if _, err := f.s.Open(ctx, f.serverID, b.ID); !errors.Is(err, errArchiveMissing) {
+		t.Fatal(err)
+	}
 	if err := os.Rename(f.copies, f.copies+"-away"); err != nil {
 		t.Fatal(err)
 	}
 	// Admitting a backup still counts the archive it can't look for.
 	if total, _, err := f.s.FoundBytes(ctx); err != nil || total != 50 {
 		t.Fatal(total, err)
+	}
+	if _, err := f.s.Open(ctx, f.serverID, b.ID); !errors.Is(err, errArchiveMissing) {
+		t.Fatal(err)
 	}
 	prune()
 }

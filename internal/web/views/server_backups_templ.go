@@ -1233,7 +1233,7 @@ func backupRow(b BackupsView, backup backups.Backup) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 103, "\" hx-confirm=\"Delete this backup?\" data-confirm-detail=\"Its archive is already missing from the backup folder. If it comes back, it is deleted permanently.\" data-confirm-action=\"Delete backup\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 103, "\" hx-confirm=\"Delete this backup?\" data-confirm-detail=\"Its archive is already missing or damaged in the backup folder. What is left of it, or the archive if it comes back, is deleted permanently.\" data-confirm-action=\"Delete backup\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1289,7 +1289,7 @@ func copyState(backup backups.Backup) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		case backup.FromCopy:
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 108, "<small class=\"table-detail backup-copy backup-copy--warning\">Missing from the backup folder; using the second copy</small>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 108, "<small class=\"table-detail backup-copy backup-copy--warning\">Missing or damaged in the backup folder; using the second copy</small>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1299,7 +1299,7 @@ func copyState(backup backups.Backup) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		case backup.Missing:
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 110, "<small class=\"table-detail backup-copy backup-copy--warning\">Its archive is missing from the backup folder, so it can’t be restored</small>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 110, "<small class=\"table-detail backup-copy backup-copy--warning\">Its archive is missing or damaged in the backup folder, so it can’t be restored</small>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1526,7 +1526,7 @@ func RestoreForm(b BackupsView) templ.Component {
 			}
 		}
 		if b.Restore.FromCopy {
-			templ_7745c5c3_Err = Alert("warning", "This backup is missing from the backup folder, so Ludock restores it from the second copy.").Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = Alert("warning", "This backup is missing or damaged in the backup folder, so Ludock restores it from the second copy.").Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1840,7 +1840,7 @@ func BackupBrowserView(b BackupBrowser) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if b.Backup.FromCopy {
-			templ_7745c5c3_Err = Alert("warning", "This backup is missing from the backup folder, so Ludock is reading the second copy.").Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = Alert("warning", "This backup is missing or damaged in the backup folder, so Ludock is reading the second copy.").Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

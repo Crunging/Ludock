@@ -137,8 +137,8 @@ itself. **Settings → Backups** shows where backups go and how much space they
 use. Each server keeps the 3 newest backups plus the last of each of the 7
 most recent days, 4 weeks, and 6 months that have one; Ludock removes the rest
 after each new backup. Only backups that can be restored count: one whose
-archive is gone from the backup folder, with no second copy, stays listed as
-missing and takes no place, and while Ludock can't reach a backup's folder it
+archive is gone from the backup folder or isn't the size it was saved at, with
+no second copy, stays listed as missing or damaged and takes no place, and while Ludock can't reach a backup's folder it
 removes none of the backups there. To keep one for good, choose **Keep…** from
 its menu. When the latest backup failed or was interrupted, the **Backups**
 tab says so, with a link to what happened, until the next one succeeds.
@@ -414,11 +414,13 @@ time limits are in the [reference](REFERENCE.md#limits).
   before it warns players or stops the server, so one that can't work leaves
   the server running.
 - **Space:** Ludock keeps 5 GiB free on the backup disk by default. A backup
-  that runs out of room fails and says why. After each successful backup, if
-  the next one might not fit, Ludock removes the server's oldest backups, never
-  the 3 newest that can be restored or kept ones. A backup whose archive is
-  gone doesn't count toward the total limit, so it never stops new backups;
-  one in a folder Ludock can't reach counts toward the limit for new
+  that runs out of room fails and says why; one without room for even empty
+  data folders, under the total limit or above the free space kept, is
+  refused before the server stops. After each successful backup, if the next
+  one might not fit, Ludock removes the server's oldest backups, never the 3
+  newest that can be restored or kept ones. A backup whose archive is gone or
+  damaged doesn't count toward the total limit, so it never stops new
+  backups; one in a folder Ludock can't reach counts toward the limit for new
   backups, but never makes Ludock remove others.
 - **Cancelled backups:** a forced stop, a start from another tool, a replaced
   container, or another running container writing the same data cancels the
