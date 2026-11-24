@@ -1,7 +1,7 @@
 // The built image against real Docker: helper containers from Ludock's own
 // image, backups, and the hardened runtime. lifecycle.spec.mjs covers the
 // rest; CI runs the two files in separate jobs.
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect, asAdmin, openServer, expectOperationSucceeded } from "../journeys/fixtures.mjs";
 import { docker, ludock, stack, gameContainer } from "../docker-setup.mjs";
@@ -50,7 +50,11 @@ test("file helpers from Ludock's image read and change server data", async ({ pa
 });
 
 test("a backup restores the server's data and running state", async ({ page }) => {
-  const properties = join(stack(), "data", "server.properties");
+  const data = join(stack(), "data");
+  const properties = join(data, "server.properties");
+  // Only here does a restore run as root: the setgid data folder gets its
+  // bit back after its owner.
+  chmodSync(data, 0o2755);
   await openServer(page, "Test Game");
   await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page.locator("#create-backup")).toBeEnabled();
@@ -59,11 +63,13 @@ test("a backup restores the server's data and running state", async ({ page }) =
   await expectOperationSucceeded(page);
 
   writeFileSync(properties, "motd=changed after the backup\n");
+  chmodSync(data, 0o755);
   await page.locator("#backup-list tbody tr").first().getByRole("link", { name: "Restore…" }).click();
   await page.locator("form.danger-panel").getByLabel(/Type Test Game to confirm/).fill("Test Game");
   await page.getByRole("button", { name: "Restore game data" }).click();
   await expectOperationSucceeded(page);
   expect(readFileSync(properties, "utf8")).toBe("motd=Hello from the container test\n");
+  expect(statSync(data).mode & 0o7777).toBe(0o2755);
   expect(docker("inspect", "--format", "{{.State.Running}}", gameContainer())).toBe("true");
   // The restarted game passes its healthcheck again, and its page, which
   // refreshes every 10 seconds, shows it running.

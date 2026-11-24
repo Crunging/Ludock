@@ -431,7 +431,8 @@ time limits are in the [reference](REFERENCE.md#limits).
   container, or another running container writing the same data cancels the
   copy.
 - **Contents:** the data folders' ordinary files and folders, with their
-  permissions, owners, and modification times. Links and special files are
+  permissions (folders keep setgid and sticky; setuid and files' setgid are
+  never restored), owners, and modification times. Links and special files are
   refused, and so is a data folder with another mount inside it; the
   **Backups** tab says which.
   [Shared and nested mounts](REFERENCE.md#shared-and-nested-mounts) has the
