@@ -616,12 +616,13 @@ func TestCheckAndWaitWaitsForANewReading(t *testing.T) {
 	close(source.release)
 }
 
-// Four games' status queries hang at once, as many as readings run side by
-// side. Each pass returns without them, the healthy server is still read on
+// More games' status queries hang at once than readings run side by side.
+// Each pass returns without them, the healthy server is still read on
 // its own interval, and no hung game gets a second reading while its first
 // runs; pages opened meanwhile get their lists once the queries end, one
 // hung game at a time.
 func TestHungReadingHoldsUpNoOther(t *testing.T) {
+	const hungGames = parallel + 1
 	ctx := context.Background()
 	// Restored after the service stops, which waits for its readings.
 	t.Cleanup(func(wait time.Duration) func() { return func() { passWait = wait } }(passWait))
@@ -632,12 +633,12 @@ func TestHungReadingHoldsUpNoOther(t *testing.T) {
 	t.Cleanup(func() { engine.Close() })
 	engine.AddContainer(fakedocker.GameOptions{Name: "other", Image: "itzg/minecraft-server", Running: true})
 	players, other := gameService(t, engine)
-	for index := range parallel {
+	for index := range hungGames {
 		engine.AddContainer(fakedocker.GameOptions{Name: fmt.Sprint("hung", index), Image: "itzg/minecraft-server", Running: true})
 	}
 	current, _ := players.Servers.RefreshNow(ctx)
 	views, err := players.Servers.List(ctx, &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin})
-	if err != nil || len(views) != parallel+1 {
+	if err != nil || len(views) != hungGames+1 {
 		t.Fatal(views, err)
 	}
 	stuck := map[string]bool{}
@@ -646,7 +647,7 @@ func TestHungReadingHoldsUpNoOther(t *testing.T) {
 			stuck[view.ID] = true
 		}
 	}
-	source := &stuckSource{Source: players.Source, stuck: stuck, runs: current, started: make(chan struct{}, parallel),
+	source := &stuckSource{Source: players.Source, stuck: stuck, runs: current, started: make(chan struct{}, hungGames),
 		release: make(chan struct{}), reads: map[string]int{}}
 	players.Source = source
 	released := false
@@ -674,7 +675,7 @@ func TestHungReadingHoldsUpNoOther(t *testing.T) {
 	}
 	all := func(string) bool { return true }
 	players.Poll(ctx, nil)
-	for range parallel {
+	for range hungGames {
 		<-source.started
 	}
 	players.Poll(ctx, all)
@@ -691,7 +692,7 @@ func TestHungReadingHoldsUpNoOther(t *testing.T) {
 	}
 	released = true
 	close(source.release)
-	for deadline := time.Now().Add(5 * time.Second); source.listed() != parallel; time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); source.listed() != hungGames; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the pages' lists were dropped:", source.listed())
 		}

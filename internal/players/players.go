@@ -44,9 +44,8 @@ const (
 
 // passWait is how long Poll waits for its readings, so a game that doesn't
 // answer holds up no other server's next reading. A reading still running
-// after it has hung: it moves to the hung lane if that is free, and the
-// game's later readings take that lane, one game at a time, until one ends
-// within passWait.
+// after it has hung: it gives up its slot, and the game's later readings take
+// the hung lane, one game at a time, until one ends within passWait.
 var passWait = 5 * time.Second
 
 // Reading is one server's players as Ludock last read them.
@@ -547,17 +546,20 @@ func (s *Service) start(ctx context.Context, server identity.Server, players, fr
 		}
 		limit := passWait
 		var moving sync.Mutex
-		// A reading past passWait gives its slot to the games that answer,
-		// unless another hung reading holds the lane.
+		// A reading past passWait gives its slot to the games that answer.
+		// It takes the lane if that is free; otherwise it runs out its limit
+		// holding nothing, which each game does at most once before its
+		// readings wait for the lane.
 		timer := time.AfterFunc(limit, func() {
 			moving.Lock()
 			defer moving.Unlock()
 			if held == s.slots {
+				<-s.slots
 				select {
 				case s.lane <- struct{}{}:
-					<-s.slots
 					held = s.lane
 				default:
+					held = nil
 				}
 			}
 		})
@@ -565,7 +567,9 @@ func (s *Service) start(ctx context.Context, server identity.Server, players, fr
 		reading, err := s.Source.Read(ctx, server, ask)
 		timer.Stop()
 		moving.Lock()
-		<-held
+		if held != nil {
+			<-held
+		}
 		// A callback already running must not move a slot it no longer holds.
 		held = nil
 		moving.Unlock()
