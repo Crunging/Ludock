@@ -1001,8 +1001,8 @@ var testHook func(point string)
 // so FinishDeletions, Prune, and Delete retry it and it never uses storage
 // unseen.
 func (s *Service) RecordDeleting(ctx context.Context, id, serverID, fingerprint, destination string) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
-    VALUES(?,?,?,?,'[]',0,'',?,'deleting')`, id, serverID, fingerprint, destination, time.Now().UnixMilli())
+	_, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,game_type)
+    VALUES(?,?,?,?,'[]',0,'',?,'deleting','')`, id, serverID, fingerprint, destination, time.Now().UnixMilli())
 	return err
 }
 

@@ -112,8 +112,8 @@ func TestCleanupKeepsNewestDelivery(t *testing.T) {
 	s.Notify(ServerProblems, "b", "second")
 	s.Deliver(ctx)
 	// A destination that never delivered doesn't stop the others' cleanup.
-	s.DB.Exec(`INSERT INTO notification_deliveries (id,event_key,destination,message,next_attempt_at,created_at,state,failure_code)
-		VALUES ('w','w','webhook','never',0,1,'failed','network')`)
+	s.DB.Exec(`INSERT INTO notification_deliveries (id,event_key,destination,message,kind,next_attempt_at,created_at,state,failure_code)
+		VALUES ('w','w','webhook','never','event',0,1,'failed','network')`)
 	s.DB.Exec("UPDATE notification_deliveries SET delivered_at=1, created_at=1 WHERE message='first'")
 	s.DB.Exec("UPDATE notification_deliveries SET delivered_at=2, created_at=2 WHERE message='second'")
 	s.Deliver(ctx)
@@ -160,8 +160,8 @@ func TestHealthWhileRetrySends(t *testing.T) {
 		sending = nil
 		return len(p) > 0
 	}
-	old := `INSERT INTO notification_deliveries (id,event_key,destination,message,next_attempt_at,created_at,state,attempts,
-		retry_attempts,last_attempt_at,failure_code) VALUES (?,?,'discord','valheim: the server is down.',0,1,'queued',3,3,?,'network')`
+	old := `INSERT INTO notification_deliveries (id,event_key,destination,message,kind,next_attempt_at,created_at,state,attempts,
+		retry_attempts,last_attempt_at,failure_code) VALUES (?,?,'discord','valheim: the server is down.','event',0,1,'queued',3,3,?,'network')`
 	// Still failing: nothing has been delivered.
 	s.DB.Exec(old, "a", "a", 2)
 	if !failingDuringRetry() {

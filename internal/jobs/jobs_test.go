@@ -552,8 +552,8 @@ func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 // finds use the limit.
 func TestBackupLimitCountsFoundArchives(t *testing.T) {
 	f := setup(t)
-	if _, err := f.jobs.DB.Exec(`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
-    VALUES(?,?,'x',?,'[]',?,'',1,'complete')`, identity.NewUUID(), f.serverID, f.backupTo, int64(1<<30)); err != nil {
+	if _, err := f.jobs.DB.Exec(`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,game_type)
+    VALUES(?,?,'x',?,'[]',?,'',1,'complete','')`, identity.NewUUID(), f.serverID, f.backupTo, int64(1<<30)); err != nil {
 		t.Fatal(err)
 	}
 	if job := f.run(t, "backup", nil); job.Status != ops.Succeeded {

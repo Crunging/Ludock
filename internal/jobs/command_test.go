@@ -59,7 +59,7 @@ func (f *fixture) scheduleCommand(t *testing.T, serverID, owner, command string)
 	server, _ := f.jobs.Identity.Get(ctx, serverID)
 	input := fmt.Sprintf(`{"kind":"recurring","action":"command","command":%q,"createBackup":false,"enabled":true,"time":"08:00","timezone":"UTC","days":[1]}`, command)
 	scheduleID := "44444444-4444-4444-8444-444444444444"
-	if _, err := f.jobs.DB.Exec(`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES(?,?,?,?,?,1)`,
+	if _, err := f.jobs.DB.Exec(`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at,changed_at) VALUES(?,?,?,?,?,1,1)`,
 		scheduleID, serverID, owner, input, server.BindingRevision); err != nil {
 		t.Fatal(err)
 	}

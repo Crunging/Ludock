@@ -149,8 +149,8 @@ func TestFailingDeletionsDoNotBlockOthers(t *testing.T) {
 	// The oldest deleting rows name a destination that no longer exists.
 	gone := filepath.Join(t.TempDir(), "gone")
 	for i, id := range []string{"1f9619ff-8b86-4011-b42d-00c04fc964ff", "2f9619ff-8b86-4011-b42d-00c04fc964ff", "3f9619ff-8b86-4011-b42d-00c04fc964ff"} {
-		if _, err := s.DB.Exec(`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
-      VALUES(?,?,'x',?,'[]',0,'',?,'deleting')`, id, backup.ServerID, gone, i); err != nil {
+		if _, err := s.DB.Exec(`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,game_type)
+      VALUES(?,?,'x',?,'[]',0,'',?,'deleting','')`, id, backup.ServerID, gone, i); err != nil {
 			t.Fatal(err)
 		}
 	}

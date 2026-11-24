@@ -185,8 +185,8 @@ func TestHTTPDestinationRequests(t *testing.T) {
 		if err := s.Configure(ctx, "admin", adminSession, c.d, c.config, false); err != nil {
 			t.Fatal(c.d, err)
 		}
-		if _, err := s.DB.Exec(`INSERT INTO notification_deliveries(id,event_key,destination,message,next_attempt_at,created_at)
-			VALUES('d1','k',?,'Survival is unavailable.',0,1767323045000)`, string(c.d)); err != nil {
+		if _, err := s.DB.Exec(`INSERT INTO notification_deliveries(id,event_key,destination,message,kind,next_attempt_at,created_at)
+			VALUES('d1','k',?,'Survival is unavailable.','event',0,1767323045000)`, string(c.d)); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.Deliver(ctx); err != nil {

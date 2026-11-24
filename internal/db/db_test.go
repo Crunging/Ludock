@@ -67,6 +67,16 @@ func TestFreshDatabaseAndReopen(t *testing.T) {
 	if !regexp.MustCompile(`^"[a-f0-9]{64}"$`).MatchString(check) {
 		t.Fatalf("key check = %q", check)
 	}
+	// Every writer sets these, so a row missing one is a bug, not a default.
+	for _, column := range []string{"backups.game_type", "schedules.changed_at", "notification_deliveries.kind"} {
+		table, name, _ := strings.Cut(column, ".")
+		var notNull int
+		var fallback sql.NullString
+		d.QueryRow("SELECT \"notnull\", dflt_value FROM pragma_table_info(?) WHERE name=?", table, name).Scan(&notNull, &fallback)
+		if notNull != 1 || fallback.Valid {
+			t.Fatal(column, "may be left out", notNull, fallback.String)
+		}
+	}
 	if _, err := d.Exec("INSERT INTO docker_hosts (id, name, created_at) VALUES ('host', 'test', 1)"); err != nil {
 		t.Fatal(err)
 	}
