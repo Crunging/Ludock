@@ -195,6 +195,11 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 		}
 		release()
 		if err != nil {
+			// A new container removed outside Ludock needs a person.
+			if apperr.Is(err, errReplacementGone.Code) {
+				j.notifyInterrupted(ctx, job, notify.Results, "operation:"+job.Job.ID,
+					"an update was cut short by a restart, and its new container has since been removed outside Ludock. Its Activity says what is left.")
+			}
 			return nil, err
 		}
 		// Ludock stopping mid-check judged nothing: the next start does.

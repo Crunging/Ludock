@@ -410,7 +410,7 @@ func TestUpdateUndoRetriesThroughDockerFailures(t *testing.T) {
 
 // Another manager removed the replacement after the update began replacing
 // the original. The original is kept for review instead of being removed,
-// and if it is gone too, recovery says so.
+// and if it is gone too, recovery says so. Either way an alert goes out.
 func TestUpdateRecoveryKeepsOriginalWithoutReplacement(t *testing.T) {
 	for _, originalLeft := range []bool{true, false} {
 		f := setup(t)
@@ -421,8 +421,8 @@ func TestUpdateRecoveryKeepsOriginalWithoutReplacement(t *testing.T) {
 			}
 			swap.Stage = swapReplacing
 		})
-		if job.Status != ops.Interrupted || !strings.Contains(job.Error, "administrator attention") {
-			t.Fatalf("%+v", job)
+		if job.Status != ops.Interrupted || !strings.Contains(job.Error, "administrator attention") || len(f.alerts) != 1 {
+			t.Fatalf("%+v %q", job, f.alerts)
 		}
 		if originalLeft && f.containerNamed("mc") == nil {
 			t.Fatal("removed the only container left")
