@@ -293,6 +293,8 @@ templ BackupList(b BackupsView) {
 templ backupRow(b BackupsView, backup backups.Backup) {
 	{{ kept := backup.KeptAt != 0 }}
 	{{ complete := backup.State == "complete" }}
+	// A backup whose archive is gone can only be removed.
+	{{ readable := complete && !backup.Missing }}
 	<tr class={ templ.KV("backup-row--kept", kept) }>
 		<td>
 			@Time(backup.CreatedAt, "", "")
@@ -335,7 +337,7 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 		</td>
 		<td>
 			<div class="inline-actions backup-row__actions">
-				if complete && b.CanRestore && b.Fits[backup.ID].Refusal == "" {
+				if readable && b.CanRestore && b.Fits[backup.ID].Refusal == "" {
 					if !b.Blocked && !b.Active {
 						<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups&restore="+backup.ID) } { inPage()... }>Restore…</a>
 					} else {
@@ -347,9 +349,11 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 						<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="3" cy="8" r="1.5"></circle><circle cx="8" cy="8" r="1.5"></circle><circle cx="13" cy="8" r="1.5"></circle></svg>
 					</button>
 					<div class="action-menu__content" id={ "backup-actions-" + backup.ID } hidden>
-						if complete {
+						if readable {
 							<a class="action-menu__action" href={ detailURL(b.ServerID, "tab=backups&browse="+backup.ID) } { inPage()... }>Browse files</a>
 							<a class="action-menu__action" href={ templ.SafeURL("/servers/" + b.ServerID + "/backups/" + backup.ID + "/download") } download>Download</a>
+						}
+						if complete {
 							if kept {
 								<button
 									class="action-menu__action"
@@ -374,6 +378,11 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete?folderAway=1" }
 								hx-confirm="Remove this backup from Ludock?"
 								data-confirm-detail="Ludock can’t reach the folder this backup was saved in, so its archive may still be there. Ludock stops listing it and deletes its second copy."
+								data-confirm-action="Remove backup"
+							} else if backup.Missing {
+								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
+								hx-confirm="Remove this backup from Ludock?"
+								data-confirm-detail="Its archive is already gone from the backup folder. Ludock stops listing it."
 								data-confirm-action="Remove backup"
 							} else {
 								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
@@ -400,6 +409,8 @@ templ copyState(backup backups.Backup) {
 			<small class="table-detail backup-copy backup-copy--warning">Missing from the backup folder; using the second copy</small>
 		case backup.FolderAway:
 			<small class="table-detail backup-copy backup-copy--warning">Its backup folder can’t be reached</small>
+		case backup.Missing:
+			<small class="table-detail backup-copy backup-copy--warning">Its archive is missing from the backup folder, so it can’t be restored</small>
 		case backup.CopyState == "complete":
 			<small class="table-detail backup-copy">Second copy saved</small>
 		case backup.Copying:

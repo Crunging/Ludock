@@ -806,10 +806,11 @@ func (s *Service) look(folder, id string, stalled error) (bool, error) {
 
 // ArchiveFolder is where a backup's archive is read from: its own folder,
 // or a second copy when the archive is missing there, preferring the one in
-// the chosen folder. It sets FromCopy and FolderAway (also when that folder
-// isn't responding), and fails when a folder it must look into isn't.
+// the chosen folder. It sets FromCopy, FolderAway (also when that folder
+// isn't responding), and Missing, and fails when a folder it must look into
+// isn't.
 func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
-	backup.FromCopy = false
+	backup.FromCopy, backup.Missing = false, false
 	found, err := s.look(backup.destination, backup.ID, errFolderStalled)
 	backup.FolderAway = err != nil
 	if errors.Is(err, errFolderStalled) {
@@ -818,6 +819,7 @@ func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 	if found {
 		return backup.destination, nil
 	}
+	looked := err == nil
 	var copies []string
 	if backup.CopyState == "complete" {
 		copies = append(copies, backup.copyDestination)
@@ -834,8 +836,18 @@ func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 			backup.FromCopy = true
 			return folder, nil
 		}
+		looked = looked && err == nil
 	}
+	backup.Missing = looked
 	return backup.destination, nil
+}
+
+// readable reports whether a backup's archive was found, in its folder or
+// as a verified second copy. One that is missing, or that Ludock can't
+// look for, is not.
+func (s *Service) readable(backup *Backup) bool {
+	_, err := s.ArchiveFolder(backup)
+	return err == nil && (backup.FromCopy || !backup.FolderAway && !backup.Missing)
 }
 
 // Locate sets FromCopy and FolderAway on backups and Copying on complete

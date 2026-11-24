@@ -57,11 +57,12 @@ func ruleKeeps(list []Backup, zone *time.Location) map[string]bool {
 // expired are those the rule doesn't keep, and spare, oldest first, are the
 // ones it keeps beyond the newest keepNewest, which go only while the next
 // backup wouldn't fit. Kept backups, ones still being deleted, and protected
-// ones are in neither.
-func planRetention(list []Backup, zone *time.Location, protected func(id string) bool) (expired, spare []Backup) {
+// ones are in neither; unreadable ones are in neither and take no place in
+// the rule.
+func planRetention(list []Backup, zone *time.Location, protected, readable func(id string) bool) (expired, spare []Backup) {
 	var candidates []Backup
 	for _, backup := range list {
-		if backup.State == "complete" && backup.KeptAt == 0 {
+		if backup.State == "complete" && backup.KeptAt == 0 && readable(backup.ID) {
 			candidates = append(candidates, backup)
 		}
 	}

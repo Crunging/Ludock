@@ -48,6 +48,9 @@ type Backup struct {
 	// FolderAway is set by ArchiveFolder and Locate when the folder the
 	// backup was saved in can't be opened or isn't responding.
 	FolderAway bool
+	// Missing is set by ArchiveFolder when its archive is in none of the
+	// folders it could be in, and every one of them could be looked into.
+	Missing bool
 
 	// FromCopy is set by ArchiveFolder when the archive is read from the
 	// second copy, and Copying by Locate while the copy is being made.
@@ -933,9 +936,22 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 			}
 		}
 	}
+	// Only backups that can be read count toward what the rule keeps: rows
+	// whose archives are gone, or can't be looked for now, would otherwise
+	// take the places of ones that can be restored. They aren't removed.
+	readable := map[string]bool{}
+	var missing int64
+	for index := range list {
+		if backup := &list[index]; backup.State == "complete" && backup.KeptAt == 0 {
+			readable[backup.ID] = s.readable(backup)
+			if backup.Missing {
+				missing += backup.Size
+			}
+		}
+	}
 	expired, spare := planRetention(list, time.Local, func(id string) bool {
 		return slices.Contains(protected, id) || s.Storage.Reading(id)
-	})
+	}, func(id string) bool { return readable[id] })
 	for _, backup := range expired {
 		if err := s.removeIdle(ctx, backup); failed(backup, err) {
 			return err
@@ -944,7 +960,7 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 	// Space is measured again after each removal, and only archives in the
 	// current folder free room on its disk.
 	for _, backup := range spare {
-		if room, need := s.room(ctx, list, settings); room >= need {
+		if room, need := s.room(ctx, list, settings, missing); room >= need {
 			break
 		}
 		if backup.destination != settings.Destination {
@@ -977,9 +993,11 @@ func (s *Service) removeIdle(ctx context.Context, backup Backup) error {
 }
 
 // room is the space left for the server's next backup and the space it
-// should need: its newest backup's size plus a margin. When either is
-// unknown, need is zero, so space alone removes nothing.
-func (s *Service) room(ctx context.Context, list []Backup, settings Settings) (room, need int64) {
+// should need: its newest backup's size plus a margin. missing is the size
+// of the server's backups whose archives are gone, which the total limit
+// doesn't count. When either is unknown, need is zero, so space alone
+// removes nothing.
+func (s *Service) room(ctx context.Context, list []Backup, settings Settings, missing int64) (room, need int64) {
 	index := slices.IndexFunc(list, func(backup Backup) bool { return backup.State == "complete" })
 	if index < 0 {
 		return 0, 0
@@ -994,7 +1012,7 @@ func (s *Service) room(ctx context.Context, list []Backup, settings Settings) (r
 		if err != nil {
 			return 0, 0
 		}
-		room = min(room, settings.MaxBytes-used)
+		room = min(room, settings.MaxBytes-used+missing)
 	}
 	size := list[index].Size
 	return room, size + size*spaceMargin/100

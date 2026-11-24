@@ -138,8 +138,11 @@ itself. **Settings → Backups**
 shows where backups go and how much space they use. Each server
 keeps the 3 newest backups plus the last of each of the 7 most recent days,
 4 weeks, and 6 months that have one; Ludock removes the rest after each new
-backup. To keep one for good, choose **Keep…** from its menu. When the latest
-backup failed or was interrupted, the **Backups** tab says so, with a link to
+backup. Only backups that can be restored count: one whose archive is gone
+from the backup folder, with no second copy, stays listed as missing and
+takes no place, and while Ludock can't reach a backup's folder it removes
+none of the backups there. To keep one for good, choose **Keep…** from its
+menu. When the latest backup failed or was interrupted, the **Backups** tab says so, with a link to
 what happened, until the next one succeeds.
 
 A server whose data isn't in a writable volume or bind mount can't be backed
@@ -415,7 +418,8 @@ Size and time limits are in the [reference](REFERENCE.md#limits).
 - **Space:** Ludock keeps 5 GiB free on the backup disk by default. A backup
   that runs out of room fails and says why. After each successful backup, if
   the next one might not fit, Ludock removes the server's oldest backups, never
-  the 3 newest or kept ones.
+  the 3 newest that can be restored or kept ones. A missing archive doesn't
+  count toward the total limit.
 - **Cancelled backups:** a forced stop, a start from another tool, a replaced
   container, or another running container writing the same data cancels the
   copy.

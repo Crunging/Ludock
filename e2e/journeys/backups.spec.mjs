@@ -356,6 +356,17 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
   // The copy is removed beside the deletion, so it may take a moment.
   await expect.poll(() => existsSync(copy)).toBe(false);
 
+  // The restore's safety backup, lost from both folders, can only be removed.
+  const safety = page.locator("#backup-list tbody tr", { hasText: "Taken before a restore" });
+  const safetyId = (await safety.getByRole("link", { name: "Download", includeHidden: true }).getAttribute("href")).split("/")[4];
+  for (const folder of [backupFolder, copyFolder]) rmSync(join(folder, `${safetyId}.tar`), { force: true });
+  await page.reload();
+  await expect(safety).toContainText("Its archive is missing from the backup folder, so it can’t be restored");
+  await expect(safety.getByRole("link", { name: "Restore…" })).toHaveCount(0);
+  await (await menuItem(safety, "button", "Delete")).click();
+  await page.getByRole("dialog", { name: "Remove this backup from Ludock?" }).getByRole("button", { name: "Remove backup" }).click();
+  await expect(safety).toHaveCount(0);
+
   await chooseCopy("No second copy");
   await expect(page.locator("#backup-storage")).not.toContainText("Second copy in");
 });

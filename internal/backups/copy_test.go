@@ -773,6 +773,51 @@ func TestBackupsInALostFolder(t *testing.T) {
 	}
 }
 
+// Two of a day's backups lost their archives, as a hand-cleaned folder
+// would leave them; one still has its second copy. Retention keeps the
+// newest three that can be restored, so the earlier ones stay, and the
+// total limit doesn't count the lost archive. The lost one stays listed,
+// marked missing.
+func TestRetentionCountsReadableBackups(t *testing.T) {
+	f := newCopyFixture(t)
+	at := func(day, hour int) int64 { return time.Date(2026, 1, day, hour, 0, 0, 0, time.Local).UnixMilli() }
+	earlier := f.add(t, "world data", at(9, 12))
+	a, b, c := f.add(t, "world data", at(10, 10)), f.add(t, "world data", at(10, 11)), f.add(t, "world data", at(10, 12))
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(f.main, b.ID+".tar"), filepath.Join(f.copies, b.ID+".tar"), filepath.Join(f.main, c.ID+".tar")} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newest := f.add(t, "world data", at(10, 13))
+	// Five rows of 10 bytes, four archives: room for the next is 20 bytes,
+	// or 10 counting the lost one.
+	settings := f.settings
+	settings.MaxBytes = 60
+	if err := f.s.Prune(ctx, f.serverID, settings, newest.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, backup := range []Backup{earlier, a, b, c, newest} {
+		if found, _ := f.s.Exists(ctx, backup.ID, true); !found {
+			t.Fatal("retention removed a backup that can be restored, or a lost one", backup.ID)
+		}
+	}
+	listed, err := f.s.List(ctx, f.serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Locate(listed); err != nil {
+		t.Fatal(err)
+	}
+	for _, backup := range listed {
+		if lost := backup.ID == b.ID; backup.Missing != lost || backup.FromCopy != (backup.ID == c.ID) {
+			t.Fatalf("%+v", backup)
+		}
+	}
+}
+
 // A backup folder that stops responding is given up on within a few seconds,
 // so the Backups tab and a restore holding the server's locks don't wait on
 // it. Until the stuck look returns, others fail at once instead of piling up.
