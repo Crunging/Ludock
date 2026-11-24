@@ -83,7 +83,9 @@ func TestRecoveryRestartsAHungGameAndReportsItsAnswer(t *testing.T) {
 	if len(events.events) != 1 || events.events[0] != "Minecraft: the game stopped answering, so Ludock is restarting it." {
 		t.Fatal(events.events)
 	}
-	// The queued restart holds the server; nothing more is queued.
+	// The queued restart holds the server and announces its own outcome,
+	// even if the game answers meanwhile; nothing more is queued.
+	*game = GameAnswering
 	s.Check(ctx, run("running", 500), 70_000)
 	jobs := recoveryJobs(t, s, serverID)
 	if len(jobs) != 1 {
