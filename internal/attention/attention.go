@@ -50,7 +50,8 @@ type Item struct {
 	ForceStopped  bool
 	// Recovery: an automatic restart did the work.
 	Recovery bool
-	// Undone: a restore that ended without finishing was undone.
+	// Undone: a restore that ended without finishing was undone, and its
+	// undo found every stage folder it needed.
 	Undone bool
 	// notifications, with Since and Reason
 	Destination notify.Destination
@@ -189,7 +190,8 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		// sides of AND, so JSON is read only under CASE.
 		forced := `COALESCE(CASE WHEN json_valid(result_json) THEN json_extract(result_json,'$.forceStopped') = 1 END, 0)`
 		rows, err := s.DB.QueryContext(ctx, `SELECT id,kind,status,updated_at,actor_id=?,`+forced+`,
-      kind='restore' AND COALESCE(CASE WHEN json_valid(recovery_json) THEN json_extract(recovery_json,'$.restore.status') = 'rolled_back' END, 0)
+      kind='restore' AND COALESCE(CASE WHEN json_valid(recovery_json) THEN json_extract(recovery_json,'$.restore.status') = 'rolled_back' END, 0) AND
+        instr(COALESCE(CASE WHEN json_valid(result_json) THEN json_extract(result_json,'$.guidance') END,''),?) = 0
       FROM (SELECT id,kind,status,updated_at,actor_id,result_json,recovery_json,created_at,error FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100) o
       WHERE (status IN ('failed','interrupted') AND (instr(COALESCE(error,''),'administrator') > 0 OR `+forced+` OR
         (kind='restore' AND NOT CASE
@@ -200,7 +202,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
           (later.kind=o.kind OR (o.kind='restore' AND later.kind IN ('backup','update'))) AND
           (later.created_at > o.created_at OR (later.created_at = o.created_at AND later.id > o.id)))))
         OR (status='succeeded' AND kind IN ('stop','restart') AND `+forced+`)`,
-			ops.RecoveryActor, server.ID, db.RestoreEndUnknown, server.ID)
+			ops.RecoveryActor, ops.NothingPutBack, server.ID, db.RestoreEndUnknown, server.ID)
 		if err != nil {
 			return nil, err
 		}

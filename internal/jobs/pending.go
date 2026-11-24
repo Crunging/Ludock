@@ -181,7 +181,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	case state.Status == "committed":
 		note = "Ludock removed the folder " + stageName(restore) + " that a finished restore left, which held the data it replaced."
 	case missing && !live:
-		note = "Ludock found nothing to put back for a restore that had stopped partway: the folder " + stageName(restore) +
+		note = "Ludock found " + ops.NothingPutBack + " for a restore that had stopped partway: the folder " + stageName(restore) +
 			" that held the server’s previous data is no longer there, so its data was left as it is."
 	case !live:
 		note = "Ludock removed the backup’s unpacked copy that a stopped restore left in " + stageName(restore) + "."
@@ -192,7 +192,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place."
 	}
 	if missing && live {
-		note += " One of its data folders had nothing to put back: its folder " + stageName(restore) + " is no longer there."
+		note += " One of its data folders had " + ops.NothingPutBack + ": its folder " + stageName(restore) + " is no longer there."
 	}
 	result := withUndone(restore.Job.Result, "")
 	result["guidance"] = note

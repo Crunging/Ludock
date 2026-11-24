@@ -70,6 +70,10 @@ const (
 // of the server's monitoring policy instead of an account.
 const RecoveryActor = "ludock-recovery"
 
+// NothingPutBack is in the guidance of a restore whose undo found a stage
+// folder gone, so its live data may not be the server's previous data.
+const NothingPutBack = "nothing to put back"
+
 type Job struct {
 	ID              string
 	ServerID        string
