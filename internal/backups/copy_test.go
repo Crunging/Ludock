@@ -881,8 +881,18 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 			t.Fatalf("%+v", backup)
 		}
 	}
+	// The records alone reach the limit; the archives found leave room, so
+	// the Backups tab offers the next backup.
+	f.s.DB.Exec(`UPDATE settings SET value_json=json_set(value_json,'$.maxBytes',55) WHERE key='backups'`)
+	if issues := f.s.Status(ctx).Issues; len(issues) != 0 {
+		t.Fatal(issues)
+	}
 	if err := os.Rename(f.copies, f.copies+"-away"); err != nil {
 		t.Fatal(err)
+	}
+	// Admitting a backup still counts the archive it can't look for.
+	if total, _, err := f.s.FoundBytes(ctx); err != nil || total != 50 {
+		t.Fatal(total, err)
 	}
 	prune()
 }

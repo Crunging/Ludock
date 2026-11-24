@@ -420,8 +420,10 @@ Size and time limits are in the [reference](REFERENCE.md#limits).
 - **Space:** Ludock keeps 5 GiB free on the backup disk by default. A backup
   that runs out of room fails and says why. After each successful backup, if
   the next one might not fit, Ludock removes the server's oldest backups, never
-  the 3 newest that can be restored or kept ones. Archives it can't find or
-  reach don't count toward the total limit when it chooses what to remove.
+  the 3 newest that can be restored or kept ones. A backup whose archive is
+  gone doesn't count toward the total limit, so it never stops new backups;
+  one in a folder Ludock can't reach counts toward the limit for new
+  backups, but never makes Ludock remove others.
 - **Cancelled backups:** a forced stop, a start from another tool, a replaced
   container, or another running container writing the same data cancels the
   copy.

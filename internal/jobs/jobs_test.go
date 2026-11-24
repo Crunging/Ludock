@@ -570,6 +570,20 @@ func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 	}
 }
 
+// An old backup's archive is gone from the backup folder, though its record
+// alone fills the total limit. A new backup still fits: only archives Ludock
+// finds use the limit.
+func TestBackupLimitCountsFoundArchives(t *testing.T) {
+	f := setup(t)
+	if _, err := f.jobs.DB.Exec(`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
+    VALUES(?,?,'x',?,'[]',?,'',1,'complete')`, identity.NewUUID(), f.serverID, f.backupTo, int64(1<<30)); err != nil {
+		t.Fatal(err)
+	}
+	if job := f.run(t, "backup", nil); job.Status != ops.Succeeded {
+		t.Fatalf("%+v", job)
+	}
+}
+
 // Compose replaces a container to change it. A backup whose stopped server
 // is replaced meanwhile says something outside Ludock changed it, rather
 // than that something went wrong.

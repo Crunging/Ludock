@@ -499,6 +499,68 @@ func (s *Service) ArchiveBytes(ctx context.Context) (total, kept int64, err erro
 	return total, kept, err
 }
 
+// FoundBytes is ArchiveBytes without the backups whose archives are gone
+// from their folder and from any second copy, as the total limit counts
+// them. It lists each folder once; a folder that can't be listed counts all
+// its backups.
+func (s *Service) FoundBytes(ctx context.Context) (total, kept int64, err error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE state='complete'")
+	if err != nil {
+		return 0, 0, err
+	}
+	var list []*Backup
+	for rows.Next() {
+		backup, err := scanBackup(rows)
+		if err != nil {
+			rows.Close()
+			return 0, 0, err
+		}
+		list = append(list, backup)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+	// A nil listing is a folder that couldn't be listed.
+	listings := map[string]map[string]bool{}
+	gone := func(folder, name string) bool {
+		if folder == "" {
+			return true
+		}
+		names, seen := listings[folder]
+		if !seen {
+			var entries []string
+			if s.reach(folder, errFolderStalled, measureWait, func(func()) error {
+				var err error
+				entries, err = s.Storage.list(folder)
+				return err
+			}) == nil {
+				names = map[string]bool{}
+				for _, entry := range entries {
+					names[entry] = true
+				}
+			}
+			listings[folder] = names
+		}
+		return names != nil && !names[name]
+	}
+	for _, backup := range list {
+		copied := ""
+		if backup.CopyState == "complete" {
+			copied = backup.copyDestination
+		}
+		name := backup.ID + ".tar"
+		if gone(backup.destination, name) && gone(copied, name) && gone(backup.copyPrevious, name) {
+			continue
+		}
+		total += backup.Size
+		if backup.KeptAt != 0 {
+			kept += backup.Size
+		}
+	}
+	return total, kept, nil
+}
+
 // unlimited stands in for "no total limit"; it fits JSON's exact integers.
 const unlimited = maxSetting
 
@@ -618,7 +680,14 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 			status.CopyIssue = errCopyMissing.Message
 		}
 	}
-	if _, err := Remaining(*settings, status.ArchiveBytes, kept); err != nil {
+	_, err = Remaining(*settings, status.ArchiveBytes, kept)
+	if err != nil {
+		// Only then are archives looked for: lost ones don't hold up a backup.
+		if found, foundKept, failed := s.FoundBytes(ctx); failed == nil {
+			_, err = Remaining(*settings, found, foundKept)
+		}
+	}
+	if err != nil {
 		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_CAPACITY", "The backup size limit could not be checked."}))
 	}
 	// A share or Docker that stops responding mustn't hold up the page.

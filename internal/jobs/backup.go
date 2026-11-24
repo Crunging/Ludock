@@ -30,6 +30,9 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		return nil, err
 	}
 	used, kept, err := j.Backups.ArchiveBytes(ctx)
+	if settings.MaxBytes > 0 {
+		used, kept, err = j.Backups.FoundBytes(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
