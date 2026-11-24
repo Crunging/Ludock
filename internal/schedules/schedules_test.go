@@ -14,10 +14,13 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
+	"github.com/Crunging/Ludock/internal/docker"
+	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/servers"
 )
 
 var ctx = context.Background()
@@ -62,11 +65,18 @@ func setup(t *testing.T) *fixture {
 	}
 	adminSession, friendSession = dbtest.Session(t, d, admin.ID), dbtest.Session(t, d, friend.ID)
 	store := &identity.Store{DB: d}
-	obs := identity.Observation{ContainerID: "original", Name: "world", DisplayName: "World", GameType: "minecraft"}
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	id := engine.AddContainer(fakedocker.GameOptions{Name: "world", Image: "itzg/minecraft-server"})
+	obs := identity.Observation{ContainerID: id, Name: "world", DisplayName: "World", GameType: "minecraft"}
 	list, _ := store.Reconcile(ctx, []identity.Observation{obs}, "", 0)
 	authorization := &authz.Service{DB: d, Servers: store}
-	f := &fixture{s: &Service{DB: d, Authz: authorization, Identity: store, Runner: &ops.Runner{DB: d, Locks: locks.New()}, Locks: locks.New()},
-		serverID: list[0].ID, obs: obs}
+	serverService := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: &servers.Observer{Docker: docker.New(engine.Socket)}}
+	f := &fixture{s: &Service{DB: d, Authz: authorization, Identity: store, Runner: &ops.Runner{DB: d, Locks: locks.New()}, Locks: locks.New(),
+		Servers: serverService}, serverID: list[0].ID, obs: obs}
 	f.grant(t, authz.ServerView, authz.ServerStart, authz.SchedulesManage)
 	previous := db.Now
 	db.Now = func() int64 { return due - 3600_000 }

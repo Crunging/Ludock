@@ -5,6 +5,7 @@
 package notify
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"database/sql"
@@ -115,6 +116,10 @@ type Service struct {
 	// cancelSend ends the request in flight when its destination's settings
 	// change.
 	cancelSend context.CancelCauseFunc
+	// RetryDelay is the first wait before queueing an event again; zero is
+	// a second.
+	RetryDelay time.Duration
+
 	// retries are event notifications waiting to be queued again.
 	retries sync.WaitGroup
 	quit    chan struct{}
@@ -136,10 +141,6 @@ func (s *Service) stamp() int64 {
 		}
 	}
 }
-
-// retryDelay is the first wait before queueing an event again; tests
-// shorten it.
-var retryDelay = time.Second
 
 // Wake receives when a notification was queued and delivery should run
 // soon rather than at the next tick.
@@ -359,7 +360,7 @@ func (s *Service) Notify(alert Alert, key, message string) {
 	log.Warn("Could not queue a notification; retrying")
 	go func() {
 		defer s.retries.Done()
-		delay := retryDelay
+		delay := cmp.Or(s.RetryDelay, time.Second)
 		for range 8 {
 			select {
 			case <-time.After(delay):

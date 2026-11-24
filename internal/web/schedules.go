@@ -21,7 +21,7 @@ var scheduleActionCapabilities = map[string]authz.Capability{"start": authz.Serv
 func scheduleActions(view *servers.View) []string {
 	var actions []string
 	for _, action := range schedules.Actions {
-		if (action == "command" && view.Console == nil) || (view.AutoRemove && servers.StopsServer(action)) {
+		if (action == "command" && view.Console == nil) || view.Refuses(action) {
 			continue
 		}
 		if can(view, scheduleActionCapabilities[action]) {
@@ -225,18 +225,23 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 		form.LeadText = views.LeadText(schedules.DefaultLeadMinutes)
 	}
 	form.Revision, _ = strconv.ParseInt(r.PostFormValue("revision"), 10, 64)
-	latest := func() *schedules.Schedule {
-		list, _ := s.App.Schedules.List(ctx, request.User(), serverID)
+	latest := func() (*schedules.Schedule, error) {
+		list, err := s.App.Schedules.List(ctx, request.User(), serverID)
 		for index := range list {
 			if list[index].ID == scheduleID {
-				return &list[index]
+				return &list[index], nil
 			}
 		}
-		return nil
+		return nil, err
 	}
 	// "Keep my draft" adopts the latest revision without saving.
 	if keep := r.PostFormValue("keepDraft"); keep != "" && scheduleID != "" {
-		if saved := latest(); saved != nil {
+		saved, err := latest()
+		if err != nil {
+			s.fail(w, r, request, err)
+			return
+		}
+		if saved != nil {
 			form.Revision, form.Input.Enabled = saved.Revision, saved.Enabled
 		} else {
 			form.Missing = true
@@ -265,7 +270,12 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 		form.Error = public.Message
 		if scheduleID != "" && (public.Code == "SCHEDULE_CHANGED" || public.Status == http.StatusNotFound) {
 			form.Error = ""
-			if current := latest(); current == nil {
+			current, err := latest()
+			if err != nil {
+				s.fail(w, r, request, err)
+				return
+			}
+			if current == nil {
 				form.Missing = true
 			} else {
 				form.Conflict = current

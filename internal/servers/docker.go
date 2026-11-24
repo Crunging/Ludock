@@ -25,6 +25,7 @@ import (
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/logging"
+	"github.com/Crunging/Ludock/internal/ops"
 )
 
 type Port struct {
@@ -106,10 +107,47 @@ const AutoRemoveMessage = "Docker is set to delete this server as soon as it sto
 // restart is a stop and a start.
 func StopsServer(kind string) bool {
 	switch kind {
-	case "stop", "restart", "backup", "restore", "undo_restore", "update":
+	case ops.KindStop, ops.KindRestart, ops.KindBackup, ops.KindRestore, ops.KindUndoRestore, ops.KindUpdate:
 		return true
 	}
 	return false
+}
+
+// Refuses reports whether Ludock refuses work of kind on the server because
+// it would stop it and Docker deletes it when it stops (--rm).
+func (c *Container) Refuses(kind string) bool { return c.AutoRemove && StopsServer(kind) }
+
+// Refusal is ErrAutoRemove if the server Refuses work of kind.
+func (c *Container) Refusal(kind string) error {
+	if c.Refuses(kind) {
+		return ErrAutoRemove
+	}
+	return nil
+}
+
+// InspectRefusal is Refusal for the container serverID is bound to now, as
+// Docker reports it.
+func (s *Service) InspectRefusal(ctx context.Context, serverID, kind string) error {
+	if !StopsServer(kind) {
+		return nil
+	}
+	binding, err := s.Identity.ResolveBinding(ctx, serverID, -1)
+	if err != nil {
+		return err
+	}
+	info, err := s.Observer.Docker.Inspect(ctx, binding.ContainerID)
+	if err != nil {
+		return err
+	}
+	if info.Host.AutoRemove {
+		return ErrAutoRemove
+	}
+	return nil
+}
+
+// IsRunning reports whether Docker shows the container running.
+func IsRunning(info *docker.ContainerInspect) bool {
+	return info.State.Running || info.State.Status == "running"
 }
 
 type Observed struct {
@@ -977,7 +1015,7 @@ type StopRecovery struct {
 // StopRecoveryState waits through the full grace period plus time to kill
 // the process.
 func StopRecoveryState(info *docker.ContainerInspect, now time.Time) StopRecovery {
-	running := info.State.Running || info.State.Status == "running"
+	running := IsRunning(info)
 	state := StopRecovery{StopStarted: running}
 	if running {
 		if started := dockerTime(info.State.StartedAt); started > 0 {

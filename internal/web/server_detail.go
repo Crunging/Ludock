@@ -16,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/history"
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/resources"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -120,7 +121,7 @@ func (s *Server) activity(r *http.Request, request *Request, id string, query ur
 		a.AlreadyOffered = a.AlreadyOffered || operation.Status == "already_current"
 		active := operation.Status == "queued" || operation.Status == "running"
 		a.Active = a.Active || active
-		if operation.Kind == "update" && operation.Status == "already_current" {
+		if operation.Kind == ops.KindUpdate && operation.Status == ops.AlreadyCurrent {
 			a.AlreadyCurrent = true
 		}
 		if (a.Status == "" || operation.Status == a.Status) && (a.Kind == "" || operation.Kind == a.Kind) {

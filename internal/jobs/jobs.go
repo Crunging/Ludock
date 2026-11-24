@@ -96,7 +96,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 			},
 		})
 	}
-	runner.Register("restart", ops.Handler{
+	runner.Register(ops.KindRestart, ops.Handler{
 		Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 			if err := j.warnFirst(ctx, job, authz.ServerRestart, false); err != nil {
 				return nil, calledOff(job, err)
@@ -125,7 +125,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 			return j.recoverLifecycle(ctx, job)
 		},
 	})
-	runner.Register("backup", ops.Handler{Run: j.warnedFirst(authz.BackupsCreate, j.runBackup), Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register(ops.KindBackup, ops.Handler{Run: j.warnedFirst(authz.BackupsCreate, j.runBackup), Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		if resumable(job) {
 			return nil, ops.ErrResume
 		}
@@ -136,12 +136,12 @@ func (j *Jobs) Register(queue *ops.Runner) {
 	}})
 	// An interrupted command is reported as interrupted and never sent again.
 	// It is sent on time or not at all, so it doesn't wait for Docker.
-	runner.Register("command", ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register(ops.KindCommand, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		return j.runCommand(docker.Promptly(ctx), job)
 	}, Recover: func(context.Context, *ops.Context) (map[string]any, error) {
 		return map[string]any{"action": "command"}, nil
 	}})
-	runner.Register("restore", ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register(ops.KindRestore, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		result, err := j.runRestore(ctx, job)
 		return warnedResult(job, result, err)
 	}, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
@@ -153,13 +153,13 @@ func (j *Jobs) Register(queue *ops.Runner) {
 	// Undoing a restore that stopped partway stops the server, which another
 	// manager may have started, finishes the undo, and returns the server to
 	// how it was.
-	runner.Register("undo_restore", ops.Handler{Run: j.warnedFirst(authz.BackupsRestore, j.runUndoRestore), Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register(ops.KindUndoRestore, ops.Handler{Run: j.warnedFirst(authz.BackupsRestore, j.runUndoRestore), Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		if resumable(job) {
 			return nil, ops.ErrResume
 		}
 		return nil, j.recoverBackup(ctx, job)
 	}})
-	runner.Register("update", ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register(ops.KindUpdate, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		result, err := j.runUpdate(ctx, job)
 		return warnedResult(job, result, err)
 	}, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
@@ -263,7 +263,7 @@ var errRecoveryOff = apperr.New("RECOVERY_OFF", 403, "Automatic restarts were tu
 // monitoring policy still asks for it, and no change to the server awaits
 // an administrator's review.
 func (j *Jobs) recoveryAllowed(ctx context.Context, job *ops.Context) error {
-	if job.Job.Kind != "restart" || job.Job.Input["createBackup"] == true {
+	if job.Job.Kind != ops.KindRestart || job.Job.Input["createBackup"] == true {
 		return errRecoveryOff
 	}
 	availability, err := j.Monitor.Get(ctx, job.Job.ServerID)
@@ -566,8 +566,6 @@ var (
 	errRecoveryStopped = errors.New("server stopped before its recovery restart")
 )
 
-// stillHung confirms right before a recovery restart that the container run
-// judged hung still runs and its game still doesn't answer.
 // sameRun reports whether a container's latest run is the one a recovery
 // restart was queued for; a stop keeps its start time.
 func sameRun(job *ops.Context, info *docker.ContainerInspect) bool {
@@ -576,8 +574,9 @@ func sameRun(job *ops.Context, info *docker.ContainerInspect) bool {
 	return ok && err == nil && float64(started.UnixMilli()) == run
 }
 
-// stillHung also requires the silence judged: an answer since starts a new
-// one, with its own wait.
+// stillHung confirms right before a recovery restart that the container run
+// judged hung still runs and its game still hasn't answered since the
+// silence judged: an answer starts a new silence, with its own wait.
 func (j *Jobs) stillHung(job *ops.Context, server *servers.Context) bool {
 	run, ok := number(job.Job.Input["run"])
 	answered, known := number(job.Job.Input["answered"])
@@ -617,7 +616,7 @@ func recordStop(r *ops.Recovery, info *docker.ContainerInspect) {
 // stopping again.
 func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[string]any, error) {
 	permission := capabilityFor(servers.Action(job.Job.Kind))
-	if job.Job.Kind != "start" && job.Job.Kind != "stop" && job.Job.Kind != "restart" {
+	if job.Job.Kind != ops.KindStart && job.Job.Kind != ops.KindStop && job.Job.Kind != ops.KindRestart {
 		return nil, apperr.New("INVALID_OPERATION_STATE", 409, "Invalid lifecycle action")
 	}
 	recovery := job.Job.Recovery
@@ -687,7 +686,7 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 			server = refreshed
 		}
 		if server.Container.Exit != nil {
-			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, job.Job.Kind == "stop"))
+			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, job.Job.Kind == ops.KindStop))
 			if err := record(job, "reconciling", func(r *ops.Recovery) {
 				r.StopSettled = true
 				r.ForceStopped = r.ForceStopped || server.Container.Exit.Code == 137

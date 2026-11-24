@@ -40,8 +40,8 @@ func (j *Jobs) warningLead() time.Duration {
 	return WarningMinutes * time.Minute
 }
 
-var verbs = map[string]string{"restart": "restart", "stop": "shut down", "update": "restart for an update",
-	"backup": "restart for a backup", "restore": "restart to restore a backup", UndoRestore: "restart to undo a restore"}
+var verbs = map[string]string{ops.KindRestart: "restart", ops.KindStop: "shut down", ops.KindUpdate: "restart for an update",
+	ops.KindBackup: "restart for a backup", ops.KindRestore: "restart to restore a backup", ops.KindUndoRestore: "restart to undo a restore"}
 
 type runFunc = func(ctx context.Context, job *ops.Context) (map[string]any, error)
 
@@ -187,7 +187,7 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 
 // warnFailedNote is what Activity says when a warning never went out.
 func warnFailedNote(kind string) string {
-	if kind == "stop" {
+	if kind == ops.KindStop {
 		return "Couldn’t warn players before the shutdown."
 	}
 	return "Couldn’t warn players before the restart."
@@ -333,7 +333,7 @@ func resumable(job *ops.Context) bool {
 	if !warnRequested(job) || r.WarnUntil == 0 {
 		return false
 	}
-	if job.Job.Kind == "update" {
+	if job.Job.Kind == ops.KindUpdate {
 		return r.InitialRunning == nil && !r.StopStarted && len(r.Swap) == 0
 	}
 	return job.Job.Phase == ops.PhaseWarning || job.Job.Phase == ops.PhaseWarningPlayers || job.Job.Phase == phaseWarned

@@ -215,18 +215,10 @@ func (s *Server) page(r *http.Request, request *Request, title string) views.Pag
 // fail renders a public error: a fragment for htmx, a page otherwise.
 // Internal errors never reach the browser.
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, request *Request, err error) {
-	public, ok := apperr.As(err)
-	if !ok {
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-		log.Error("Unhandled request error", append([]logging.Field{logging.F("method", r.Method), logging.F("path", loggedPath(r))},
-			causeFields(err)...)...)
-		public = apperr.New("INTERNAL", 500, "Internal server error")
-		if docker.Unavailable(err) {
-			public = dockerUnavailable
-		}
+	if _, ok := apperr.As(err); !ok && errors.Is(err, context.Canceled) {
+		return
 	}
+	public := publicError(err, logging.F("method", r.Method), logging.F("path", loggedPath(r)))
 	if public.RetryAfterMs > 0 {
 		w.Header().Set("Retry-After", itoa(max(1, (public.RetryAfterMs+999)/1000)))
 	}
@@ -252,22 +244,27 @@ func render(w http.ResponseWriter, r *http.Request, status int, components ...te
 	}
 }
 
-// publicMessage is the text of a public error; other errors are logged and
-// shown generically.
-func publicMessage(err error) string {
+// publicError is err if it is public; other errors are logged, with fields,
+// and shown generically.
+func publicError(err error, fields ...logging.Field) *apperr.Error {
 	if public, ok := apperr.As(err); ok {
-		return public.Message
+		return public
 	}
 	if !errors.Is(err, context.Canceled) {
-		log.Error("Unhandled request error", causeFields(err)...)
+		log.Error("Unhandled request error", append(fields, causeFields(err)...)...)
 	}
 	if docker.Unavailable(err) {
-		return dockerUnavailable.Message
+		return dockerUnavailable
 	}
-	return "Internal server error"
+	return errInternal
 }
 
-var dockerUnavailable = apperr.New("DOCKER_UNAVAILABLE", http.StatusServiceUnavailable, "Ludock can’t reach Docker right now. Try again once it can.")
+func publicMessage(err error) string { return publicError(err).Message }
+
+var (
+	dockerUnavailable = apperr.New("DOCKER_UNAVAILABLE", http.StatusServiceUnavailable, "Ludock can’t reach Docker right now. Try again once it can.")
+	errInternal       = apperr.New("INTERNAL", 500, "Internal server error")
+)
 
 // causeFields describe an unexpected error without its message.
 func causeFields(err error) []logging.Field { return logging.Cause(err, docker.StatusCode(err)) }

@@ -14,6 +14,7 @@ import (
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
+	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
@@ -190,5 +191,5 @@ func restoreItemInput(backup *backups.Backup, root, item string) (map[string]any
 
 // restoreOffered is whether the backups tab offers restores for a server.
 func restoreOffered(view *servers.View, discoveryUnavailable bool) bool {
-	return can(view, authz.BackupsRestore) && !view.AutoRemove && view.BindingStatus == "active" && !discoveryUnavailable && view.ActiveOperation == nil
+	return can(view, authz.BackupsRestore) && !view.Refuses(ops.KindRestore) && view.BindingStatus == "active" && !discoveryUnavailable && view.ActiveOperation == nil
 }
