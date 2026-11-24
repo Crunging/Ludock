@@ -113,9 +113,10 @@ function removeHelpers() {
   for (const helper of helpers ? helpers.split("\n") : []) {
     try {
       docker("rm", "--force", "--volumes", helper);
-    } catch {
-      // Ludock removes its own helpers, so one can be gone by now. One that
-      // really couldn't be removed fails the teardown that follows.
+    } catch (error) {
+      // Ludock removes its own helpers, so one can be gone by now. Any
+      // other failure stops the teardown before game data is removed.
+      if (docker("ps", "--all", "--quiet", "--filter", `id=${helper}`)) throw error;
     }
   }
 }
