@@ -966,7 +966,7 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 	// Only backups that can be read count toward what the rule keeps: rows
 	// whose archives are gone, or can't be looked for now, would otherwise
 	// take the places of ones that can be restored. They aren't removed, and
-	// their sizes don't make the total limit remove others.
+	// their sizes, any server's, don't make the total limit remove others.
 	readable := map[string]bool{}
 	var unconfirmed int64
 	for index := range list {
@@ -975,6 +975,13 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 				unconfirmed += backup.Size
 			}
 		}
+	}
+	if settings.MaxBytes > 0 {
+		others, err := s.unconfirmedBytes(ctx, serverID)
+		if err != nil {
+			return err
+		}
+		unconfirmed += others
 	}
 	expired, spare := planRetention(list, time.Local, func(id string) bool {
 		return slices.Contains(protected, id) || s.Storage.Reading(id)
@@ -1019,10 +1026,39 @@ func (s *Service) removeIdle(ctx context.Context, backup Backup) error {
 	return nil
 }
 
+// unconfirmedBytes is the size of other servers' complete backups whose
+// archives can't be found.
+func (s *Service) unconfirmedBytes(ctx context.Context, serverID string) (int64, error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE state='complete' AND server_id<>?", serverID)
+	if err != nil {
+		return 0, err
+	}
+	var others []*Backup
+	for rows.Next() {
+		backup, err := scanBackup(rows)
+		if err != nil {
+			rows.Close()
+			return 0, err
+		}
+		others = append(others, backup)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, backup := range others {
+		if !s.readable(backup) {
+			total += backup.Size
+		}
+	}
+	return total, nil
+}
+
 // room is the space left for the server's next backup and the space it
 // should need: its newest backup's size plus a margin. unconfirmed is the
-// size of the server's backups whose archives weren't found, which the total
-// limit doesn't count. When either is unknown, need is zero, so space alone
+// size of backups whose archives weren't found, which the total limit
+// doesn't count. When either is unknown, need is zero, so space alone
 // removes nothing.
 func (s *Service) room(ctx context.Context, list []Backup, settings Settings, unconfirmed int64) (room, need int64) {
 	index := slices.IndexFunc(list, func(backup Backup) bool { return backup.State == "complete" })

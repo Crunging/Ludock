@@ -555,7 +555,8 @@ func (s *Storage) removeFile(directory, name string, assertAccess func() error) 
 		return nil
 	}
 	if err != nil {
-		return err
+		// As present reports it, so removing the backup from Ludock is offered.
+		return errFolderAway
 	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
 		return fail("INVALID_BACKUP", "Ludock won’t delete this backup because its archive isn’t a normal file.")

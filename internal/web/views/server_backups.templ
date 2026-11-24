@@ -381,9 +381,9 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 								data-confirm-action="Remove backup"
 							} else if backup.Missing {
 								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
-								hx-confirm="Remove this backup from Ludock?"
-								data-confirm-detail="Its archive is already gone from the backup folder. Ludock stops listing it."
-								data-confirm-action="Remove backup"
+								hx-confirm="Delete this backup?"
+								data-confirm-detail="Its archive is already missing from the backup folder. If it comes back, it is deleted permanently."
+								data-confirm-action="Delete backup"
 							} else {
 								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
 								hx-confirm="Delete this backup?"

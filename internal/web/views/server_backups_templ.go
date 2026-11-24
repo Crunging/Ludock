@@ -1233,7 +1233,7 @@ func backupRow(b BackupsView, backup backups.Backup) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 103, "\" hx-confirm=\"Remove this backup from Ludock?\" data-confirm-detail=\"Its archive is already gone from the backup folder. Ludock stops listing it.\" data-confirm-action=\"Remove backup\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 103, "\" hx-confirm=\"Delete this backup?\" data-confirm-detail=\"Its archive is already missing from the backup folder. If it comes back, it is deleted permanently.\" data-confirm-action=\"Delete backup\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

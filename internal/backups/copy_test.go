@@ -819,8 +819,8 @@ func TestCopyDueSkipsBusyServers(t *testing.T) {
 }
 
 // Two of a day's backups lost their archives, as a hand-cleaned folder
-// would leave them; one still has its second copy, and a kept backup lost
-// its archive too. Retention keeps the newest three that can be restored,
+// would leave them; one still has its second copy, and another server's
+// kept backup lost its archive too. Retention keeps the newest three that can be restored,
 // so the earlier ones stay, and the total limit doesn't count the lost
 // archives. The lost ones stay listed, marked missing. With the second
 // folder unreachable, the backup read from it can't be confirmed and takes
@@ -833,8 +833,19 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 	if err := f.s.CopyDue(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// Another server's kept backup.
+	servers, err := (&identity.Store{DB: f.s.DB}).Reconcile(ctx, []identity.Observation{
+		{ContainerID: "mc", Name: "mc", DisplayName: "Minecraft", GameType: "minecraft"},
+		{ContainerID: "mc2", Name: "mc2", DisplayName: "Minecraft 2", GameType: "minecraft"}}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := servers[0].ID
+	if other == f.serverID {
+		other = servers[1].ID
+	}
 	kept := f.add(t, "world data", at(8, 12))
-	f.s.DB.Exec("UPDATE backups SET kept_at=1 WHERE id=?", kept.ID)
+	f.s.DB.Exec("UPDATE backups SET kept_at=1, server_id=? WHERE id=?", other, kept.ID)
 	for _, path := range []string{filepath.Join(f.main, b.ID+".tar"), filepath.Join(f.copies, b.ID+".tar"), filepath.Join(f.main, c.ID+".tar"),
 		filepath.Join(f.main, kept.ID+".tar")} {
 		if err := os.Remove(path); err != nil {
@@ -851,7 +862,7 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 		if err := f.s.Prune(ctx, f.serverID, settings, newest.ID); err != nil {
 			t.Fatal(err)
 		}
-		for _, backup := range []Backup{earlier, a, b, c, kept, newest} {
+		for _, backup := range []Backup{earlier, a, b, c, newest} {
 			if found, _ := f.s.Exists(ctx, backup.ID, true); !found {
 				t.Fatal("retention removed a backup that can be restored, or a lost one", backup.ID)
 			}
@@ -866,7 +877,7 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, backup := range listed {
-		if lost := backup.ID == b.ID || backup.ID == kept.ID; backup.Missing != lost || backup.FromCopy != (backup.ID == c.ID) {
+		if lost := backup.ID == b.ID; backup.Missing != lost || backup.FromCopy != (backup.ID == c.ID) {
 			t.Fatalf("%+v", backup)
 		}
 	}

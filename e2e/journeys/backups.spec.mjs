@@ -364,7 +364,9 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
   await expect(safety).toContainText("Its archive is missing from the backup folder, so it can’t be restored");
   await expect(safety.getByRole("link", { name: "Restore…" })).toHaveCount(0);
   await (await menuItem(safety, "button", "Delete")).click();
-  await page.getByRole("dialog", { name: "Remove this backup from Ludock?" }).getByRole("button", { name: "Remove backup" }).click();
+  const confirm = page.getByRole("dialog", { name: "Delete this backup?" });
+  await expect(confirm).toContainText("already missing from the backup folder");
+  await confirm.getByRole("button", { name: "Delete backup" }).click();
   await expect(safety).toHaveCount(0);
 
   await chooseCopy("No second copy");
