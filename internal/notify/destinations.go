@@ -279,7 +279,9 @@ func normalizeEmail(c Config) (Config, error) {
 
 type message struct {
 	id, kind, text string
-	createdAt      int64
+	// alert is the alert type's name, empty for a test.
+	alert     string
+	createdAt int64
 }
 
 const title = "Ludock"
@@ -309,8 +311,12 @@ func (d Destination) request(ctx context.Context, c Config, m message) (*http.Re
 		body = map[string]any{"chat_id": c.ChatID, "text": m.text, "link_preview_options": map[string]any{"is_disabled": true}}
 	case Webhook:
 		target = c.URL
-		body = map[string]any{"source": "ludock", "id": m.id, "kind": m.kind, "message": m.text,
+		fields := map[string]any{"source": "ludock", "id": m.id, "kind": m.kind, "message": m.text,
 			"createdAt": time.UnixMilli(m.createdAt).UTC().Format(time.RFC3339)}
+		if m.alert != "" {
+			fields["alert"] = m.alert
+		}
+		body = fields
 		if c.Token != "" {
 			header.Set("Authorization", c.Token)
 		}

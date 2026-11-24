@@ -651,7 +651,13 @@ func (s *Service) Deliver(ctx context.Context) error {
 			release()
 			continue
 		}
-		failure := s.send(sendCtx, &noRedirects, d, config, message{id: r.id, kind: r.kind, text: r.message, createdAt: r.createdAt})
+		sending := message{id: r.id, kind: r.kind, text: r.message, createdAt: r.createdAt}
+		if name, _, ok := strings.Cut(r.key, ":"); ok && r.kind == "event" {
+			if alert, known := ParseAlert(name); known {
+				sending.alert = alert.Name()
+			}
+		}
+		failure := s.send(sendCtx, &noRedirects, d, config, sending)
 		if failure != "" && errors.Is(context.Cause(sendCtx), errSettingsChanged) {
 			release()
 			continue

@@ -94,6 +94,10 @@ Journey controls are all in `control.go`, and `helpers.go` runs Ludock's
 helpers in-process for both the binary and Go tests. `cmd/fakedocker` seeds the
 servers (`seed.go`) and the fake games' consoles (`games.go`).
 
+`LUDOCK_DEV_COPY_ROOT` names a folder Ludock treats as mounted at
+`/backups-copy`, so the journeys can test a second folder Ludock found by
+itself. It is for development only and can change or go without notice.
+
 Locally, run `npx playwright install chromium` once, or point the journeys at
 an installed Chromium with `LUDOCK_E2E_CHROMIUM=/path/to/chrome`. Playwright's
 own headless shell needs much less memory than a full Chrome. Each stack
