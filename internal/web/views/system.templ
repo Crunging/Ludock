@@ -10,7 +10,16 @@ import (
 
 type SystemView struct {
 	DockerConnected bool
+	DockerProblem   string
 	Diagnostics     []servers.Diagnostic
+}
+
+// dockerOutage is problem, or fallback when Docker just can't be reached.
+func dockerOutage(problem, fallback string) string {
+	if problem != "" {
+		return problem
+	}
+	return fallback
 }
 
 func dashIfEmpty(text string) string {
@@ -65,11 +74,11 @@ templ SystemPage(page Page, d SystemView) {
 					if d.DockerConnected {
 						Connected
 					} else {
-						Can’t reach Docker
+						{ dockerOutage(d.DockerProblem, "Can’t reach Docker") }
 					}
 				</dd>
 			</dl>
-			if !d.DockerConnected {
+			if !d.DockerConnected && d.DockerProblem == "" {
 				<section class="help-panel system-help" aria-labelledby="docker-help-title">
 					<h2 id="docker-help-title">Connect Ludock to Docker</h2>
 					<p>Check that Docker is running on the host where Ludock is installed. The Ludock container needs its Docker socket mounted:</p>
@@ -102,7 +111,7 @@ templ SystemPage(page Page, d SystemView) {
 										if d.DockerConnected {
 											None.
 										} else {
-											Shown once Ludock can reach Docker.
+											Shown once Ludock is connected to Docker.
 										}
 									</td>
 								</tr>

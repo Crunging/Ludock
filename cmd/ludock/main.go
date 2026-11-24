@@ -116,6 +116,12 @@ func serve() int {
 	accounts.LogSetupInstructions(ctx, func(text string) { os.Stdout.WriteString(text) })
 
 	services.Start(ctx)
+	// Ludock keeps running so its pages can tell the owner too.
+	go func() {
+		if err := services.Docker.Negotiate(ctx); apperr.Is(err, "DOCKER_INCOMPATIBLE") {
+			log.Error(err.Error())
+		}
+	}()
 	served := make(chan error, 1)
 	go func() { served <- httpServer.Serve(listener) }()
 	// Exiting with an error lets the container's restart policy start Ludock

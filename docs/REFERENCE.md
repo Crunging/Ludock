@@ -632,8 +632,8 @@ two-factor sign-in and signs it out everywhere. It doesn't create accounts.
 Run one Ludock per Docker host with [`compose.yaml`](../compose.yaml). It keeps
 its database in `/data` and backups in `/backups`, in separate volumes.
 
-- **Docker:** Ludock uses the mounted Unix socket and needs Engine API 1.44 or
-  later. Remote Docker connections aren't supported. For
+- **Docker:** Ludock uses the mounted Unix socket and needs Docker Engine 25 or
+  later (Engine API 1.44). Remote Docker connections aren't supported. For
   [rootless Docker](https://docs.docker.com/engine/security/rootless/tips/),
   mount its socket at `/var/run/docker.sock`.
 - **Setup code:** until the first administrator exists, the setup page asks for

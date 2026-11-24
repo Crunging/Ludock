@@ -259,6 +259,15 @@ func publicError(err error, fields ...logging.Field) *apperr.Error {
 	return errInternal
 }
 
+// dockerProblem is why Docker can't be used when the engine answers but shares
+// no API version with Ludock, or "" when it just can't be reached.
+func (s *Server) dockerProblem(ctx context.Context) string {
+	if err := s.App.Docker.Negotiate(ctx); apperr.Is(err, "DOCKER_INCOMPATIBLE") {
+		return err.Error()
+	}
+	return ""
+}
+
 func publicMessage(err error) string { return publicError(err).Message }
 
 var (

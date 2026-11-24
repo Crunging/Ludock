@@ -59,7 +59,7 @@ func TestNegotiatesVersionAndInspects(t *testing.T) {
 func TestRejectsUnsupportedEngine(t *testing.T) {
 	e, client := engine(t)
 	e.APIVersion = "1.41"
-	if err := client.Ping(ctx); err == nil || !strings.Contains(err.Error(), "no supported API version") {
+	if err := client.Ping(ctx); err != docker.ErrEngineTooOld {
 		t.Fatal(err)
 	}
 	e.APIVersion = "1.99"

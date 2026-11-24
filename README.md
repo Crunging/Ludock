@@ -13,7 +13,7 @@ never creates or edits them, and removing it leaves them as they were.
 
 ## Quick start
 
-You need Docker with Compose, on Linux (AMD64 or ARM64).
+You need Docker Engine 25 or later with Compose, on Linux (AMD64 or ARM64).
 
 1. On the host that runs your game servers, save
    [`compose.yaml`](./compose.yaml) and start Ludock:

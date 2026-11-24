@@ -22,12 +22,22 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Crunging/Ludock/internal/apperr"
 )
 
 // Tested Engine API range. Recursive read-only bind proofs need v1.44.
 const (
 	maxAPIMinor = 55
 	minAPIMinor = 44
+)
+
+// The engine answers but shares no API version with Ludock.
+var (
+	ErrEngineTooOld = apperr.New("DOCKER_INCOMPATIBLE", http.StatusServiceUnavailable,
+		"This Docker Engine is too old for Ludock, which needs Docker Engine 25 or later. Update Docker, then restart Ludock.")
+	ErrEngineTooNew = apperr.New("DOCKER_INCOMPATIBLE", http.StatusServiceUnavailable,
+		"This Docker Engine is newer than this version of Ludock supports. Update Ludock, then restart it.")
 )
 
 type APIError struct{ Status int }
@@ -137,12 +147,15 @@ func (c *Client) negotiate(ctx context.Context) (string, error) {
 	}
 	minor = min(minor, maxAPIMinor)
 	if minor < minAPIMinor {
-		return "", errors.New("docker Engine has no supported API version for this client")
+		return "", ErrEngineTooOld
 	}
 	if info.MinAPIVersion != "" {
 		least, err := apiMinor(info.MinAPIVersion)
-		if err != nil || minor < least {
-			return "", errors.New("docker Engine has no supported API version for this client")
+		if err != nil {
+			return "", err
+		}
+		if minor < least {
+			return "", ErrEngineTooNew
 		}
 	}
 	version = fmt.Sprintf("v1.%d", minor)
