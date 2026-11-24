@@ -622,12 +622,28 @@ func TestBackupHelperCreateFails(t *testing.T) {
 	}
 }
 
-// Docker fails just as a backup's archive is read, or comes back from a
-// restart without the archive's exec. A failing Docker fails the backup,
-// which blames Docker, not the server's files; a lost exec is copied again.
+// Docker fails just as a backup's archive is read, comes back from a
+// restart without the archive's exec, or fails to start the archive's
+// command, as a daemon stalled at that moment does. A failing Docker fails
+// the backup, which blames Docker, not the server's files; a lost or
+// unstarted exec is copied again.
 func TestBackupWhenDockerGoesAway(t *testing.T) {
-	for _, status := range []int{500, 404} {
+	for _, status := range []int{500, 404, 0} {
 		f := setup(t)
+		if status == 0 {
+			var once sync.Once
+			f.engine.FailExecStart = func(cmd []string) bool {
+				failed := false
+				if strings.Contains(strings.Join(cmd, " "), `"operation":"backup"`) {
+					once.Do(func() { failed = true })
+				}
+				return failed
+			}
+			if job := f.run(t, "backup", nil); job.Status != ops.Succeeded || !f.running() {
+				t.Fatalf("unstarted: %+v", job)
+			}
+			continue
+		}
 		f.jobs.Docker.OutageLimit = 300 * time.Millisecond
 		exec := f.engine.Exec
 		var once sync.Once

@@ -95,6 +95,11 @@ type Engine struct {
 	// HangExecStarts makes the next N exec starts accept the request and never
 	// answer, as a stalled daemon can. The exec ends when the client hangs up.
 	HangExecStarts int
+	// FailExecStart reports whether Docker fails to run an exec of cmd once
+	// its stream is open, as a daemon whose containerd times out does: Docker
+	// writes its error unframed on the stream and ends the exec with code 128
+	// without running it.
+	FailExecStart func(cmd []string) bool
 	// ExitDelay records each exec's exit this long after its stream closes,
 	// as Docker sometimes does.
 	ExitDelay time.Duration
@@ -1408,6 +1413,7 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 	e.mu.Lock()
 	instance.running = true
 	handler := e.Exec
+	failStart := e.FailExecStart != nil && e.FailExecStart(instance.options.Cmd)
 	hang := e.HangExecStarts > 0
 	if hang {
 		e.HangExecStarts--
@@ -1423,6 +1429,14 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 		return
 	}
 	e.hijack(w, r, func(conn net.Conn, reader *bufio.Reader) {
+		if failStart {
+			conn.Write([]byte("DeadlineExceeded: failed to start io pipe copy\r\n"))
+			unknown := 128
+			e.mu.Lock()
+			instance.running, instance.exitCode = false, &unknown
+			e.mu.Unlock()
+			return
+		}
 		var mu sync.Mutex
 		write := func(channel byte) func([]byte) {
 			return func(data []byte) {
