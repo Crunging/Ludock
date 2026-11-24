@@ -118,11 +118,9 @@ func (h *restoreHelper) moveContents(source, destination fd, omitted ...string) 
 		return errUnsafe
 	}
 	for _, name := range children {
-		if slices.Contains(omitted, name) {
+		// Ludock's own names, such as another restore's stage, stay put.
+		if slices.Contains(omitted, name) || Reserved(name) {
 			continue
-		}
-		if strings.HasPrefix(name, StagePrefix) {
-			return errUnsafe
 		}
 		sourceInfo, err := lstatAt(source, name)
 		if err != nil {
@@ -369,11 +367,8 @@ func (h *restoreHelper) run() (any, error) {
 			return nil, err
 		}
 		for _, name := range children {
-			if name == h.request.Stage {
+			if Reserved(name) {
 				continue
-			}
-			if strings.HasPrefix(name, StagePrefix) {
-				return nil, errUnsafe
 			}
 			if err := h.removeEntry(root, name, 0); err != nil {
 				return nil, err
@@ -481,10 +476,8 @@ func itemParts(item string) ([]string, error) {
 	if err != nil || len(parts) > 62 {
 		return nil, errUnsafe
 	}
-	for _, part := range parts {
-		if strings.HasPrefix(part, StagePrefix) {
-			return nil, errUnsafe
-		}
+	if slices.ContainsFunc(parts, Reserved) {
+		return nil, errUnsafe
 	}
 	return parts, nil
 }
@@ -972,10 +965,8 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		if err := x.room(size, reserve); err != nil {
 			return err
 		}
-		for _, name := range names {
-			if strings.HasPrefix(name, StagePrefix) {
-				return errUnsafe
-			}
+		if slices.ContainsFunc(names, Reserved) {
+			return errUnsafe
 		}
 		owner, err := x.parent(names[:len(names)-1])
 		if err != nil {

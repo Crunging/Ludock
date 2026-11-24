@@ -35,6 +35,7 @@ var log = logging.New("files")
 var messages = map[string]string{
 	"INVALID_PATH":                "Invalid file path",
 	"INVALID_NAME":                "Invalid file or folder name",
+	"RESERVED_NAME":               "Names starting with .ludock- are kept for Ludock’s own work folders. Choose another name.",
 	"ROOT_NOT_FOUND":              "That data folder isn’t available. Reload the page.",
 	"ROOT_MUTATION":               "A data folder itself can’t be renamed, moved, or deleted here",
 	"ROOT_DOWNLOAD":               "Choose a file or folder to download",
@@ -109,13 +110,19 @@ func NormalizeRelativePath(value string) (string, error) {
 	if normalized == ".." || strings.HasPrefix(normalized, "../") {
 		return "", Error("INVALID_PATH", 400)
 	}
+	if slices.ContainsFunc(strings.Split(normalized, "/"), helper.Reserved) {
+		return "", Error("RESERVED_NAME", 400)
+	}
 	return normalized, nil
 }
 
 // ValidateName rejects names that are empty, padded, contain separators or
-// control characters (which also forge terminal output in logs), or are
-// longer than 255 characters.
+// control characters (which also forge terminal output in logs), are longer
+// than 255 characters, or are Ludock's own.
 func ValidateName(name string) error {
+	if helper.Reserved(name) {
+		return Error("RESERVED_NAME", 400)
+	}
 	if name == "" || textutil.Length(name) > 255 || name == "." || name == ".." || strings.Contains(name, "/") ||
 		strings.TrimSpace(name) != name || strings.IndexFunc(name, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
 		return Error("INVALID_NAME", 400)

@@ -237,6 +237,13 @@ func TestRestoreSteps(t *testing.T) {
 	if _, code := restore(t, root, ".ludock-restore-bad", "stage"); code == 0 {
 		t.Fatal("accepted a bad stage")
 	}
+	// Other names Ludock reserves, such as another restore's stage or one a
+	// person made, stay where they are, untouched.
+	other := ".ludock-restore-1f9619ff-8b86-4011-b42d-00c04fc964ff"
+	for _, folder := range []string{other + "/old", ".ludock-restore-anything"} {
+		os.MkdirAll(filepath.Join(root, folder), 0o700)
+		os.WriteFile(filepath.Join(root, folder, "kept"), []byte("kept"), 0o644)
+	}
 	if _, code := restore(t, root, stage, "stage"); code != 0 {
 		t.Fatal("stage")
 	}
@@ -291,6 +298,11 @@ func TestRestoreSteps(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, stage)); !os.IsNotExist(err) {
 		t.Fatal("stage left behind")
+	}
+	for _, folder := range []string{other + "/old", ".ludock-restore-anything"} {
+		if data, _ := os.ReadFile(filepath.Join(root, folder, "kept")); string(data) != "kept" {
+			t.Fatal("a restore moved", folder)
+		}
 	}
 	if _, code := restore(t, root, stage, "cleanup"); code != 0 {
 		t.Fatal("cleanup is idempotent")
@@ -565,5 +577,146 @@ func TestExtractionCutInput(t *testing.T) {
 		if code := RunRestoreExtract(string(argument), strings.NewReader(c.input), io.Discard, &stderr); code != c.status {
 			t.Error(c.name, code, stderr.String())
 		}
+	}
+}
+
+// A restore's stage folder at the top of the data and an unpack's staging
+// folder beside its archive, in any letter case, are Ludock's own: forged
+// file requests never list, read, create, rename, move, upload into, or
+// delete them, and downloads and backups of the folders around them leave
+// them out.
+func TestReservedNamesStayOutOfFiles(t *testing.T) {
+	root, _ := dataRoot(t)
+	os.Remove(filepath.Join(root, "escape"))
+	stage := ".ludock-restore-6f9619ff-8b86-4011-b42d-00c04fc964ff"
+	os.MkdirAll(filepath.Join(root, stage, "old"), 0o700)
+	os.WriteFile(filepath.Join(root, stage, "old", "level.dat"), []byte("previous"), 0o644)
+	os.MkdirAll(filepath.Join(root, "world", ".LUDOCK-unpack-x"), 0o755)
+	os.WriteFile(filepath.Join(root, "world", ".LUDOCK-unpack-x", "part"), []byte("part"), 0o644)
+	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
+	size, reserve := int64(1), int64(0)
+	for _, request := range []FileRequest{
+		{Operation: "list", Root: root, Path: stage},
+		{Operation: "stat", Root: root, Path: stage + "/old/level.dat"},
+		{Operation: "space", Root: root, Path: stage},
+		{Operation: "download", Root: root, Path: stage + "/old"},
+		{Operation: "delete", Root: root, Path: stage},
+		{Operation: "delete", Root: root, Path: "world/.LUDOCK-unpack-x/part"},
+		{Operation: "rename", Root: root, Path: stage, Destination: "kept"},
+		{Operation: "rename", Root: root, Path: "server.properties", Destination: ".ludock-restore-x"},
+		{Operation: "mkdir", Root: root, Path: ".Ludock-restore-x"},
+		{Operation: "upload", Root: root, Path: stage + "/old/level.dat", Size: &size, UploadID: id},
+		{Operation: "upload", Root: root, Path: ".ludock-x", Size: &size, UploadID: id},
+		{Operation: "unpack", Root: root, Path: stage + "/old/level.dat", UploadID: id, Reserve: &reserve},
+		{Operation: "delete-paths", Root: root, Paths: []string{"server.properties", stage}},
+		{Operation: "download-paths", Root: root, Paths: []string{"server.properties", stage}},
+		{Operation: "move", Root: root, Paths: []string{stage}, Destination: "world"},
+		{Operation: "move", Root: root, Paths: []string{"server.properties"}, Destination: stage + "/old"},
+	} {
+		if _, code := runFile(t, request, []byte("x"+id)); code == 0 {
+			t.Errorf("%s %s %s %v succeeded", request.Operation, request.Path, request.Destination, request.Paths)
+		}
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, stage, "old", "level.dat")); string(data) != "previous" {
+		t.Fatal("the stage folder changed")
+	}
+	if _, err := os.Stat(filepath.Join(root, "server.properties")); err != nil {
+		t.Fatal("a refused selection changed something")
+	}
+	for _, folder := range []string{"", "world"} {
+		out, _ := runFile(t, FileRequest{Operation: "list", Root: root, Path: folder}, nil)
+		if strings.Contains(strings.ToLower(out), ".ludock-") {
+			t.Fatal("listed", out)
+		}
+	}
+	for _, request := range []FileRequest{
+		{Operation: "download", Root: root, Path: "world"},
+		{Operation: "download-paths", Root: root, Paths: []string{"world"}},
+		{Operation: "backup", Root: root},
+	} {
+		out, code := runFile(t, request, nil)
+		if code != 0 {
+			t.Fatal(request.Operation, code)
+		}
+		if request.Operation != "backup" {
+			out = out[strings.IndexByte(out, '\n')+1:]
+		}
+		reader := tar.NewReader(strings.NewReader(out))
+		for header, err := reader.Next(); err == nil; header, err = reader.Next() {
+			if strings.Contains(strings.ToLower(header.Name), ".ludock-") {
+				t.Fatal(request.Operation, "archived", header.Name)
+			}
+		}
+	}
+}
+
+// A folder or file mounted separately inside a data folder, whether the
+// backend declared it or only the file system shows it, is never entered or
+// moved: deleting, renaming, or moving it or a folder holding it is refused
+// before anything changes. Tests can't mount, so the file system's answer is
+// faked by inode.
+func TestChangesNeverCrossAMount(t *testing.T) {
+	root, _ := dataRoot(t)
+	os.Remove(filepath.Join(root, "escape"))
+	mods := filepath.Join(root, "world", "mods")
+	os.MkdirAll(mods, 0o755)
+	os.WriteFile(filepath.Join(mods, "a.jar"), []byte("jar"), 0o644)
+	var mounted, mountedFile unix.Stat_t
+	if err := unix.Stat(mods, &mounted); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Stat(filepath.Join(root, "world", "level.dat"), &mountedFile); err != nil {
+		t.Fatal(err)
+	}
+	requests := map[string]FileRequest{
+		"delete the folder":  {Operation: "delete", Root: root, Path: "world"},
+		"delete the mount":   {Operation: "delete", Root: root, Path: "world/mods"},
+		"delete a selection": {Operation: "delete-paths", Root: root, Paths: []string{"server.properties", "world"}},
+		"rename the folder":  {Operation: "rename", Root: root, Path: "world", Destination: "renamed"},
+		"rename the mount":   {Operation: "rename", Root: root, Path: "world/mods", Destination: "world/plugins"},
+		"move the folder":    {Operation: "move", Root: root, Paths: []string{"world"}, Destination: "private"},
+	}
+	intact := func(how string) {
+		t.Helper()
+		for _, name := range []string{"world/mods/a.jar", "world/level.dat", "server.properties"} {
+			if _, err := os.Stat(filepath.Join(root, name)); err != nil {
+				t.Fatal(how, "changed", name)
+			}
+		}
+	}
+	for name, request := range requests {
+		request.Mounts = []string{mods}
+		if _, code := runFile(t, request, nil); code != FileMounted {
+			t.Errorf("declared: %s: %d", name, code)
+		}
+	}
+	intact("declared")
+	mountOf = func(descriptor fd) (uint64, error) {
+		var info unix.Stat_t
+		if err := unix.Fstat(int(descriptor), &info); err != nil {
+			return 0, err
+		}
+		if info.Ino == mounted.Ino {
+			return 2, nil
+		}
+		return 1, nil
+	}
+	t.Cleanup(func() { mountOf = mountID })
+	for name, request := range requests {
+		if _, code := runFile(t, request, nil); code != FileMounted {
+			t.Errorf("found: %s: %d", name, code)
+		}
+	}
+	intact("found")
+	mounted.Ino = mountedFile.Ino
+	for _, name := range []string{"delete the folder", "delete a selection"} {
+		if _, code := runFile(t, requests[name], nil); code != FileMounted {
+			t.Errorf("file: %s: %d", name, code)
+		}
+	}
+	intact("file")
+	mountOf = mountID
+	if _, code := runFile(t, requests["delete the folder"], nil); code != 0 {
+		t.Fatal("refused a folder on one mount", code)
 	}
 }

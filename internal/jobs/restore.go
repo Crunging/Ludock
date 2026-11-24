@@ -666,7 +666,7 @@ func (r *restoreRun) failed(err error) (map[string]any, error) {
 	ctx, job := context.WithoutCancel(r.ctx), r.job
 	state, _ := restoreState(job)
 	// The restored data is in place; only its staging copy of the old data
-	// remains, which blocks every later backup until it is removed.
+	// remains, which the next stop for a backup, restore, or update removes.
 	if r.restored != nil && state != nil && state.Status == "committed" {
 		if cleanErr := r.j.cleanupAfterFailure(ctx, r.server, job, &r.data); cleanErr == nil {
 			return r.restored, nil
