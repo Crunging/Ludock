@@ -1136,7 +1136,7 @@ func ScheduleEditor(f ScheduleForm) templ.Component {
 			}
 		}
 		if saved := f.Conflict; saved != nil {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 91, "<div class=\"schedule-conflict\" role=\"alert\"><p>This schedule changed elsewhere. Your draft is preserved. Review the current saved settings before saving.</p><p><strong>Current saved settings:</strong> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 91, "<div class=\"schedule-conflict\" role=\"alert\"><p>This schedule changed elsewhere. Your draft is still here; check the saved settings below before saving.</p><p><strong>Current saved settings:</strong> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

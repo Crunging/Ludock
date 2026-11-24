@@ -182,15 +182,6 @@ func (j *Jobs) notifyInterrupted(ctx context.Context, job *ops.Context, alert no
 
 const backupInterrupted = "Ludock restarted during a backup, so there’s no new backup. Its Activity says more."
 
-// notifyDone reports finished work nobody watched start: scheduled or
-// automatic work. Work started in the panel shows its result there, and
-// notifies only if it fails.
-func (j *Jobs) notifyDone(job *ops.Context, key, message string) {
-	if _, scheduled := job.Job.Input["scheduleId"].(string); scheduled || job.Job.ActorID == ops.RecoveryActor {
-		j.notify(notify.Results, key, message)
-	}
-}
-
 func (j *Jobs) poll() time.Duration {
 	if j.Poll > 0 {
 		return j.Poll

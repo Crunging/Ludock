@@ -98,11 +98,7 @@ templ AccountSessions(view AccountView) {
 					<span>Last active @Time(session.LastSeenAt, "", "")</span>
 				</div>
 				<button class="secondary-btn secondary-btn--danger" type="button" hx-post={ "/account/sessions/" + session.ID + "/revoke" } hx-target="#sessions" data-busy-label="Working…">
-					if session.Current {
-						Sign out
-					} else {
-						Revoke
-					}
+					Sign out
 				</button>
 			</article>
 		}
