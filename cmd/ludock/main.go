@@ -274,9 +274,6 @@ func healthcheck() int {
 	return 0
 }
 
-// startupError describes a failure without its underlying message, which can
-// name host paths: a public error keeps its message, anything else gets the
-// fixed description.
 // refuse keeps running with a database Ludock can't use, saying why once in
 // its log and on every page, until it is stopped: exiting would have a
 // container restarted over and over with the reason buried in its log.
@@ -298,6 +295,9 @@ func refuse(ctx context.Context, address, message string) int {
 	return 0
 }
 
+// startupError describes a failure without its underlying message, which can
+// name host paths: a public error keeps its message, anything else gets the
+// fixed description.
 func startupError(err error, fallback string) string {
 	if public, ok := apperr.As(err); ok {
 		return public.Message

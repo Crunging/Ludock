@@ -133,7 +133,7 @@ type queryer interface {
 }
 
 // authority confirms the owner can still run this schedule now.
-func (s *Service) authority(ctx context.Context, q queryer, r *row, data Input) (*db.SessionUser, *identity.Server, error) {
+func (s *Service) authority(ctx context.Context, r *row, data Input) (*db.SessionUser, *identity.Server, error) {
 	user, err := s.DB.FindUserByID(ctx, r.ownerID)
 	if err != nil {
 		return nil, nil, err
@@ -428,7 +428,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, serverID stri
 		if err, ok := outcomes[key]; ok {
 			return err
 		}
-		_, _, err := s.authority(ctx, s.DB, r, data)
+		_, _, err := s.authority(ctx, r, data)
 		outcomes[key] = err
 		return err
 	}
@@ -472,7 +472,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, serverID stri
 
 func (s *Service) check(ctx context.Context) func(*row, Input) error {
 	return func(r *row, data Input) error {
-		_, _, err := s.authority(ctx, s.DB, r, data)
+		_, _, err := s.authority(ctx, r, data)
 		return err
 	}
 }
@@ -527,7 +527,7 @@ func (s *Service) create(ctx context.Context, actor *db.SessionUser, tokenHash, 
 		return nil, err
 	}
 	id := identity.NewUUID()
-	if _, _, err := s.authority(ctx, s.DB, &row{id: id, serverID: serverID, ownerID: actor.ID,
+	if _, _, err := s.authority(ctx, &row{id: id, serverID: serverID, ownerID: actor.ID,
 		bindingRevision: binding.BindingRevision}, data); err != nil {
 		return nil, err
 	}
@@ -707,7 +707,7 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, tokenHash, 
 		}
 		// Pausing stays possible after the action grant or original binding
 		// was revoked. Editing or resuming needs requester and owner access.
-		if _, _, err := s.authority(ctx, s.DB, first, data); err != nil {
+		if _, _, err := s.authority(ctx, first, data); err != nil {
 			return nil, err
 		}
 		if update != nil {
@@ -927,7 +927,7 @@ func (s *Service) evaluate(ctx context.Context, r *row, now int64, d *dueRun) er
 	if err != nil {
 		return err
 	}
-	user, binding, err := s.authority(ctx, s.DB, r, data)
+	user, binding, err := s.authority(ctx, r, data)
 	if err != nil {
 		return err
 	}
@@ -1257,7 +1257,7 @@ func (s *Service) say(ctx context.Context, r *row, data Input, stillWaiting bool
 			(stillWaiting && (!waiting(latest) || latest.lastSlot != r.lastSlot)) {
 			return nil, nil, errors.New("the announcement is no longer current")
 		}
-		user, binding, err := s.authority(ctx, s.DB, latest, data)
+		user, binding, err := s.authority(ctx, latest, data)
 		if err != nil {
 			return nil, nil, err
 		}

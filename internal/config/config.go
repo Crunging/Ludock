@@ -109,10 +109,10 @@ func contains(values []string, value string) bool {
 	return false
 }
 
-// hostnameMount finds the file Docker and Podman mount at /etc/hostname, which
-// sits in a folder named for the container's full ID.
 var mountinfoPath = "/proc/self/mountinfo"
 
+// hostnameMount finds the file Docker and Podman mount at /etc/hostname, which
+// sits in a folder named for the container's full ID.
 var hostnameMount = regexp.MustCompile(`/([0-9a-f]{64})(?:/userdata)?/hostname$`)
 
 // containerID reads the container's own ID from /proc/self/mountinfo, which
