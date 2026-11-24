@@ -70,7 +70,7 @@ test("trusting a reverse proxy that Ludock noticed", async ({ page, session }) =
   await page.goto("/account");
   const visitorSession = page.locator(".session-row", { hasText: "203.0.113.9" });
   await expect(visitorSession).toBeVisible();
-  await visitorSession.getByRole("button", { name: "Revoke" }).click();
+  await visitorSession.getByRole("button", { name: "Sign out" }).click();
   await expect(visitorSession).toHaveCount(0);
 
   // Trusting no proxy again puts the hint back for the next forwarded request.

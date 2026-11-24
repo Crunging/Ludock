@@ -77,7 +77,7 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   const editor = page.locator("#schedule-form");
   await editor.getByLabel("Time", { exact: true }).fill("07:15");
   await editor.getByRole("button", { name: "Save changes" }).click();
-  await expect(editor.locator(".schedule-conflict")).toContainText("This schedule changed elsewhere. Your draft is preserved.");
+  await expect(editor.locator(".schedule-conflict")).toContainText("This schedule changed elsewhere. Your draft is still here");
   await expect(editor.getByLabel("Time", { exact: true })).toHaveValue("07:15");
   await editor.getByRole("button", { name: "Keep my draft" }).click();
   await expect(editor.getByText("This schedule stays paused when saved.")).toBeVisible();

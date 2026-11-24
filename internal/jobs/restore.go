@@ -445,7 +445,6 @@ func (r *restoreRun) run() (map[string]any, error) {
 	if err := r.j.cleanupRestore(r.ctx, r.server, r.job, r.data); err != nil {
 		return nil, err
 	}
-	r.j.notifyDone(r.job, "restore-result:"+r.job.Job.ID, r.server.Container.DisplayName+": "+r.what+" completed.")
 	return r.restored, nil
 }
 
@@ -670,7 +669,6 @@ func (r *restoreRun) failed(err error) (map[string]any, error) {
 	// remains, which blocks every later backup until it is removed.
 	if r.restored != nil && state != nil && state.Status == "committed" {
 		if cleanErr := r.j.cleanupAfterFailure(ctx, r.server, job, &r.data); cleanErr == nil {
-			r.j.notifyDone(job, "restore-result:"+job.Job.ID, r.server.Container.DisplayName+": "+r.what+" completed.")
 			return r.restored, nil
 		}
 		r.j.notify(notify.Results, "restore-result:"+job.Job.ID, r.server.Container.DisplayName+": "+r.what+

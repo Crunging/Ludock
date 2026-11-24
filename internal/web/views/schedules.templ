@@ -499,7 +499,7 @@ templ ScheduleEditor(f ScheduleForm) {
 		}
 		if saved := f.Conflict; saved != nil {
 			<div class="schedule-conflict" role="alert">
-				<p>This schedule changed elsewhere. Your draft is preserved. Review the current saved settings before saving.</p>
+				<p>This schedule changed elsewhere. Your draft is still here; check the saved settings below before saving.</p>
 				<p><strong>Current saved settings:</strong> { savedSummary(saved) }</p>
 				<div class="inline-actions">
 					<button type="submit" class="secondary-btn" name="keepDraft" value={ strconv.FormatInt(saved.Revision, 10) }>Keep my draft</button>

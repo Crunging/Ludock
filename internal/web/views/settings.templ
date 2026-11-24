@@ -372,7 +372,7 @@ templ BackupSummary(b BackupSettingsView) {
 				</ol>
 			</div>
 		} else {
-			<p>Backups are off. Choose a backup folder under <a class="text-link" href="#backup-storage-settings-title">Advanced</a> and save to turn them on.</p>
+			<p>Backups are off: Ludock couldn’t turn them on by itself with <code>{ b.Roots[0] }</code>. If no folder is mounted there, mount one where Ludock is defined and recreate Ludock. Otherwise choose the folder under <a class="text-link" href="#backup-storage-settings-title">Advanced</a> and save, and Ludock says what’s wrong with it.</p>
 		}
 	</div>
 }
