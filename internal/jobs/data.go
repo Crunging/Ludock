@@ -56,6 +56,16 @@ func withSave(job *ops.Context, result map[string]any) map[string]any {
 	return result
 }
 
+// stopForBackup stops the server for a backup, making room for it first as
+// retention would after it. A restore's source stays.
+func (j *Jobs) stopForBackup(ctx context.Context, server *servers.Context, job *ops.Context) error {
+	source, _ := text(job.Job.Input["backupId"])
+	if err := j.Backups.MakeRoom(ctx, server, func() error { return j.dataAuthority(ctx, server, job) }, source); err != nil {
+		return err
+	}
+	return j.stopForData(ctx, server, job)
+}
+
 // stopForData stops the server, recording its initial state and the locks
 // it needs before the stop is dispatched.
 func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *ops.Context) error {

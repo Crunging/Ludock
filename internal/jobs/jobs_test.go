@@ -764,8 +764,7 @@ func TestImpossibleBackupNeverStopsServer(t *testing.T) {
 		}
 	}
 	// Backups fill the total limit, or leave less than an empty archive
-	// needs. Retention makes room only after a new backup is written, so
-	// there is none for it.
+	// needs. Retention never removes the newest backup, so there is no room.
 	limit := func(bytes int64) {
 		t.Helper()
 		if _, err := f.jobs.Backups.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, MaxBytes: bytes}, f.admin, f.adminSession); err != nil {
@@ -776,9 +775,9 @@ func TestImpossibleBackupNeverStopsServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, room := range []int64{0, 2560} {
+	for room, problem := range map[int64]string{0: "Backups have reached their total size limit.", 2560: "The backup doesn’t fit under the total size limit."} {
 		limit(found + room)
-		refused("full", "Backups have reached their total size limit. Delete backups you no longer need, or raise the limit in Settings.")
+		refused("full", problem+" Delete backups you no longer need, or raise the limit in Settings.")
 	}
 	limit(1 << 30)
 	// Docker can't change a container's mounts; a label changed with them
@@ -822,5 +821,138 @@ func TestImpossibleBackupNeverStopsServer(t *testing.T) {
 	job := f.run(t, "restart", map[string]any{"createBackup": true})
 	if job.Status != ops.Failed || job.Error != backups.ErrHostMount.Message || f.running() || !has() {
 		t.Fatalf("copying: %s %q, running %v", job.Status, job.Error, f.running())
+	}
+}
+
+// A server has three safety backups, then three of its own, and less room
+// under the total limit than its next backup: the limit was lowered, its
+// data grew, or another server's backup took the room. Before the server
+// stops, a backup, a restart or update that backs up first, and a restore
+// remove what retention would remove after it, safety backups oldest first
+// and never a restore's source, so the backup fits on its first try. With
+// nothing removable, it still tries, and fails without room. The Backups tab
+// offers each backup. Traces show
+// which of the server's backups (oldest first) are left as the stop arrives.
+func TestBackupMakesRoomBeforeTheStop(t *testing.T) {
+	cases := []struct {
+		name, kind string
+		input      func(ids []string) map[string]any
+		// room under the limit, in backup sizes
+		room float64
+		// other: another server's backup first takes one backup's room.
+		other, keep bool
+		// revoked: access is lost after the first removal.
+		revoked bool
+		want    string
+		failed  bool
+	}{
+		{name: "backup", kind: "backup", room: 0.95, want: "1 2 3 4 5"},
+		{name: "lowered limit", kind: "restart", input: func([]string) map[string]any { return map[string]any{"createBackup": true} },
+			room: 0, want: "2 3 4 5"},
+		{name: "update", kind: "update", input: func([]string) map[string]any {
+			return map[string]any{"request": map[string]any{"createBackup": true}}
+		}, room: 0.95, want: "1 2 3 4 5"},
+		{name: "restore", kind: "restore", input: func(ids []string) map[string]any {
+			return map[string]any{"backupId": ids[0], "confirmation": "mc", MovedInput: true}
+		}, room: 0.95, want: "0 2 3 4 5"},
+		{name: "other server", kind: "backup", room: 1.95, other: true, want: "1 2 3 4 5"},
+		{name: "nothing removable", kind: "backup", room: 0.5, keep: true, want: "0 1 2 3 4 5", failed: true},
+		{name: "access lost while making room", room: 0, revoked: true, want: "1 2 3 4 5"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			var ids []string
+			for index := range 6 {
+				ids = append(ids, f.run(t, "backup", nil).Result["backupId"].(string))
+				if index < 3 {
+					f.jobs.DB.Exec("UPDATE backups SET reason='restore' WHERE id=?", ids[index])
+				}
+			}
+			if c.keep {
+				f.jobs.DB.Exec("UPDATE backups SET kept_at=1 WHERE id IN (?,?,?)", ids[0], ids[1], ids[2])
+			}
+			newest, _ := f.jobs.Backups.Get(ctx, f.serverID, ids[5])
+			used, _, _ := f.jobs.Backups.FoundBytes(ctx)
+			limit := used + int64(c.room*float64(newest.Size))
+			if _, err := f.jobs.Backups.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, MaxBytes: limit}, f.admin, f.adminSession); err != nil {
+				t.Fatal(err)
+			}
+			if c.other {
+				data := filepath.Join(t.TempDir(), "game")
+				os.MkdirAll(filepath.Join(data, "world"), 0o755)
+				os.WriteFile(filepath.Join(data, "world", "level.dat"), []byte("original"), 0o644)
+				f.engine.AddContainer(fakedocker.GameOptions{Name: "other", Image: "itzg/minecraft-server", Running: true,
+					Mounts: []docker.MountPoint{{Type: "bind", Source: data, Destination: data, RW: true}}})
+				if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
+					t.Fatal(err)
+				}
+				views, _ := f.jobs.Servers.List(ctx, f.admin)
+				own := f.serverID
+				for _, view := range views {
+					if view.Name == "other" {
+						f.serverID = view.ID
+					}
+				}
+				if job := f.run(t, "backup", nil); job.Status != ops.Succeeded {
+					t.Fatalf("other server: %+v", job)
+				}
+				f.serverID = own
+			}
+			// The Backups tab offers the backup.
+			server, err := f.jobs.Servers.ResolveAuthorized(ctx, f.admin, f.serverID, authz.BackupsCreate, -1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if preflight := f.jobs.Backups.Preflight(ctx, server); !preflight.Ready {
+				t.Errorf("not ready: %+v", preflight.Issues)
+			}
+			left := func() string {
+				var left []string
+				for index, id := range ids {
+					if _, err := os.Stat(filepath.Join(f.backupTo, id+".tar")); err == nil {
+						left = append(left, strconv.Itoa(index))
+					}
+				}
+				return strings.Join(left, " ")
+			}
+			if c.revoked {
+				checks := 0
+				err := f.jobs.Backups.MakeRoom(ctx, server, func() error {
+					if checks++; checks > 1 {
+						return apperr.New("FORBIDDEN", 403, "You can’t do that on this server")
+					}
+					return nil
+				})
+				if !apperr.Is(err, "FORBIDDEN") || left() != c.want {
+					t.Errorf("%v, left %q, want %q", err, left(), c.want)
+				}
+				return
+			}
+			var mu sync.Mutex
+			var trace []string
+			f.engine.OnStop = func(container *fakedocker.Container) {
+				if container.ID != f.game {
+					return
+				}
+				mu.Lock()
+				trace = append(trace, left())
+				mu.Unlock()
+			}
+			var input map[string]any
+			if c.input != nil {
+				input = c.input(ids)
+			}
+			job := f.run(t, c.kind, input)
+			mu.Lock()
+			defer mu.Unlock()
+			if want := []string{c.want}; !slices.Equal(trace, want) {
+				t.Errorf("left at each stop %q, want %q", trace, want)
+			}
+			if failed := job.Status == ops.Failed && strings.HasPrefix(job.Error, "The backup doesn’t fit under the total size limit."); failed != c.failed ||
+				(!c.failed && job.Status != ops.Succeeded) {
+				t.Errorf("%s %q", job.Status, job.Error)
+			}
+		})
 	}
 }

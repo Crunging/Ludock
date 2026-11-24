@@ -416,16 +416,17 @@ time limits are in the [reference](REFERENCE.md#limits).
   backup, restart or update with a backup first, and restore checks again
   before it warns players or stops the server, so one that can't work leaves
   the server running.
-- **Space:** Ludock keeps 5 GiB free on the backup disk by default. A backup
-  that runs out of room fails and says why; one without room for even empty
-  data folders, under the total limit or above the free space kept, is
-  refused before the server stops. After each successful backup, if the next
-  one might not fit, Ludock removes the server's safety backups first, then
-  its oldest other backups, never its newest backup, the 3 newest of your own
-  that can be restored, or kept ones. A backup whose archive is gone or
-  damaged doesn't count toward the total limit, so it never stops new
-  backups; one in a folder Ludock can't reach counts toward the limit for new
-  backups, but never makes Ludock remove others.
+- **Space:** Ludock keeps 5 GiB free on the backup disk by default. Before a
+  backup stops the server, if it might not fit, and after it, if the next one
+  might not, Ludock removes the server's safety backups first, then its
+  oldest other backups, never its newest backup, the 3 newest of your own
+  that can be restored, or kept ones. A backup that still runs out of room
+  fails and says why; one without room for even empty data folders, under the
+  total limit or above the free space kept, is refused before the server
+  stops. A backup whose archive is gone or damaged doesn't count toward the
+  total limit, so it never stops new backups; one in a folder Ludock can't
+  reach counts toward the limit for new backups, but never makes Ludock
+  remove others.
 - **Cancelled backups:** a forced stop, a start from another tool, a replaced
   container, or another running container writing the same data cancels the
   copy.

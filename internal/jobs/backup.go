@@ -241,7 +241,7 @@ func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any,
 			}
 		}()
 		backup, err := func() (*backups.Backup, error) {
-			if err := j.stopForData(ctx, server, job); err != nil {
+			if err := j.stopForBackup(ctx, server, job); err != nil {
 				return nil, err
 			}
 			return j.createStoppedBackup(ctx, server, job)
