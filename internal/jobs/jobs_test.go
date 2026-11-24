@@ -776,7 +776,7 @@ func TestImpossibleBackupNeverStopsServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, room := range []int64{0, 512} {
+	for _, room := range []int64{0, 2560} {
 		limit(found + room)
 		refused("full", "Backups have reached their total size limit. Delete backups you no longer need, or raise the limit in Settings.")
 	}

@@ -307,11 +307,16 @@ func (h *Helpers) archive(ctx context.Context, id, base, root string, assertAcce
 
 // smallestArchive is the size of WriteSnapshot's archive of roots when each
 // is an empty folder: the headers and end blocks every backup of them has.
+// Zero metadata encodes shortest.
 func smallestArchive(roots []Root) int64 {
 	header, _ := tarstream.EncodeHeader(tarstream.Header{Name: "snapshot/", Type: "directory", Mode: 0o755})
 	size := int64(len(header) + len(tarstream.End()))
 	for _, root := range roots {
-		header, _ := tarstream.EncodeHeader(tarstream.Header{Name: "snapshot/" + root.ID + "/", Type: "directory"})
+		mapped, err := MappedHeader(&tarstream.Header{Type: "directory"}, "snapshot/"+root.ID+"/")
+		if err != nil {
+			continue
+		}
+		header, _ := tarstream.EncodeHeader(*mapped)
 		size += int64(len(header))
 	}
 	return size

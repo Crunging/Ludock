@@ -837,11 +837,15 @@ func (s *Service) look(folder string, backup *Backup, stalled error) (bool, erro
 	return err == nil && found, err
 }
 
+// errArchiveMissing is a backup whose archive is missing or the wrong size
+// in every folder it could be in.
+var errArchiveMissing = fail("INVALID_BACKUP", "This backup’s archive is missing or damaged, so it can’t be read or restored.")
+
 // ArchiveFolder is where a backup's archive is read from: its own folder,
-// or a second copy when the archive is missing or the wrong size there, preferring the one in
-// the chosen folder. It sets FromCopy, FolderAway (also when that folder
-// isn't responding), and Missing, and fails when a folder it must look into
-// isn't.
+// or a second copy when the archive is missing or the wrong size there,
+// preferring the one in the chosen folder. It sets FromCopy, FolderAway
+// (also when that folder isn't responding), and Missing, and fails when a
+// folder it must look into isn't, or with errArchiveMissing when Missing.
 func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 	backup.FromCopy, backup.Missing, backup.found = false, false, false
 	found, err := s.look(backup.destination, backup, errFolderStalled)
@@ -872,7 +876,9 @@ func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 		}
 		looked = looked && err == nil
 	}
-	backup.Missing = looked
+	if backup.Missing = looked; looked {
+		return "", errArchiveMissing
+	}
 	return backup.destination, nil
 }
 
@@ -892,7 +898,7 @@ func (s *Service) Locate(list []Backup) error {
 		backup := &list[index]
 		switch backup.State {
 		case "complete":
-			if _, err := s.ArchiveFolder(backup); err != nil && stalled == nil {
+			if _, err := s.ArchiveFolder(backup); err != nil && !errors.Is(err, errArchiveMissing) && stalled == nil {
 				stalled = err
 			}
 			backup.Copying = s.Copying(backup.ID)

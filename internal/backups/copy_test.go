@@ -829,9 +829,9 @@ func TestCopyDueSkipsBusyServers(t *testing.T) {
 // is now a folder, and the other still has its second copy. Another server's
 // kept backup lost its archive too. Retention keeps the newest three that
 // can be restored, so the earlier ones stay, and the total limit doesn't
-// count the lost archives. The lost ones stay listed, marked missing. With the second
-// folder unreachable, the backup read from it can't be confirmed and takes
-// no place in the rule either.
+// count the lost archives. The lost ones stay listed, marked missing, and
+// can't be read. With the second folder unreachable, the backup read from it
+// can't be confirmed and takes no place in the rule either.
 func TestRetentionCountsReadableBackups(t *testing.T) {
 	f := newCopyFixture(t)
 	at := func(day, hour int) int64 { return time.Date(2026, 1, day, hour, 0, 0, 0, time.Local).UnixMilli() }
@@ -901,6 +901,13 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 	}
 	if issues := f.s.Status(ctx).Issues; len(issues) != 0 {
 		t.Fatal(issues)
+	}
+	if total, _, err := f.s.FoundBytes(ctx); err != nil || total != 40 {
+		t.Fatal(total, err)
+	}
+	// The cut archive is never read.
+	if _, err := f.s.Open(ctx, f.serverID, b.ID); !errors.Is(err, errArchiveMissing) {
+		t.Fatal(err)
 	}
 	if err := os.Rename(f.copies, f.copies+"-away"); err != nil {
 		t.Fatal(err)
