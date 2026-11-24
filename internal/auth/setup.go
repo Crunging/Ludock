@@ -52,7 +52,7 @@ func NewSetup(code string) (*Setup, error) {
 
 var (
 	errSetupComplete = apperr.New("SETUP_COMPLETE", 409, "Initial setup has already been completed")
-	errSetupAuth     = apperr.New("SETUP_AUTHORIZATION_REQUIRED", 403, "That setup code didn’t work. Check the latest code in docker compose logs ludock and try again.")
+	errSetupAuth     = apperr.New("SETUP_AUTHORIZATION_REQUIRED", 403, "That setup code didn’t work. Use the latest one in Ludock’s log, or the one you set as LUDOCK_SETUP_CODE.")
 )
 
 func (w *Setup) assertOpen(required bool) error {
