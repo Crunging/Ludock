@@ -173,7 +173,12 @@ templ checklistDetail(item ChecklistItem) {
 				}
 			}
 			if count := len(item.Suspended); count > 0 {
-				Backups are suspended for { otherServers(count, len(item.Names) > 0) } (<a class="text-link" href={ detailURL(item.Suspended[0], "tab=schedules") }>review</a>).
+				// With nothing else to schedule, the item's button is the link.
+				if len(item.IDs) > 0 {
+					Backups are suspended for { otherServers(count, len(item.Names) > 0) } (<a class="text-link" href={ detailURL(item.Suspended[0], "tab=schedules") }>review</a>).
+				} else {
+					Backups are suspended for { otherServers(count, false) }.
+				}
 			}
 			if len(item.NoData) > 0 {
 				Ludock can’t back up { otherServers(len(item.NoData), true) } (<a class="text-link" href={ detailURL(item.NoData[0], "tab=backups") }>why</a>).
