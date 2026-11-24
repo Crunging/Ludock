@@ -522,7 +522,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			return err
 		}
 		// Pause outage tracking before acting, or the change could alert.
-		if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
+		if err := j.suppressFor(job)(ctx, server.Logical.ID); err != nil {
 			return nil, err
 		}
 		// server is nil after a failed resolve, so the ID is kept apart.
@@ -564,13 +564,17 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 	})
 }
 
-// suppressAfter pauses outage tracking once a lifecycle action ends.
-func (j *Jobs) suppressAfter(ctx context.Context, job *ops.Context, serverID string) {
-	suppress := j.Monitor.Suppress
+// suppressFor is how a lifecycle action pauses outage tracking: an automatic
+// restart announces its own outcome, so it ends the outage it acts on.
+func (j *Jobs) suppressFor(job *ops.Context) func(context.Context, string) error {
 	if job.Job.ActorID == ops.RecoveryActor {
-		suppress = j.Monitor.SuppressRecovered
+		return j.Monitor.SuppressRecovered
 	}
-	j.noteAvailability(suppress(context.WithoutCancel(ctx), serverID))
+	return j.Monitor.Suppress
+}
+
+func (j *Jobs) suppressAfter(ctx context.Context, job *ops.Context, serverID string) {
+	j.noteAvailability(j.suppressFor(job)(context.WithoutCancel(ctx), serverID))
 }
 
 var (
