@@ -71,7 +71,7 @@ func (f *fixture) interrupt(t *testing.T, prepare func(id string, swap *swapStat
 	swap := swapState{Stage: swapCreating, Name: "mc", Temporary: servers.ReplacementName("mc", id),
 		RestartPolicy: json.RawMessage(`{"Name":"unless-stopped"}`)}
 	prepare(id, &swap)
-	running := true
+	running := !f.wasStopped
 	var swapJSON json.RawMessage
 	if swap.Stage != "" {
 		swapJSON, _ = json.Marshal(swap)
@@ -165,26 +165,53 @@ func TestUpdateRecoveryUndoesUncheckedReplacement(t *testing.T) {
 // Ludock restarted after it began removing the original: the checked
 // replacement takes its name and becomes the server, never undone. A
 // removal that failed or lost its response can leave the original dead or
-// still being removed, so it is removed again first.
+// still being removed, so it is removed again first. A replacement that a
+// Docker restart stopped meanwhile, having no restart policy then, is
+// started again, since the server was running; one Docker can't start is
+// left stopped and Activity says so.
 func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
-	for _, left := range []bool{false, true} {
+	finished := "Ludock restarted while the updated container replaced the previous one, so it finished the update."
+	for _, c := range []struct {
+		name                             string
+		left, stopped, fails, wasStopped bool
+		guidance                         string
+	}{
+		{name: "original removed", guidance: finished},
+		{name: "server was stopped", stopped: true, wasStopped: true, guidance: finished},
+		{name: "original left dead", left: true, guidance: finished},
+		{name: "replacement stopped", stopped: true, guidance: finished},
+		{name: "replacement won't start", stopped: true, fails: true, guidance: finished +
+			" Its new container had stopped, and Docker couldn’t start it again, so the server is stopped. Check it, then start it."},
+	} {
 		f := setup(t)
+		f.wasStopped = c.wasStopped
 		var replacement string
 		job := f.interrupt(t, func(id string, swap *swapState) {
-			replacement = f.replacement(t, id, true)
+			replacement = f.replacement(t, id, !c.stopped)
 			swap.Stage = swapReplacing
-			if left {
+			if c.left {
 				f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.Status, c.State.Running = "dead", false })
 			} else {
 				f.engine.RemoveContainer(f.game)
 			}
+			if c.fails {
+				f.engine.AddFault("POST .*/containers/"+replacement+"/start", 500, false, 0)
+			}
 		})
-		if job.Status != ops.Interrupted {
-			t.Fatalf("%+v", job)
+		if job.Status != ops.Interrupted || job.Result["guidance"] != c.guidance {
+			t.Fatalf("%s: %+v", c.name, job)
 		}
-		current := f.containerNamed("mc")
-		if current == nil || current.ID != replacement || !current.State.Running || f.engine.Container(f.game) != nil {
-			t.Fatalf("original left: %v, replacement did not take the server's name: %+v", left, current)
+		current, taken := f.containerNamed("mc"), &fakedocker.Container{}
+		f.engine.Update(replacement, func(c *fakedocker.Container) { *taken = *c })
+		if current == nil || current.ID != replacement || current.State.Running != (!c.fails && !c.wasStopped) || f.engine.Container(f.game) != nil ||
+			restartPolicy(taken) != "unless-stopped" {
+			t.Fatalf("%s: replacement did not take over the server as it was: %+v", c.name, current)
+		}
+		// A server left stopped on purpose is no outage.
+		var intentional bool
+		f.jobs.DB.QueryRow("SELECT intentionally_stopped FROM availability WHERE server_id=?", f.serverID).Scan(&intentional)
+		if intentional != (c.fails || c.wasStopped) {
+			t.Fatalf("%s: intentionally stopped %v", c.name, intentional)
 		}
 	}
 }
@@ -501,6 +528,40 @@ func TestUpdateCheckSkipsConsoleHelpers(t *testing.T) {
 	for _, request := range f.engine.Requests[before:] {
 		if strings.Contains(request, "/containers/") && !strings.Contains(request, f.game) {
 			t.Fatal("inspected another container", request)
+		}
+	}
+}
+
+// Something outside Ludock starts or stops the server while the update
+// pulls its image. The update goes by the state it found when it stopped
+// the server: one started meanwhile comes back running on the new
+// container, and one stopped meanwhile stays stopped, as its owner left it.
+func TestUpdateKeepsStateChangedDuringPull(t *testing.T) {
+	for _, startedElsewhere := range []bool{true, false} {
+		f := setup(t)
+		if startedElsewhere {
+			if err := f.jobs.Docker.Stop(ctx, f.game, nil); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f.engine.OnPull = func(string) {
+			f.engine.OnPull = nil
+			if startedElsewhere {
+				f.startElsewhere()
+			} else {
+				f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.Status, c.State.Running = "exited", false })
+			}
+		}
+		job := f.run(t, "update", skipBackup)
+		current := f.containerNamed("mc")
+		var stopped bool
+		f.jobs.DB.QueryRow("SELECT intentionally_stopped FROM availability WHERE server_id=?", f.serverID).Scan(&stopped)
+		if job.Status != ops.Succeeded || current == nil || current.ID == f.game || current.State.Running != startedElsewhere ||
+			job.Result["running"] != startedElsewhere || stopped == startedElsewhere {
+			t.Fatalf("started elsewhere %v: %+v, running %v, intentionally stopped %v", startedElsewhere, job, current.State.Running, stopped)
 		}
 	}
 }

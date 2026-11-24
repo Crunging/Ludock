@@ -171,12 +171,26 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 			return nil, err
 		}
 		err = j.settle(ctx, job)
+		var started error
+		if err == nil && swap.reached(swapReplacing) {
+			started = j.startReplacement(ctx, job)
+		}
 		release()
 		if err != nil {
 			return nil, err
 		}
 		if swap.reached(swapReplacing) {
-			return map[string]any{"guidance": "Ludock restarted while the updated container replaced the previous one, so it finished the update."}, nil
+			finished := "Ludock restarted while the updated container replaced the previous one, so it finished the update."
+			if started != nil {
+				j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, true))
+				j.notify(notify.Results, "operation:"+job.Job.ID, "An update finished after Ludock restarted, but the server’s new container is stopped and couldn’t be started. Check it, then start it.")
+				return map[string]any{"guidance": finished + " Its new container had stopped, and Docker couldn’t start it again, so the server is stopped. Check it, then start it."}, nil
+			}
+			// A server that was stopped stays stopped on purpose, as when the
+			// update finishes without a restart.
+			running := job.Job.Recovery.InitialRunning != nil && *job.Job.Recovery.InitialRunning
+			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, !running))
+			return map[string]any{"guidance": finished}, nil
 		}
 	}
 	// Pulling changes no state. Backup recovery applies only after the
@@ -361,6 +375,9 @@ func (j *Jobs) undoUpdate(ctx context.Context, server *servers.Context, job *ops
 	}
 	if swap != nil {
 		if err := j.settle(ctx, job); err != nil || swap.reached(swapReplacing) {
+			if err == nil {
+				err = j.startReplacement(ctx, job)
+			}
 			return err
 		}
 		if swap.reached(swapStarting) {
@@ -375,7 +392,6 @@ func (j *Jobs) undoUpdate(ctx context.Context, server *servers.Context, job *ops
 // the server. Only a replacement that started cleanly replaces it.
 func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Context, request UpdateRequest, capability authz.Capability,
 	plan *update.Plan) (map[string]any, error) {
-	initiallyRunning := plan.Spec.State.Running
 	if err := j.assertCapability(ctx, job, capability); err != nil {
 		return nil, err
 	}
@@ -436,6 +452,10 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if err := j.stopForData(ctx, server, job); err != nil && (request.CreateBackup || !apperr.Is(err, "UNCLEAN_SHUTDOWN")) {
 		return nil, err
 	}
+	// The server returns to how it was when it was stopped, not when the
+	// update was asked for: its owner may have started or stopped it during
+	// the pull.
+	initiallyRunning := job.Job.Recovery.InitialRunning != nil && *job.Job.Recovery.InitialRunning
 	if request.CreateBackup {
 		if err := job.Progress("backing_up", nil, nil); err != nil {
 			return nil, err
@@ -468,6 +488,10 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	}
 	verification, err := j.swap(ctx, job, server, capability, stopped, body, pulled, initiallyRunning)
 	if err != nil {
+		return nil, err
+	}
+	if err := j.startReplacement(ctx, job); err != nil {
+		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, true))
 		return nil, err
 	}
 	// The update is complete; discovery binds the server to the replacement
@@ -702,8 +726,55 @@ func (j *Jobs) settleSwap(ctx context.Context, job *ops.Context) error {
 			return errUnnamedReplacement
 		}
 	}
-	swap.Stage = swapReplaced
+	swap.Stage, swap.Replacement = swapReplaced, replacement
 	return saveSwap(job, *swap)
+}
+
+var errReplacementNotStarted = apperr.New("REPLACEMENT_NOT_STARTED", 409,
+	"The server was updated, but its new container stopped before the update finished, as when Docker restarts, and Docker couldn’t start it again. Check the server, then start it.")
+
+// startReplacement starts the replacement of a server that was running once
+// it took over: during the swap neither container may restart on its own,
+// so one Docker stopped meanwhile stays stopped. A start that reached Docker
+// is never repeated.
+func (j *Jobs) startReplacement(ctx context.Context, job *ops.Context) error {
+	recovery := job.Job.Recovery
+	swap, err := savedSwap(job)
+	if err != nil || swap == nil || swap.Stage != swapReplaced || recovery.InitialRunning == nil || !*recovery.InitialRunning || recovery.StateRestored {
+		return err
+	}
+	info, err := j.Docker.Inspect(ctx, swap.Replacement)
+	if err != nil {
+		return errReplacementNotStarted
+	}
+	if !info.State.Running && !info.State.Restarting {
+		if recovery.StartRequested {
+			return errReplacementNotStarted
+		}
+		// The replacement is started only as the server it became: discovery
+		// binds it, and the start confirms that binding.
+		if _, err := j.Servers.RefreshNow(ctx); err != nil {
+			return errReplacementNotStarted
+		}
+		logical, err := j.Identity.Get(ctx, job.Job.ServerID)
+		if err != nil || logical == nil || logical.ContainerID != swap.Replacement {
+			return errReplacementNotStarted
+		}
+		// A lost answer, or Docker's 304 for a started container, is judged
+		// by what Docker shows, never by starting again. The marker is saved
+		// once the start is about to be sent.
+		if err := j.Servers.Observer.ChangeState(ctx, swap.Replacement, servers.Start, func(observation identity.Observation, _ *docker.ContainerInspect) error {
+			if _, err := j.Identity.AssertObservedBinding(ctx, logical.ID, observation, logical.BindingRevision); err != nil {
+				return err
+			}
+			return job.Progress("restarting", func(r *ops.Recovery) { r.StartRequested = true }, nil)
+		}); err != nil {
+			if info, inspectErr := j.Docker.Inspect(ctx, swap.Replacement); inspectErr != nil || !info.State.Running {
+				return errReplacementNotStarted
+			}
+		}
+	}
+	return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.StateRestored = true }, nil)
 }
 
 // ownedReplacement is the ID of the swap's replacement, or "". Without a saved

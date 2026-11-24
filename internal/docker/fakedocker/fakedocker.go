@@ -82,6 +82,8 @@ type Engine struct {
 	// the logs a helper process would print; OnStop when one stops.
 	OnStart func(c *Container)
 	OnStop  func(c *Container)
+	// OnPull runs, under no lock, before an image pull answers.
+	OnPull func(reference string)
 	// AddGame adds a fake game server for POST /fake/game, or reports false
 	// for a game it doesn't know.
 	AddGame func(game, name string) bool
@@ -710,6 +712,12 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 201, info)
 	case path == "/images/create" && r.Method == "POST":
 		reference := r.URL.Query().Get("fromImage")
+		e.mu.Lock()
+		hook := e.OnPull
+		e.mu.Unlock()
+		if hook != nil {
+			hook(reference)
+		}
 		e.mu.Lock()
 		pulled, ok := e.registry[reference]
 		if !ok {

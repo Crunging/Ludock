@@ -320,7 +320,9 @@ container:
   seconds if the image has no health check; one whose health check is still
   starting after 3 minutes is accepted. Only then does Ludock remove the
   original and give the new one its name. Until then neither restarts on its
-  own, so Docker can't run both. A stopped server stays stopped.
+  own, so Docker can't run both. A stopped server stays stopped. Running or
+  stopped means as Ludock found the server when it stopped it, after the
+  download: a server started or stopped elsewhere meanwhile is kept that way.
 - If the new container stops, restarts, or turns unhealthy before then, Ludock
   removes it and restores the original, stopped. Check **Activity**, restore
   the backup if needed, then start the server.
@@ -540,6 +542,11 @@ run the commands above, ending with `docker compose up -d`.
 
 Without Ludock, `tar -xpf` a save into an empty data folder, as the user Ludock
 runs as.
+
+A save taken while a restore was running, or before an unfinished one was
+undone, doesn't know how that restore ended, so Ludock never undoes it from the
+restored data: its **Activity** entry says so and which `.ludock-restore-<id>`
+folder to look for.
 
 Afterwards, game backups are listed again and read from the backup folder as
 before. Archives made after the save aren't listed, and records of archives
@@ -788,7 +795,9 @@ anything that was in progress:
   happen, and the server is returned to how it was; one interrupted while its
   new container was being checked is undone and the server left stopped (since
   the new version may have changed the game data); one that had begun removing
-  the original is finished.
+  the original is finished, and its new container is started if the server was
+  running and Docker stopped it meanwhile. If it won't start, the server is
+  left stopped, listed in **Needs attention**, and its entry says so.
 - **Everything else:** work Ludock can't safely finish is marked interrupted,
   never repeated. Cancelled work stays cancelled, and a warning Ludock resumes
   can still be cancelled. One-time scheduled runs missed by more than 5 minutes
@@ -816,8 +825,13 @@ whatever is in the data folder now into `ludock-set-aside-<id>` beside it,
 returns the previous data, and starts the server again if it was running. If
 no one does that, the next backup, restore, update, or restart with a backup
 first finishes the undo the same way before its own work, and so does Ludock's
-next start if the server is stopped then. A state Ludock can't finish safely,
-such as data folders that changed since, makes those refuse instead.
+next start if the server is stopped then. If the `.ludock-restore-<id>` folder
+is gone, there is nothing to put back: the data is left as it is and the
+entry says so. A state Ludock can't finish safely, such as data folders that
+changed since, makes those refuse instead; a backup, restore, or update that
+stopped a running server for it starts it again, unless the undo had already
+begun moving data. A restart with a backup first, while Ludock keeps running,
+starts it only once its backup is taken.
 
 If Docker itself restarts while work runs, such as for an upgrade, Ludock's
 requests to it wait up to 90 seconds for it to answer again, and the work's

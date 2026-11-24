@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/ops"
 )
@@ -34,10 +35,10 @@ func (f *fixture) stoppedRestore(t *testing.T) (*ops.Job, *restoreTrace) {
 }
 
 // undoneLines is how the next operation finishes stoppedRestore's undo:
-// the config root held only its stage folder, which the failed restore
-// already removed; the world's live data is set aside before its previous
-// data returns.
-var undoneLines = []string{"cleanup config: rolling_back old_moved,staging unsafe",
+// the world's stage folder is still there; the config root held only its
+// stage folder, which the failed restore already removed; the world's live
+// data is set aside before its previous data returns.
+var undoneLines = []string{"stageExists world: rolling_back old_moved,staging unsafe", "cleanup config: rolling_back old_moved,staging unsafe",
 	"setAside world: rolling_back old_moved,staging unsafe",
 	"rollbackOld world: rolling_back rolling_back,staging unsafe",
 	"cleanup world: rolling_back rolled_back,staging unsafe"}
@@ -135,5 +136,45 @@ func TestBackupRefusesUnfinishableRestore(t *testing.T) {
 	}
 	if f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" {
 		t.Fatal(f.savedJournal(restore.ID))
+	}
+}
+
+// Ludock's data is saved while a restore moves the backup's data in, the
+// restore then finishes, and later the owner restores Ludock from that save:
+// the copy's journal names a stage folder that is gone. The next backup finds
+// nothing to put back, says so, backs up, and leaves the server running.
+func TestNextBackupAfterStaleRestoreJournal(t *testing.T) {
+	f := setup(t)
+	input := map[string]any{"backupId": twoRootBackup(t, f), "confirmation": "mc"}
+	var restoreID, saved string
+	f.traceRestore(once("moveNew", "world", func(_ *fakedocker.Container, code int) int {
+		f.jobs.DB.QueryRow("SELECT id,recovery_json FROM operations WHERE kind='restore'").Scan(&restoreID, &saved)
+		return code
+	}))
+	if restore := f.run(t, "restore", input); restore.Status != ops.Succeeded || saved == "" || !f.running() {
+		t.Fatalf("%+v", restore)
+	}
+	if _, err := f.jobs.DB.Exec("UPDATE operations SET status='interrupted', recovery_json=? WHERE id=?", saved, restoreID); err != nil {
+		t.Fatal(err)
+	}
+	backup := f.run(t, "backup", nil)
+	if undone, _ := backup.Result["undone"].(string); backup.Status != ops.Succeeded || !f.running() || !strings.Contains(undone, "nothing to put back") {
+		t.Fatalf("%+v, running %v", backup, f.running())
+	}
+	if pending, _ := f.jobs.pendingRestores(ctx, f.serverID); len(pending) != 0 {
+		t.Fatal(pending)
+	}
+}
+
+// Finishing a restore that stopped partway fails before any live data moves:
+// the backup fails, but the server it stopped is running again and the undo
+// is left for the next operation.
+func TestFailedUndoReturnsServerToRunning(t *testing.T) {
+	f := setup(t)
+	restore, _ := f.stoppedRestore(t)
+	f.failStep, f.failTimes = "cleanup", 1
+	backup := f.run(t, "backup", nil)
+	if backup.Status != ops.Failed || !f.running() || f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" {
+		t.Fatalf("%+v, running %v, journal %s", backup, f.running(), f.savedJournal(restore.ID))
 	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/files"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/locks"
@@ -114,14 +115,6 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	if err != nil || state == nil || !journalMatches(state.Roots, server) || restore.Job.Recovery.Fingerprint != server.Logical.BindingFingerprint {
 		return "", errPendingBlocked
 	}
-	live := slices.ContainsFunc(state.Roots, holdsLive)
-	// A server started since the restore stopped it may have written into
-	// a folder the restore had emptied or filled, so that is kept.
-	if restore.Job.Recovery.StoppedStartedAt != stoppedAt && slices.ContainsFunc(state.Roots, func(entry journal) bool {
-		return entry.Phase == "old_moved" || entry.Phase == "replaced"
-	}) && state.Status != "committed" {
-		state.SetAside = true
-	}
 	owner := restore
 	if job != nil {
 		owner = job
@@ -130,11 +123,46 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	if err != nil {
 		return "", err
 	}
+	live, missing := false, false
 	err = func() error {
 		if job != nil {
-			if err := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID, r.PendingUndo = data.Container, true }, nil); err != nil {
+			if err := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID = data.Container }, nil); err != nil {
 				return err
 			}
+		}
+		if state.Status != "committed" {
+			// A root whose stage folder is gone has nothing to put back, for
+			// whatever removed it, such as the restore finishing after
+			// Ludock's data was saved.
+			for index, entry := range state.Roots {
+				if !holdsLive(entry) {
+					continue
+				}
+				rootPath, err := backups.HelperRoot(server, entry.Root)
+				if err != nil {
+					return err
+				}
+				found, err := j.restoreStep(ctx, data, rootPath, "", restore, "stageExists", nil)
+				if err != nil {
+					return err
+				}
+				// Only a helper that says so proves the stage is gone.
+				switch found["exists"] {
+				case true:
+					live = true
+				case false:
+					state.Roots[index].Phase, missing = "rolled_back", true
+				default:
+					return errJournal
+				}
+			}
+		}
+		// A server started since the restore stopped it may have written into
+		// a folder the restore had emptied or filled, so that is kept.
+		if restore.Job.Recovery.StoppedStartedAt != stoppedAt && slices.ContainsFunc(state.Roots, func(entry journal) bool {
+			return entry.Phase == "old_moved" || entry.Phase == "replaced"
+		}) && state.Status != "committed" {
+			state.SetAside = true
 		}
 		encoded, err := json.Marshal(state)
 		if err != nil {
@@ -150,7 +178,14 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		if state.Status == "committed" {
 			return j.cleanupRestore(ctx, server, restore, data)
 		}
-		return j.rollbackRestore(ctx, server, restore, data)
+		// Until live data moves, a failure leaves the server's data as it
+		// was, so the operation that stopped it can start it again.
+		return j.rollbackRestore(ctx, server, restore, data, func() error {
+			if job == nil {
+				return nil
+			}
+			return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.PendingUndo = true }, nil)
+		})
 	}()
 	data.Cleanup()
 	restore.Progress("", func(r *ops.Recovery) { r.DataHelperID = "" }, nil)
@@ -166,6 +201,9 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	switch {
 	case state.Status == "committed":
 		note = "Ludock removed the folder " + stageName(restore) + " that a finished restore left, which held the data it replaced."
+	case missing && !live:
+		note = "Ludock found nothing to put back for a restore that had stopped partway: the folder " + stageName(restore) +
+			" that held the server’s previous data is no longer there, so its data was left as it is."
 	case !live:
 		note = "Ludock removed the backup’s unpacked copy that a stopped restore left in " + stageName(restore) + "."
 	case state.SetAside:
@@ -173,6 +211,9 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 			helper.SetAsideName(restore.Job.ID) + " beside it."
 	default:
 		note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place."
+	}
+	if missing && live {
+		note += " One of its data folders had nothing to put back: its folder " + stageName(restore) + " is no longer there."
 	}
 	result := withUndone(restore.Job.Result, "")
 	result["guidance"] = note
