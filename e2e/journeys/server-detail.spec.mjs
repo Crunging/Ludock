@@ -167,33 +167,6 @@ test("switching a server's tabs keeps the page loaded", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
   await page.goForward();
   await expect(page.locator("#create-backup")).toBeEnabled();
-
-  // Quick clicks: the last tab wins even when the one before it answers
-  // first. Both requests are held until both are sent.
-  const holds = {};
-  const sent = (name) => new Promise((resolve) => { holds[name] = { resolve }; });
-  const sentBoth = Promise.all([sent("schedules"), sent("activity")]);
-  const gates = {};
-  await page.route(/\?tab=(schedules|activity)$/, async (route) => {
-    const name = new URL(route.request().url()).searchParams.get("tab");
-    const gate = new Promise((resolve) => { gates[name] = resolve; });
-    holds[name].resolve();
-    await gate;
-    await route.continue();
-  });
-  await page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
-  await page.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
-  await sentBoth;
-  const schedules = page.waitForResponse(/\?tab=schedules$/);
-  gates.schedules();
-  await schedules;
-  const activityAnswer = page.waitForResponse(/\?tab=activity$/);
-  gates.activity();
-  await activityAnswer;
-  await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
-  await expect(page.locator(".section-tabs").getByRole("link", { name: "Activity" })).toHaveAttribute("aria-current", "page");
-  await expect(page).toHaveURL(/\?tab=activity$/);
-  await page.unroute(/\?tab=(schedules|activity)$/);
 });
 
 test("a later tab wins over following earlier work", async ({ page }) => {
@@ -277,37 +250,10 @@ test("a filter answering after another tab opened leaves that tab alone", async 
   await page.unroute(/\/fragments\/servers\/[^/]+\/activity\?/);
 });
 
-test("clicking a tab again while its page loads still opens it", async ({ page }) => {
-  await openServer(page, "Survival");
-  // Hold every tab page until all three clicks are made.
-  const gates = [];
-  await page.route(/\?tab=(activity|backups)$/, async (route) => {
-    const tab = new URL(route.request().url()).searchParams.get("tab");
-    await new Promise((resolve) => gates.push({ tab, resolve }));
-    await route.continue();
-  });
-  const activity = page.locator(".section-tabs").getByRole("link", { name: "Activity" });
-  await activity.click();
-  await expect.poll(() => gates.length).toBe(1);
-  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
-  await expect.poll(() => gates.length).toBe(2);
-  await activity.click();
-  // The third click has a request of its own; Backups answers first.
-  const activities = () => gates.filter((gate) => gate.tab === "activity");
-  await expect.poll(() => activities().length).toBe(2);
-  const backups = page.waitForResponse(/\?tab=backups$/);
-  gates.find((gate) => gate.tab === "backups").resolve();
-  await backups;
-  for (const gate of activities()) gate.resolve();
-  await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
-  await expect(page.locator(".section-tabs").getByRole("link", { name: "Activity" })).toHaveAttribute("aria-current", "page");
-  await expect(page).toHaveURL(/\?tab=activity$/);
-  await page.unroute(/\?tab=(activity|backups)$/);
-});
-
 test("quick repeated clicks end on the last tab clicked", async ({ page }) => {
   await openServer(page, "Survival");
-  // Hold every tab page until all four clicks are made.
+  // Hold every tab page until all four clicks are made. Each click, even on
+  // a tab whose page is still loading, sends a request of its own.
   const gates = [];
   await page.route(/\?tab=(activity|backups)$/, async (route) => {
     await new Promise((resolve) => gates.push(resolve));
@@ -319,15 +265,14 @@ test("quick repeated clicks end on the last tab clicked", async ({ page }) => {
     await tab.click();
     await expect.poll(() => gates.length).toBe(index + 1);
   }
-  // The third answers before the fourth, then the first two.
-  const third = page.waitForResponse(/\?tab=activity$/);
-  gates[2]();
-  await third;
-  const fourth = page.waitForResponse(/\?tab=backups$/);
-  gates[3]();
-  await fourth;
-  gates[0]();
-  gates[1]();
+  // The third answers before the fourth, then the second and the first:
+  // neither an earlier tab answering first nor one answering last wins.
+  for (const index of [2, 3, 1, 0]) {
+    const answered = page.waitForResponse(index % 2 ? /\?tab=backups$/ : /\?tab=activity$/);
+    gates[index]();
+    await answered;
+  }
+  await page.waitForTimeout(300);
   await expect(page.locator("#backups-tab")).toBeVisible();
   await expect(backups).toHaveAttribute("aria-current", "page");
   await expect(page).toHaveURL(/\?tab=backups$/);
