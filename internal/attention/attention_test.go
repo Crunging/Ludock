@@ -92,8 +92,8 @@ func TestAttentionListsAResultWithoutForceStopped(t *testing.T) {
 // the server later; a force-stop and an error that asks for an
 // administrator stay, even on an undone restore, and so does a failure after
 // the success. A restore whose data is settled leaves once a backup, restore
-// or update succeeds; one stopped partway, or one whose end Ludock doesn't
-// know, stays.
+// or update succeeds; one stopped partway, one whose end Ludock doesn't
+// know, and one whose undo found a stage folder gone stay.
 func TestAttentionSettlesFailuresByALaterSuccess(t *testing.T) {
 	d := dbtest.Open(t)
 	admin := &db.SessionUser{ID: "11111111-1111-4111-8111-111111111111", Username: "owner", Role: db.RoleAdmin}
@@ -129,9 +129,9 @@ func TestAttentionSettlesFailuresByALaterSuccess(t *testing.T) {
 		{"14", "restore", "interrupted", "Ludock restarted while this ran. Check the server before trying again.", "{}", undone},
 		{"15", "restore", "failed", "The server was started while this ran.", "{}", stranded},
 		{"16", "restore", "failed", "The backup is damaged.", "{}", `{"restore":{"status":"unknown"}}`},
+		{"19", "restore", "failed", "The server was started while this ran.", "{}", `{"restore":{"status":"rolled_back","stageMissing":true}}`},
 		{"17", "backup", "succeeded", "", "{}", "{}"},
 		{"18", "restore", "failed", "The server was started while this ran.", "{}", undone},
-		{"19", "restore", "failed", "The server was started while this ran.", "{}", `{"restore":{"status":"rolled_back","stageMissing":true}}`},
 		{"20", "restore", "failed", "The backup is damaged.", "{}", `{"restore":{"status":"rolled_back"}}`},
 	}
 	for index, operation := range operations {
@@ -151,10 +151,10 @@ func TestAttentionSettlesFailuresByALaterSuccess(t *testing.T) {
 	for _, item := range result.Items {
 		listed = append(listed, item.OperationID[len(item.OperationID)-2:])
 	}
-	if want := []string{"15", "20", "19", "18", "16", "12", "13", "05", "04", "03"}; !slices.Equal(listed, want) {
+	if want := []string{"15", "20", "18", "19", "16", "12", "13", "05", "04", "03"}; !slices.Equal(listed, want) {
 		t.Fatalf("listed %v, want %v", listed, want)
 	}
-	if result.Items[0].Kind != "restore" || result.Items[1].Undone || result.Items[2].Undone || !result.Items[3].Undone || result.Items[4].Undone {
+	if result.Items[0].Kind != "restore" || result.Items[1].Undone || !result.Items[2].Undone || result.Items[3].Undone || result.Items[4].Undone {
 		t.Fatalf("%+v", result.Items[:5])
 	}
 }
