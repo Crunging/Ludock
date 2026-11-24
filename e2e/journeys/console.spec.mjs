@@ -1,4 +1,4 @@
-import { test, expect, asAdmin, serverRow } from "./fixtures.mjs";
+import { test, expect, asAdmin, serverRow, fake } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -100,7 +100,7 @@ test("a command sent after the server stopped says why it can't run", async ({ p
 
 // Ludock, or Docker under it, can take a minute to restart: the console keeps
 // reconnecting by itself that long.
-test("the console reconnects by itself after Ludock was away for a minute", async ({ page }) => {
+test("the console reconnects by itself after Docker or Ludock was away", async ({ page }) => {
   await page.clock.install();
   await page.clock.resume();
   let away = false;
@@ -114,6 +114,11 @@ test("the console reconnects by itself after Ludock was away for a minute", asyn
   await serverRow(page, "Survival").getByRole("link", { name: "Console" }).click();
   const status = page.locator("[data-console-status]");
   await expect(status).toHaveText("Connected");
+
+  // Docker restarting under Ludock isn't a lost permission.
+  await fake("/fake/outage", { seconds: 4 });
+  await expect(page.getByText("Connection lost. Reconnecting…")).toBeVisible();
+  await expect(status).toHaveText("Connected", { timeout: 30_000 });
 
   away = true;
   sockets.forEach((ws) => ws.close());
