@@ -182,7 +182,7 @@ func (s *Server) attentionFragment(w http.ResponseWriter, r *http.Request, reque
 	result, err := s.App.Attention.List(r.Context(), request.User(), time.Now().UnixMilli())
 	if err != nil {
 		log.Warn("The attention check failed", causeFields(err)...)
-		view.Error = "The attention check failed. Try again."
+		view.Error = "Couldn’t check what needs attention. Try again."
 	} else {
 		view.DiscoveryUnavailable = result.DiscoveryUnavailable
 		for _, item := range result.Items {

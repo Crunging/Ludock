@@ -374,7 +374,7 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 				return err
 			}
 			if names[name] || entries >= maxEntries {
-				return fail("UNSAFE_ARCHIVE", "The selected roots have duplicate paths or too many entries.")
+				return fail("UNSAFE_ARCHIVE", "The server’s data folders have duplicate paths or too many entries.")
 			}
 			names[name] = true
 			entries++
@@ -417,7 +417,7 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 			return 0, "", err
 		}
 		if prefix == "" || !names[prefix] {
-			return 0, "", fail("INVALID_BACKUP", "The archive is missing a recorded data root.")
+			return 0, "", fail("INVALID_BACKUP", "The archive is missing one of the server’s data folders.")
 		}
 		if err := assertStopped(); err != nil {
 			return 0, "", err
@@ -485,7 +485,7 @@ func (c *coalescer) flush() error {
 	return err
 }
 
-var errStagingCapacity = fail("RESTORE_CAPACITY", "The server’s disk doesn’t have room to unpack the backup next to the current data and still keep its free-space reserve. Free up space on that disk, then try again.")
+var errStagingCapacity = fail("RESTORE_CAPACITY", "The server’s disk doesn’t have room to unpack the backup next to the current data and still keep its minimum free space. Free up space on that disk, then try again.")
 
 type StageTarget struct {
 	Root Root
@@ -696,7 +696,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		return nil
 	})
 	if err == nil && hex.EncodeToString(hash.Sum(nil)) != checksum {
-		err = fail("BACKUP_CHECKSUM", "The archive changed while it was being staged. No existing game data was replaced.")
+		err = fail("BACKUP_CHECKSUM", "The backup archive changed while it was being unpacked. No game data was replaced.")
 	}
 	if errors.Is(err, errExtractCut) {
 		// The archive is fine; the stream to a helper broke. A helper that

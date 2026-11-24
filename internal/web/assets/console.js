@@ -99,7 +99,7 @@
   if (pauseButton) {
     pauseButton.addEventListener("click", function () {
       if (paused) {
-        if (dropped) output("\x1b[33m[system] Some paused output was discarded to limit memory use\x1b[0m\r\n");
+        if (dropped) output("\x1b[33m[system] Some paused output was dropped to save memory\x1b[0m\r\n");
         held.splice(0).forEach(write);
         heldChars = 0;
         dropped = false;
@@ -241,7 +241,7 @@
       ws.send(JSON.stringify({ type: "input", data: command }));
       if (ws.readyState !== WebSocket.OPEN) throw new Error("closed");
     } catch (error) {
-      setFeedback("The connection could not confirm sending. Your draft is still here. Check the output before trying again.", true);
+      setFeedback("Couldn’t confirm the command was sent. Your text is still in the box; check the output before trying again.", true);
       return;
     }
     output("\x1b[33m> " + command + "\x1b[0m\r\n");

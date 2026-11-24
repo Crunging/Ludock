@@ -356,7 +356,7 @@ func (s *Server) releaseBackup(w http.ResponseWriter, r *http.Request, request *
 		return
 	}
 	s.audit(r, request, "backup.released", id, map[string]any{"backupId": backupID})
-	s.backupOutcome(w, r, request, id, "Backup released. Retention can remove it like any other.")
+	s.backupOutcome(w, r, request, id, "Backup released. Ludock can now remove it automatically when older backups expire.")
 }
 
 func (s *Server) assertArchives(r *http.Request, request *Request, id string) error {

@@ -136,7 +136,7 @@ func ActionLabel(action string) string {
 var unavailableGuidance = map[string]string{
 	"owner_missing":         "Its owner’s account was deleted. Make the schedule again from an account that can use this server.",
 	"owner_disabled":        "Its owner’s account is disabled. Ask an administrator to enable it.",
-	"owner_access_removed":  "Its owner can no longer set up schedules for this server. Ask an administrator to give them Full access again in the server’s Sharing tab.",
+	"owner_access_removed":  "Its owner can no longer set up schedules for this server. Ask an administrator to give them schedule access again in the server’s Sharing tab.",
 	"action_access_removed": "Its owner can no longer do this action. Ask an administrator to give it back in the server’s Sharing tab, or edit the schedule to use an action they can do.",
 	"sharing_paused":        "The server’s game or data folders changed. This schedule runs again once an administrator confirms the change on the server’s page.",
 	"binding_unavailable":   "Ludock can’t find this server in Docker. The schedule runs again once the server is back.",
@@ -1124,7 +1124,7 @@ func ScheduleEditor(f ScheduleForm) templ.Component {
 			}
 		}
 		if f.Missing {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 90, "<p class=\"alert alert--error\" role=\"alert\">This schedule is no longer available. Your draft is preserved. Cancel editing to return to the new schedule form.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 90, "<p class=\"alert alert--error\" role=\"alert\">This schedule is no longer available. Your draft is still here; cancel editing to add a new schedule.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

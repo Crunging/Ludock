@@ -605,10 +605,10 @@ func (r *Runtime) stdin(ctx context.Context, containerID, command string, out Ou
 		return err
 	}
 	if !info.Config.OpenStdin {
-		return notConfigured("Container standard input is closed; recreate it with stdin_open: true")
+		return notConfigured("This server’s console input is closed. Add stdin_open: true where the container is defined and recreate it.")
 	}
 	if info.Config.StdinOnce {
-		return notConfigured("Container standard input closes after an attached client disconnects; recreate it with StdinOnce disabled")
+		return notConfigured("This server’s console input closes after one connection. Turn off StdinOnce where the container is defined and recreate it.")
 	}
 	conn, err := r.Docker.Attach(ctx, containerID, docker.AttachOptions{Stream: true, Stdin: true})
 	if err != nil {

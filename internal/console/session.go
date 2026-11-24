@@ -285,7 +285,7 @@ func (s *Sessions) Console(ctx context.Context, channel Channel, validate func(c
 	defer access.Stop()
 	adapter := games.ResolveAdapter(access.Context.Container.GameType, access.Context.Container.Labels)
 	if mode == GameMode && adapter == nil {
-		channel.Send("error", "This server has no supported game console adapter")
+		channel.Send("error", "This server doesn’t have a game console Ludock can connect to.")
 		channel.Close(ClosePolicy, "Console unavailable")
 		return
 	}

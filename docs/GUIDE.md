@@ -15,16 +15,16 @@ After the first administrator is created, the server list shows a **Finish
 setting up** list with only what's still undone. Each item does its job in one
 click, and goes away once done.
 
-- **Get alerts** opens the notification settings. It stays until a
-  destination is on and not only failing; if everything sent so far has
-  failed, it says why and opens that destination.
+- **Get alerts** opens the notification settings. It goes away once a
+  destination is on. If every alert sent to that destination so far has
+  failed, it stays, says why, and links straight to its settings.
 - **Back up your servers** offers **Back up every night**: after you confirm,
-  each server with data folders and no repeating schedule that backs it up (a
-  backup, or a restart with **Back up first**; paused ones count) gets a daily
-  one between 04:00 and 06:00 in your browser's time zone,
-  a few minutes apart. Like a new schedule, each waits for players to leave
-  and warns anyone still on where the game allows. It appears once backup
-  storage is on.
+  each server that has data folders and no repeating schedule that backs it up
+  (a backup, or a restart with **Back up first**; a paused schedule still
+  counts) gets a daily backup between 04:00 and 06:00 in your browser's time
+  zone, spaced a few minutes apart. Like
+  a new schedule, each waits for players to leave and warns anyone still on
+  where the game allows. It appears once backup storage is on.
 - **Restart servers that stop answering** offers **Restart automatically** for
   servers whose game Ludock can check (see
   [Restart a game that hangs](#restart-a-game-that-hangs)).
@@ -52,8 +52,8 @@ visible only to administrators until you share it.
 To take a server out, open it and choose **Remove from Ludock** at the bottom of
 its **Overview**. The container keeps running. Its sharing, schedules, and
 backups come back if you add it again. A server labeled
-`ludock.enable: "true"` leaves only when you change the label to `"false"` and
-recreate the container.
+`ludock.enable: "true"` can't be removed from the panel: set the label to
+`"false"` where the container is defined and recreate it.
 
 Ludock never offers itself, its helpers, or Compose one-off containers.
 
@@ -68,17 +68,17 @@ its console or files could take over the machine. If it looks like a game,
 host**. If it really is a game server, remove the access it doesn't need, or
 add the label `ludock.enable: "true"` where it is defined and recreate it. Its
 **Sharing** tab then warns that sharing it can hand over the host, so share it
-only as **Can see it**, or with people you would trust with the host. A server
-that gains such access later, recreated as privileged say, leaves Ludock as a
-relabeled one does, and its sharing, schedules, and backups come back when it
-returns without that access.
+only as **Can see it**, or with people you would trust with the host. If a
+server later gains that access (for example, if it is recreated as privileged),
+Ludock stops managing it; its sharing, schedules, and backups come back if you
+remove that access and recreate it.
 
 ### Share a server with a friend
 
 1. Open the server and choose **Sharing**.
-2. Under **Share with someone**, pick them under **Person** if they already
-   have an account. For someone new, choose **Someone new…** there if the list
-   appears, and type a username for them under **Their username**.
+2. Under **Share with someone**, enter a username for a new friend under **Their
+   username**. If you already have members, pick **Someone new…** under
+   **Person** first, or pick an existing member.
 3. Choose their **Access** and choose **Share**.
 
 For someone new, Ludock makes the account and shows a one-time invite link.
@@ -132,8 +132,9 @@ To back up on a schedule, use **Back up every night** in
 **Schedules** tab: choose **Backup** as the action, or keep **Restart** with
 **Back up first** ticked.
 
-Backups need nothing set up: the example `compose.yaml` mounts a `backups`
-volume, and Ludock turns storage on there by itself. **Settings → Backups**
+Backups need nothing set up: the example `compose.yaml` mounts a
+`ludock-backups` volume at `/backups`, and Ludock turns storage on there by
+itself. **Settings → Backups**
 shows where backups go and how much space they use. Each server
 keeps the 3 newest backups plus the last of each of the 7 most recent days,
 4 weeks, and 6 months that have one; Ludock removes the rest after each new
@@ -207,9 +208,9 @@ stands in for one, Ludock can restart it:
 When the game stops answering for the **Wait before alerting** time (two
 minutes by default), Ludock restarts it the way **Restart** does and sends an
 alert. It leaves alone a server that is stopped, still starting, hasn't
-answered since it last started, or is paused for maintenance. If the game
-doesn't answer again within five times the wait (at most 30 minutes), or after
-3 restarts in 6 hours, Ludock says so and leaves it for that outage.
+answered since it last started, or is paused for maintenance. If the game still doesn't answer after the restart (within five times **Wait
+before alerting**, at most 30 minutes), or after 3 restarts in 6 hours, Ludock
+alerts you and stops trying to restart it for that outage.
 **Activity** lists each of these restarts as by "Ludock, because the game
 stopped answering". A server
 whose container exits is left to the restart policy set in the tool that runs
@@ -259,7 +260,7 @@ alert.
 Once players have been warned, a run that won't happen as announced is called
 off in the game, once: they hear "Server restart cancelled." (or the like)
 when you cancel the run, pause or delete its schedule, or change its time or
-action, and when it is skipped or its owner lost access. An edit that leaves
+action, and when it is skipped or its owner loses access. An edit that leaves
 the warned run as it was says nothing.
 
 ## How things work
@@ -276,8 +277,8 @@ shows **Down** once its alert is due, as the alert says.
 A server's **Overview** starts with whether it's up, whether the game answers,
 the address to give friends, its last backup, and what's scheduled next. Then
 come **Players**, **Resources** with their history, and **Monitoring**.
-**Details** holds what few people need: the health check, the ports, the
-container and image (for administrators), and that 100% CPU is one core.
+**Details** holds what few people need: the health check, that 100% CPU is one
+core, and (for administrators) the ports, container, and image.
 
 The address players use is the host from **Settings → Server address** (or the
 one in your browser until you set it) with the port the container publishes
@@ -306,20 +307,21 @@ The Stop and Restart dialogs say how many players are online when Ludock
 knows, such as "2 players are online and will be disconnected.", including
 for games it can count but not message. **Create backup**, a restore, and the
 **Update** tab say that connected players will be disconnected. When the
-server is running and the game can message its players, the Restart,
-Stop, and **Create backup** dialogs, a restore, and the **Update** tab offer
-**Warn players and wait 1 minute**, ticked. Ludock checks who is online when
-the work starts, not when the page loaded; an update checks once the new image
-is downloaded, and a restore once it has checked the backup. If someone is on, or Ludock can't tell, it tells players in the
-game, waits the minute (shown in **Activity**), then goes ahead. If nobody is
-on, it goes ahead at once, and **Activity** says nobody was online, so players
-weren't warned. If the game's console or Docker doesn't answer, Ludock keeps
-trying to send the warning for a minute (**Warning players** in **Activity**)
-and gives players the whole minute from when it goes out; if it never does,
-the work goes ahead and **Activity** says Ludock couldn't warn players. If
-Ludock restarts during the minute, it finishes
-the wait afterwards; if it was down for more than five minutes past the time
-players were given, it leaves the server alone and says so in **Activity**.
+server is running and the game can message its players, all five offer
+**Warn players and wait 1 minute**, ticked by default. Ludock checks who is
+online when the work starts (for an update, once the new image is downloaded;
+for a restore, once the backup is checked). If someone is on, or Ludock can't
+tell, it tells players in the game, waits the minute (shown in **Activity**),
+then goes ahead. If nobody is on, it goes ahead at once, and **Activity** says
+nobody was online.
+
+If the game's console or Docker doesn't answer when it's time to warn, Ludock
+keeps trying for a minute (**Warning players** in **Activity**) and gives
+players a full minute from when the warning goes out; if it never goes out, the
+work goes ahead and **Activity** says Ludock couldn't warn players. If Ludock
+restarts during the minute, it finishes the wait afterwards; if it was down for
+more than five minutes past the time players were given, it leaves the server
+alone and says so in **Activity**.
 
 Until the minute is up, the server's page, its row on the server list, and its
 rows in **Activity** show **Cancel restart** (or stop, backup, restore, or
@@ -420,19 +422,21 @@ sockets. To limit access to some folders, set
   archives can hold configuration secrets.
 
 If a restore fails, check **Activity**: its entry says what the data was left
-as. Usually the restore was undone and the data is as it was. If something
-outside Ludock started the server partway, the restore stops there and leaves
-the server running. If the server's previous data had already been moved out,
-it waits, safe but not in place, in the restore's `.ludock-restore-*` folder;
-don't delete those folders. **Needs attention** offers administrators
-**Undo the restore**, which stops the server (warning players first when it
-can), puts the previous data back, and starts it again if it was running.
-Anything the game wrote meanwhile is kept in a `ludock-set-aside-*` folder
-beside the data, not deleted. Otherwise Ludock finishes the undo itself the
-next time it stops that server for a backup, a restore, or an update, or when
-it starts and finds the server stopped, and that work's **Activity** entry says
-so. An interrupted restore is finished or rolled back when Ludock starts again
-in the same way, and its entry in **Activity** says which.
+as. Usually the restore was undone and the data is as it was.
+
+If something outside Ludock started the server partway, the restore stops there
+and leaves the server running. If the server's previous data had already been
+moved out, it waits, safe but not in place, in the restore's
+`.ludock-restore-*` folder; don't delete those folders. **Needs attention**
+offers administrators **Undo the restore**, which stops the server (warning
+players first when it can), puts the previous data back, and starts it again if
+it was running. Anything the game wrote meanwhile is kept in a
+`ludock-set-aside-*` folder beside the data, not deleted. Otherwise Ludock
+finishes the undo itself the next time it stops that server for a backup, a
+restore, or an update, or when it starts and finds the server stopped, and that
+work's **Activity** entry says so. An interrupted restore is finished or rolled
+back when Ludock starts again in the same way, and its entry in **Activity**
+says which.
 
 ### Schedules
 
@@ -464,17 +468,18 @@ in the same way, and its entry in **Activity** says which.
 
 While someone has the server list open, Ludock reads who is online on its
 servers about every 30 seconds, and while a server's page is open, on that
-server. It asks the game's console only when the
-game's status check can't say the list is unchanged, since games such as
-Minecraft log every console connection: once the console has listed the
-players, a status check that names the same players, or says nobody is
-online, stands in for it. While nobody has Ludock open, only monitored games
-with a status check are asked, about every 2 minutes, and only through the
-status check. Games with a working status check but no player list, or no
-console password, still show how many are online. Terraria, Bedrock, and
-Vintage Story have no status check, so their list command and its reply show
-in their **Logs** each time Ludock reads them. A count Ludock can't read
-shows as unavailable, never as empty. Readings stay in memory.
+server. While nobody has Ludock open, only monitored games with a status check
+are asked, about every 2 minutes, and only through the status check. Readings
+stay in memory, and a count Ludock can't read shows as unavailable, never as
+empty.
+
+Ludock asks the game's console only when the status check can't say the list is
+unchanged, since games such as Minecraft log every console connection: once the
+console has listed the players, a status check that names the same players, or
+says nobody is online, stands in for it. Games with a working status check but
+no player list, or no console password, still show how many are online.
+Terraria, Bedrock, and Vintage Story have no status check, so their list
+command and its reply show in their **Logs** each time Ludock reads them.
 
 A kick or ban targets the player by the name or ID the game's latest list
 gave, and only when it is wholly in the game's own form, so it can't carry
@@ -567,10 +572,10 @@ server, person, action, result, and dates; it says how many are on, and a link
 to a filtered page opens with them showing. Each server's **Activity** tab
 lists its own, with filters for the results and kinds of work it has had. Work that is queued or warning players shows **Cancel restart**
 (or backup, and so on) on its row in both, to anyone who may cancel it, and
-rows update while work runs. Administrators can choose
-**Show → Everything** to add sign-ins,
-account changes, and settings changes. **Needs attention** on the server list
-shows recent failures until the same kind of work succeeds on that server,
-such as a good backup after a failed one. An interrupted restore, a
-force-stop, and a failure that asks for an administrator stay listed.
-**Activity** keeps everything.
+rows update while work runs. Administrators can choose **Show → Everything** to add sign-ins, account
+changes, and settings changes.
+
+**Needs attention** on the server list shows recent failures until the same
+kind of work succeeds on that server, such as a good backup after a failed one.
+An interrupted restore, a force-stop, and a failure that asks for an
+administrator stay listed. **Activity** keeps everything.

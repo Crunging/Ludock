@@ -61,7 +61,7 @@ var (
 var (
 	errCopyMissing  = fail("BACKUP_COPY_FOLDER", "The second folder is missing or not mounted.")
 	errCopyReadOnly = fail("BACKUP_COPY_FOLDER", "Ludock can’t write to the second folder.")
-	errCopySpace    = fail("BACKUP_COPY_SPACE", "The second folder is down to its free-space reserve.")
+	errCopySpace    = fail("BACKUP_COPY_SPACE", "The second folder is down to its minimum free space.")
 	errCopyStalled  = fail("BACKUP_COPY_STALLED", "The second folder stopped responding.")
 	errCopyMismatch = fail("BACKUP_COPY_MISMATCH", "The copy didn’t match the original.")
 	errCopyOverlap  = fail("BACKUP_COPY_OVERLAP", "The second folder must be separate from the backup folder.")

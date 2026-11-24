@@ -233,7 +233,7 @@ test("a failing webhook is called out until a delivery gets through, and then an
 
     // The link opens the destination's card.
     await page.goto("/");
-    await page.getByRole("link", { name: "Check Webhook: Notifications — Alerts aren’t reaching Webhook" }).click();
+    await page.getByRole("link", { name: "Check Webhook: Notifications, Alerts aren’t reaching Webhook" }).click();
     webhook = page.locator("#notification-webhook-card");
     await expect(webhook).toHaveAttribute("open", "");
     await expect(webhook.locator(".notification-destination__health")).toContainText("Alerts aren’t reaching Webhook.");

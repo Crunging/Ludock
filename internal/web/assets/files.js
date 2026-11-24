@@ -164,8 +164,8 @@
       show("success", completed + " file" + (completed === 1 ? "" : "s") + " uploaded.");
     } catch (error) {
       if (controller.signal.aborted) {
-        show("success", "Upload canceled. " + completed + " of " + files.length + " files confirmed complete. Check “" + current +
-          "” before retrying; canceling does not undo data already written.");
+        show("success", "Upload cancelled. " + completed + " of " + files.length + " files finished. Check “" + current +
+          "” before trying again; cancelling doesn’t undo data already written.");
       } else if (error && error.unconfirmed) {
         show("error", "Uploaded " + completed + " of " + files.length + " files. " + error.message);
       } else {
@@ -192,7 +192,7 @@
   }
   cancel.addEventListener("click", function () {
     if (!controller) return;
-    status.textContent = "Canceling upload…";
+    status.textContent = "Cancelling upload…";
     cancel.disabled = true;
     controller.abort();
   });

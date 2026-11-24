@@ -311,14 +311,14 @@ func (s *Storage) validateFolder(ctx context.Context, folder string) (string, er
 		return "", fail("BACKUP_DESTINATION", "Ludock can’t write to the backup folder. Check its mount and directory permissions, then save again.")
 	}
 	if !docker.ContainerIDPattern.MatchString(s.Self) {
-		return "", fail("BACKUP_MOUNT_UNVERIFIED", "Identify Ludock's container with LUDOCK_SELF_CONTAINER before configuring backups.")
+		return "", fail("BACKUP_MOUNT_UNVERIFIED", "Ludock couldn’t find its own container. Set LUDOCK_SELF_CONTAINER to its container name or ID, then try again.")
 	}
 	self, err := s.Docker.Inspect(ctx, s.Self)
 	if errors.Is(err, docker.ErrReadTimeout) {
 		return "", errDockerStalled
 	}
 	if err != nil {
-		return "", fail("BACKUP_MOUNT_UNVERIFIED", "Ludock could not verify its backup mount. Set LUDOCK_SELF_CONTAINER to its Docker container name or ID.")
+		return "", fail("BACKUP_MOUNT_UNVERIFIED", "Ludock couldn’t check its backup mount. Set LUDOCK_SELF_CONTAINER to its container name or ID, then try again.")
 	}
 	var mount *docker.MountPoint
 	for index := range self.Mounts {
@@ -328,13 +328,13 @@ func (s *Storage) validateFolder(ctx context.Context, folder string) (string, er
 		}
 	}
 	if mount == nil || !mount.RW || (mount.Type != "bind" && mount.Type != "volume") {
-		return "", fail("BACKUP_MOUNT_UNVERIFIED", "The backup destination must be a writable mounted directory in Ludock's container.")
+		return "", fail("BACKUP_MOUNT_UNVERIFIED", "The backup folder must be a writable folder mounted into Ludock.")
 	}
 	return directory, nil
 }
 
 var errDestination = fail("BACKUP_DESTINATION",
-	"The backup folder or an approved backup root is missing or unreadable. Create the folder and check its mount and permissions, then try again.")
+	"The backup folder is missing or can’t be read. Create the folder and check its mount and permissions, then try again.")
 
 // ApprovedDirectory resolves a destination inside the approved roots
 // without symbolic-link traversal.
@@ -351,11 +351,11 @@ func (s *Storage) ApprovedDirectory(directory string) (string, error) {
 
 func (s *Storage) resolveDirectory(directory string) (string, error) {
 	if !filepath.IsAbs(directory) || strings.Contains(directory, "\x00") {
-		return "", fail("BACKUP_DESTINATION", "Choose an absolute mounted backup destination inside LUDOCK_BACKUP_ROOTS.")
+		return "", fail("BACKUP_DESTINATION", "Choose a mounted backup folder inside LUDOCK_BACKUP_ROOTS (starting with /).")
 	}
 	configured := s.ApprovedRoots()
 	if len(configured) == 0 {
-		return "", fail("BACKUP_DESTINATION", "No backup roots are configured. Set LUDOCK_BACKUP_ROOTS to a mounted backup folder and recreate Ludock, then save again.")
+		return "", fail("BACKUP_DESTINATION", "No backup folder is allowed by LUDOCK_BACKUP_ROOTS. Set LUDOCK_BACKUP_ROOTS to a mounted backup folder, recreate Ludock, and save again.")
 	}
 	var roots []string
 	for _, value := range configured {
@@ -369,7 +369,7 @@ func (s *Storage) resolveDirectory(directory string) (string, error) {
 			return "", err
 		}
 		if filepath.Clean(value) != canonical {
-			return "", fail("BACKUP_DESTINATION", "Configured backup roots must not traverse symbolic links.")
+			return "", fail("BACKUP_DESTINATION", "Paths in LUDOCK_BACKUP_ROOTS can’t go through symbolic links.")
 		}
 		roots = append(roots, canonical)
 	}
@@ -380,7 +380,7 @@ func (s *Storage) resolveDirectory(directory string) (string, error) {
 	cleaned := filepath.Clean(directory)
 	index := slices.IndexFunc(roots, func(root string) bool { return within(resolved, root) })
 	if index < 0 || !within(cleaned, roots[index]) {
-		return "", fail("BACKUP_DESTINATION", "Backup destination must be an existing mounted directory inside LUDOCK_BACKUP_ROOTS, without symlink traversal.")
+		return "", fail("BACKUP_DESTINATION", "The backup folder must be an existing mounted folder inside LUDOCK_BACKUP_ROOTS, with no symbolic links in its path.")
 	}
 	root := roots[index]
 	current := root
@@ -400,7 +400,7 @@ func (s *Storage) resolveDirectory(directory string) (string, error) {
 	}
 	for _, path := range []string{root, directory} {
 		if info, err := os.Lstat(path); err != nil || !info.IsDir() {
-			return "", fail("BACKUP_DESTINATION", "Backup destination must be a directory.")
+			return "", fail("BACKUP_DESTINATION", "The backup folder must be a folder, not a file.")
 		}
 	}
 	return resolved, nil
@@ -530,7 +530,7 @@ func (s *Storage) openNamed(directory, name string) (*os.File, error) {
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		file.Close()
-		return nil, fail("INVALID_BACKUP", "The backup archive is not a regular file.")
+		return nil, fail("INVALID_BACKUP", "The backup archive isn’t a normal file.")
 	}
 	return file, nil
 }
@@ -558,7 +558,7 @@ func (s *Storage) removeFile(directory, name string, assertAccess func() error) 
 		return err
 	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
-		return fail("INVALID_BACKUP", "Refusing to remove an archive that is not a regular file.")
+		return fail("INVALID_BACKUP", "Ludock won’t delete this backup because its archive isn’t a normal file.")
 	}
 	if assertAccess != nil {
 		if err := assertAccess(); err != nil {

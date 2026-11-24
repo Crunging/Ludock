@@ -32,7 +32,7 @@ const (
 var keyLog = logging.New("identity-key")
 
 // ErrIdentityKey is the generic key failure. It never names host paths.
-var ErrIdentityKey = apperr.New("IDENTITY_KEY_INVALID", 500, "Ludock's identity key is missing, unsafe, or does not match this database. Restore the matching .identity-key directory beside the database from your application-data backup; do not generate a replacement key.")
+var ErrIdentityKey = apperr.New("IDENTITY_KEY_INVALID", 500, "Ludock’s identity key is missing, unsafe, or doesn’t match this database. Restore the matching ludock.db.identity-key folder beside the database from a ludock-data-*.tar backup; don’t generate a new key.")
 
 // keyPermissionCode marks an error that says exactly what to fix, so it must
 // not be replaced by the generic error.

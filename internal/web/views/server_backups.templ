@@ -756,7 +756,7 @@ type UpdateView struct {
 
 templ UpdateTab(serverID string, recreate bool) {
 	<div id="update-panel" hx-get={ "/fragments/servers/" + serverID + "/update" + map[bool]string{true: "?recreate=1"}[recreate] } hx-trigger="load" hx-swap="outerHTML">
-		<p role="status">Loading server settings…</p>
+		<p role="status">Checking update options…</p>
 	</div>
 }
 
@@ -764,8 +764,8 @@ templ UpdatePanel(u UpdateView) {
 	<div id="update-panel">
 		if u.Capability == nil {
 			<div>
-				<p role="alert">Unable to load server settings. Reload them before making changes.</p>
-				@reloadUpdate(u.ServerID, "Reload server settings")
+				<p role="alert">Couldn’t check whether this server can be updated. Try again.</p>
+				@reloadUpdate(u.ServerID, "Check again")
 			</div>
 		} else {
 			{{ capability := u.Capability }}

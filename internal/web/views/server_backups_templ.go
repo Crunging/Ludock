@@ -2600,7 +2600,7 @@ func UpdateTab(serverID string, recreate bool) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 214, "\" hx-trigger=\"load\" hx-swap=\"outerHTML\"><p role=\"status\">Loading server settings…</p></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 214, "\" hx-trigger=\"load\" hx-swap=\"outerHTML\"><p role=\"status\">Checking update options…</p></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2630,11 +2630,11 @@ func UpdatePanel(u UpdateView) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if u.Capability == nil {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 216, "<div><p role=\"alert\">Unable to load server settings. Reload them before making changes.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 216, "<div><p role=\"alert\">Couldn’t check whether this server can be updated. Try again.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = reloadUpdate(u.ServerID, "Reload server settings").Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = reloadUpdate(u.ServerID, "Check again").Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

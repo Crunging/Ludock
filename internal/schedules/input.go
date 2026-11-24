@@ -131,10 +131,10 @@ func (i *Input) Validate() error {
 		return invalid("Enter a time as HH:MM")
 	}
 	if len(i.Timezone) == 0 || len(i.Timezone) > 100 {
-		return invalid("Unknown timezone")
+		return invalid("Unknown time zone")
 	}
 	if _, ok := schedtime.Location(i.Timezone); !ok {
-		return invalid("Unknown timezone")
+		return invalid("Unknown time zone")
 	}
 	switch i.Kind {
 	case "recurring":
@@ -155,7 +155,7 @@ func (i *Input) Validate() error {
 			return invalid("Unknown date")
 		}
 	default:
-		return invalid("Choose a schedule kind")
+		return invalid("Choose whether this repeats or runs once")
 	}
 	if err := i.validateCommand(); err != nil {
 		return err
@@ -192,7 +192,7 @@ func (i *Input) Validate() error {
 		seen := map[int]bool{}
 		for _, lead := range leads {
 			if lead < 1 || lead > 60 || seen[lead] {
-				return invalid("Lead times must be unique minutes between 1 and 60")
+				return invalid("Warning times must be unique whole numbers between 1 and 60 minutes")
 			}
 			seen[lead] = true
 		}

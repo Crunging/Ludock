@@ -307,7 +307,7 @@ func (s *Server) scheduleNightlyBackups(w http.ResponseWriter, r *http.Request, 
 	ctx := r.Context()
 	timezone := strings.TrimSpace(r.PostFormValue("timezone"))
 	if _, ok := schedtime.Location(timezone); !ok || timezone == "" {
-		s.fail(w, r, request, apperr.New("INVALID_REQUEST", 400, "Unknown timezone"))
+		s.fail(w, r, request, apperr.New("INVALID_REQUEST", 400, "Unknown time zone"))
 		return
 	}
 	if err := s.recheckAdmin(ctx, request); err != nil {

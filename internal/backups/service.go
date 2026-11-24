@@ -517,7 +517,7 @@ const (
 // CapacityError reports a backup that can't fit, saying how much kept
 // backups hold when they are part of the reason.
 func CapacityError(code string, kept int64) error {
-	problem := "The backup disk is down to its free-space reserve."
+	problem := "The backup disk is down to its minimum free space."
 	if code == codeLimit {
 		problem = "Backups have reached their total size limit."
 	}
@@ -739,7 +739,7 @@ func (s *Service) AssertNoOtherWriters(ctx context.Context, server *servers.Cont
 			other := identity.Mount{Type: mount.Type, Source: mount.Source, Destination: mount.Destination, Writable: true, Name: mount.Name}
 			for _, source := range sources {
 				if MountsOverlap(source, other) {
-					return fail("SHARED_DATA_WRITER", "Another running container can write to this server's data. Stop shared writers before backing up or restoring.")
+					return fail("SHARED_DATA_WRITER", "Another running container can write to this server’s data. Stop that container before backing up or restoring.")
 				}
 			}
 		}

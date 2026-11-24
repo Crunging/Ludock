@@ -249,7 +249,7 @@ func TestSaveDataKeepsTheReserve(t *testing.T) {
 		t.Fatal(err)
 	}
 	track, _ := f.s.dataTrack(ctx, dataSaveKey, f.main)
-	if track.Failures != 1 || !strings.Contains(track.Problem, "reserve") || len(dataFiles(t, f.main)) != 0 {
+	if track.Failures != 1 || !strings.Contains(track.Problem, "minimum free space") || len(dataFiles(t, f.main)) != 0 {
 		t.Fatal(track, dataFiles(t, f.main))
 	}
 }
