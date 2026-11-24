@@ -883,7 +883,9 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 	}
 	// The records alone reach the limit; the archives found leave room, so
 	// the Backups tab offers the next backup.
-	f.s.DB.Exec(`UPDATE settings SET value_json=json_set(value_json,'$.maxBytes',55) WHERE key='backups'`)
+	if _, err := f.s.DB.Exec(`UPDATE settings SET value_json=json_set(value_json,'$.maxBytes',55) WHERE key='backups'`); err != nil {
+		t.Fatal(err)
+	}
 	if issues := f.s.Status(ctx).Issues; len(issues) != 0 {
 		t.Fatal(issues)
 	}
