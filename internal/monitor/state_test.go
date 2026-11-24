@@ -109,6 +109,20 @@ func TestRecoveryTurnedOffDuringACheck(t *testing.T) {
 		events.events[0] != "Minecraft: running, but the game stopped answering." {
 		t.Fatal(jobs, events.events)
 	}
+
+	// Nor does a stop through Ludock recorded during the check: the outage
+	// that was read is no longer one to restart for or announce.
+	s, events, serverID, _ = recovering(t, nil)
+	s.Check(ctx, run("running", 500), 1000)
+	hookAt(t, "read", func() {
+		if err := s.SetIntentionalStop(ctx, serverID, true); err != nil {
+			t.Fatal(err)
+		}
+	})
+	s.Check(ctx, run("running", 500), 62_000)
+	if jobs := recoveryJobs(t, s, serverID); len(jobs) != 0 || len(events.events) != 0 {
+		t.Fatal(jobs, events.events)
+	}
 }
 
 // A recovery restart that finishes after a check read the operations is

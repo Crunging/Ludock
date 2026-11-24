@@ -251,9 +251,9 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 	}
 	if err == nil {
 		if scheduleID == "" {
-			saved, err = s.App.Schedules.Create(ctx, request.User(), serverID, draftForSave(input))
+			saved, err = s.App.Schedules.Create(ctx, request.User(), request.Principal.TokenHash, serverID, draftForSave(input))
 		} else {
-			saved, err = s.App.Schedules.Update(ctx, request.User(), serverID, scheduleID, form.Revision, draftForSave(input))
+			saved, err = s.App.Schedules.Update(ctx, request.User(), request.Principal.TokenHash, serverID, scheduleID, form.Revision, draftForSave(input))
 		}
 	}
 	if err != nil {
@@ -290,7 +290,7 @@ func (s *Server) toggleSchedule(w http.ResponseWriter, r *http.Request, request 
 		return
 	}
 	enabled := r.PostFormValue("enabled") == "true"
-	_, err = s.App.Schedules.SetEnabled(r.Context(), request.User(), r.PathValue("id"), r.PathValue("schedule"), revision, enabled)
+	_, err = s.App.Schedules.SetEnabled(r.Context(), request.User(), request.Principal.TokenHash, r.PathValue("id"), r.PathValue("schedule"), revision, enabled)
 	// A stale list reloads either way.
 	w.Header().Set("HX-Trigger", "schedules-changed")
 	if err != nil {
@@ -317,7 +317,7 @@ func (s *Server) scheduleOutcome(w http.ResponseWriter, r *http.Request, request
 }
 
 func (s *Server) deleteSchedule(w http.ResponseWriter, r *http.Request, request *Request) {
-	err := s.App.Schedules.Delete(r.Context(), request.User(), r.PathValue("id"), r.PathValue("schedule"))
+	err := s.App.Schedules.Delete(r.Context(), request.User(), request.Principal.TokenHash, r.PathValue("id"), r.PathValue("schedule"))
 	w.Header().Set("HX-Trigger", "schedules-changed")
 	if err != nil {
 		s.fail(w, r, request, err)

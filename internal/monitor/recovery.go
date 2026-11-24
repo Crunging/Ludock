@@ -11,7 +11,6 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/identity"
-	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -124,10 +123,10 @@ func resetRecovery(raw sql.NullString, previous, policy Policy) sql.NullString {
 }
 
 // saveRecovery replaces a server's recovery state only if it is still as r
-// holds it and the policy it was judged by is still saved; r then holds the
-// saved state.
-func (s *Service) saveRecovery(ctx context.Context, serverID string, r *row, state Recovery) bool {
-	saved, changed, err := s.saveState(ctx, serverID, r.policy, recoveryColumn, r.recovery, state)
+// holds it and the policy it was judged by is still saved, queuing alerts
+// with it; r then holds the saved state.
+func (s *Service) saveRecovery(ctx context.Context, serverID string, r *row, state Recovery, alerts ...alert) bool {
+	saved, changed, err := s.saveState(ctx, serverID, r.policy, recoveryColumn, r.recovery, state, alerts...)
 	if err != nil {
 		log.Warn("Could not save a server's automatic restart; it will be checked again")
 	}
@@ -195,25 +194,35 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 	state.Attempts = recentAttempts(state.Attempts, now)
 	if len(state.Attempts) >= RecoveryAttempts {
 		state.Last, state.LastAt = RecoveryGaveUp, now
-		if !s.saveRecovery(ctx, server.ID, r, state) {
+		// Like the restart below, giving up is announced only for the outage
+		// as it was read: a stop or pause recorded since ends it.
+		saved := encode(state)
+		changed, err := s.apply(ctx, []alert{{"recovery-gave-up:" + server.ID + ":" + strconv.FormatInt(state.SilentSince, 10),
+			server.DisplayName + ": the game stopped answering again. Ludock already tried restarting it 3 times in 6 hours, so it won’t restart it again for now; it needs a look."}},
+			"UPDATE availability SET recovery_json=? WHERE server_id=? AND policy_json=? AND recovery_json IS ? AND "+asRead,
+			append([]any{saved, server.ID, r.policy, r.recovery}, r.asRead()...)...)
+		if err != nil {
+			log.Warn("Could not save a server's automatic restart; it will be checked again")
+		}
+		if !changed {
 			return false
 		}
-		s.notify(notify.ServerProblems, "recovery-gave-up:"+server.ID+":"+strconv.FormatInt(state.SilentSince, 10), server.DisplayName+
-			": the game stopped answering again. Ludock already tried restarting it 3 times in 6 hours, so it won’t restart it again for now; it needs a look.")
+		r.recovery = saved
 		s.changed(server.ID)
 		return true
 	}
 	var job *ops.Job
 	var saved sql.NullString
+	var restarting []alert
 	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
-		// The policy and restarts are as judged above, read on this connection.
-		var policyNow string
-		var recoveryNow sql.NullString
-		if err := tx.QueryRowContext(ctx, "SELECT policy_json,recovery_json FROM availability WHERE server_id=?", server.ID).
-			Scan(&policyNow, &recoveryNow); err != nil {
+		// The policy, restarts and outage are as judged above, read on this
+		// connection: a stop or pause recorded since ends the outage.
+		var same int
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM availability WHERE server_id=? AND policy_json=? AND recovery_json IS ? AND "+asRead,
+			append([]any{server.ID, r.policy, r.recovery}, r.asRead()...)...).Scan(&same); err != nil {
 			return err
 		}
-		if policyNow != r.policy || recoveryNow != r.recovery {
+		if same != 1 {
 			return errRecoveryChanged
 		}
 		var err error
@@ -225,8 +234,11 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 		state.Attempts = append(state.Attempts, now)
 		state.OperationID, state.RestartedAt, state.Pending, state.Last, state.LastAt = job.ID, now, true, RecoveryRestarted, now
 		saved = encode(state)
-		_, err = tx.ExecContext(ctx, "UPDATE availability SET recovery_json=? WHERE server_id=?", saved, server.ID)
-		return err
+		if _, err = tx.ExecContext(ctx, "UPDATE availability SET recovery_json=? WHERE server_id=?", saved, server.ID); err != nil {
+			return err
+		}
+		restarting = []alert{{"recovery:" + job.ID, server.DisplayName + ": the game stopped answering, so Ludock is restarting it."}}
+		return s.queueIn(ctx, tx, restarting)
 	})
 	if err != nil {
 		if !errors.Is(err, errRecoveryChanged) && !apperr.Is(err, "OPERATION_CONFLICT") {
@@ -236,7 +248,7 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 	}
 	r.recovery = saved
 	s.Runner.Wake()
-	s.notify(notify.ServerProblems, "recovery:"+job.ID, server.DisplayName+": the game stopped answering, so Ludock is restarting it.")
+	s.alerted(restarting)
 	s.changed(server.ID)
 	return true
 }
@@ -327,11 +339,12 @@ func (s *Service) trackRecovery(ctx context.Context, server identity.Server, con
 	if equalRecovery(next, state) {
 		return
 	}
-	if !s.saveRecovery(ctx, server.ID, r, next) {
-		return
-	}
+	var alerts []alert
 	if message != "" {
-		s.notify(notify.ServerProblems, "recovery-"+next.Last+":"+next.OperationID, message)
+		alerts = []alert{{"recovery-" + next.Last + ":" + next.OperationID, message}}
+	}
+	if !s.saveRecovery(ctx, server.ID, r, next, alerts...) {
+		return
 	}
 	if next.Last != state.Last || next.Pending != state.Pending {
 		s.changed(server.ID)

@@ -2,6 +2,7 @@ package schedules
 
 import (
 	"context"
+	"database/sql"
 	"slices"
 	"strings"
 	"testing"
@@ -56,9 +57,12 @@ func (f *fixture) withPlayers(online int, known bool) *fakePlayers {
 func TestWaitForEmptyWindow(t *testing.T) {
 	f := setup(t)
 	var notified []string
-	f.s.Notify = func(_ notify.Alert, key, message string) { notified = append(notified, key) }
+	f.s.Queue = func(_ context.Context, _ *sql.Tx, _ notify.Alert, key, message string) (bool, error) {
+		notified = append(notified, key)
+		return true, nil
+	}
 	players := f.withPlayers(2, true)
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(30, WaitSkip)); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(30, WaitSkip)); err != nil {
 		t.Fatal(err)
 	}
 	// A tick a few seconds into the minute still waits from the minute.
@@ -128,7 +132,7 @@ func TestWaitForEmptyWindow(t *testing.T) {
 func TestWaitForEmptyEnds(t *testing.T) {
 	f := setup(t)
 	f.withPlayers(1, true)
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(10, WaitRun)); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(10, WaitRun)); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due)
@@ -143,9 +147,12 @@ func TestWaitForEmptyEnds(t *testing.T) {
 	f.s.DB.Exec("DELETE FROM schedules")
 	f.s.DB.Exec("UPDATE operations SET status='succeeded'")
 	var notified []string
-	f.s.Notify = func(_ notify.Alert, key, message string) { notified = append(notified, key) }
+	f.s.Queue = func(_ context.Context, _ *sql.Tx, _ notify.Alert, key, message string) (bool, error) {
+		notified = append(notified, key)
+		return true, nil
+	}
 	f.withPlayers(0, false)
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due)
@@ -164,7 +171,7 @@ func TestWaitForEmptyEnds(t *testing.T) {
 func TestWaitingRunRecoversAfterRestart(t *testing.T) {
 	f := setup(t)
 	f.withPlayers(3, true)
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(30, WaitRun)); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(30, WaitRun)); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due)
@@ -180,7 +187,7 @@ func TestWaitingRunRecoversAfterRestart(t *testing.T) {
 
 	f.s.DB.Exec("DELETE FROM schedules")
 	f.s.DB.Exec("DELETE FROM operations")
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(30, WaitRun)); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(30, WaitRun)); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due)
@@ -196,7 +203,7 @@ func TestWaitEndsOnRevocationOrChange(t *testing.T) {
 	f := setup(t)
 	f.grant(t, authz.ServerView, authz.ServerRestart, authz.SchedulesManage)
 	players := f.withPlayers(1, true)
-	if _, err := f.s.Create(ctx, friend, f.serverID, waitingRestart(30, WaitRun)); err != nil {
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, waitingRestart(30, WaitRun)); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due)
@@ -216,7 +223,7 @@ func TestWaitEndsOnRevocationOrChange(t *testing.T) {
 	if saved.WaitingUntil == 0 {
 		t.Fatal("did not wait")
 	}
-	paused, err := f.s.SetEnabled(ctx, friend, f.serverID, saved.ID, saved.Revision, false)
+	paused, err := f.s.SetEnabled(ctx, friend, friendSession, f.serverID, saved.ID, saved.Revision, false)
 	if err != nil || paused.WaitingUntil != 0 || !strings.Contains(paused.LastResult, "paused while it waited") {
 		t.Fatal(paused, err)
 	}
@@ -239,16 +246,16 @@ func TestWaitForEmptyValidation(t *testing.T) {
 	warned.Announcements = &Announcements{LeadMinutes: []int{5}}
 	for _, input := range []Input{start, waitingRestart(0, WaitSkip), waitingRestart(MaxWaitMinutes+1, WaitSkip),
 		waitingRestart(30, "later"), warned} {
-		if _, err := f.s.Create(ctx, admin, f.serverID, input); !apperr.Is(err, "INVALID_REQUEST") {
+		if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, input); !apperr.Is(err, "INVALID_REQUEST") {
 			t.Fatal(input, err)
 		}
 	}
 	warned.WaitForEmpty.Then = WaitRun
-	if _, err := f.s.Create(ctx, admin, f.serverID, warned); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, warned); err != nil {
 		t.Fatal(err)
 	}
 	players.lists = false
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(30, WaitSkip)); err != errNoPlayerList {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(30, WaitSkip)); err != errNoPlayerList {
 		t.Fatal(err)
 	}
 }
@@ -260,7 +267,7 @@ func TestWaitingWarningsCountDownToTheEnd(t *testing.T) {
 	f.withPlayers(1, true)
 	input := waitingRestart(10, WaitRun)
 	input.Announcements = &Announcements{LeadMinutes: []int{5}}
-	if _, err := f.s.Create(ctx, admin, f.serverID, input); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, input); err != nil {
 		t.Fatal(err)
 	}
 	claims := func() int {
@@ -307,7 +314,7 @@ func TestWaitingRunsShareReadings(t *testing.T) {
 func TestWaitEdges(t *testing.T) {
 	f := setup(t)
 	players := f.withPlayers(0, true)
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
 		t.Fatal(err)
 	}
 	// Found waiting by a service that has asked for no reading yet, as
@@ -333,7 +340,7 @@ func TestWaitEdges(t *testing.T) {
 
 	f.s.DB.Exec("DELETE FROM schedules")
 	players.now.Stopped = true
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(30, WaitSkip)); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(30, WaitSkip)); err != nil {
 		t.Fatal(err)
 	}
 	busy, err := f.s.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: admin.ID, Kind: "backup"})
@@ -360,7 +367,7 @@ func TestWaitIgnoresEarlierEmptyReading(t *testing.T) {
 	f := setup(t)
 	players := f.withPlayers(0, true)
 	players.now.ReadAt = due - 20_000
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(1, WaitSkip)); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(1, WaitSkip)); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due)
@@ -383,7 +390,7 @@ func TestWaitStoppedServerBusyToTheEnd(t *testing.T) {
 	f := setup(t)
 	players := f.withPlayers(0, true)
 	players.now.Stopped = true
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.s.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: admin.ID, Kind: "backup"}); err != nil {
@@ -404,7 +411,7 @@ func TestWaitRunningServerBusyToTheEnd(t *testing.T) {
 	f := setup(t)
 	players := f.withPlayers(0, true)
 	players.now.ReadAt = due + 1_000
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.s.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: admin.ID, Kind: "backup"}); err != nil {
@@ -428,7 +435,7 @@ func TestWaitNeedsReadingSinceLatestCheck(t *testing.T) {
 	f := setup(t)
 	players := f.withPlayers(0, true)
 	players.now.ReadAt = due + 2_000
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(10, WaitRun)); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(10, WaitRun)); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due)
@@ -455,10 +462,10 @@ func TestBackupScheduleWaitsAndWarns(t *testing.T) {
 	input.Considerate(true, true)
 	skipping := input
 	skipping.WaitForEmpty = &WaitForEmpty{Minutes: 30, Then: WaitSkip}
-	if _, err := f.s.Create(ctx, admin, f.serverID, skipping); !apperr.Is(err, "INVALID_REQUEST") {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, skipping); !apperr.Is(err, "INVALID_REQUEST") {
 		t.Fatal(err)
 	}
-	if _, err := f.s.Create(ctx, admin, f.serverID, input); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, input); err != nil {
 		t.Fatal(err)
 	}
 	claims := func() int {
@@ -533,7 +540,7 @@ func TestConsiderateDefaults(t *testing.T) {
 func TestCancelWaitingRun(t *testing.T) {
 	f := setup(t)
 	players := f.withPlayers(1, true)
-	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(30, WaitRun)); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(30, WaitRun)); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due)
@@ -558,5 +565,55 @@ func TestCancelWaitingRun(t *testing.T) {
 	f.s.Run(ctx, due+86_400_000)
 	if next := f.first(t, admin); next.LastResult != WaitingResult || next.WaitingUntil != due+86_400_000+30*minute {
 		t.Fatal("the next day's run didn't start", next)
+	}
+}
+
+// A session signed out after the web layer checked it, so before a write's
+// transaction commits, makes no schedule write: neither an administrator's on
+// a member's schedule or from the checklist, nor a member's on their own.
+func TestScheduleWritesRecheckTheSession(t *testing.T) {
+	for _, actor := range []*db.SessionUser{admin, friend} {
+		f := setup(t)
+		f.grant(t, authz.ServerView, authz.ServerStart, authz.ServerRestart, authz.SchedulesManage)
+		f.withPlayers(1, true)
+		if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, waitingRestart(30, WaitRun)); err != nil {
+			t.Fatal(err)
+		}
+		f.s.Run(ctx, due)
+		saved := f.first(t, friend)
+		if saved.WaitingUntil == 0 {
+			t.Fatal("not waiting", saved)
+		}
+		if _, err := f.s.DB.Exec("DELETE FROM sessions WHERE token_hash=?", session(actor)); err != nil {
+			t.Fatal(err)
+		}
+		token := session(actor)
+		writes := map[string]func() error{
+			"create": func() error { _, err := f.s.Create(ctx, actor, token, f.serverID, base); return err },
+			"update": func() error {
+				_, err := f.s.Update(ctx, actor, token, f.serverID, saved.ID, saved.Revision, base)
+				return err
+			},
+			"pause": func() error {
+				_, err := f.s.SetEnabled(ctx, actor, token, f.serverID, saved.ID, saved.Revision, false)
+				return err
+			},
+			"delete": func() error { return f.s.Delete(ctx, actor, token, f.serverID, saved.ID) },
+			"cancel wait": func() error {
+				return f.s.CancelWait(ctx, actor, token, f.serverID, saved.ID, saved.LastSlot)
+			},
+		}
+		if actor == admin {
+			writes["checklist"] = func() error { _, err := f.s.CreateAsAdmin(ctx, actor, token, f.serverID, base); return err }
+		}
+		for name, write := range writes {
+			if err := write(); !apperr.Is(err, "AUTHENTICATION_REQUIRED") {
+				t.Fatalf("%s %s: %v", actor.Username, name, err)
+			}
+		}
+		list, err := f.s.List(ctx, admin, f.serverID)
+		if err != nil || len(list) != 1 || list[0].Revision != saved.Revision || list[0].WaitingUntil != saved.WaitingUntil {
+			t.Fatalf("%s: schedules changed: %+v %v", actor.Username, list, err)
+		}
 	}
 }

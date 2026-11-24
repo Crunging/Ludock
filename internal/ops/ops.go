@@ -230,8 +230,11 @@ var laneCapacity = map[string]int{laneLifecycle: 4, laneData: 1, laneConsole: 4}
 type Runner struct {
 	DB    *db.DB
 	Locks *locks.Table
-	// Notify queues a notification (notifications.Service.Notify).
-	Notify func(alert notify.Alert, key, message string)
+	// Queue queues an alert inside tx (notify.Service.QueueIn), so a failed
+	// scheduled job never finishes without its alert; Alerted wakes delivery
+	// once tx commits. Either may be nil.
+	Queue   func(ctx context.Context, tx *sql.Tx, alert notify.Alert, key, message string) (bool, error)
+	Alerted func()
 	// Username resolves an actor ID for history, or "".
 	Username func(id string) string
 	// Changed tells open pages that a server's operation ended: Docker has
@@ -432,6 +435,13 @@ func (r *Runner) Enqueue(ctx context.Context, tx *sql.Tx, options EnqueueOptions
 // finish records a running job's outcome, reporting false when it was
 // cancelled instead. waited notes in its result that it waited for Docker.
 func (r *Runner) finish(ctx context.Context, job *Job, status string, result map[string]any, errorText string, waited bool) (bool, error) {
+	return r.finishAlerting(ctx, job, status, result, errorText, waited, nil)
+}
+
+// finishAlerting is finish for the job of rw, which queues the alert of a
+// failed scheduled job with its outcome.
+func (r *Runner) finishAlerting(ctx context.Context, job *Job, status string, result map[string]any, errorText string, waited bool,
+	scheduled *row) (bool, error) {
 	var resultJSON, errorValue any
 	if result != nil {
 		encoded, _ := json.Marshal(result)
@@ -451,7 +461,7 @@ func (r *Runner) finish(ctx context.Context, job *Job, status string, result map
 	}
 	// The outcome and its audit entry commit together. A job cancelled
 	// meanwhile keeps the outcome its cancellation recorded.
-	finished := false
+	finished, alerted := false, false
 	if err := r.DB.Tx(ctx, func(tx *sql.Tx) error {
 		updated, err := tx.ExecContext(ctx, `UPDATE operations SET status=?1,phase=?1,result_json=CASE
 			WHEN ?2 AND json_valid(COALESCE(?3,result_json,'{}')) THEN json_set(COALESCE(?3,result_json,'{}'),'$.waitedForDocker',json('true'))
@@ -464,9 +474,16 @@ func (r *Runner) finish(ctx context.Context, job *Job, status string, result map
 			return err
 		}
 		finished = true
-		return r.DB.FinishOperationAudit(ctx, tx, job.ID, "server."+job.Kind+".queued", entry)
+		if err := r.DB.FinishOperationAudit(ctx, tx, job.ID, "server."+job.Kind+".queued", entry); err != nil {
+			return err
+		}
+		alerted, err = r.queueScheduledFailure(ctx, tx, scheduled)
+		return err
 	}); err != nil {
 		return false, err
+	}
+	if alerted && r.Alerted != nil {
+		r.Alerted()
 	}
 	if !finished {
 		return false, nil
@@ -507,13 +524,18 @@ func (r *Runner) persist(ctx context.Context, what string, write func() error) b
 	}
 }
 
-func (r *Runner) notifyScheduledFailure(rw *row) {
+// queueScheduledFailure queues the alert for a failed job that a schedule
+// started, through tx.
+func (r *Runner) queueScheduledFailure(ctx context.Context, tx *sql.Tx, rw *row) (bool, error) {
+	if rw == nil || r.Queue == nil {
+		return false, nil
+	}
 	input, err := parseObject(rw.input)
-	if err != nil || r.Notify == nil {
-		return
+	if err != nil {
+		return false, nil
 	}
 	if _, ok := input["scheduleId"].(string); !ok {
-		return
+		return false, nil
 	}
 	// The backup handler may already have recorded its failure; share its key.
 	key := "schedule-failed:" + rw.id
@@ -522,10 +544,10 @@ func (r *Runner) notifyScheduledFailure(rw *row) {
 	}
 	name := "A server"
 	var display string
-	if r.DB.QueryRowContext(context.Background(), "SELECT display_name FROM logical_servers WHERE id=?", rw.serverID).Scan(&display) == nil {
+	if tx.QueryRowContext(ctx, "SELECT display_name FROM logical_servers WHERE id=?", rw.serverID).Scan(&display) == nil {
 		name = display
 	}
-	r.Notify(notify.FailedWork, key, name+": a scheduled "+rw.kind+" failed. Its Activity says why.")
+	return r.Queue(ctx, tx, notify.FailedWork, key, name+": a scheduled "+rw.kind+" failed. Its Activity says why.")
 }
 
 // resourcesBusy returns a job to the queue until its resources are free.
@@ -758,13 +780,10 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 			}
 		}
 		job := &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}
-		finished := false
-		if r.persist(ctx, "finish", func() (err error) {
-			finished, err = r.finish(ctx, job, Failed, nil, message, waited.Load())
+		r.persist(ctx, "finish", func() error {
+			_, err := r.finishAlerting(ctx, job, Failed, nil, message, waited.Load(), rw)
 			return err
-		}) && finished {
-			r.notifyScheduledFailure(rw)
-		}
+		})
 	}
 	for {
 		// A job runs only once it is saved as running: a restart then

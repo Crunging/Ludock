@@ -27,7 +27,7 @@ func (f *fixture) warnedRestart(t *testing.T, owner *db.SessionUser) (Schedule, 
 	input := base
 	input.Action = "restart"
 	input.Announcements = &Announcements{LeadMinutes: []int{5, 1}}
-	created, err := f.s.Create(ctx, owner, f.serverID, input)
+	created, err := f.s.Create(ctx, owner, session(owner), f.serverID, input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,18 +74,18 @@ func (f *fixture) claims(t *testing.T) int {
 func TestPauseCallsOffCountdownOnce(t *testing.T) {
 	f := setup(t)
 	schedule, calls := f.warnedRestart(t, admin)
-	paused, err := f.s.SetEnabled(ctx, admin, f.serverID, schedule.ID, schedule.Revision, false)
+	paused, err := f.s.SetEnabled(ctx, admin, adminSession, f.serverID, schedule.ID, schedule.Revision, false)
 	if err != nil || *calls != 1 {
 		t.Fatal(err, *calls)
 	}
-	resumed, err := f.s.SetEnabled(ctx, admin, f.serverID, schedule.ID, paused.Revision, true)
+	resumed, err := f.s.SetEnabled(ctx, admin, adminSession, f.serverID, schedule.ID, paused.Revision, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.s.SetEnabled(ctx, admin, f.serverID, schedule.ID, resumed.Revision, false); err != nil {
+	if _, err := f.s.SetEnabled(ctx, admin, adminSession, f.serverID, schedule.ID, resumed.Revision, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.s.Delete(ctx, admin, f.serverID, schedule.ID); err != nil || *calls != 1 {
+	if err := f.s.Delete(ctx, admin, adminSession, f.serverID, schedule.ID); err != nil || *calls != 1 {
 		t.Fatal(err, *calls)
 	}
 }
@@ -95,7 +95,7 @@ func TestPauseCallsOffCountdownOnce(t *testing.T) {
 func TestDeleteCallsOffCountdown(t *testing.T) {
 	f := setup(t)
 	schedule, calls := f.warnedRestart(t, admin)
-	if err := f.s.Delete(ctx, admin, f.serverID, schedule.ID); err != nil || *calls != 1 || f.claims(t) != 0 {
+	if err := f.s.Delete(ctx, admin, adminSession, f.serverID, schedule.ID); err != nil || *calls != 1 || f.claims(t) != 0 {
 		t.Fatal(err, *calls)
 	}
 }
@@ -124,14 +124,14 @@ func TestEditCallsOffOnlyAChangedRun(t *testing.T) {
 			f.s.calledOff = func(string, string, int64) { *calls++ }
 			input := schedule.Input
 			test.change(&input)
-			edited, err := f.s.Update(ctx, admin, f.serverID, schedule.ID, schedule.Revision, input)
+			edited, err := f.s.Update(ctx, admin, adminSession, f.serverID, schedule.ID, schedule.Revision, input)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if want := map[bool]int{true: 1}[test.off]; *calls != want {
 				t.Fatalf("called off %d times", *calls)
 			}
-			if err := f.s.Delete(ctx, admin, f.serverID, edited.ID); err != nil || *calls > 1 {
+			if err := f.s.Delete(ctx, admin, adminSession, f.serverID, edited.ID); err != nil || *calls > 1 {
 				t.Fatal(err, *calls)
 			}
 		})
@@ -144,16 +144,16 @@ func TestNoCountdownNothingToCallOff(t *testing.T) {
 	input := base
 	input.Action = "restart"
 	input.Announcements = &Announcements{LeadMinutes: []int{5}}
-	schedule, err := f.s.Create(ctx, admin, f.serverID, input)
+	schedule, err := f.s.Create(ctx, admin, adminSession, f.serverID, input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
 	f.s.calledOff = func(string, string, int64) { calls++ }
-	if _, err := f.s.SetEnabled(ctx, admin, f.serverID, schedule.ID, schedule.Revision, false); err != nil {
+	if _, err := f.s.SetEnabled(ctx, admin, adminSession, f.serverID, schedule.ID, schedule.Revision, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.s.Delete(ctx, admin, f.serverID, schedule.ID); err != nil || calls != 0 {
+	if err := f.s.Delete(ctx, admin, adminSession, f.serverID, schedule.ID); err != nil || calls != 0 {
 		t.Fatal(err, calls)
 	}
 }
@@ -172,7 +172,7 @@ func TestPauseCallsOffOnlyAQueuedRun(t *testing.T) {
 				t.Fatal("not queued", queued.LastResult)
 			}
 			f.s.DB.Exec("UPDATE operations SET status=?", status)
-			if _, err := f.s.SetEnabled(ctx, admin, f.serverID, schedule.ID, queued.Revision, false); err != nil {
+			if _, err := f.s.SetEnabled(ctx, admin, adminSession, f.serverID, schedule.ID, queued.Revision, false); err != nil {
 				t.Fatal(err)
 			}
 			want := map[string]int{"queued": 1}[status]
@@ -212,7 +212,7 @@ func TestSkippedWaitCallsOffCountdown(t *testing.T) {
 			f.withPlayers(1, true)
 			input := waitingRestart(10, WaitRun)
 			input.Announcements = &Announcements{LeadMinutes: []int{5}}
-			if _, err := f.s.Create(ctx, admin, f.serverID, input); err != nil {
+			if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, input); err != nil {
 				t.Fatal(err)
 			}
 			calls := 0
@@ -254,7 +254,7 @@ func TestEditEndsADueRunsCountdown(t *testing.T) {
 	db.Now = func() int64 { return due + 2*minute }
 	input := schedule.Input
 	input.Announcements = &Announcements{LeadMinutes: []int{10, 1}}
-	if _, err := f.s.Update(ctx, admin, f.serverID, schedule.ID, schedule.Revision, input); err != nil || *calls != 1 {
+	if _, err := f.s.Update(ctx, admin, adminSession, f.serverID, schedule.ID, schedule.Revision, input); err != nil || *calls != 1 {
 		t.Fatal(err, *calls)
 	}
 }
@@ -318,7 +318,7 @@ func (f *fixture) soonRestart(t *testing.T) (*Schedule, int64) {
 	input := base
 	input.Action, input.Timezone, input.Time = "restart", "UTC", runAt.UTC().Format("15:04")
 	input.Announcements = &Announcements{LeadMinutes: []int{5}}
-	schedule, err := f.s.Create(ctx, admin, f.serverID, input)
+	schedule, err := f.s.Create(ctx, admin, adminSession, f.serverID, input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestCallOffGoesOnlyToTheWarnedBinding(t *testing.T) {
 			if rebound {
 				f.s.DB.Exec("UPDATE logical_servers SET binding_revision=binding_revision+1 WHERE id=?", f.serverID)
 			}
-			if _, err := f.s.SetEnabled(ctx, admin, f.serverID, schedule.ID, schedule.Revision, false); err != nil {
+			if _, err := f.s.SetEnabled(ctx, admin, adminSession, f.serverID, schedule.ID, schedule.Revision, false); err != nil {
 				t.Fatal(err)
 			}
 			f.s.Wait()
@@ -384,7 +384,7 @@ func TestWarningCalledOffWhileItGoesOutIsTakenBack(t *testing.T) {
 	input := base
 	input.Action, input.Timezone, input.Time = "restart", "UTC", runAt.UTC().Format("15:04")
 	input.Announcements = &Announcements{LeadMinutes: []int{5}}
-	if _, err := f.s.Create(ctx, admin, f.serverID, input); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, input); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Announce(ctx, runAt.UnixMilli()-5*minute)
@@ -431,7 +431,7 @@ func TestUnheardWarningIsNotCalledOff(t *testing.T) {
 		if f.heardOn(t).Valid || said("Server restart") != 0 {
 			t.Fatal("a game that can't message players heard the warning")
 		}
-		if _, err := f.s.SetEnabled(ctx, admin, f.serverID, schedule.ID, schedule.Revision, false); err != nil {
+		if _, err := f.s.SetEnabled(ctx, admin, adminSession, f.serverID, schedule.ID, schedule.Revision, false); err != nil {
 			t.Fatal(err)
 		}
 		f.s.Wait()
@@ -448,7 +448,7 @@ func (f *fixture) warnedRestartUnheard(t *testing.T) (*Schedule, *int) {
 	input := base
 	input.Action = "restart"
 	input.Announcements = &Announcements{LeadMinutes: []int{5}}
-	schedule, err := f.s.Create(ctx, admin, f.serverID, input)
+	schedule, err := f.s.Create(ctx, admin, adminSession, f.serverID, input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +460,7 @@ func (f *fixture) warnedRestartUnheard(t *testing.T) (*Schedule, *int) {
 		t.Fatal("expected one unheard claim")
 	}
 	db.Now = func() int64 { return due - 4*minute }
-	if _, err := f.s.SetEnabled(ctx, admin, f.serverID, schedule.ID, schedule.Revision, false); err != nil {
+	if _, err := f.s.SetEnabled(ctx, admin, adminSession, f.serverID, schedule.ID, schedule.Revision, false); err != nil {
 		t.Fatal(err)
 	}
 	return schedule, calls

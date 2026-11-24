@@ -94,9 +94,13 @@ type Service struct {
 	Runner   *ops.Runner
 	Servers  *servers.Service
 	Locks    *locks.Table
-	Notify   func(alert notify.Alert, key, message string)
-	Console  Broadcaster
-	Players  Players
+	// Queue queues an alert inside tx (notify.Service.QueueIn), with the
+	// skip that raises it; Alerted wakes delivery once tx commits. Either
+	// may be nil.
+	Queue   func(ctx context.Context, tx *sql.Tx, alert notify.Alert, key, message string) (bool, error)
+	Alerted func()
+	Console Broadcaster
+	Players Players
 
 	mu         sync.Mutex
 	announcing map[string]bool
@@ -363,6 +367,29 @@ func assertUnchanged(ctx context.Context, tx *sql.Tx, before, serverID string, u
 	return err
 }
 
+// write runs fn in a transaction that first confirms, through tx, the
+// requester's exact session and that the authority state read before the
+// checks is unchanged. Authority that is being an administrator is checked as
+// db.AdminMutation does.
+func (s *Service) write(ctx context.Context, actor *db.SessionUser, tokenHash string, admin bool, state, serverID string, users []string,
+	fn func(*sql.Tx) error) error {
+	within := func(tx *sql.Tx) error {
+		if err := assertUnchanged(ctx, tx, state, serverID, users...); err != nil {
+			return err
+		}
+		return fn(tx)
+	}
+	if admin {
+		return authz.AdminMutationError(s.DB.AdminMutation(ctx, actor.ID, tokenHash, db.Now(), within))
+	}
+	return authz.AdminMutationError(s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		if err := db.AssertSession(ctx, tx, actor.ID, tokenHash, db.Now()); err != nil {
+			return err
+		}
+		return within(tx)
+	}))
+}
+
 // List lists every schedule on a server, whoever owns it. Another owner's
 // console command is shown only to someone who could send it themselves.
 func (s *Service) List(ctx context.Context, actor *db.SessionUser, serverID string) ([]Schedule, error) {
@@ -466,7 +493,17 @@ func payloadSize(input any) error {
 	return nil
 }
 
-func (s *Service) Create(ctx context.Context, actor *db.SessionUser, serverID string, data Input) (*Schedule, error) {
+// Create saves a schedule owned by actor, signed in with tokenHash.
+func (s *Service) Create(ctx context.Context, actor *db.SessionUser, tokenHash, serverID string, data Input) (*Schedule, error) {
+	return s.create(ctx, actor, tokenHash, serverID, data, false)
+}
+
+// CreateAsAdmin is Create for work only an administrator may ask for.
+func (s *Service) CreateAsAdmin(ctx context.Context, actor *db.SessionUser, tokenHash, serverID string, data Input) (*Schedule, error) {
+	return s.create(ctx, actor, tokenHash, serverID, data, true)
+}
+
+func (s *Service) create(ctx context.Context, actor *db.SessionUser, tokenHash, serverID string, data Input, admin bool) (*Schedule, error) {
 	if err := payloadSize(data); err != nil {
 		return nil, err
 	}
@@ -498,11 +535,8 @@ func (s *Service) Create(ctx context.Context, actor *db.SessionUser, serverID st
 		return nil, err
 	}
 	encoded, _ := json.Marshal(data)
-	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
-		// Access revoked after the checks above plants nothing.
-		if err := assertUnchanged(ctx, tx, state, serverID, actor.ID); err != nil {
-			return err
-		}
+	// Access revoked after the checks above plants nothing.
+	err = s.write(ctx, actor, tokenHash, admin, state, serverID, []string{actor.ID}, func(tx *sql.Tx) error {
 		// Check the global boundary first; this stops after a bounded number
 		// of rows even on a database already over it.
 		var present int
@@ -546,7 +580,7 @@ func (s *Service) Create(ctx context.Context, actor *db.SessionUser, serverID st
 
 var errNotFound = apperr.New("NOT_FOUND", 404, "Schedule not found")
 
-func (s *Service) Delete(ctx context.Context, actor *db.SessionUser, serverID, id string) error {
+func (s *Service) Delete(ctx context.Context, actor *db.SessionUser, tokenHash, serverID, id string) error {
 	state, err := authorityState(ctx, s.DB, serverID, actor.ID)
 	if err != nil {
 		return err
@@ -556,11 +590,9 @@ func (s *Service) Delete(ctx context.Context, actor *db.SessionUser, serverID, i
 		return err
 	}
 	action, heard := "", int64(0)
-	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
-		// A grant or role revoked after the check above stops the deletion.
-		if err := assertUnchanged(ctx, tx, state, serverID, actor.ID); err != nil {
-			return err
-		}
+	// A session, grant, or role revoked after the check above stops the
+	// deletion.
+	err = s.write(ctx, actor, tokenHash, current.Role == db.RoleAdmin, state, serverID, []string{actor.ID}, func(tx *sql.Tx) error {
 		r, err := s.get(ctx, tx, id, serverID)
 		if err != nil {
 			return err
@@ -591,7 +623,8 @@ func (s *Service) Delete(ctx context.Context, actor *db.SessionUser, serverID, i
 	return err
 }
 
-func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, id string, expected int64, update *Input, enabled *bool) (*Schedule, error) {
+func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, tokenHash, serverID, id string, expected int64, update *Input,
+	enabled *bool) (*Schedule, error) {
 	pausing := enabled != nil && !*enabled
 	// The authority state is read before any check, so the transaction can
 	// tell whether the requester's or owner's access changed since.
@@ -661,16 +694,13 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 	}
 	var result *row
 	changed, heard, action := false, int64(0), ""
-	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
+	err = s.write(ctx, actor, tokenHash, current.Role == db.RoleAdmin, state, serverID, users, func(tx *sql.Tx) error {
 		r, err := s.get(ctx, tx, id, serverID)
 		if err != nil {
 			return err
 		}
 		// The pinned revision keeps the owner and settings checked above.
 		if err := check(r); err != nil {
-			return err
-		}
-		if err := assertUnchanged(ctx, tx, state, serverID, users...); err != nil {
 			return err
 		}
 		previous, data, err := next(r)
@@ -754,25 +784,19 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 }
 
 // Update replaces a schedule's settings at the expected revision.
-func (s *Service) Update(ctx context.Context, actor *db.SessionUser, serverID, id string, revision int64, data Input) (*Schedule, error) {
+func (s *Service) Update(ctx context.Context, actor *db.SessionUser, tokenHash, serverID, id string, revision int64, data Input) (*Schedule, error) {
 	if err := payloadSize(data); err != nil {
 		return nil, err
 	}
 	if err := data.Validate(); err != nil {
 		return nil, err
 	}
-	return s.mutate(ctx, actor, serverID, id, revision, &data, nil)
+	return s.mutate(ctx, actor, tokenHash, serverID, id, revision, &data, nil)
 }
 
 // SetEnabled pauses or resumes a schedule at the expected revision.
-func (s *Service) SetEnabled(ctx context.Context, actor *db.SessionUser, serverID, id string, revision int64, enabled bool) (*Schedule, error) {
-	return s.mutate(ctx, actor, serverID, id, revision, nil, &enabled)
-}
-
-func (s *Service) notify(alert notify.Alert, key, message string) {
-	if s.Notify != nil {
-		s.Notify(alert, key, message)
-	}
+func (s *Service) SetEnabled(ctx context.Context, actor *db.SessionUser, tokenHash, serverID, id string, revision int64, enabled bool) (*Schedule, error) {
+	return s.mutate(ctx, actor, tokenHash, serverID, id, revision, nil, &enabled)
 }
 
 // errScheduleChanged rolls back a run for a schedule edited since it was
@@ -921,24 +945,48 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 		log.Warn("Could not evaluate a schedule; it will be retried", logging.F("scheduleId", r.id))
 		return
 	}
-	var result sql.Result
-	var recordErr error
 	stillWaiting := ""
 	if waiting(r) {
 		stillWaiting = stillWaitingSQL
 	}
-	if slot != "" {
-		result, recordErr = s.DB.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=NULL,last_result=? WHERE id=? AND revision=?"+stillWaiting,
-			slot, now, reason, r.id, r.revision)
-	} else {
-		result, recordErr = s.DB.ExecContext(ctx, "UPDATE schedules SET last_result=? WHERE id=? AND revision=?"+stillWaiting, reason, r.id, r.revision)
+	key := slot
+	if key == "" {
+		key = "invalid"
 	}
+	// The skip and its alert commit together. A command is expected to skip
+	// while its server is stopped or busy, and alerts nobody.
+	changed, alerted := false, false
+	recordErr := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		var result sql.Result
+		var err error
+		if slot != "" {
+			result, err = tx.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=NULL,last_result=? WHERE id=? AND revision=?"+stillWaiting,
+				slot, now, reason, r.id, r.revision)
+		} else {
+			result, err = tx.ExecContext(ctx, "UPDATE schedules SET last_result=? WHERE id=? AND revision=?"+stillWaiting, reason, r.id, r.revision)
+		}
+		if err != nil {
+			return err
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows == 0 {
+			return err
+		}
+		changed = true
+		if skip != "" || s.Queue == nil {
+			return nil
+		}
+		alerted, err = s.Queue(ctx, tx, notify.FailedWork, "schedule:"+r.id+":"+key, "A scheduled Ludock action could not run. Review its server and permissions.")
+		return err
+	})
 	if recordErr != nil {
 		log.Warn("Could not record or notify a skipped schedule run", logging.F("scheduleId", r.id))
 		return
 	}
-	if changed, err := result.RowsAffected(); err != nil || changed == 0 {
+	if !changed {
 		return
+	}
+	if alerted && s.Alerted != nil {
+		s.Alerted()
 	}
 	// A run that won't happen calls off its countdown, unless its time
 	// passed long ago while Ludock was down.
@@ -947,18 +995,9 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 			s.sayCalledOff(r.serverID, action, heard)
 		}
 	}
-	// A command is expected to skip while its server is stopped or busy.
-	if skip != "" {
-		return
-	}
-	if !configurationValid && r.lastResult.String != reason {
+	if skip == "" && !configurationValid && r.lastResult.String != reason {
 		log.Warn("Saved schedule configuration is invalid; recreate the schedule", logging.F("scheduleId", r.id))
 	}
-	key := slot
-	if key == "" {
-		key = "invalid"
-	}
-	s.notify(notify.FailedWork, "schedule:"+r.id+":"+key, "A scheduled Ludock action could not run. Review its server and permissions.")
 }
 
 // queue enqueues a run's operation and records it on the schedule in one

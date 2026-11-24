@@ -226,7 +226,7 @@ func TestDeletedOnStopServerOffersNoStop(t *testing.T) {
 	p := newPages(t)
 	ctx := context.Background()
 	restart := schedules.Input{Kind: "recurring", Action: "restart", Enabled: true, Time: "08:00", Timezone: "UTC", Days: []int{0, 1, 2, 3, 4, 5, 6}}
-	if _, err := p.app.Schedules.Create(ctx, &p.admin.User, p.server, restart); err != nil {
+	if _, err := p.app.Schedules.Create(ctx, &p.admin.User, p.admin.TokenHash, p.server, restart); err != nil {
 		t.Fatal(err)
 	}
 	p.engine.Update(p.docker, func(c *fakedocker.Container) {

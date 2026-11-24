@@ -11,7 +11,6 @@ import (
 
 	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/identity"
-	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/resources"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -182,16 +181,17 @@ const (
 
 // saveState replaces one of a server's states only if it is still previous
 // and the policy it was judged by is still saved, so a policy saved
-// meanwhile and its reset are kept. It returns the value saved.
-func (s *Service) saveState(ctx context.Context, serverID, policy, column string, previous sql.NullString, value any) (sql.NullString, bool, error) {
+// meanwhile and its reset are kept. alerts are queued with the change. It
+// returns the value saved.
+func (s *Service) saveState(ctx context.Context, serverID, policy, column string, previous sql.NullString, value any,
+	alerts ...alert) (sql.NullString, bool, error) {
 	encoded := encode(value)
-	result, err := s.DB.ExecContext(ctx, "UPDATE availability SET "+column+"=? WHERE server_id=? AND policy_json=? AND "+column+" IS ?",
+	changed, err := s.apply(ctx, alerts, "UPDATE availability SET "+column+"=? WHERE server_id=? AND policy_json=? AND "+column+" IS ?",
 		encoded, serverID, policy, previous)
 	if err != nil {
 		return previous, false, err
 	}
-	changed, err := result.RowsAffected()
-	return encoded, changed == 1, err
+	return encoded, changed, nil
 }
 
 // resetAlerts ends the disk and memory alerts whose settings changed,
@@ -327,44 +327,33 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 		}
 		next, ended := evaluateDisk(previous, spaces, policy.DiskPercent, now)
 		next.Revision = server.BindingRevision
-		saved, changed, err := s.saveState(ctx, server.ID, policy.row.policy, diskColumn, policy.row.disk, next)
-		if err != nil || !changed {
+		// Each alert is keyed by its start and saved as sent with it.
+		var alerts []alert
+		for _, folder := range ended {
+			if folder.Notified {
+				alerts = append(alerts, alert{"disk-recovery:" + server.ID + ":" + folder.Path + ":" + strconv.FormatInt(folder.AlertSince, 10),
+					fmt.Sprintf("%s: the disk under %s has space again (%.0f%% full).", server.DisplayName, folder.Path, folder.Percent())})
+			}
+		}
+		for index := range next.Folders {
+			folder := &next.Folders[index]
+			if folder.AlertSince == 0 || folder.Notified {
+				continue
+			}
+			alerts = append(alerts, alert{"disk:" + server.ID + ":" + folder.Path + ":" + strconv.FormatInt(folder.AlertSince, 10),
+				fmt.Sprintf("%s: the disk under %s is %.0f%% full (%s free).", server.DisplayName, folder.Path, folder.Percent(),
+					datasize.Format(folder.AvailableBytes))})
+			folder.Notified = true
+		}
+		if _, changed, err := s.saveState(ctx, server.ID, policy.row.policy, diskColumn, policy.row.disk, next, alerts...); err != nil || !changed {
 			log.Warn("Could not save a server's disk space; it will be measured again")
 			continue
 		}
-		for _, folder := range ended {
-			if folder.Notified {
-				s.notify(notify.ServerProblems, "disk-recovery:"+server.ID+":"+folder.Path+":"+strconv.FormatInt(folder.AlertSince, 10),
-					fmt.Sprintf("%s: the disk under %s has space again (%.0f%% full).", server.DisplayName, folder.Path, folder.Percent()))
-			}
-		}
-		s.raiseDisk(ctx, server, policy.row.policy, saved, next)
 		if next.alertingPaths() != shown {
 			s.changed(server.ID)
 		}
 	}
 	return nil
-}
-
-// raiseDisk sends the alerts saved but not yet sent, then records them as
-// sent. Each is keyed by its saved start, so a retry sends it once.
-func (s *Service) raiseDisk(ctx context.Context, server identity.Server, policy string, saved sql.NullString, state DiskState) {
-	sent := false
-	for index := range state.Folders {
-		folder := &state.Folders[index]
-		if folder.AlertSince == 0 || folder.Notified {
-			continue
-		}
-		s.notify(notify.ServerProblems, "disk:"+server.ID+":"+folder.Path+":"+strconv.FormatInt(folder.AlertSince, 10),
-			fmt.Sprintf("%s: the disk under %s is %.0f%% full (%s free).", server.DisplayName, folder.Path, folder.Percent(),
-				datasize.Format(folder.AvailableBytes)))
-		folder.Notified, sent = true, true
-	}
-	if sent {
-		if _, _, err := s.saveState(ctx, server.ID, policy, diskColumn, saved, state); err != nil {
-			log.Warn("Could not save a server's disk alert; it may be sent again")
-		}
-	}
 }
 
 // CheckMemory runs after each minute's resource samples. limits holds, for
@@ -418,26 +407,24 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 		if next == previous && (next.AlertSince == 0 || next.Notified) {
 			continue
 		}
-		saved, changed, err := s.saveState(ctx, server.ID, policy.row.policy, memoryColumn, policy.row.memory, next)
-		if err != nil || !changed {
+		var alerts []alert
+		ended := previous.AlertSince != 0 && next.AlertSince == 0
+		// Like a disk alert, one that ends with its binding sends no recovery.
+		if ended && previous.Notified && previous.Revision == next.Revision {
+			alerts = append(alerts, alert{"memory-recovery:" + server.ID + ":" + strconv.FormatInt(previous.AlertSince, 10),
+				server.DisplayName + ": memory use is no longer near its limit."})
+		}
+		raised := next.AlertSince != 0 && !next.Notified
+		if raised {
+			alerts = append(alerts, alert{"memory:" + server.ID + ":" + strconv.FormatInt(next.AlertSince, 10),
+				fmt.Sprintf("%s: over %d%% of its memory limit for %s.", server.DisplayName, policy.MemoryPercent, minutes(policy.MemoryMinutes))})
+			next.Notified = true
+		}
+		if _, changed, err := s.saveState(ctx, server.ID, policy.row.policy, memoryColumn, policy.row.memory, next, alerts...); err != nil || !changed {
 			log.Warn("Could not save a server's memory alert; it will be checked again")
 			continue
 		}
-		if previous.AlertSince != 0 && next.AlertSince == 0 {
-			// Like a disk alert, one that ends with its binding sends no recovery.
-			if previous.Notified && previous.Revision == next.Revision {
-				s.notify(notify.ServerProblems, "memory-recovery:"+server.ID+":"+strconv.FormatInt(previous.AlertSince, 10),
-					server.DisplayName+": memory use is no longer near its limit.")
-			}
-			s.changed(server.ID)
-		}
-		if next.AlertSince != 0 && !next.Notified {
-			s.notify(notify.ServerProblems, "memory:"+server.ID+":"+strconv.FormatInt(next.AlertSince, 10),
-				fmt.Sprintf("%s: over %d%% of its memory limit for %s.", server.DisplayName, policy.MemoryPercent, minutes(policy.MemoryMinutes)))
-			next.Notified = true
-			if _, _, err := s.saveState(ctx, server.ID, policy.row.policy, memoryColumn, saved, next); err != nil {
-				log.Warn("Could not save a server's memory alert; it may be sent again")
-			}
+		if ended || raised {
 			s.changed(server.ID)
 		}
 	}

@@ -733,6 +733,16 @@ func (d *DB) UpgradePasswordHashIfUnchanged(ctx context.Context, id, oldHash, ne
 	return err
 }
 
+// AssertSession confirms through tx that tokenHash is still one of userID's
+// unexpired sessions on an enabled account, or returns ErrSessionGone.
+func AssertSession(ctx context.Context, tx *sql.Tx, userID, tokenHash string, now int64) error {
+	valid, err := sessionValid(ctx, tx, userID, tokenHash, now)
+	if err == nil && !valid {
+		err = ErrSessionGone
+	}
+	return err
+}
+
 func sessionValid(ctx context.Context, tx *sql.Tx, userID, tokenHash string, now int64) (bool, error) {
 	var count int
 	err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions JOIN users ON users.id = sessions.user_id
@@ -783,12 +793,8 @@ func (d *DB) ChangePassword(ctx context.Context, userID, tokenHash, oldHash, new
 // requesting session still belongs to an enabled administrator.
 func (d *DB) AdminMutation(ctx context.Context, adminID, tokenHash string, now int64, fn func(tx *sql.Tx) error) error {
 	return d.Tx(ctx, func(tx *sql.Tx) error {
-		valid, err := sessionValid(ctx, tx, adminID, tokenHash, now)
-		if err != nil {
+		if err := AssertSession(ctx, tx, adminID, tokenHash, now); err != nil {
 			return err
-		}
-		if !valid {
-			return ErrSessionGone
 		}
 		var role string
 		if err := tx.QueryRowContext(ctx, "SELECT role FROM users WHERE id = ?", adminID).Scan(&role); err != nil {
