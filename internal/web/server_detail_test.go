@@ -254,6 +254,12 @@ func TestDeletedOnStopServerOffersNoStop(t *testing.T) {
 		strings.Contains(response.Body.String(), "create-backup") {
 		t.Fatal(response.Code, response.Body.String())
 	}
+	// A stale Create backup form hears the reason that matters, not that
+	// the server has no data folders.
+	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusConflict ||
+		!strings.Contains(readBody(t, response), "--rm") {
+		t.Fatal(response.StatusCode)
+	}
 	for _, action := range []string{"stop", "restart", "backup"} {
 		form := url.Values{"kind": {"recurring"}, "action": {action}, "time": {"09:00"}, "timezone": {"UTC"}, "days": {"1"}}
 		if response := p.action("/servers/"+p.server+"/schedules", p.admin, form); response.StatusCode != http.StatusConflict {

@@ -249,8 +249,12 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request, request *R
 		s.fail(w, r, request, err)
 		return
 	}
-	if len(resolved.Container.FileRoots) == 0 {
-		s.fail(w, r, request, backups.ErrNoRoots)
+	// The --rm refusal comes first: adding a data folder wouldn't lift it.
+	if err = resolved.Container.Refusal(ops.KindBackup); err == nil && len(resolved.Container.FileRoots) == 0 {
+		err = backups.ErrNoRoots
+	}
+	if err != nil {
+		s.fail(w, r, request, err)
 		return
 	}
 	var input map[string]any
