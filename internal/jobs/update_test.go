@@ -71,7 +71,7 @@ func (f *fixture) interrupt(t *testing.T, prepare func(id string, swap *swapStat
 	swap := swapState{Stage: swapCreating, Name: "mc", Temporary: servers.ReplacementName("mc", id),
 		RestartPolicy: json.RawMessage(`{"Name":"unless-stopped"}`)}
 	prepare(id, &swap)
-	running := true
+	running := !f.wasStopped
 	var swapJSON json.RawMessage
 	if swap.Stage != "" {
 		swapJSON, _ = json.Marshal(swap)
@@ -172,17 +172,19 @@ func TestUpdateRecoveryUndoesUncheckedReplacement(t *testing.T) {
 func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
 	finished := "Ludock restarted while the updated container replaced the previous one, so it finished the update."
 	for _, c := range []struct {
-		name                 string
-		left, stopped, fails bool
-		guidance             string
+		name                             string
+		left, stopped, fails, wasStopped bool
+		guidance                         string
 	}{
 		{name: "original removed", guidance: finished},
+		{name: "server was stopped", stopped: true, wasStopped: true, guidance: finished},
 		{name: "original left dead", left: true, guidance: finished},
 		{name: "replacement stopped", stopped: true, guidance: finished},
 		{name: "replacement won't start", stopped: true, fails: true, guidance: finished +
 			" Its new container had stopped, and Docker couldn’t start it again, so the server is stopped. Check it, then start it."},
 	} {
 		f := setup(t)
+		f.wasStopped = c.wasStopped
 		var replacement string
 		job := f.interrupt(t, func(id string, swap *swapState) {
 			replacement = f.replacement(t, id, !c.stopped)
@@ -201,9 +203,15 @@ func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
 		}
 		current, taken := f.containerNamed("mc"), &fakedocker.Container{}
 		f.engine.Update(replacement, func(c *fakedocker.Container) { *taken = *c })
-		if current == nil || current.ID != replacement || current.State.Running == c.fails || f.engine.Container(f.game) != nil ||
+		if current == nil || current.ID != replacement || current.State.Running != (!c.fails && !c.wasStopped) || f.engine.Container(f.game) != nil ||
 			restartPolicy(taken) != "unless-stopped" {
 			t.Fatalf("%s: replacement did not take over the server as it was: %+v", c.name, current)
+		}
+		// A server left stopped on purpose is no outage.
+		var intentional bool
+		f.jobs.DB.QueryRow("SELECT intentionally_stopped FROM availability WHERE server_id=?", f.serverID).Scan(&intentional)
+		if intentional != (c.fails || c.wasStopped) {
+			t.Fatalf("%s: intentionally stopped %v", c.name, intentional)
 		}
 	}
 }

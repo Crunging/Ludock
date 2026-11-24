@@ -47,6 +47,8 @@ type fixture struct {
 	data     string
 	backupTo string
 	admin    *db.SessionUser
+	// wasStopped makes interrupt record a server that was stopped.
+	wasStopped bool
 	// adminSession is the admin's token hash.
 	adminSession string
 	mu           sync.Mutex

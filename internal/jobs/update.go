@@ -186,6 +186,10 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 				j.notify(notify.Results, "operation:"+job.Job.ID, "An update finished after Ludock restarted, but the server’s new container is stopped and couldn’t be started. Check it, then start it.")
 				return map[string]any{"guidance": finished + " Its new container had stopped, and Docker couldn’t start it again, so the server is stopped. Check it, then start it."}, nil
 			}
+			// A server that was stopped stays stopped on purpose, as when the
+			// update finishes without a restart.
+			running := job.Job.Recovery.InitialRunning != nil && *job.Job.Recovery.InitialRunning
+			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, !running))
 			return map[string]any{"guidance": finished}, nil
 		}
 	}
