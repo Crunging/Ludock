@@ -172,7 +172,7 @@ func TestHTTPDestinationRequests(t *testing.T) {
 			map[string]any{"title": "Ludock", "message": "Survival is unavailable.", "priority": float64(5)}},
 		{Webhook, Config{URL: "https://hooks.example/in?token=x", Token: "Basic abc"}, "https://hooks.example/in?token=x",
 			map[string]string{"Authorization": "Basic abc"},
-			map[string]any{"source": "ludock", "id": "d1", "kind": "event", "message": "Survival is unavailable.", "createdAt": "2026-01-02T03:04:05Z"}},
+			map[string]any{"source": "ludock", "id": "d1", "kind": "event", "alert": "problems", "message": "Survival is unavailable.", "createdAt": "2026-01-02T03:04:05Z"}},
 	} {
 		var got *http.Request
 		var body map[string]any
@@ -186,7 +186,7 @@ func TestHTTPDestinationRequests(t *testing.T) {
 			t.Fatal(c.d, err)
 		}
 		if _, err := s.DB.Exec(`INSERT INTO notification_deliveries(id,event_key,destination,message,kind,next_attempt_at,created_at)
-			VALUES('d1','k',?,'Survival is unavailable.','event',0,1767323045000)`, string(c.d)); err != nil {
+			VALUES('d1','problems:k',?,'Survival is unavailable.','event',0,1767323045000)`, string(c.d)); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.Deliver(ctx); err != nil {

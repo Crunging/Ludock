@@ -32,7 +32,8 @@ image doesn't verify where it came from.
 | Core Keeper | `escaping/core-keeper-dedicated` | — | — |
 | Vintage Story | `zsuatem/vintagestory`, `devidian/vintagestory` | Vintage Story console (server input) | Health check |
 
-The console port is where Ludock sends commands, inside the container. The
+The console port is where Ludock sends commands, inside the container; a
+container that sets `RCON_PORT` uses that port instead of the default. The
 status check asks the game whether it answers; when the image documents a
 variable for its port, listed after the port, that variable's value wins.
 The Steam server query is Valve's A2S, which Valheim answers only when the
@@ -255,6 +256,33 @@ database and Docker are reachable, and 503 with `{"status":"degraded"}`
 otherwise. The image's `HEALTHCHECK` runs `ludock healthcheck` against it.
 Ludock has no other HTTP API.
 
+## Webhook alerts
+
+The **Webhook** destination sends each alert as a JSON `POST`:
+
+```json
+{
+  "source": "ludock",
+  "id": "0c9d2f4e-6f0b-4c9e-9a53-0d3f6c1d2b7a",
+  "kind": "event",
+  "alert": "problems",
+  "message": "Survival: the server is down.",
+  "createdAt": "2026-01-02T03:04:05Z"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `source` | Always `ludock` |
+| `id` | One per alert and destination; a retry repeats it |
+| `kind` | `event` for an alert, `test` for **Send test notification** |
+| `alert` | The alert type: `problems`, `failures`, `results`, or `images`, in the order **Alert types** lists them. A test has none |
+| `message` | The alert as people read it. Its wording can change between versions, so scripts should go by `alert` |
+| `createdAt` | When the alert was raised, in UTC |
+
+The token, when you set one, is sent as the `Authorization` header exactly as
+typed. Any 2xx answer counts as delivered, and redirects aren't followed.
+
 ## Updates
 
 **Update server** (**Update image** for a game Ludock doesn't know) pulls the
@@ -442,6 +470,11 @@ docker compose up -d ludock
 
 Its data and your servers stay as they are. Work Ludock is stopped in the
 middle of is recovered at the next start.
+
+`latest` follows every release. Each release is also published under its
+version, such as `1.2.3`, and moves the shorter tags `1.2` and `1`. To stay
+on one major version, set `image: ghcr.io/crunging/ludock:1` in
+`compose.yaml`. `nightly` is the newest unreleased build.
 
 Ludock can't use data from a newer version than the one starting, from a
 pre-1.0 build, or from another program. It says which in its log and on its
