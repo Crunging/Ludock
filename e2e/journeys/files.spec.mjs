@@ -98,6 +98,20 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   await dialog.getByRole("button", { name: "Create folder" }).click();
   await expect(page.locator("#file-feedback")).toHaveText("Created “mods”.");
 
+  // A folder of mods goes up in one go; a file the server refuses fails alone.
+  await page.getByRole("link", { name: "mods" }).click();
+  await expect(page.locator(".file-list")).toContainText("This folder is empty");
+  const mods = Array.from({ length: 40 }, (_, index) => ({ name: `mod-${index + 1}.jar`, mimeType: "application/java-archive",
+    buffer: Buffer.from(`mod ${index + 1}\n`.repeat(index + 1)) }));
+  await page.locator("[data-upload-input]").setInputFiles([...mods.slice(0, 20), { name: ".ludock-mod.jar", mimeType: "application/java-archive",
+    buffer: Buffer.from("reserved\n") }, ...mods.slice(20)]);
+  await expect(page.locator("#file-feedback")).toHaveText("Uploaded 40 of 41 files. Could not upload “.ludock-mod.jar”: " +
+    "Names starting with .ludock- are kept for Ludock’s own work folders. Choose another name.");
+  await expect(names).toHaveCount(40);
+  for (const mod of mods) expect(readFileSync(join(ownServer.data, "mods", mod.name))).toEqual(mod.buffer);
+  expect(readdirSync(join(ownServer.data, "mods"))).toHaveLength(40);
+  await page.locator(".file-breadcrumbs").getByRole("link", { name: ownServer.container }).click();
+
   await page.locator(".file-row", { hasText: "mods" }).getByRole("button", { name: "Actions for mods" }).click();
   await page.getByRole("button", { name: "Rename" }).click();
   await dialog.getByLabel("New name").fill("world");
@@ -267,14 +281,17 @@ test("a save or upload whose result is lost is reported as unconfirmed, not fail
   await expect(dialog.locator("pre")).toContainText("motd=Maybe saved");
   await dialog.getByRole("button", { name: "Close" }).click();
 
+  // A file over 16 MiB is sent on its own, so the next one waits for it.
   await fake("/fake/lose-upload");
   await page.locator("[data-upload-input]").setInputFiles([
-    { name: "lost.txt", mimeType: "text/plain", buffer: Buffer.from("lost result\n") },
+    { name: "lost.bin", mimeType: "application/octet-stream", buffer: Buffer.alloc(17 * 1024 * 1024, 1) },
     { name: "never.txt", mimeType: "text/plain", buffer: Buffer.from("not sent\n") },
   ]);
-  await expect(page.locator("#file-feedback")).toHaveText(
-    "Uploaded 0 of 2 files. The result for “lost.txt” could not be confirmed. The upload may have completed. Review the folder before uploading again.");
-  await expect(page.locator(".file-row__name")).toContainText(["lost.txt"]);
+  await expect(page.locator("#file-feedback p")).toHaveText("Uploaded 0 of 2 files.");
+  await expect(page.locator("#file-feedback li")).toHaveText([
+    "The result for “lost.bin” could not be confirmed. The upload may have completed. Review the folder before uploading again.",
+    "The remaining file wasn’t uploaded."]);
+  await expect(page.locator(".file-row__name")).toContainText(["lost.bin"]);
   await expect(page.locator(".file-row__name", { hasText: "never.txt" })).toHaveCount(0);
 
   // Both are in the audit log, since either may have happened.

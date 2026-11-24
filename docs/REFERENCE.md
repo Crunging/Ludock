@@ -234,7 +234,7 @@ needs `ludock.address`.
 | Unpacking an archive | 20 GiB, 100,000 entries, 64 nested folders, and 100 times the archive's size plus 1 MiB; 30 minutes |
 | Selection | 500 entries of one folder |
 | Folder listing | 10,000 entries |
-| Upload or download | 30 minutes, or 60 seconds without data for an upload |
+| Upload or download | 30 minutes, or 30 seconds without data for an upload |
 | Other file actions | 55 seconds |
 | Backup archive | 100,000 entries and 64 folder levels; use `ludock.files` for smaller folders |
 | Shell command | 60 seconds |

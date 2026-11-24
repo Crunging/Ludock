@@ -88,8 +88,9 @@ type Engine struct {
 	// ExitDelay records each exec's exit this long after its stream closes,
 	// as Docker sometimes does.
 	ExitDelay time.Duration
-	// LoseUploads makes the next N file-helper uploads finish and then fail
-	// their exec inspection, as a daemon that loses the result can.
+	// LoseUploads makes the next N file-helper uploads finish without their
+	// output and then fail their exec inspection, as a daemon that loses the
+	// result can.
 	LoseUploads int
 	// HangCreates makes the next N container creates make the container and
 	// never answer, as a daemon whose response is lost can.

@@ -19,7 +19,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/Crunging/Ludock/internal/apperr"
-	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/games"
@@ -83,16 +82,21 @@ type Service struct {
 	// administrator's choice; nil reads its labels and image alone.
 	Managed func(ctx context.Context, info *docker.ContainerInspect) (bool, error)
 	// ListerIdle is how long a listing helper is kept after its last use; zero
-	// means 30 seconds.
+	// means 30 seconds. An upload's helper is kept at most writerIdle.
 	ListerIdle time.Duration
 
 	mu sync.Mutex
-	// listers are idle read-only helpers kept for the next listing of the
-	// same root, by container and root path.
+	// listers are idle helpers kept for the next use of the same root, by
+	// container, root path, and whether they can write.
 	listers map[string]*lister
 }
 
-const listerIdle = 30 * time.Second
+const (
+	listerIdle = 30 * time.Second
+	// writerIdle keeps an upload's writable helper only between the batches
+	// of one upload.
+	writerIdle = 10 * time.Second
+)
 
 type lister struct {
 	access *Access
@@ -183,9 +187,13 @@ func (a *Access) Cleanup(retry bool) error {
 }
 
 func (a *Access) request(ctx context.Context, request helper.FileRequest, input io.Reader, trailer []byte) ([]byte, error) {
+	return a.exec(ctx, request, launch.ExecOptions{Input: input, Trailer: trailer})
+}
+
+func (a *Access) exec(ctx context.Context, request helper.FileRequest, options launch.ExecOptions) ([]byte, error) {
 	request.Blocked, request.Mounts = a.blocked, a.mounts
-	return launch.Exec(ctx, a.service.Docker, a.container, launch.ExecOptions{Cmd: helper.Command("file", request),
-		Input: input, Trailer: trailer, AssertAccess: a.assertAccess})
+	options.Cmd, options.AssertAccess = helper.Command("file", request), a.assertAccess
+	return launch.Exec(ctx, a.service.Docker, a.container, options)
 }
 
 // signature is what must not change while file access is prepared.
@@ -331,7 +339,17 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 // container is still exactly the one its mounts were proven for, or
 // acquires a new one. release returns it for reuse after a success.
 func (s *Service) acquireLister(ctx context.Context, target Target, root Root, assertAccess func() error) (*Access, func(ok bool), error) {
+	return s.acquireIdle(ctx, target, root, true, assertAccess)
+}
+
+// acquireIdle is acquireLister for a read-only or a writable helper. The
+// caller holds the server's locks; a writable helper is returned for reuse
+// only after commands that all ended, so nothing still runs in it.
+func (s *Service) acquireIdle(ctx context.Context, target Target, root Root, readOnly bool, assertAccess func() error) (*Access, func(ok bool), error) {
 	key := target.ContainerID + "\x00" + root.Path
+	if !readOnly {
+		key += "\x00writable"
+	}
 	s.mu.Lock()
 	idle := s.listers[key]
 	delete(s.listers, key)
@@ -344,11 +362,15 @@ func (s *Service) acquireLister(ctx context.Context, target Target, root Root, a
 		}
 		idle.access.Cleanup(false)
 	}
-	access, err := s.Acquire(ctx, target, root, true, assertAccess)
+	access, err := s.Acquire(ctx, target, root, readOnly, assertAccess)
 	if err != nil {
 		return nil, nil, err
 	}
-	return access, s.releaser(key, access), nil
+	release := s.releaser(key, access)
+	if !readOnly {
+		release = s.releaserFor(key, access, writerIdle)
+	}
+	return access, release, nil
 }
 
 func (s *Service) reusable(ctx context.Context, target Target, root Root, access *Access) bool {
@@ -374,6 +396,10 @@ func (s *Service) reusable(ctx context.Context, target Target, root Root, access
 }
 
 func (s *Service) releaser(key string, access *Access) func(ok bool) {
+	return s.releaserFor(key, access, listerIdle)
+}
+
+func (s *Service) releaserFor(key string, access *Access, longest time.Duration) func(ok bool) {
 	return func(ok bool) {
 		access.assertAccess = nil
 		s.mu.Lock()
@@ -392,6 +418,7 @@ func (s *Service) releaser(key string, access *Access) func(ok bool) {
 		if idle <= 0 {
 			idle = listerIdle
 		}
+		idle = min(idle, longest)
 		entry.timer = time.AfterFunc(idle, func() {
 			s.mu.Lock()
 			current := s.listers[key] == entry
@@ -578,24 +605,6 @@ func (s *Service) Rename(ctx context.Context, target Target, rootID, relative, n
 	return err
 }
 
-// Upload writes a file of exactly size bytes. The helper commits only after
-// the upload ID trailer, which is sent after the complete body and the
-// last access check. Staging cleanup has no user-controlled input and runs
-// even after cancellation or revocation.
-func (s *Service) Upload(ctx context.Context, target Target, rootID, parent, name string, size int64, body io.Reader, assertAccess func() error) error {
-	if err := ValidateName(name); err != nil {
-		return err
-	}
-	if size < 0 || size > 1<<53-1 {
-		return Error("INVALID_UPLOAD_SIZE", 400)
-	}
-	root, normalized, err := resolve(target, rootID, joinRelative(parent, name))
-	if err != nil {
-		return err
-	}
-	return s.write(ctx, target, root, normalized, size, body, nil, true, assertAccess)
-}
-
 // Save replaces an existing file's content only while it still matches
 // version, the Version its preview reported.
 func (s *Service) Save(ctx context.Context, target Target, rootID, relative string, content []byte, version string, assertAccess func() error) error {
@@ -610,39 +619,14 @@ func (s *Service) Save(ctx context.Context, target Target, rootID, relative stri
 	if normalized == "" {
 		return Error("ROOT_MUTATION", 400)
 	}
-	return s.write(ctx, target, root, normalized, int64(len(content)), bytes.NewReader(content), &expected, false, assertAccess)
+	return s.write(ctx, target, root, normalized, int64(len(content)), bytes.NewReader(content), &expected, assertAccess)
 }
 
-// UploadSpare is the free space an upload leaves on the server's disk: 1 GiB,
-// or a twentieth of a smaller disk, so the game can still save.
-func UploadSpare(total int64) int64 { return min(1<<30, total/20) }
-
 func (s *Service) write(ctx context.Context, target Target, root Root, normalized string, size int64, body io.Reader,
-	expected *helper.FileVersion, checkSpace bool, assertAccess func() error) error {
+	expected *helper.FileVersion, assertAccess func() error) error {
 	access, err := s.Acquire(ctx, target, root, false, assertAccess)
 	if err != nil {
 		return err
-	}
-	if checkSpace {
-		// Uploads have no size limit by default, so one that would fill the
-		// disk is refused before anything is written.
-		folder := path.Dir(normalized)
-		if folder == "." {
-			folder = ""
-		}
-		out, err := access.request(ctx, helper.FileRequest{Operation: "space", Root: root.Path, Path: folder}, nil, nil)
-		var space helper.FileSpace
-		if err == nil && (json.Unmarshal(out, &space) != nil || space.Total <= 0) {
-			err = Error("FILE_OPERATION_FAILED", 409)
-		}
-		if err == nil && size > space.Available-UploadSpare(space.Total) {
-			err = apperr.New("NOT_ENOUGH_SPACE", 507, fmt.Sprintf("Not enough free space: the file needs %s, and %s is free on the server’s disk, of which Ludock leaves %s for the game.",
-				datasize.Format(size), datasize.Format(space.Available), datasize.Format(UploadSpare(space.Total))))
-		}
-		if err != nil {
-			access.Cleanup(false)
-			return err
-		}
 	}
 	uploadID := identity.NewUUID()
 	_, err = access.request(ctx, helper.FileRequest{Operation: "upload", Root: root.Path, Path: normalized, Size: &size,

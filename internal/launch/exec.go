@@ -69,9 +69,13 @@ type ExecOptions struct {
 	Cmd []string
 	// Input is streamed to stdin; Trailer follows it only after the whole
 	// input arrived and every access check passed, so the helper commits the
-	// upload only then.
+	// upload only then. A public error from Input fails the command with it.
 	Input   io.Reader
 	Trailer []byte
+	// Stdout, when set, receives the output as it arrives, including what a
+	// command that then fails printed; Exec returns no output. It is not
+	// limited.
+	Stdout io.Writer
 	// AssertAccess runs before the exec, after it is created, and between
 	// input chunks; with Limit, also every second while the command runs.
 	// A settling command checks it only after the create.
@@ -284,7 +288,11 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 					break
 				}
 				if readErr != nil {
-					fail(ErrUpload)
+					if _, public := apperr.As(readErr); public {
+						fail(readErr)
+					} else {
+						fail(ErrUpload)
+					}
 					break
 				}
 			}
@@ -295,7 +303,11 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		}()
 	}
 	var stdout limitedBuffer
-	demuxErr := docker.Demux(conn, &stdout, nil)
+	var output io.Writer = &stdout
+	if options.Stdout != nil {
+		output = options.Stdout
+	}
+	demuxErr := docker.Demux(conn, output, nil)
 	var info *docker.ExecInspect
 	if options.Settle {
 		conn.Close()
@@ -412,4 +424,10 @@ func stopHelper(client *docker.Client, container string) bool {
 		return true
 	}
 	return err == nil && !info.State.Running
+}
+
+// FileExitError is the public error of a file helper exit code, or nil for
+// success.
+func FileExitError(code int) error {
+	return fileErrors.exit(&docker.ExecInspect{ExitCode: &code})
 }

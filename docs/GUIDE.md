@@ -380,8 +380,10 @@ network, so the console port needn't be published.
 Ludock considers safe, except where an image keeps the server it downloads,
 such as Valheim's `/opt/valheim`. It shows container paths, never host paths.
 
-- Upload by dropping files on the page or with **Choose files**. Each upload
-  replaces the destination only once it is complete.
+- Upload by dropping files on the page or with **Choose files**, as many at
+  once as you like, such as a whole mods folder. Each file replaces the
+  destination only once it is complete, and one that can't be uploaded is
+  listed while the rest still go.
 - Choose a text file to preview it, and **Edit** to change it. If the file
   changed since you opened it, the save is refused and your text stays.
 - **Unpack** extracts a zip, tar, or tar.gz (including `.mcworld`, `.mcpack`,

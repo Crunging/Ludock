@@ -40,9 +40,17 @@ type FileRequest struct {
 	Mounts []string `json:"mounts,omitempty"`
 	// Reserve is the free space an unpack leaves.
 	Reserve *int64 `json:"reserve,omitempty"`
+	// Files are a batch upload's files, all in the folder Path.
+	Files []UploadFile `json:"files,omitempty"`
 	// Base is the helper's mount that holds Root. A backup, and the mounts
 	// check, refuse any other mount at or below Root or between them.
 	Base string `json:"base,omitempty"`
+}
+
+type UploadFile struct {
+	Name     string `json:"name"`
+	Size     int64  `json:"size"`
+	UploadID string `json:"uploadId"`
 }
 
 // FileVersion identifies a file's content by size and SHA-256.
@@ -95,6 +103,9 @@ const (
 	// FileHoldsRestore refuses deleting or moving a folder that holds a
 	// restore's stage folder.
 	FileHoldsRestore = 11
+	// FileNoSpace refuses a file of a batch upload that would leave the disk
+	// less than UploadSpare.
+	FileNoSpace = 12
 )
 
 type fileHelper struct {
@@ -104,6 +115,9 @@ type fileHelper struct {
 	stdin   io.Reader
 	entries int
 	buffer  []byte
+	// part is the upload part being read, which a refused file of a batch
+	// is skipped to the end of.
+	part *uploadPart
 
 	exit     func(int)
 	stop     atomic.Bool
@@ -528,12 +542,49 @@ func newUUID() string {
 	return s[:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:]
 }
 
-func (h *fileHelper) upload(parent fd, name string) error {
-	if h.request.Size == nil || *h.request.Size < 0 || *h.request.Size > 1<<53-1 {
+// uploadPart reads one file's body and then its trailer from stdin, never
+// past them, so the next file of a batch follows in sync.
+type uploadPart struct {
+	in      io.Reader
+	body    int64
+	trailer []byte
+}
+
+var errUploadStream = errors.New("upload did not match its declared size or was interrupted")
+
+// read returns body bytes, consumes the trailer once the body is read, and
+// returns io.EOF after both.
+func (p *uploadPart) read(buffer []byte) (int, error) {
+	want := p.body
+	if want == 0 {
+		want = int64(len(p.trailer))
+	}
+	if want == 0 {
+		return 0, io.EOF
+	}
+	n, err := p.in.Read(buffer[:min(int64(len(buffer)), want)])
+	if p.body > 0 {
+		p.body -= int64(n)
+	} else {
+		if subtle.ConstantTimeCompare(buffer[:n], p.trailer[:n]) != 1 {
+			return 0, errUploadStream
+		}
+		p.trailer, n = p.trailer[n:], 0
+	}
+	if err != nil && (err != io.EOF || p.body > 0 || len(p.trailer) > 0) {
+		return n, errUploadStream
+	}
+	return n, nil
+}
+
+// upload writes stdin's next size bytes to name, committing them only
+// after the trailer id. Errors other than errUploadStream leave the rest of
+// the part unread.
+func (h *fileHelper) upload(parent fd, name string, size int64, id string, expected *FileVersion) error {
+	if size < 0 || size > 1<<53-1 {
 		return errors.New("invalid upload size")
 	}
-	size := *h.request.Size
-	id := h.request.UploadID
+	trailer := []byte(id)
 	if id == "" {
 		id = newUUID()
 	}
@@ -541,7 +592,6 @@ func (h *fileHelper) upload(parent fd, name string) error {
 	if err != nil {
 		return err
 	}
-	trailer := []byte(h.request.UploadID)
 	original, err := uploadTarget(parent, name)
 	if err != nil {
 		return err
@@ -550,6 +600,15 @@ func (h *fileHelper) upload(parent fd, name string) error {
 	if owner == nil {
 		if owner, err = fstat(parent); err != nil {
 			return err
+		}
+	}
+	if h.request.Operation == "upload-files" {
+		var stat unix.Statfs_t
+		if err := unix.Fstatfs(int(parent), &stat); err != nil {
+			return err
+		}
+		if space := Space(&stat); size > space.Available-UploadSpare(space.Total) {
+			return &noSpaceError{space}
 		}
 	}
 	file, err := h.t.openAt(parent, temporary, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0o600)
@@ -566,31 +625,25 @@ func (h *fileHelper) upload(parent fd, name string) error {
 	}()
 	idle := time.AfterFunc(60*time.Second, func() { h.abortUpload(errors.New("upload interrupted")) })
 	defer idle.Stop()
-	var received, committed int64
-	buffer := make([]byte, 64*1024)
+	part := &uploadPart{in: h.stdin, body: size, trailer: trailer}
+	h.part = part
+	if h.buffer == nil {
+		h.buffer = make([]byte, 64*1024)
+	}
 	for {
-		n, readErr := h.stdin.Read(buffer)
-		if n > 0 {
+		n, readErr := part.read(h.buffer)
+		if readErr == nil {
 			idle.Reset(60 * time.Second)
-			chunk := buffer[:n]
-			payload := min(int64(len(chunk)), size-received)
-			for offset := int64(0); offset < payload; {
-				written, err := unix.Write(int(file), chunk[offset:payload])
-				if err != nil {
-					return err
-				}
-				if written == 0 {
-					return errors.New("upload write made no progress")
-				}
-				offset += int64(written)
+		}
+		for offset := 0; offset < n; {
+			written, err := unix.Write(int(file), h.buffer[offset:n])
+			if err != nil {
+				return err
 			}
-			received += payload
-			tail := chunk[payload:]
-			if committed+int64(len(tail)) > int64(len(trailer)) ||
-				subtle.ConstantTimeCompare(tail, trailer[committed:committed+int64(len(tail))]) != 1 {
-				return errors.New("upload exceeded its declared size or was interrupted")
+			if written == 0 {
+				return errors.New("upload write made no progress")
 			}
-			committed += int64(len(tail))
+			offset += written
 		}
 		if readErr == io.EOF {
 			break
@@ -599,13 +652,19 @@ func (h *fileHelper) upload(parent fd, name string) error {
 			return readErr
 		}
 	}
-	if h.uploadAborted() || received != size || committed != int64(len(trailer)) {
-		return errors.New("upload did not match its declared size or was interrupted")
+	// A single upload ends with its input.
+	if h.request.Operation == "upload" {
+		if n, err := h.stdin.Read(h.buffer[:1]); n > 0 || err != io.EOF {
+			return errUploadStream
+		}
+	}
+	if h.uploadAborted() {
+		return errUploadStream
 	}
 	// Checked once the input is complete, so the backend reads the helper's
 	// exit code instead of an unfinished upload.
-	if h.request.Expected != nil {
-		if err := h.expectVersion(parent, name, original, *h.request.Expected); err != nil {
+	if expected != nil {
+		if err := h.expectVersion(parent, name, original, *expected); err != nil {
 			return err
 		}
 	}
@@ -649,10 +708,92 @@ func (h *fileHelper) upload(parent fd, name string) error {
 			return err
 		}
 	}
-	if err := unix.Fsync(int(parent)); err != nil {
-		return err
+	return unix.Fsync(int(parent))
+}
+
+// UploadSpare is the free space an upload leaves on the server's disk: 1 GiB,
+// or a twentieth of a smaller disk, so the game can still save.
+func UploadSpare(total int64) int64 { return min(1<<30, total/20) }
+
+type noSpaceError struct{ space FileSpace }
+
+func (e *noSpaceError) Error() string { return "not enough free space" }
+
+// UploadResult is the file helper's line for each file of a batch upload.
+type UploadResult struct {
+	OK bool `json:"ok,omitempty"`
+	// Code is the exit code a single upload would have ended with.
+	Code int `json:"code,omitempty"`
+	// Space is the disk's when Code is FileNoSpace.
+	Space *FileSpace `json:"space,omitempty"`
+}
+
+// uploadFiles writes a batch into one folder: each file's body and trailer
+// follow the previous one's. A file that fails is skipped in step and
+// reported; only a broken stream ends the batch, and each line is flushed
+// once its file is committed or refused.
+func (h *fileHelper) uploadFiles(folder fd, relative string) error {
+	for _, file := range h.request.Files {
+		if file.Size < 0 || file.Size > 1<<53-1 {
+			return errors.New("invalid upload size")
+		}
 	}
-	return h.json(map[string]bool{"ok": true})
+	h.buffer = make([]byte, 64*1024)
+	for _, file := range h.request.Files {
+		h.part = nil
+		err := h.check(path.Join(relative, file.Name), false)
+		if parts, partsErr := ownParts(file.Name); err == nil && (partsErr != nil || len(parts) != 1 || parts[0] != file.Name) {
+			err = errUnsafe
+		}
+		if err == nil {
+			err = h.upload(folder, file.Name, file.Size, file.UploadID, nil)
+		}
+		if errors.Is(err, errUploadStream) || h.uploadAborted() {
+			return errUploadStream
+		}
+		result := UploadResult{OK: err == nil}
+		if err != nil {
+			part := h.part
+			if part == nil {
+				part = &uploadPart{in: h.stdin, body: file.Size, trailer: []byte(file.UploadID)}
+			}
+			idle := time.AfterFunc(60*time.Second, func() { h.abortUpload(errors.New("upload interrupted")) })
+			for {
+				_, readErr := part.read(h.buffer)
+				if readErr == io.EOF {
+					break
+				}
+				if readErr != nil {
+					idle.Stop()
+					return errUploadStream
+				}
+				idle.Reset(60 * time.Second)
+			}
+			idle.Stop()
+			var full *noSpaceError
+			if errors.As(err, &full) || errors.Is(err, unix.ENOSPC) || errors.Is(err, unix.EDQUOT) {
+				result.Code = FileNoSpace
+				if full != nil {
+					result.Space = &full.space
+				}
+			} else {
+				result.Code = fileExit(err)
+			}
+		}
+		if err := h.json(result); err != nil {
+			return err
+		}
+		if _, err := h.out.Write([]byte{'\n'}); err != nil {
+			return err
+		}
+		if err := h.out.Flush(); err != nil {
+			return err
+		}
+	}
+	if n, err := h.stdin.Read(h.buffer[:1]); n > 0 || err != io.EOF {
+		return errUploadStream
+	}
+	return nil
 }
 
 // expectVersion confirms the target still holds the expected content. The
@@ -806,6 +947,12 @@ func (h *fileHelper) run() error {
 	switch operation {
 	case "delete-paths", "move", "download-paths":
 		return h.selection(root, operation)
+	case "upload-files":
+		folder, err := h.pinDirectory(root, relative)
+		if err != nil {
+			return err
+		}
+		return h.uploadFiles(folder, relative)
 	}
 	parent, name, err := h.parentOf(root, relative)
 	// A folder that is gone took its staging folder with it.
@@ -884,7 +1031,13 @@ func (h *fileHelper) run() error {
 		}
 		return h.json(map[string]bool{"ok": true})
 	case "upload":
-		return h.upload(parent, name)
+		if h.request.Size == nil {
+			return errors.New("invalid upload size")
+		}
+		if err := h.upload(parent, name, *h.request.Size, h.request.UploadID, h.request.Expected); err != nil {
+			return err
+		}
+		return h.json(map[string]bool{"ok": true})
 	case "upload-cleanup":
 		temporary, err := uploadName(h.request.UploadID)
 		if err != nil {
@@ -953,7 +1106,7 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// losing the connection must not leave a writer running.
 	limit := 55 * time.Second
 	switch request.Operation {
-	case "download", "upload", "download-paths":
+	case "download", "upload", "upload-files", "download-paths":
 		limit = 30 * time.Minute
 	case "unpack":
 		limit = UnpackDuration
@@ -963,7 +1116,7 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 		limit = BackupLimit + time.Minute
 	}
 	deadline := time.AfterFunc(limit, func() {
-		if request.Operation == "upload" {
+		if request.Operation == "upload" || request.Operation == "upload-files" {
 			h.abortUpload(errors.New("upload deadline"))
 			return
 		}
@@ -989,31 +1142,34 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if err != nil {
 		io.WriteString(stderr, FileFailure)
-		if errors.Is(err, errNameTaken) {
-			return FileNameTaken
-		}
-		if errors.Is(err, errFileChanged) {
-			return FileChanged
-		}
-		switch {
-		case errors.Is(err, errArchiveUnsafe):
-			return FileArchiveUnsafe
-		case errors.Is(err, errArchiveLimit):
-			return FileArchiveLimit
-		case errors.Is(err, errArchiveFull), errors.Is(err, unix.ENOSPC), errors.Is(err, unix.EDQUOT):
-			return FileArchiveFull
-		case errors.Is(err, errNotArchive):
-			return FileNotArchive
-		case errors.Is(err, errPartial):
-			return FilePartial
-		case errors.Is(err, errMounted):
-			return FileMounted
-		case errors.Is(err, errHoldsRestore):
-			return FileHoldsRestore
-		}
-		return 1
+		return fileExit(err)
 	}
 	return 0
+}
+
+// fileExit is the exit code that reports err.
+func fileExit(err error) int {
+	switch {
+	case errors.Is(err, errNameTaken):
+		return FileNameTaken
+	case errors.Is(err, errFileChanged):
+		return FileChanged
+	case errors.Is(err, errArchiveUnsafe):
+		return FileArchiveUnsafe
+	case errors.Is(err, errArchiveLimit):
+		return FileArchiveLimit
+	case errors.Is(err, errArchiveFull), errors.Is(err, unix.ENOSPC), errors.Is(err, unix.EDQUOT):
+		return FileArchiveFull
+	case errors.Is(err, errNotArchive):
+		return FileNotArchive
+	case errors.Is(err, errPartial):
+		return FilePartial
+	case errors.Is(err, errMounted):
+		return FileMounted
+	case errors.Is(err, errHoldsRestore):
+		return FileHoldsRestore
+	}
+	return 1
 }
 
 var (

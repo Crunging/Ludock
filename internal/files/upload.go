@@ -1,0 +1,268 @@
+package files
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"slices"
+
+	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/datasize"
+	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/launch"
+	"github.com/Crunging/Ludock/internal/logging"
+)
+
+// UploadEntry is one file of a batch upload; its Size bytes follow the
+// previous entry's in the body. Err, when set, refuses it unread.
+type UploadEntry struct {
+	Name string
+	Size int64
+	Err  error
+}
+
+// ErrUploadUnconfirmed is a file whose upload stopped after it may have
+// been committed.
+var ErrUploadUnconfirmed = apperr.New("UPLOAD_UNCONFIRMED", 500, "The upload may have completed")
+
+var errNotUploaded = apperr.New("UPLOAD_STOPPED", 409, "The upload stopped before this file")
+
+// MaxBatch is the most files one upload request may carry.
+const MaxBatch = 200
+
+// UploadFiles writes entries into one folder through one helper command,
+// with a helper kept between the batches of an upload. Each file commits
+// only after its trailer, which is sent after its whole body and an access
+// check. It returns each entry's result, and the error that stopped the
+// batch, after which later entries were not written.
+func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder string, entries []UploadEntry, body io.Reader,
+	assertAccess func() error) ([]error, error) {
+	results := make([]error, len(entries))
+	// Every result left nil by a failure is that failure.
+	fail := func(err error) ([]error, error) {
+		for index := range results {
+			if results[index] == nil {
+				results[index] = err
+			}
+		}
+		return results, err
+	}
+	for index, entry := range entries {
+		if entry.Err == nil {
+			entry.Err = ValidateName(entry.Name)
+		}
+		if entry.Err == nil && (entry.Size < 0 || entry.Size > 1<<53-1) {
+			entry.Err = Error("INVALID_UPLOAD_SIZE", 400)
+		}
+		results[index] = entry.Err
+	}
+	root, normalized, err := resolve(target, rootID, folder)
+	if err == nil && len(entries) > MaxBatch {
+		err = Error("INVALID_UPLOAD", 400)
+	}
+	if err != nil {
+		return fail(err)
+	}
+	input := &batchInput{body: body, check: assertAccess, entries: entries, ids: make([]string, len(entries)), sent: make([]bool, len(entries))}
+	if !slices.Contains(results, nil) {
+		return results, nil
+	}
+	access, release, err := s.acquireIdle(ctx, target, root, false, assertAccess)
+	if err == nil {
+		// Uploads have no size limit by default, so a file that would fill the
+		// disk is refused before anything is written; the helper checks each
+		// file again as the batch fills the disk.
+		var space *helper.FileSpace
+		if space, err = access.space(ctx, root, normalized); err != nil {
+			release(false)
+		} else {
+			for index, entry := range entries {
+				if results[index] == nil && entry.Size > space.Available-helper.UploadSpare(space.Total) {
+					results[index] = uploadNoSpace(*space, entry.Size)
+				}
+			}
+		}
+	}
+	if err != nil {
+		return fail(err)
+	}
+	var files []helper.UploadFile
+	var accepted []int
+	for index, entry := range entries {
+		if results[index] == nil {
+			input.ids[index] = identity.NewUUID()
+			files = append(files, helper.UploadFile{Name: entry.Name, Size: entry.Size, UploadID: input.ids[index]})
+			accepted = append(accepted, index)
+		}
+	}
+	if len(files) == 0 {
+		release(true)
+		return results, nil
+	}
+	acks := &uploadAcks{limit: len(files)}
+	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized, Files: files},
+		launch.ExecOptions{Input: input, Stdout: acks})
+	if err == nil && len(acks.results) != len(files) {
+		err = launch.ErrUnsafe
+	}
+	for position, index := range accepted {
+		switch {
+		case position < len(acks.results):
+			results[index] = acks.result(acks.results[position], entries[index].Size)
+		case input.sent[index]:
+			results[index] = ErrUploadUnconfirmed
+		case err != nil && isRefusal(err):
+			results[index] = err
+		default:
+			results[index] = errNotUploaded
+		}
+	}
+	if err == nil {
+		release(true)
+		return results, nil
+	}
+	// The helper writes one file at a time, the first it did not answer for,
+	// and removes its staging file unless it was cut off. Cleanup has no
+	// user-controlled input and runs even after cancellation or revocation.
+	if len(acks.results) < len(accepted) {
+		index := accepted[len(acks.results)]
+		cleanup := &Access{service: s, container: access.container, blocked: access.blocked}
+		if _, cleanupErr := cleanup.request(context.WithoutCancel(ctx), helper.FileRequest{Operation: "upload-cleanup",
+			Root: root.Path, Path: joinRelative(normalized, entries[index].Name), UploadID: input.ids[index]}, nil, nil); cleanupErr != nil {
+			log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
+		}
+	}
+	// A failed upload may still be writing, so its helper is removed before
+	// the locks are released, as for Delete.
+	access.Cleanup(true)
+	return results, err
+}
+
+// isRefusal reports a public error that says nothing was written.
+func isRefusal(err error) bool {
+	public, ok := apperr.As(err)
+	return ok && public.Status < 500
+}
+
+// batchInput is a batch's stdin: each accepted entry's body, then its
+// trailer once access is confirmed after the body's last write. Refused
+// entries are read past.
+type batchInput struct {
+	body    io.Reader
+	check   func() error
+	entries []UploadEntry
+	ids     []string
+	// sent marks entries whose trailer was handed on, which may be committed.
+	sent    []bool
+	index   int
+	left    int64
+	started bool
+	trailer []byte
+}
+
+func (b *batchInput) Read(p []byte) (int, error) {
+	for {
+		if len(b.trailer) > 0 {
+			n := copy(p, b.trailer)
+			b.trailer = b.trailer[n:]
+			return n, nil
+		}
+		if b.index >= len(b.entries) {
+			return 0, io.EOF
+		}
+		if !b.started {
+			b.left, b.started = b.entries[b.index].Size, true
+		}
+		if b.ids[b.index] == "" {
+			if _, err := io.CopyN(io.Discard, b.body, b.left); err != nil {
+				return 0, err
+			}
+			b.index, b.started = b.index+1, false
+			continue
+		}
+		if b.left > 0 {
+			n, err := b.body.Read(p[:min(int64(len(p)), b.left)])
+			b.left -= int64(n)
+			if errors.Is(err, io.EOF) {
+				err = nil
+				if b.left > 0 {
+					err = io.ErrUnexpectedEOF
+				}
+			}
+			if n > 0 || err != nil {
+				return n, err
+			}
+			continue
+		}
+		if b.check != nil {
+			if err := b.check(); err != nil {
+				return 0, err
+			}
+		}
+		b.sent[b.index], b.trailer = true, []byte(b.ids[b.index])
+		b.index, b.started = b.index+1, false
+	}
+}
+
+// uploadAcks reads the helper's line for each file as it arrives, so files
+// committed before a failure are known.
+type uploadAcks struct {
+	limit   int
+	pending []byte
+	results []helper.UploadResult
+}
+
+func (a *uploadAcks) Write(p []byte) (int, error) {
+	a.pending = append(a.pending, p...)
+	for {
+		line, rest, found := bytes.Cut(a.pending, []byte{'\n'})
+		if !found {
+			break
+		}
+		var result helper.UploadResult
+		if len(a.results) >= a.limit || json.Unmarshal(line, &result) != nil {
+			return 0, errors.New("unexpected upload output")
+		}
+		a.results, a.pending = append(a.results, result), rest
+	}
+	if len(a.pending) > 4096 {
+		return 0, errors.New("unexpected upload output")
+	}
+	return len(p), nil
+}
+
+func (a *uploadAcks) result(result helper.UploadResult, size int64) error {
+	switch {
+	case result.OK:
+		return nil
+	case result.Code == helper.FileNoSpace && result.Space != nil:
+		return uploadNoSpace(*result.Space, size)
+	case result.Code == helper.FileNoSpace:
+		return apperr.New("NOT_ENOUGH_SPACE", 507, "Not enough free space on the server’s disk.")
+	}
+	if err := launch.FileExitError(result.Code); err != nil {
+		return err
+	}
+	return launch.ErrUnsafe
+}
+
+func uploadNoSpace(space helper.FileSpace, size int64) error {
+	return apperr.New("NOT_ENOUGH_SPACE", 507, fmt.Sprintf("Not enough free space: the file needs %s, and %s is free on the server’s disk, of which Ludock leaves %s for the game.",
+		datasize.Format(size), datasize.Format(max(space.Available, 0)), datasize.Format(helper.UploadSpare(space.Total))))
+}
+
+func (a *Access) space(ctx context.Context, root Root, folder string) (*helper.FileSpace, error) {
+	out, err := a.request(ctx, helper.FileRequest{Operation: "space", Root: root.Path, Path: folder}, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var space helper.FileSpace
+	if err := json.Unmarshal(out, &space); err != nil || space.Total <= 0 {
+		return nil, Error("FILE_OPERATION_FAILED", 409)
+	}
+	return &space, nil
+}
