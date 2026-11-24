@@ -83,6 +83,7 @@ func (t *Table) Fence() (lift func()) {
 			t.mu.Lock()
 			defer t.mu.Unlock()
 			t.fences--
+			t.wakeLocked()
 		})
 	}
 }
@@ -208,10 +209,7 @@ func (t *Table) acquire(keys []string, background func(), recovering bool) (func
 			for _, key := range ordered {
 				delete(t.active, key)
 			}
-			if t.released != nil {
-				close(t.released)
-				t.released = nil
-			}
+			t.wakeLocked()
 			if len(t.active) == 0 {
 				for _, waiter := range t.drained {
 					close(waiter)
@@ -222,7 +220,14 @@ func (t *Table) acquire(keys []string, background func(), recovering bool) (func
 	}, nil
 }
 
-// NextRelease is closed at the next release of any keys.
+func (t *Table) wakeLocked() {
+	if t.released != nil {
+		close(t.released)
+		t.released = nil
+	}
+}
+
+// NextRelease is closed at the next release of any keys or lift of a fence.
 func (t *Table) NextRelease() <-chan struct{} {
 	t.mu.Lock()
 	defer t.mu.Unlock()
