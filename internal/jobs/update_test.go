@@ -176,11 +176,15 @@ func TestUpdateRecoveryUndoesUncheckedReplacement(t *testing.T) {
 func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
 	finished := "Ludock restarted while the updated container replaced the previous one, so it finished the update."
 	stopped := finished + " Its new container is stopped, so the server is stopped. Check its logs, then start it."
+	removed := finished + " Its new container was then removed outside Ludock, so the server no longer exists. Recreate it through the tool that created it."
 	for _, c := range []struct {
 		name                                string
 		left, stopped, wasStopped, restored bool
 		fails, exits, restarts, unreachable bool
-		guidance                            string
+		// looping: Docker restarts the replacement in a loop as Ludock
+		// starts; removed: something removed it.
+		looping, removed bool
+		guidance         string
 	}{
 		{name: "original removed", guidance: finished},
 		{name: "server was stopped", stopped: true, wasStopped: true, guidance: finished},
@@ -192,6 +196,10 @@ func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
 		{name: "replacement restarts once started", stopped: true, restarts: true, guidance: finished +
 			" Its new container restarted right after it started. Check its logs."},
 		{name: "stopped after the update started it", stopped: true, restored: true, guidance: stopped},
+		{name: "restarting after the update started it", restored: true, looping: true, guidance: finished +
+			" Its new container restarted right after it started. Check its logs."},
+		{name: "replacement removed", removed: true, guidance: removed},
+		{name: "replacement of a stopped server removed", stopped: true, wasStopped: true, removed: true, guidance: removed},
 		{name: "Docker stops answering", stopped: true, unreachable: true, guidance: finished +
 			" Ludock couldn’t reach Docker to check that its new container is running. Check the server."},
 	} {
@@ -240,17 +248,28 @@ func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
 				swap.Stage, swap.Replacement = swapReplaced, replacement
 				recovery.StartRequested, recovery.StateRestored = true, true
 			}
+			if c.looping {
+				f.engine.Update(replacement, func(c *fakedocker.Container) { c.State.Status, c.State.Restarting = "restarting", true })
+			}
+			if c.removed {
+				swap.Stage, swap.Replacement = swapReplaced, replacement
+				f.engine.RemoveContainer(replacement)
+			}
 		})
 		if job.Status != ops.Interrupted || job.Result["guidance"] != c.guidance {
 			t.Fatalf("%s: %+v", c.name, job)
 		}
-		down := c.fails || c.exits || c.restored
+		down := c.fails || c.exits || (c.restored && c.stopped) || c.removed
 		if want := map[bool]int{true: 0, false: 1}[c.wasStopped || c.fails || c.restored || !c.stopped]; starts != want {
 			t.Fatalf("%s: replacement started %d times", c.name, starts)
 		}
 		current, taken := f.containerNamed("mc"), &fakedocker.Container{}
 		f.engine.Update(replacement, func(c *fakedocker.Container) { *taken = *c })
-		if current == nil || current.ID != replacement || current.State.Running != (!down && !c.wasStopped) || f.engine.Container(f.game) != nil ||
+		if c.removed {
+			if current != nil {
+				t.Fatalf("%s: %+v", c.name, current)
+			}
+		} else if current == nil || current.ID != replacement || current.State.Running != (!down && !c.wasStopped) || f.engine.Container(f.game) != nil ||
 			restartPolicy(taken) != "unless-stopped" {
 			t.Fatalf("%s: replacement did not take over the server as it was: %+v", c.name, current)
 		}
@@ -261,7 +280,7 @@ func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
 		if intentional != (down || c.wasStopped) {
 			t.Fatalf("%s: intentionally stopped %v", c.name, intentional)
 		}
-		if alerted := len(f.alerts) > 0; alerted != (down || c.restarts || c.unreachable) {
+		if alerted := len(f.alerts) > 0; alerted != (down || c.restarts || c.looping || c.unreachable) {
 			t.Fatalf("%s: alerts %q", c.name, f.alerts)
 		}
 	}

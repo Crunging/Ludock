@@ -765,7 +765,10 @@ anything that was in progress:
   started once if needed and must keep running for 10 seconds, or the server
   is left stopped, an alert is sent, and it is listed in **Needs attention**.
   If Docker doesn't answer for that check, the entry says Ludock couldn't
-  confirm the server is running.
+  confirm the server is running. A new container that is restarting over and
+  over, or that ran again since it was checked, is watched the same way, and
+  one removed outside Ludock, whether the server was running or stopped, is
+  reported with an alert and listed in **Needs attention**.
 - **Everything else:** work Ludock can't safely finish is marked interrupted,
   never repeated. Cancelled work stays cancelled, and a warning Ludock resumes
   can still be cancelled. One-time scheduled runs missed by more than 5 minutes

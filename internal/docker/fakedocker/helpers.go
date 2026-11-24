@@ -3,6 +3,8 @@ package fakedocker
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
+	"regexp"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/helper"
@@ -56,16 +58,35 @@ func (e *Engine) RunHelpers(hook HelperHook) {
 
 // hostArgs rewrites the paths a helper sees under its mounts' targets to
 // their host sources, since the helper runs here rather than in its
-// container.
+// container. Each JSON string that is an absolute path maps through the
+// deepest mount holding it, as the container's file system would.
 func hostArgs(c *Container, args []string) []string {
 	args = append([]string(nil), args...)
 	if c.CreateRequest.HostConfig == nil {
 		return args
 	}
-	for _, mount := range c.CreateRequest.HostConfig.Mounts {
-		for index := range args {
-			args[index] = strings.ReplaceAll(args[index], `"`+mount.Target, `"`+mount.Source)
-		}
+	mounts := c.CreateRequest.HostConfig.Mounts
+	for index := range args {
+		args[index] = jsonString.ReplaceAllStringFunc(args[index], func(quoted string) string {
+			var value string
+			if json.Unmarshal([]byte(quoted), &value) != nil || !strings.HasPrefix(value, "/") {
+				return quoted
+			}
+			deepest := -1
+			for i, mount := range mounts {
+				if (value == mount.Target || strings.HasPrefix(value, mount.Target+"/")) &&
+					(deepest < 0 || len(mount.Target) > len(mounts[deepest].Target)) {
+					deepest = i
+				}
+			}
+			if deepest < 0 {
+				return quoted
+			}
+			encoded, _ := json.Marshal(mounts[deepest].Source + value[len(mounts[deepest].Target):])
+			return string(encoded)
+		})
 	}
 	return args
 }
+
+var jsonString = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
