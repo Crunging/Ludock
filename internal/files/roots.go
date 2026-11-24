@@ -83,8 +83,10 @@ func sharesOwnMount(mount identity.Mount, own self.Info) bool {
 			return true
 		}
 		// A volume's source is its folder on the host, which a bind can reach
-		// when Docker keeps volumes outside /var/lib/docker.
-		if otherSource := path.Clean(other.Source); strings.HasPrefix(source, "/") && strings.HasPrefix(otherSource, "/") &&
+		// when Docker keeps volumes outside /var/lib/docker. The host's /
+		// holds every volume, whatever source Docker reports for it.
+		otherSource := path.Clean(other.Source)
+		if otherSource == "/" || strings.HasPrefix(source, "/") && strings.HasPrefix(otherSource, "/") &&
 			(Within(source, otherSource) || Within(otherSource, source)) {
 			return true
 		}
