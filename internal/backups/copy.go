@@ -847,11 +847,11 @@ var errArchiveMissing = fail("INVALID_BACKUP", "This backup’s archive is missi
 // ArchiveFolder is where a backup's archive is read from: its own folder,
 // or a second copy when the archive is missing or the wrong size there,
 // preferring the one in the chosen folder. It sets FromCopy, FolderAway
-// (also when that folder isn't responding), and Missing, and fails when a
-// folder it must look into isn't, or with errArchiveMissing when its own
-// folder was looked into and nothing intact was found.
+// (also when that folder isn't responding), Missing, and CopyAway, and
+// fails when a folder it must look into isn't, or with errArchiveMissing
+// when its own folder was looked into and nothing intact was found.
 func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
-	backup.FromCopy, backup.Missing, backup.found = false, false, false
+	backup.FromCopy, backup.Missing, backup.CopyAway, backup.found = false, false, false, false
 	found, err := s.look(backup.destination, backup, errFolderStalled)
 	backup.FolderAway = err != nil
 	if errors.Is(err, errFolderStalled) {
@@ -882,6 +882,7 @@ func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 	}
 	backup.Missing = looked
 	if !backup.FolderAway {
+		backup.CopyAway = !looked
 		return "", errArchiveMissing
 	}
 	return backup.destination, nil

@@ -337,6 +337,16 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
   const downloadLink = await menuItem(row, "link", "Download");
   const [download] = await Promise.all([page.waitForEvent("download"), downloadLink.click()]);
   expect(readFileSync(await download.path())).toEqual(readFileSync(copy));
+  // While the second folder is away, nothing intact can be read, so the
+  // backup isn't offered for a restore until the folder is back.
+  renameSync(copyFolder, `${copyFolder}.away`);
+  await page.reload();
+  const away = page.locator("#backup-list tbody tr", { hasText: "Missing or damaged in the backup folder, and the second folder can’t be reached" });
+  await expect(away).toHaveCount(1);
+  await expect(away.getByRole("link", { name: "Restore…" })).toHaveCount(0);
+  renameSync(`${copyFolder}.away`, copyFolder);
+  await page.reload();
+  await expect(row).toContainText("using the second copy");
   await (await menuItem(row, "link", "Browse files")).click();
   await expect(page.locator(".backup-browser .alert--warning")).toContainText("reading the second copy");
   await page.getByRole("link", { name: "All backups" }).click();

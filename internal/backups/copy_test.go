@@ -923,6 +923,17 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 	if _, err := f.s.Open(ctx, f.serverID, b.ID); !errors.Is(err, errArchiveMissing) {
 		t.Fatal(err)
 	}
+	// Its second copy may be intact in the folder that is away, so it isn't
+	// called lost, and isn't offered as readable either.
+	if listed, err = f.s.List(ctx, f.serverID); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Locate(listed)
+	for _, backup := range listed {
+		if backup.ID == b.ID && (backup.Missing || !backup.CopyAway) {
+			t.Fatalf("%+v", backup)
+		}
+	}
 	prune()
 }
 

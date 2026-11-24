@@ -293,8 +293,9 @@ templ BackupList(b BackupsView) {
 templ backupRow(b BackupsView, backup backups.Backup) {
 	{{ kept := backup.KeptAt != 0 }}
 	{{ complete := backup.State == "complete" }}
-	// A backup whose archive is gone can only be removed.
-	{{ readable := complete && !backup.Missing }}
+	// A backup whose archive is gone can only be removed, and one whose only
+	// intact copy is out of reach can't be read until its folder is back.
+	{{ readable := complete && !backup.Missing && !backup.CopyAway }}
 	<tr class={ templ.KV("backup-row--kept", kept) }>
 		<td>
 			@Time(backup.CreatedAt, "", "")
@@ -413,6 +414,8 @@ templ copyState(backup backups.Backup) {
 			<small class="table-detail backup-copy backup-copy--warning">Its backup folder can’t be reached</small>
 		case backup.Missing:
 			<small class="table-detail backup-copy backup-copy--warning">Its archive is missing or damaged in the backup folder, so it can’t be restored</small>
+		case backup.CopyAway:
+			<small class="table-detail backup-copy backup-copy--warning">Missing or damaged in the backup folder, and the second folder can’t be reached</small>
 		case backup.CopyState == "complete":
 			<small class="table-detail backup-copy">Second copy saved</small>
 		case backup.Copying:
