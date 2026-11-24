@@ -889,8 +889,7 @@ func RunRestore(argument string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// ExtractRequest is restore-extract's argument. Its fields, and
-// ExtractRecord's, stay in key order: the encoding is the one a map gave.
+// ExtractRequest is restore-extract's argument.
 type ExtractRequest struct {
 	MaxBytes     int64  `json:"maxBytes"`
 	ReserveBytes *int64 `json:"reserveBytes"`

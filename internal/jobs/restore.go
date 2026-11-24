@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -42,7 +43,7 @@ func restoreState(job *ops.Context) (*restoreRecovery, error) {
 		return nil, nil
 	}
 	var state restoreRecovery
-	decoder := json.NewDecoder(bytesReader(job.Job.Recovery.Restore))
+	decoder := json.NewDecoder(bytes.NewReader(job.Job.Recovery.Restore))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&state) != nil {
 		return nil, errJournal
@@ -829,7 +830,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string
 	// What recovery leaves the data as, for Activity: a committed restore is
 	// finished, one that began replacing is undone.
 	outcome := restoreNothing
-	finished := false
+	finished, touched := false, false
 	if state, _ := restoreState(job); state != nil {
 		switch state.Status {
 		case "committed", "cleaned":
@@ -837,14 +838,11 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string
 		case "replacing", "rolling_back", "rolled_back":
 			outcome = restoreUndone
 		}
+		touched = slices.ContainsFunc(state.Roots, holdsLive)
 	}
 	if !finished {
 		defer j.notifyInterrupted(ctx, job, notify.Results, "restore-result:"+job.Job.ID,
 			"Ludock restarted during a restore. Its Activity says what the data was left as.")
-	}
-	touched := false
-	if state, _ := restoreState(job); state != nil {
-		touched = slices.ContainsFunc(state.Roots, holdsLive)
 	}
 	err := j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
 		entries, err := journals(job)

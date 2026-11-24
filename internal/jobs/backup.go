@@ -29,10 +29,11 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 	if err := j.assertStopped(ctx, server, job); err != nil {
 		return nil, err
 	}
-	used, kept, err := j.Backups.ArchiveBytes(ctx)
+	bytes := j.Backups.ArchiveBytes
 	if settings.MaxBytes > 0 {
-		used, kept, err = j.Backups.FoundBytes(ctx)
+		bytes = j.Backups.FoundBytes
 	}
+	used, kept, err := bytes(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -271,14 +272,11 @@ func (j *Jobs) removeUnpublished(ctx context.Context, job *ops.Context) error {
 	return j.Backups.Storage.RemovePartial(destination, id)
 }
 
-func (j *Jobs) recoverBackup(ctx context.Context, job *ops.Context, startServer bool) error {
+func (j *Jobs) recoverBackup(ctx context.Context, job *ops.Context) error {
 	return j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
 		if err := j.removeUnpublished(ctx, job); err != nil {
 			return err
 		}
-		if startServer {
-			return j.restoreInitialState(ctx, server, job)
-		}
-		return j.keepStoppedAfterFailedBackup(ctx, server, job)
+		return j.restoreInitialState(ctx, server, job)
 	})
 }

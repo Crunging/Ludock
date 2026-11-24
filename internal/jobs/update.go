@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -135,10 +136,10 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 	})
 }
 
-// recoverBackupRestart returns the server to running, as the restart was
-// asked to. Ludock restarting is not a failed backup, so a server stopped
-// for one is started again even if the backup didn't complete, and the
-// backup is not taken again.
+// recoverBackupRestart starts the server again if it was running when
+// Ludock stopped it. Ludock restarting is not a failed backup, so it is
+// started even if the backup didn't complete, and the backup is not taken
+// again.
 func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[string]any, error) {
 	completed := j.backupCompleted(ctx, job)
 	if !completed {
@@ -149,7 +150,7 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[
 	if job.Job.Recovery.InitialRunning == nil {
 		return nil, j.removeOperationHelpers(ctx, job)
 	}
-	if err := j.recoverBackup(ctx, job, true); err != nil {
+	if err := j.recoverBackup(ctx, job); err != nil {
 		return nil, err
 	}
 	result := map[string]any{"action": "restart"}
@@ -206,8 +207,7 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 	}
 	// Pulling changes no state. Backup recovery applies only after the
 	// initial state and binding were recorded before stopping.
-	initial := job.Job.Recovery.InitialRunning
-	if initial == nil {
+	if job.Job.Recovery.InitialRunning == nil {
 		return map[string]any{"guidance": "Ludock restarted before the update changed anything, so the update didn’t happen."}, j.removeOperationHelpers(ctx, job)
 	}
 	if swap != nil && swap.reached(swapStarting) {
@@ -226,10 +226,10 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 	}
 	// Ludock restarting is not a failed update: the server is returned to
 	// how it was.
-	if err := j.recoverBackup(ctx, job, true); err != nil {
+	if err := j.recoverBackup(ctx, job); err != nil {
 		return nil, err
 	}
-	if *initial {
+	if wasRunning(job) {
 		return withSave(job, map[string]any{"guidance": "Ludock restarted during the update, so the update didn’t happen. The server was started again as it was."}), nil
 	}
 	return withSave(job, map[string]any{"guidance": "Ludock restarted during the update, so the update didn’t happen. The server stays stopped, as it was."}), nil
@@ -246,8 +246,7 @@ func (j *Jobs) finishedUpdate(ctx context.Context, job *ops.Context, started err
 	case started == nil:
 		// A server that was stopped stays stopped on purpose, as when the
 		// update finishes without a restart.
-		running := job.Job.Recovery.InitialRunning != nil && *job.Job.Recovery.InitialRunning
-		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, !running))
+		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, !wasRunning(job)))
 		return map[string]any{"guidance": finished}
 	case apperr.Is(started, errReplacementNotStarted.Code):
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, true))
@@ -310,7 +309,7 @@ func savedSwap(job *ops.Context) (*swapState, error) {
 	if len(job.Job.Recovery.Swap) == 0 {
 		return nil, nil
 	}
-	decoder := json.NewDecoder(bytesReader(job.Job.Recovery.Swap))
+	decoder := json.NewDecoder(bytes.NewReader(job.Job.Recovery.Swap))
 	decoder.DisallowUnknownFields()
 	var swap swapState
 	if decoder.Decode(&swap) != nil || !slices.Contains(swapStages, swap.Stage) || swap.Name == "" || swap.Temporary == "" {
@@ -512,7 +511,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	// The server returns to how it was when it was stopped, not when the
 	// update was asked for: its owner may have started or stopped it during
 	// the pull.
-	initiallyRunning := job.Job.Recovery.InitialRunning != nil && *job.Job.Recovery.InitialRunning
+	initiallyRunning := wasRunning(job)
 	if request.CreateBackup {
 		if err := job.Progress("backing_up", nil, nil); err != nil {
 			return nil, err
@@ -803,7 +802,7 @@ var (
 func (j *Jobs) startReplacement(ctx context.Context, job *ops.Context) error {
 	recovery := job.Job.Recovery
 	swap, err := savedSwap(job)
-	if err != nil || swap == nil || swap.Stage != swapReplaced || recovery.InitialRunning == nil || !*recovery.InitialRunning {
+	if err != nil || swap == nil || swap.Stage != swapReplaced || !wasRunning(job) {
 		return err
 	}
 	info, err := j.Docker.Inspect(ctx, swap.Replacement)
