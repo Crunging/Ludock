@@ -57,7 +57,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 		if err := j.assertBackupPossible(ctx, current, job); err != nil {
 			return nil, err
 		}
-		if err := j.Monitor.Suppress(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.dataAuthorityIn(ctx, tx, job) }); err != nil {
+		if err := j.Monitor.Suppress(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.dataAuthorityIn(ctx, tx, current, job) }); err != nil {
 			return nil, err
 		}
 		defer func() {
@@ -408,13 +408,15 @@ func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (map[string]any,
 		if err != nil {
 			return nil, err
 		}
+		// An update cancelled or refused before its pause never touched the
+		// server, so outage tracking stays as it was.
+		paused := false
 		defer func() {
-			// A cancelled update never touched the server, so outage tracking stays as it was.
-			if !errors.Is(err, ops.ErrCancelled) {
+			if paused && !errors.Is(err, ops.ErrCancelled) {
 				j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID, nil))
 			}
 		}()
-		result, err = j.update(ctx, job, server, request, capability, plan)
+		result, err = j.update(ctx, job, server, request, capability, plan, &paused)
 		// Cancelled while it warned players: nothing was stopped or changed.
 		if err != nil && !errors.Is(err, ops.ErrCancelled) {
 			if undoErr := j.undoUpdate(context.WithoutCancel(ctx), server, job); undoErr != nil {
@@ -456,7 +458,7 @@ func (j *Jobs) undoUpdate(ctx context.Context, server *servers.Context, job *ops
 // temporary name that discovery ignores, while the stopped original stays
 // the server. Only a replacement that started cleanly replaces it.
 func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Context, request UpdateRequest, capability authz.Capability,
-	plan *update.Plan) (map[string]any, error) {
+	plan *update.Plan, paused *bool) (map[string]any, error) {
 	if err := j.assertCapability(ctx, job, capability); err != nil {
 		return nil, err
 	}
@@ -514,6 +516,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if err := j.Monitor.Suppress(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.allowedIn(ctx, tx, job, capability) }); err != nil {
 		return nil, err
 	}
+	*paused = true
 	if err := job.Progress("stopping", nil, nil); err != nil {
 		return nil, err
 	}

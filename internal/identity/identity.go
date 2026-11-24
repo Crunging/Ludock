@@ -355,7 +355,11 @@ func getServer(ctx context.Context, q queryer, id string) (*Server, error) {
 // bound to it. expectedRevision < 0 skips the revision check. Paused sharing
 // is checked by authz, per user.
 func (s *Store) ResolveBinding(ctx context.Context, id string, expectedRevision int64) (*Server, error) {
-	server, err := s.Get(ctx, id)
+	return resolveBinding(ctx, s.DB, id, expectedRevision)
+}
+
+func resolveBinding(ctx context.Context, q queryer, id string, expectedRevision int64) (*Server, error) {
+	server, err := getServer(ctx, q, id)
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +379,16 @@ func (s *Store) ResolveBinding(ctx context.Context, id string, expectedRevision 
 // mutation. It never reconciles a replacement silently into an operation
 // that was authorized for an older container.
 func (s *Store) AssertObservedBinding(ctx context.Context, id string, o Observation, expectedRevision int64) (*Server, error) {
-	server, err := s.ResolveBinding(ctx, id, expectedRevision)
+	return s.assertObservedBinding(ctx, s.DB, id, o, expectedRevision)
+}
+
+// AssertObservedBindingIn is AssertObservedBinding through tx.
+func (s *Store) AssertObservedBindingIn(ctx context.Context, tx *sql.Tx, id string, o Observation, expectedRevision int64) (*Server, error) {
+	return s.assertObservedBinding(ctx, tx, id, o, expectedRevision)
+}
+
+func (s *Store) assertObservedBinding(ctx context.Context, q queryer, id string, o Observation, expectedRevision int64) (*Server, error) {
+	server, err := resolveBinding(ctx, q, id, expectedRevision)
 	if err != nil {
 		return nil, err
 	}

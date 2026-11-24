@@ -840,7 +840,18 @@ func (s *Service) MakeRoom(ctx context.Context, server *servers.Context, assertA
 	if err != nil {
 		return err
 	}
-	_ = s.prune(ctx, server.Logical.ID, settings, allowedIn, protected...)
+	// The first refusal ends every removal after it, in any folder, and is
+	// the answer.
+	var refused error
+	_ = s.prune(ctx, server.Logical.ID, settings, func(tx *sql.Tx) error {
+		if refused == nil {
+			refused = allowedIn(tx)
+		}
+		return refused
+	}, protected...)
+	if refused != nil {
+		return refused
+	}
 	if err := assertAccess(); err != nil {
 		return err
 	}

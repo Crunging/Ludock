@@ -33,10 +33,14 @@ func (j *Jobs) dataAuthority(ctx context.Context, server *servers.Context, job *
 	return err
 }
 
-// dataAuthorityIn is dataAuthority's capability check through tx, for a
-// write the data operation makes.
-func (j *Jobs) dataAuthorityIn(ctx context.Context, tx *sql.Tx, job *ops.Context) error {
-	return j.allowedIn(ctx, tx, job, dataCapabilities(job)...)
+// dataAuthorityIn is dataAuthority through tx, for a write the data
+// operation makes.
+func (j *Jobs) dataAuthorityIn(ctx context.Context, tx *sql.Tx, server *servers.Context, job *ops.Context) error {
+	if err := j.allowedIn(ctx, tx, job, dataCapabilities(job)...); err != nil {
+		return err
+	}
+	_, err := j.Identity.AssertObservedBindingIn(ctx, tx, server.Logical.ID, server.Observation, server.Logical.BindingRevision)
+	return err
 }
 
 func dataCapabilities(job *ops.Context) []authz.Capability {
@@ -70,7 +74,7 @@ func withSave(job *ops.Context, result map[string]any) map[string]any {
 func (j *Jobs) stopForBackup(ctx context.Context, server *servers.Context, job *ops.Context) error {
 	source, _ := text(job.Job.Input["backupId"])
 	if err := j.Backups.MakeRoom(ctx, server, func() error { return j.dataAuthority(ctx, server, job) },
-		func(tx *sql.Tx) error { return j.dataAuthorityIn(ctx, tx, job) }, source); err != nil {
+		func(tx *sql.Tx) error { return j.dataAuthorityIn(ctx, tx, server, job) }, source); err != nil {
 		return err
 	}
 	return j.stopForData(ctx, server, job)
@@ -122,6 +126,14 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 		if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observation, server.Logical.BindingRevision); err != nil {
 			return err
 		}
+		// A server already stopped elsewhere keeps its outage, which was
+		// alerted once. The pause comes before the stop is recorded, so a
+		// job refused here records no stop to undo.
+		if info.State.Running {
+			if err := j.Monitor.Suppress(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.dataAuthorityIn(ctx, tx, server, job) }); err != nil {
+				return err
+			}
+		}
 		// Called again after a stop that never reached Docker: the new
 		// inspection replaces the stop state, but not the initial state.
 		if err := job.Progress("stopping", func(r *ops.Recovery) {
@@ -134,13 +146,6 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 			r.DataUnsafe = false
 		}, nil); err != nil {
 			return err
-		}
-		// A server already stopped elsewhere keeps its outage, which was
-		// alerted once.
-		if info.State.Running {
-			if err := j.Monitor.Suppress(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.dataAuthorityIn(ctx, tx, job) }); err != nil {
-				return err
-			}
 		}
 		dispatching = true
 		return nil
