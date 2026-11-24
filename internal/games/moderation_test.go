@@ -61,6 +61,11 @@ func TestModerationCommands(t *testing.T) {
 	if adapter := ResolveAdapter("minecraft", map[string]string{LabelConsole: "minecraft-rcon"}); adapter.Moderation == nil {
 		t.Error("Minecraft lost moderation to its own label")
 	}
+	// A label naming the game's own console keeps where the game puts its
+	// port and password too.
+	if labeled, preset := ResolveAdapter("factorio", map[string]string{LabelConsole: "source-rcon"}), ResolveAdapter("factorio", nil); labeled.DefaultPort != preset.DefaultPort || labeled.PasswordFile != preset.PasswordFile || labeled.PasswordFile == "" {
+		t.Error("Factorio lost its preset to its own label:", labeled.DefaultPort, labeled.PasswordFile)
+	}
 }
 
 // A name or ID is accepted only in the game's whole form, so nothing in it

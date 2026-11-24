@@ -17,6 +17,10 @@ function totp(secret, stepsAhead = 0) {
 /** Turns on two-factor sign-in from the account page; returns the secret and recovery codes. */
 async function enroll(page, password) {
   await page.goto("/account");
+  // Backing out of the setup puts the page back as it was.
+  await page.getByRole("button", { name: "Set up two-factor sign-in" }).click();
+  await page.getByRole("button", { name: "Cancel setup" }).click();
+  await expect(page.getByRole("img", { name: "QR code for your authenticator app" })).toBeHidden();
   await page.getByRole("button", { name: "Set up two-factor sign-in" }).click();
   await expect(page.getByRole("img", { name: "QR code for your authenticator app" })).toBeVisible();
   const secret = (await page.locator(".two-factor__key").textContent()).replace(/\s/g, "");

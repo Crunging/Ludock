@@ -343,9 +343,12 @@ func (r *Runtime) passwordFile(ctx context.Context, containerID, file, key strin
 // passwordProperty reads the value of an XML config's
 // <property name="..." value="..."/>, which may be empty.
 func (r *Runtime) passwordProperty(ctx context.Context, containerID, file, property string) (string, error) {
-	unavailable := errors.New("Ludock could not read the console password from " + file +
-		". Check that the game's console is on, or set " + games.LabelConsolePasswordEnv)
+	unavailable := apperr.New(PasswordUnreadable, 409, "Ludock could not read the console password from "+file+
+		". Check that the game's console is on, or set "+games.LabelConsolePasswordEnv)
 	data, err := r.Docker.ReadFile(ctx, containerID, file, 256<<10)
+	if docker.Unavailable(err) {
+		return "", err
+	}
 	if err != nil {
 		return "", unavailable
 	}

@@ -157,6 +157,10 @@ templ twoFactorSection(page Page, view TwoFactorView) {
 					<button class="primary-btn" type="submit" data-busy-label="Working…">Turn on two-factor sign-in</button>
 				</div>
 			</form>
+			<form method="post" action="/account/two-factor/cancel">
+				<input type="hidden" name="_csrf" value={ page.CSRF }/>
+				<button class="secondary-btn" type="submit" data-busy-label="Working…">Cancel setup</button>
+			</form>
 		} else if view.On {
 			<p>
 				On. Signing in asks for a code from your authenticator app.

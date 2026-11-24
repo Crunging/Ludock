@@ -190,6 +190,11 @@ func (s *Service) BeginTwoFactor(ctx context.Context, principal *Principal) (*En
 	return &enrollment, nil
 }
 
+// CancelTwoFactor drops the unconfirmed secret.
+func (s *Service) CancelTwoFactor(ctx context.Context, principal *Principal) error {
+	return s.DB.ClearPendingTwoFactor(ctx, principal.User.ID)
+}
+
 // PendingTwoFactor returns the unconfirmed secret again to the session that
 // started setting it up, or nil.
 func (s *Service) PendingTwoFactor(ctx context.Context, principal *Principal) (*Enrollment, error) {

@@ -151,16 +151,11 @@ func ResolveAdapter(gameType string, labels map[string]string) *Adapter {
 		return nil
 	}
 	integration := Lookup(gameType)
-	if adapter, ok := adapters[AdapterID(configured)]; ok && configured != "" {
-		// A label naming the game's own adapter keeps its player list.
-		if integration != nil && integration.Console != nil && integration.Console.Adapter == adapter.ID &&
-			integration.Console.Players != nil {
-			adapter.Players = integration.Console.Players
-		}
-		// Moderation belongs to the game, never to an adapter a label names.
-		if integration != nil && integration.Console != nil && integration.Console.Adapter == adapter.ID {
-			adapter.Moderation, adapter.Announce = integration.Console.Moderation, integration.Console.Announce
-		}
+	// A label naming the game's own adapter changes nothing. Any other
+	// adapter comes bare: the game's port, password, commands, player list
+	// and moderation belong to its own console.
+	if adapter, ok := adapters[AdapterID(configured)]; ok && configured != "" &&
+		(integration == nil || integration.Console == nil || integration.Console.Adapter != adapter.ID) {
 		return &adapter
 	}
 	if integration == nil || integration.Console == nil {

@@ -145,6 +145,9 @@ const (
 // answering its status query.
 const NotAnswering = "not_answering"
 
+// DockerUnavailable is the last state of a server Ludock couldn't check.
+const DockerUnavailable = "docker_unavailable"
+
 // ParsePolicy validates a policy, applying defaults.
 func ParsePolicy(raw []byte) (Policy, error) {
 	var input struct {
@@ -539,7 +542,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		// A silent game keeps its state while Docker is unreachable, since
 		// only the game answering ends that outage.
 		if unavailable && r.lastState.String != NotAnswering {
-			lastState = "docker_unavailable"
+			lastState = DockerUnavailable
 		} else if unavailable || silent {
 			lastState = NotAnswering
 		} else if found && server.ContainerID != "" {

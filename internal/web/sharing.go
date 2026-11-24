@@ -41,7 +41,8 @@ func (s *Server) sharingView(r *http.Request, request *Request, serverID string)
 // sharingResult re-renders the Sharing tab with the outcome of a change.
 // Errors keep the share form's choices.
 func (s *Server) sharingResult(w http.ResponseWriter, r *http.Request, request *Request, err error, change func(*views.SharingView)) {
-	if public, ok := apperr.As(err); ok && public.Status == http.StatusUnauthorized {
+	// An account that is no longer an administrator is shown no list.
+	if public, ok := apperr.As(err); ok && (public.Status == http.StatusUnauthorized || public.Status == http.StatusForbidden) {
 		s.fail(w, r, request, err)
 		return
 	}
