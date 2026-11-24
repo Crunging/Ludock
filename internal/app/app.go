@@ -103,8 +103,8 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	storage.DevCopyRoot = cfg.DevCopyRoot
 	backupService := &backups.Service{DB: database, Storage: storage, Docker: client, Observer: observer, Locks: table,
 		Helpers: &backups.Helpers{Docker: client, Images: images, Storage: storage}}
-	runner := &ops.Runner{DB: database, Locks: table, Notify: notifications.Notify}
-	monitoring := &monitor.Service{DB: database, Locks: table, Runner: runner, Notify: notifications.Notify, Store: store}
+	runner := &ops.Runner{DB: database, Locks: table, Queue: notifications.QueueIn, Alerted: notifications.Poke}
+	monitoring := &monitor.Service{DB: database, Locks: table, Runner: runner, Queue: notifications.QueueIn, Alerted: notifications.Poke, Store: store}
 	runtime := &console.Runtime{Docker: client, Images: images}
 	files.SetSensitivePaths(cfg.SensitivePaths)
 	updates := &update.Service{Docker: client, DockerConfig: cfg.DockerConfig}
@@ -129,7 +129,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	jobService.Pulled = checks.Forget
 	jobService.Register(runner)
 	scheduleService := &schedules.Service{DB: database, Authz: authorization, Identity: store, Runner: runner, Servers: serverService,
-		Locks: table, Notify: notifications.Notify, Console: console.Broadcaster{Runtime: runtime}}
+		Locks: table, Queue: notifications.QueueIn, Alerted: notifications.Poke, Console: console.Broadcaster{Runtime: runtime}}
 	a := &App{Config: cfg, DB: database, Docker: client, Locks: table, Identity: store, Authz: authorization,
 		Auth: auth.NewService(database, authorization, setup), ClientIP: clientIP, Advanced: settings, Observer: observer, Servers: serverService,
 		Images: images, Files: &files.Service{DB: database, Docker: client, Images: images, Managed: observer.Managed}, Backups: backupService, Runner: runner, Jobs: jobService,

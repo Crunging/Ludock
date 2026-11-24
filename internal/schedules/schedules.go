@@ -94,9 +94,13 @@ type Service struct {
 	Runner   *ops.Runner
 	Servers  *servers.Service
 	Locks    *locks.Table
-	Notify   func(alert notify.Alert, key, message string)
-	Console  Broadcaster
-	Players  Players
+	// Queue queues an alert inside tx (notify.Service.QueueIn), with the
+	// skip that raises it; Alerted wakes delivery once tx commits. Either
+	// may be nil.
+	Queue   func(ctx context.Context, tx *sql.Tx, alert notify.Alert, key, message string) (bool, error)
+	Alerted func()
+	Console Broadcaster
+	Players Players
 
 	mu         sync.Mutex
 	announcing map[string]bool
@@ -795,12 +799,6 @@ func (s *Service) SetEnabled(ctx context.Context, actor *db.SessionUser, tokenHa
 	return s.mutate(ctx, actor, tokenHash, serverID, id, revision, nil, &enabled)
 }
 
-func (s *Service) notify(alert notify.Alert, key, message string) {
-	if s.Notify != nil {
-		s.Notify(alert, key, message)
-	}
-}
-
 // errScheduleChanged rolls back a run for a schedule edited since it was
 // read; the next run evaluates the current revision.
 var errScheduleChanged = errors.New("schedule changed")
@@ -947,24 +945,48 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 		log.Warn("Could not evaluate a schedule; it will be retried", logging.F("scheduleId", r.id))
 		return
 	}
-	var result sql.Result
-	var recordErr error
 	stillWaiting := ""
 	if waiting(r) {
 		stillWaiting = stillWaitingSQL
 	}
-	if slot != "" {
-		result, recordErr = s.DB.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=NULL,last_result=? WHERE id=? AND revision=?"+stillWaiting,
-			slot, now, reason, r.id, r.revision)
-	} else {
-		result, recordErr = s.DB.ExecContext(ctx, "UPDATE schedules SET last_result=? WHERE id=? AND revision=?"+stillWaiting, reason, r.id, r.revision)
+	key := slot
+	if key == "" {
+		key = "invalid"
 	}
+	// The skip and its alert commit together. A command is expected to skip
+	// while its server is stopped or busy, and alerts nobody.
+	changed, alerted := false, false
+	recordErr := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		var result sql.Result
+		var err error
+		if slot != "" {
+			result, err = tx.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=NULL,last_result=? WHERE id=? AND revision=?"+stillWaiting,
+				slot, now, reason, r.id, r.revision)
+		} else {
+			result, err = tx.ExecContext(ctx, "UPDATE schedules SET last_result=? WHERE id=? AND revision=?"+stillWaiting, reason, r.id, r.revision)
+		}
+		if err != nil {
+			return err
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows == 0 {
+			return err
+		}
+		changed = true
+		if skip != "" || s.Queue == nil {
+			return nil
+		}
+		alerted, err = s.Queue(ctx, tx, notify.FailedWork, "schedule:"+r.id+":"+key, "A scheduled Ludock action could not run. Review its server and permissions.")
+		return err
+	})
 	if recordErr != nil {
 		log.Warn("Could not record or notify a skipped schedule run", logging.F("scheduleId", r.id))
 		return
 	}
-	if changed, err := result.RowsAffected(); err != nil || changed == 0 {
+	if !changed {
 		return
+	}
+	if alerted && s.Alerted != nil {
+		s.Alerted()
 	}
 	// A run that won't happen calls off its countdown, unless its time
 	// passed long ago while Ludock was down.
@@ -973,18 +995,9 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 			s.sayCalledOff(r.serverID, action, heard)
 		}
 	}
-	// A command is expected to skip while its server is stopped or busy.
-	if skip != "" {
-		return
-	}
-	if !configurationValid && r.lastResult.String != reason {
+	if skip == "" && !configurationValid && r.lastResult.String != reason {
 		log.Warn("Saved schedule configuration is invalid; recreate the schedule", logging.F("scheduleId", r.id))
 	}
-	key := slot
-	if key == "" {
-		key = "invalid"
-	}
-	s.notify(notify.FailedWork, "schedule:"+r.id+":"+key, "A scheduled Ludock action could not run. Review its server and permissions.")
 }
 
 // queue enqueues a run's operation and records it on the schedule in one

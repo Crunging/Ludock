@@ -64,7 +64,11 @@ type Service struct {
 	Locks *locks.Table
 	// Runner queues recovery restarts. It may be nil.
 	Runner *ops.Runner
-	Notify func(alert notify.Alert, key, message string)
+	// Queue queues an alert inside tx (notify.Service.QueueIn), so the
+	// state that raises it never commits without it. Alerted wakes delivery
+	// once tx commits. Either may be nil.
+	Queue   func(ctx context.Context, tx *sql.Tx, alert notify.Alert, key, message string) (bool, error)
+	Alerted func()
 	// Changed is told when an alert is raised or cleared, which no Docker
 	// event announces to open pages. It must not block.
 	Changed func(serverID string)
@@ -392,9 +396,45 @@ func (s *Service) Problems(ctx context.Context, now int64) (map[string]*Problem,
 	return problems, nil
 }
 
-func (s *Service) notify(alert notify.Alert, key, message string) {
-	if s.Notify != nil {
-		s.Notify(alert, key, message)
+// alert is a server problem to queue with the state that raises it.
+type alert struct{ key, message string }
+
+// apply runs an UPDATE of availability and, only if it changed exactly one
+// row, queues alerts in the same transaction. It reports whether it changed.
+func (s *Service) apply(ctx context.Context, alerts []alert, query string, args ...any) (bool, error) {
+	changed := false
+	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if changed = rows == 1; err != nil || !changed {
+			return err
+		}
+		return s.queueIn(ctx, tx, alerts)
+	})
+	if err == nil && changed {
+		s.alerted(alerts)
+	}
+	return changed && err == nil, err
+}
+
+func (s *Service) queueIn(ctx context.Context, tx *sql.Tx, alerts []alert) error {
+	for _, a := range alerts {
+		if s.Queue == nil {
+			return nil
+		}
+		if _, err := s.Queue(ctx, tx, notify.ServerProblems, a.key, a.message); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) alerted(alerts []alert) {
+	if len(alerts) > 0 && s.Alerted != nil {
+		s.Alerted()
 	}
 }
 
@@ -457,7 +497,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		// from before it restarted, not yet alerted, waits its grace again
 		// from this process's first check.
 		if r.lastState.String == NotAnswering && r.notified == 0 && r.outage.Valid && r.outage.Int64 < since {
-			changed, err := s.transition(ctx, server.ID, r, "outage_started_at=?", since)
+			changed, err := s.transition(ctx, server.ID, r, nil, "outage_started_at=?", since)
 			if err != nil {
 				log.Warn("Could not save a server's availability; it will be checked again")
 				continue
@@ -475,7 +515,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		// The flag is cleared only if no stop was recorded since the row was
 		// read; a newer stop is kept and the server is checked next tick.
 		if running && r.intentional == 1 {
-			changed, err := s.transition(ctx, server.ID, r, "intentionally_stopped=0")
+			changed, err := s.transition(ctx, server.ID, r, nil, "intentionally_stopped=0")
 			if err != nil {
 				log.Warn("Could not save a server's availability; it will be checked again")
 				continue
@@ -512,13 +552,14 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			if !r.outage.Valid && r.notified == 0 && r.intentional == 0 && r.lastState.String == "running" {
 				continue
 			}
-			changed, err := s.transition(ctx, server.ID, r, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
+			var back []alert
+			if r.notified == 1 {
+				back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), server.DisplayName + ": the server is back up."}}
+			}
+			changed, err := s.transition(ctx, server.ID, r, back, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
 			if err != nil {
 				log.Warn("Could not save a server's availability; it will be checked again")
 				continue
-			}
-			if changed && r.notified == 1 {
-				s.notify(notify.ServerProblems, "recovery:"+server.ID+":"+strconv.FormatInt(r.outage.Int64, 10), server.DisplayName+": the server is back up.")
 			}
 			// Pages show an outage once its grace ends, even before its alert.
 			if changed && r.outage.Valid {
@@ -548,30 +589,35 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		} else if found && server.ContainerID != "" {
 			lastState = container.State
 		}
-		changed := false
-		if !(r.outage.Valid && r.outage.Int64 == started && r.notified == notified && r.lastState.String == lastState) {
-			if changed, err = s.transition(ctx, server.ID, r, "outage_started_at=?,notified=?,last_state=?,updated_at=?",
-				started, notified, lastState, now); err != nil {
-				log.Warn("Could not save a server's availability; it will be checked again")
-				continue
-			}
-		}
 		// A recovery restart, or giving up on one, is announced instead of
-		// the outage.
+		// the outage. It saves only the recovery state, which the outage
+		// transition below doesn't compare.
 		recovering := false
 		if silent && pastGrace && policy.Recover && container.Health != "starting" {
 			recovering = s.recover(ctx, server, container, r, policy, now)
 		}
-		// Raising an alert always changes notified, so it is sent only when
-		// that change was saved against the state read above.
-		if changed && pastGrace && r.notified == 0 && !recovering {
+		// Raising an alert always changes notified, and is queued with that
+		// change, saved against the state read above.
+		raise := pastGrace && r.notified == 0 && !recovering
+		var down []alert
+		if raise {
 			message := server.DisplayName + ": the server is down."
 			if unavailable {
 				message = server.DisplayName + ": Ludock can’t reach Docker to check it."
 			} else if silent {
 				message = server.DisplayName + ": running, but the game stopped answering."
 			}
-			s.notify(notify.ServerProblems, "outage:"+server.ID+":"+strconv.FormatInt(started, 10), message)
+			down = []alert{{"outage:" + server.ID + ":" + strconv.FormatInt(started, 10), message}}
+		}
+		changed := false
+		if !(r.outage.Valid && r.outage.Int64 == started && r.notified == notified && r.lastState.String == lastState) {
+			if changed, err = s.transition(ctx, server.ID, r, down, "outage_started_at=?,notified=?,last_state=?,updated_at=?",
+				started, notified, lastState, now); err != nil {
+				log.Warn("Could not save a server's availability; it will be checked again")
+				continue
+			}
+		}
+		if changed && raise {
 			s.changed(server.ID)
 		} else if changed && pastGrace && r.lastState.String != lastState {
 			// Pages show the reason of an outage past its grace.
@@ -611,15 +657,11 @@ func (s *Service) adopt(ctx context.Context, logical []identity.Server, rows map
 // transition applies set only if the row still has the policy and state
 // that were read, so a policy saved, a stop recorded, or a suppression added
 // meanwhile is never overwritten and raises no alert from the old state.
-func (s *Service) transition(ctx context.Context, serverID string, r *row, set string, args ...any) (bool, error) {
-	result, err := s.DB.ExecContext(ctx, "UPDATE availability SET "+set+` WHERE server_id=? AND policy_json=? AND
+// alerts are queued with the change.
+func (s *Service) transition(ctx context.Context, serverID string, r *row, alerts []alert, set string, args ...any) (bool, error) {
+	return s.apply(ctx, alerts, "UPDATE availability SET "+set+` WHERE server_id=? AND policy_json=? AND
     outage_started_at IS ? AND notified=? AND suppressed_until=? AND intentionally_stopped=?`,
 		append(args, serverID, r.policy, r.outage, r.notified, r.suppressed, r.intentional)...)
-	if err != nil {
-		return false, err
-	}
-	changed, err := result.RowsAffected()
-	return changed == 1, err
 }
 
 // testHook, set only by tests, runs at named points in Check so a test can

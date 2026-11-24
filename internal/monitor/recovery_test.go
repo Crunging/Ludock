@@ -193,7 +193,7 @@ func TestRecoveryAttemptWindowSurvivesARestart(t *testing.T) {
 		}
 		at = restarted + wait
 		// Ludock restarts: a new service on the same database.
-		s = &Service{DB: s.DB, Locks: s.Locks, Runner: s.Runner, Notify: s.Notify, Store: s.Store, Game: s.Game}
+		s = &Service{DB: s.DB, Locks: s.Locks, Runner: s.Runner, Queue: s.Queue, Store: s.Store, Game: s.Game}
 	}
 	*game = GameNotAnswering
 	before := len(events.events)

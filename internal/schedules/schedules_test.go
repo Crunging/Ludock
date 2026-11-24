@@ -557,7 +557,10 @@ func TestCommandSchedulesNeedConsoleAccess(t *testing.T) {
 func TestCommandSkippedWhileServerBusy(t *testing.T) {
 	f := setup(t)
 	var notified []string
-	f.s.Notify = func(_ notify.Alert, key, message string) { notified = append(notified, key) }
+	f.s.Queue = func(_ context.Context, _ *sql.Tx, _ notify.Alert, key, message string) (bool, error) {
+		notified = append(notified, key)
+		return true, nil
+	}
 	input := base
 	input.Action, input.Command = "command", "save-all"
 	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, input); err != nil {

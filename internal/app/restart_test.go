@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"database/sql"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -67,7 +69,10 @@ func restartable(t *testing.T, source *statusSource, recover bool) func() *lifet
 		p := &players.Service{Identity: store, Source: source}
 		t.Cleanup(p.Stop)
 		m := &monitor.Service{DB: d, Locks: locks.New(), Runner: &ops.Runner{DB: d}, Store: store,
-			Notify: func(_ notify.Alert, _, message string) { *events = append(*events, message) }}
+			Queue: func(_ context.Context, _ *sql.Tx, _ notify.Alert, _, message string) (bool, error) {
+				*events = append(*events, message)
+				return true, nil
+			}}
 		watchGames(m, p)
 		return &lifetime{monitor: m, players: p, events: events, server: list[0]}
 	}
@@ -351,5 +356,70 @@ func TestAnnouncedHangKeepsItsRecoveryTiming(t *testing.T) {
 	after.check(t, base, 100_000)
 	if state, _ := after.monitor.Recovery(ctx, after.server.ID); state.SilentSince != base+2000 || state.Pending {
 		t.Fatalf("%+v", state)
+	}
+}
+
+// Ludock ends just as it alerts that a server is down, and the server is
+// still down when it starts again: the outage alert is queued all the same,
+// before the one saying the server is back up.
+func TestOutageAlertSurvivesALudockRestart(t *testing.T) {
+	ctx := context.Background()
+	d := dbtest.Open(t)
+	store := &identity.Store{DB: d}
+	list, err := store.Reconcile(ctx, []identity.Observation{{ContainerID: "mc", Name: "mc", DisplayName: "Game", GameType: "valheim"}}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CreateUser(ctx, db.UserRecord{User: db.User{ID: "admin", Username: "admin", Role: db.RoleAdmin, CreatedAt: 1}, PasswordHash: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	session := dbtest.Session(t, d, "admin")
+	notifications := &notify.Service{DB: d}
+	if err := notifications.Configure(ctx, "admin", session, notify.Discord,
+		notify.Config{Enabled: true, URL: "https://discord.com/api/webhooks/1/token"}, false); err != nil {
+		t.Fatal(err)
+	}
+	// ends is a process that stops at its first alert, before anything after it runs.
+	start := func(ends bool) *monitor.Service {
+		m := &monitor.Service{DB: d, Locks: locks.New(), Store: store, Queue: notifications.QueueIn, Alerted: notifications.Poke}
+		if ends {
+			m.Alerted = func() { runtime.Goexit() }
+		}
+		return m
+	}
+	policy := monitor.DefaultPolicy()
+	policy.GraceSeconds = 60
+	if _, err := start(false).Configure(ctx, "admin", session, list[0].ID, policy); err != nil {
+		t.Fatal(err)
+	}
+	check := func(m *monitor.Service, state string, at int64) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			m.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: state}}, at)
+		}()
+		<-done
+	}
+	before := start(true)
+	check(before, "running", 1000)
+	check(before, "exited", 2000)
+	check(before, "exited", 63_000)
+	after := start(false)
+	check(after, "exited", 100_000)
+	check(after, "running", 200_000)
+	rows, err := d.Query("SELECT message FROM notification_deliveries ORDER BY created_at, rowid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var sent []string
+	for rows.Next() {
+		var message string
+		rows.Scan(&message)
+		sent = append(sent, message)
+	}
+	if !slices.Equal(sent, []string{"Game: the server is down.", "Game: the server is back up."}) {
+		t.Fatal(sent)
 	}
 }

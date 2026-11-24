@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/db"
@@ -16,7 +17,10 @@ var ctx = context.Background()
 
 type recorder struct{ events []string }
 
-func (r *recorder) notify(_ notify.Alert, key, message string) { r.events = append(r.events, message) }
+func (r *recorder) queue(_ context.Context, _ *sql.Tx, _ notify.Alert, key, message string) (bool, error) {
+	r.events = append(r.events, message)
+	return true, nil
+}
 
 func setup(t *testing.T) (*Service, *recorder, identity.Server) {
 	t.Helper()
@@ -32,7 +36,7 @@ func setupWith(t *testing.T, change func(*Policy)) (s *Service, events *recorder
 	store := &identity.Store{DB: d}
 	list, _ := store.Reconcile(ctx, []identity.Observation{{ContainerID: "mc", Name: "mc", DisplayName: "Minecraft", GameType: "minecraft"}}, "", 0)
 	events = &recorder{}
-	s = &Service{DB: d, Locks: locks.New(), Notify: events.notify, Store: store}
+	s = &Service{DB: d, Locks: locks.New(), Queue: events.queue, Store: store}
 	if err := d.CreateUser(ctx, db.UserRecord{User: db.User{ID: "admin", Username: "admin", Role: db.RoleAdmin, CreatedAt: 1}, PasswordHash: "x"}); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +197,7 @@ func TestPolicySavedDuringACheckIsKept(t *testing.T) {
 	if _, err := s.DB.Exec(`UPDATE availability SET policy_json='{"enabled":false,"graceSeconds":60}' WHERE server_id=?`, server.ID); err != nil {
 		t.Fatal(err)
 	}
-	if changed, err := s.transition(ctx, server.ID, read, "outage_started_at=?,notified=1", 1000); err != nil || changed {
+	if changed, err := s.transition(ctx, server.ID, read, nil, "outage_started_at=?,notified=1", 1000); err != nil || changed {
 		t.Fatal(changed, err)
 	}
 	if found, _ := problem(s, server.ID, 200_000); found != nil {
@@ -312,7 +316,7 @@ func TestNewServersAreWatched(t *testing.T) {
 	list, _ := store.Reconcile(ctx, []identity.Observation{{ContainerID: "a", Name: "a", DisplayName: "Alpha", GameType: "minecraft"},
 		{ContainerID: "b", Name: "b", DisplayName: "Beta", GameType: "minecraft"}}, "", 0)
 	events := &recorder{}
-	s := &Service{DB: d, Locks: locks.New(), Notify: events.notify, Store: store}
+	s := &Service{DB: d, Locks: locks.New(), Queue: events.queue, Store: store}
 	both := func(a, b string) map[string]servers.Container {
 		return map[string]servers.Container{"a": {ID: "a", State: a}, "b": {ID: "b", State: b}}
 	}
