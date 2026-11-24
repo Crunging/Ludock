@@ -8,6 +8,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/schedtime"
 	"github.com/Crunging/Ludock/internal/schedules"
@@ -258,6 +259,9 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 	}
 	if err == nil {
 		err = d.Row.Server.Refusal(input.Action)
+	}
+	if err == nil && (input.Action == "backup" || input.CreateBackup) && d.Row.Server.NoDataFolders {
+		err = backups.ErrNoRoots
 	}
 	if err == nil {
 		if scheduleID == "" {

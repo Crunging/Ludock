@@ -222,6 +222,30 @@ func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 	if response := p.action("/servers/"+p.server+"/updates", p.admin, values); response.StatusCode != http.StatusConflict {
 		t.Fatal(response.StatusCode)
 	}
+	// A server with no data folders has nothing to back up first: a form
+	// opened earlier, or a forged request, is refused before any image is
+	// pulled, and so is a schedule that would back it up.
+	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.HostConfig, c.Mounts = nil, nil })
+	if _, err := p.app.Servers.RefreshNow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if response := p.action("/servers/"+p.server+"/updates", p.admin, url.Values{"createBackup": {"true"}}); response.StatusCode != http.StatusConflict {
+		t.Fatal(response.StatusCode)
+	}
+	p.engine.Update(p.docker, func(*fakedocker.Container) {
+		if requests := strings.Join(p.engine.Requests, "\n"); strings.Contains(requests, "/images/create") {
+			t.Error("pulled an image for an update that couldn't back up first")
+		}
+	})
+	for _, form := range []url.Values{{"action": {"backup"}}, {"action": {"restart"}, "createBackup": {"true"}}} {
+		form.Set("kind", "recurring")
+		form.Set("time", "09:00")
+		form.Set("timezone", "UTC")
+		form.Set("days", "1")
+		if response := p.action("/servers/"+p.server+"/schedules", p.admin, form); response.StatusCode != http.StatusConflict {
+			t.Fatal(form, response.StatusCode)
+		}
+	}
 }
 
 // The Backups tab follows work that is still running even without a link

@@ -530,6 +530,12 @@ func (s *Server) queueUpdate(w http.ResponseWriter, r *http.Request, request *Re
 		s.fail(w, r, request, apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping backup"))
 		return
 	}
+	// Refused before the image is pulled, which a form opened earlier or a
+	// forged request would otherwise wait through.
+	if createBackup && len(resolved.Container.FileRoots) == 0 {
+		s.fail(w, r, request, backups.ErrNoRoots)
+		return
+	}
 	if _, err := s.App.Updates.Check(r.Context(), resolved); err != nil {
 		s.fail(w, r, request, err)
 		return
