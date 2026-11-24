@@ -3,7 +3,7 @@ import { test, expect, signIn, createUser, serverRow, openServer, shareServer, c
 
 async function openSharing(page, server) {
   await openServer(page, server);
-  await page.getByRole("tab", { name: "Sharing" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Sharing" }).click();
   await expect(page).toHaveURL(/\?tab=sharing$/);
   return page.locator("#sharing");
 }
@@ -39,7 +39,7 @@ test("sharing a server with someone new by invite link, and what they can see", 
   await expect(row.getByRole("button", { name: "Stop" })).toHaveCount(0);
   await expect(row.getByRole("link", { name: "Console" })).toHaveCount(0);
   await pal.getByRole("link", { name: "Survival", exact: true }).click();
-  await expect(pal.getByRole("tab")).toHaveText(["Overview", "Activity"]);
+  await expect(pal.locator(".section-tabs").getByRole("link")).toHaveText(["Overview", "Activity"]);
   await expect(pal.locator(".detail-actions")).toHaveCount(0);
   // Their menu and the server's page hold only what they can use: no
   // Docker details, and nothing that says to ask an administrator.
@@ -49,9 +49,9 @@ test("sharing a server with someone new by invite link, and what they can see", 
   for (const docker of ["Ports", "Container", "Image"]) await expect(facts.filter({ hasText: docker })).toHaveCount(0);
   await expect(pal.locator(".detail-header code")).toHaveCount(0);
   // Activity offers only results that can apply to them: no updates.
-  await pal.getByRole("tab", { name: "Activity" }).click();
+  await pal.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
   await expect(pal.getByLabel("Result").locator("option")).toHaveText(["Any result", "Queued", "Running", "Succeeded", "Skipped", "Failed", "Interrupted", "Cancelled"]);
-  await pal.getByRole("tab", { name: "Overview" }).click();
+  await pal.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
   await expect(pal.getByText("administrator", { exact: false })).toHaveCount(0);
 
   // Requests the page doesn't offer are refused.
@@ -82,7 +82,7 @@ test("changing someone's access and stopping sharing from the server's page", as
   await row.getByRole("button", { name: "Save" }).click();
   await expect(sharing.locator(".alert--success")).toHaveText("Changed pal’s access to “Can run it”.");
   await pal.reload();
-  await expect(pal.getByRole("tab")).toHaveText(["Overview", "Activity"]);
+  await expect(pal.locator(".section-tabs").getByRole("link")).toHaveText(["Overview", "Activity"]);
   await expect(pal.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
   await expect(pal.locator(".detail-actions").getByRole("link", { name: "Console" })).toBeVisible();
   await expect(pal.locator(".detail-actions").getByRole("link", { name: "Files" })).toHaveCount(0);
@@ -96,7 +96,7 @@ test("changing someone's access and stopping sharing from the server's page", as
   await row.getByRole("button", { name: "Save" }).click();
   await expect(sharing.locator(".alert--success")).toHaveText("Changed pal’s access to “Full access”.");
   await pal.reload();
-  await expect(pal.getByRole("tab")).toHaveText(["Overview", "Activity", "Backups", "Schedules"]);
+  await expect(pal.locator(".section-tabs").getByRole("link")).toHaveText(["Overview", "Activity", "Backups", "Schedules"]);
   await expect(pal.locator(".detail-actions").getByRole("link", { name: "Files" })).toBeVisible();
 
   // The users page lists what each person can use.
@@ -111,7 +111,7 @@ test("changing someone's access and stopping sharing from the server's page", as
   await expect(sharing.locator(".alert--success")).toHaveText("Stopped sharing with pal.");
   await expect(shareRow(sharing, "pal")).toHaveCount(0);
   await expect(sharing.locator("form.share-form").getByLabel("Person").locator("option", { hasText: "pal" })).toHaveCount(1);
-  await pal.getByRole("tab", { name: "Activity" }).click();
+  await pal.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
   await expect(pal.getByText("Server not found")).toBeVisible();
   await pal.goto("/");
   await expect(pal.getByText("No servers shared with you yet")).toBeVisible();

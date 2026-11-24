@@ -202,13 +202,13 @@ test.describe("a game its owner labeled in although it can control the host", ()
     await page.goto("/");
     await expect(serverRow(page, "factorio")).toContainText("Factorio");
     await openServer(page, "factorio");
-    await page.getByRole("tab", { name: "Sharing" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Sharing" }).click();
     const warning = page.locator("#sharing-host-warning");
     await expect(warning).toContainText("This container can control the host");
     await expect(warning).toContainText("Share it only as Can see it, or with people you would trust with the host.");
     // An ordinary server carries no warning.
     await openServer(page, "Survival");
-    await page.getByRole("tab", { name: "Sharing" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Sharing" }).click();
     await expect(page.locator("#sharing")).toBeVisible();
     await expect(page.locator("#sharing-host-warning")).toHaveCount(0);
   });

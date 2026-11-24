@@ -89,7 +89,7 @@ test("a new install lists what's left to set up, and does it in a click", async 
       "Nightly backups scheduled: Survival at 04:00, valheim at 04:15 (Europe/Berlin).");
     await expect(item(page, "Back up your servers")).toHaveCount(0);
     await page.getByRole("link", { name: "Survival", exact: true }).click();
-    await page.getByRole("tab", { name: "Schedules" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
     const schedule = page.locator("#schedule-list tbody tr");
     await expect(schedule).toHaveCount(1);
     await expect(schedule).toContainText("Backup");
@@ -189,7 +189,7 @@ test("a server with no data folders says why it can't be backed up", async ({ se
   await expect(row.locator(".server-row__backup")).not.toContainText("Never");
   await expect(row.locator(".server-row__never")).toHaveCount(0);
   await row.getByRole("link", { name: "enshrouded", exact: true }).click();
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   const why = page.locator("#backup-no-data");
   await expect(why).toContainText("Ludock can’t back up this server. None of its data is in a folder Ludock can reach.");
   await expect(why).toContainText("give its game data a writable volume or bind mount");

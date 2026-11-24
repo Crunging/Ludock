@@ -64,7 +64,7 @@ templ ConsolePage(page Page, c ConsoleView) {
 					<a class="console-header__back" href={ templ.SafeURL("/servers/" + c.ServerID) } title="Back to server details" aria-label="Back to server details" id="btn-console-back"><span aria-hidden="true">←</span></a>
 					<div>
 						<div class="console-header__name">
-							{ c.ServerName }
+							<h1>{ c.ServerName }</h1>
 							@ServerState(c.State, c.Health, c.Exit)
 						</div>
 						<div class="console-header__status">{ c.statusText() }</div>

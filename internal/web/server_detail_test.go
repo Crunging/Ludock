@@ -143,7 +143,7 @@ func TestOperationLinkFallsBackToActivity(t *testing.T) {
 	var operation string
 	p.app.DB.QueryRow("SELECT id FROM operations ORDER BY created_at DESC LIMIT 1").Scan(&operation)
 	body := p.do("GET", "/servers/"+p.server+"?tab=backups&operation="+operation, viewer, nil, nil).Body.String()
-	if !strings.Contains(body, `id="selected-operation"`) || !strings.Contains(body, `id="tab-activity" role="tab" aria-selected="true"`) {
+	if !strings.Contains(body, `id="selected-operation"`) || !strings.Contains(body, `id="tab-activity" aria-current="page"`) {
 		t.Fatal(body)
 	}
 }

@@ -15,7 +15,7 @@ async function menuItem(row, role, name) {
 
 test("backing up, downloading, restoring, and deleting a backup", async ({ page, ownServer }) => {
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   // A server that is ready says nothing about readiness.
   await expect(page.locator("#create-backup")).toBeEnabled();
   await expect(page.locator("#backup-readiness")).toBeEmpty();
@@ -43,7 +43,7 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   // Progress shows where the backup started, and the tab catches up once
   // it finishes.
   await expect(page).toHaveURL(/\?tab=backups&operation=/);
-  await expect(page.getByRole("tab", { name: "Backups" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".section-tabs").getByRole("link", { name: "Backups" })).toHaveAttribute("aria-current", "page");
   await expectOperationSucceeded(page);
   // The copy holds what the game last saved, so it is asked to save first.
   await expect(page.locator("#selected-operation")).toContainText("Save command sent before stopping.");
@@ -102,7 +102,7 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   await restart.getByRole("button", { name: "Restart server" }).click();
   expect((await queued).ok()).toBe(true);
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page).toHaveURL(/\?tab=backups$/);
   // The backup appears once the restart has taken it.
   await expect(async () => {
@@ -123,7 +123,7 @@ test("browsing a backup, downloading one file, and restoring it alone", async ({
   for (let index = 1; index <= 501; index++) writeFileSync(join(folder, "chunks", `chunk-${index}.dat`), "");
 
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page.locator("#create-backup")).toBeEnabled();
   await page.getByRole("button", { name: "Create backup" }).click();
   await page.getByRole("dialog", { name: `Back up ${ownServer.name}?` }).getByRole("button", { name: "Create backup" }).click();
@@ -187,7 +187,7 @@ test("browsing a backup, downloading one file, and restoring it alone", async ({
   const operator = await session({ storageState: { cookies: [], origins: [] } });
   await signIn(operator, backupmaker, "backup maker password");
   await openServer(operator, ownServer.name);
-  await operator.getByRole("tab", { name: "Backups" }).click();
+  await operator.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(operator.locator("#backup-retention")).toBeVisible();
   await expect(operator.locator("#backup-list")).toHaveCount(0);
   await expect(operator.getByRole("link", { name: "Browse files" })).toHaveCount(0);
@@ -203,7 +203,7 @@ test("browsing a backup, downloading one file, and restoring it alone", async ({
 
 test("keeping a backup with a note, seeing it outlast retention, and releasing it", async ({ page, ownServer }) => {
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   const retention = page.locator("#backup-retention");
   await retention.getByText("Which backups Ludock keeps").click();
   await expect(retention).toContainText("The 3 newest, plus the last one of each of the 7 most recent days");
@@ -285,7 +285,7 @@ test("Ludock saving its own data beside the backups without being asked", async 
   expect(saves.length).toBeGreaterThan(0);
   expect(statSync(join(backupFolder, saves[0])).mode & 0o777).toBe(0o600);
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page.locator("#backup-list")).toBeVisible();
   await expect(page.locator("main")).not.toContainText("ludock-data");
 });
@@ -312,7 +312,7 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
 
   // Each backup is copied there once its server is back.
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page.locator("#create-backup")).toBeEnabled();
   await page.getByRole("button", { name: "Create backup" }).click();
   await page.getByRole("dialog", { name: `Back up ${ownServer.name}?` }).getByRole("button", { name: "Create backup" }).click();
@@ -374,7 +374,7 @@ test("removing a backup whose folder was lost", async ({ page, ownServer }) => {
   // A backup saved in a folder on a disk that is later lost.
   await saveIn(oldFolder);
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page.locator("#create-backup")).toBeEnabled();
   await page.getByRole("button", { name: "Create backup" }).click();
   await page.getByRole("dialog", { name: `Back up ${ownServer.name}?` }).getByRole("button", { name: "Create backup" }).click();
@@ -385,7 +385,7 @@ test("removing a backup whose folder was lost", async ({ page, ownServer }) => {
   renameSync(oldFolder, lost);
   try {
     await openServer(page, ownServer.name);
-    await page.getByRole("tab", { name: "Backups" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
     const row = page.locator("#backup-list tbody tr", { has: page.locator(`a[href="${href}"]`) });
     await expect(row).toContainText("Its backup folder can’t be reached");
     await (await menuItem(row, "button", "Delete")).click();
@@ -407,7 +407,7 @@ test("a backup Docker fails says so plainly, and the Backups tab shows it until 
   await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
   try {
-    await page.getByRole("tab", { name: "Backups" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
     await expect(page.locator("#create-backup")).toBeEnabled({ timeout: 45_000 });
     await fake("/fake/fault", { match: "^POST .*/containers/create", status: "500" });
     try {
@@ -429,7 +429,7 @@ test("a backup Docker fails says so plainly, and the Backups tab shows it until 
     await expect(page.locator("#selected-operation")).toContainText("Docker reported an error");
 
     // The server went back to running, and Valheim saves on its own stop.
-    await page.getByRole("tab", { name: "Backups" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
     await expect(page.locator("#create-backup")).toBeEnabled({ timeout: 45_000 });
     await page.getByRole("button", { name: "Create backup" }).click();
     await page.getByRole("dialog", { name: "Back up valheim?" }).getByRole("button", { name: "Create backup" }).click();

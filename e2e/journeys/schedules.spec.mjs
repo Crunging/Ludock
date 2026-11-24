@@ -14,7 +14,7 @@ async function moreOptions(form) {
 
 test("scheduling, editing, pausing, and deleting a restart", async ({ page, session, ownServer }) => {
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Schedules" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
   await moreOptions(form);
   await form.getByLabel("Time zone").fill("Europe/Berlin");
@@ -61,16 +61,16 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await row.getByRole("button", { name: "Resume" }).click();
   await expect(row.locator("td").nth(2)).toHaveText("Enabled");
 
-  await page.getByRole("tab", { name: "Overview" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
   await expect(page.locator(".overview-facts").first()).toContainText("Restart");
 
   // Someone else pauses the schedule while it is being edited: saving shows
   // the conflict and keeps the draft, which then saves without resuming it.
-  await page.getByRole("tab", { name: "Schedules" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
   await row.getByRole("link", { name: "Edit" }).click();
   const other = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
   await openServer(other, ownServer.name);
-  await other.getByRole("tab", { name: "Schedules" }).click();
+  await other.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
   await other.locator("#schedule-list tbody tr", { hasText: "weekdays" }).getByRole("button", { name: "Pause" }).click();
   await expect(other.locator("#detail-status")).toHaveText("Schedule paused.");
 
@@ -103,7 +103,7 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
 // warns anyone still on. The rest waits under More options.
 test("a new schedule opens on a daily restart that backs up first", async ({ page, ownServer }) => {
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Schedules" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
   await expect(form.getByLabel("Action")).toHaveValue("restart");
   await expect(form.getByLabel("Back up first")).toBeChecked();
@@ -147,7 +147,7 @@ test("a new schedule starts on an action its owner can use", async ({ page, sess
   const operator = await session({ storageState: { cookies: [], origins: [] } });
   await signIn(operator, scheduler, "scheduler password one");
   await operator.getByRole("link", { name: ownServer.name, exact: true }).click();
-  await operator.getByRole("tab", { name: "Schedules" }).click();
+  await operator.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
   const form = operator.locator("#schedule-form");
   await expect(form.getByLabel("Action")).toHaveValue("restart");
   await expect(form.locator(".schedule-form-note").getByText("Connected players are disconnected.").filter({ visible: true })).toHaveCount(1);
@@ -169,7 +169,7 @@ test("a new schedule starts on an action its owner can use", async ({ page, sess
 test("a member sees the owner's schedules read-only", async ({ page, session, ownServer }) => {
   const planner = "planner-" + ownServer.container;
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Schedules" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
   await form.getByLabel("Time", { exact: true }).fill("03:10");
   await form.getByRole("button", { name: "Add schedule" }).click();
@@ -181,7 +181,7 @@ test("a member sees the owner's schedules read-only", async ({ page, session, ow
     await signIn(member, planner, "planner password one");
     await member.getByRole("link", { name: ownServer.name, exact: true }).click();
     await expect(member.locator(".overview-facts").first()).not.toContainText("Nothing scheduled");
-    await member.getByRole("tab", { name: "Schedules" }).click();
+    await member.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
     const row = member.locator("#schedule-list tbody tr", { hasText: "03:10, every day" });
     await expect(row).toContainText("Set up by admin");
     // Usernames show as typed: no style capitalizes them.
@@ -193,7 +193,7 @@ test("a member sees the owner's schedules read-only", async ({ page, session, ow
   } finally {
     await page.goto("/servers");
     await openServer(page, ownServer.name);
-    await page.getByRole("tab", { name: "Schedules" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
     const row = page.locator("#schedule-list tbody tr", { hasText: "03:10, every day" });
     await row.getByRole("button", { name: "Delete" }).click();
     await page.getByRole("dialog", { name: "Delete this schedule?" }).getByRole("button", { name: "Delete schedule" }).click();

@@ -79,7 +79,7 @@ test.describe("a game that hangs while Ludock restarts", () => {
     const status = page.locator(".recovery-status");
     await expect(status).toContainText("because the game stopped answering", { timeout: 120_000 });
     await expect(status).toContainText("It answered again.", { timeout: 60_000 });
-    await page.getByRole("tab", { name: "Activity" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
     await expect(page.getByText("By Ludock, because the game stopped answering").first()).toBeVisible();
     await page.getByRole("link", { name: "Restart" }).first().click();
     await expect(page.locator(".metadata-list")).toContainText("Ludock, because the game stopped answering");

@@ -74,7 +74,7 @@ try {
   const openServer = async (tab, name = minecraft) => {
     await page.goto("/");
     await page.getByRole("link", { name, exact: true }).click();
-    if (tab) await page.getByRole("tab", { name: tab }).click();
+    if (tab) await page.locator(".section-tabs").getByRole("link", { name: tab }).click();
   };
   const backUp = async () => {
     await page.locator("#create-backup").click();

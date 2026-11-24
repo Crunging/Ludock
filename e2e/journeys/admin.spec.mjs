@@ -73,7 +73,7 @@ test("checking the Docker connection under Settings", async ({ page }) => {
   await page.goto("/");
   await expect(menu.getByRole("link")).toHaveText(["Servers", "Activity", "Users", "Settings"]);
   await menu.getByRole("link", { name: "Settings" }).click();
-  await page.getByRole("navigation", { name: "Settings pages" }).getByRole("tab", { name: "System" }).click();
+  await page.getByRole("navigation", { name: "Settings pages" }).getByRole("link", { name: "System" }).click();
   await expect(page).toHaveURL(/\/settings\/system$/);
   await expect(menu.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "location");
   await expect(page.locator(".metadata-list")).toContainText("DockerConnected");

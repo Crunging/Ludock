@@ -25,7 +25,7 @@ test("an update recreates the server with its settings and unnamed volume", asyn
   const inspect = (id) => JSON.parse(docker("inspect", id))[0];
   const old = inspect(before);
   await openServer(page, "Test Game");
-  await page.getByRole("tab", { name: "Update" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Update" }).click();
   const form = page.locator("#update-panel form");
   // A console command may hold the server for a moment; check again.
   const checkAgain = page.locator("#update-panel").getByRole("button", { name: "Check again" });

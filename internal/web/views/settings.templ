@@ -207,7 +207,7 @@ templ LoggingForm(l LoggingSettings) {
 			@fixedByDeployment("LUDOCK_LOG_LEVEL")
 		} else {
 			<label class="check-label">
-				<input type="checkbox" name="verbose" value="true" checked?={ l.Verbose } aria-describedby="logging-help"/>
+				<input type="checkbox" id="logging-verbose" name="verbose" value="true" checked?={ l.Verbose } aria-describedby="logging-help" data-autosubmit/>
 				Log extra detail
 			</label>
 			<p class="muted check-help" id="logging-help">For a bug report; it turns itself off after 24 hours. Read it with <code>docker compose logs ludock</code>.</p>
@@ -215,7 +215,6 @@ templ LoggingForm(l LoggingSettings) {
 				<p class="muted">On until @Time(l.Until, "", "")</p>
 			}
 			@settingFeedback(l.Error, l.Notice)
-			<button class="primary-btn" type="submit" data-busy-label="Saving…">Save logging</button>
 		}
 	</form>
 }
@@ -273,7 +272,7 @@ templ ConnectionForm(c ConnectionSettings) {
 templ ImageUpdateSettingsForm(u ImageUpdateSettings) {
 	<form class="stack-form" id="image-update-settings-form" hx-post="/settings/image-updates" hx-target="this" hx-swap="outerHTML">
 		<label class="check-label">
-			<input type="checkbox" name="enabled" value="true" checked?={ u.Enabled } aria-describedby="image-update-help"/>
+			<input type="checkbox" id="image-update-enabled" name="enabled" value="true" checked?={ u.Enabled } aria-describedby="image-update-help" data-autosubmit/>
 			Check for newer server images
 		</label>
 		<p class="muted check-help" id="image-update-help">A few times a day, without downloading or installing anything.</p>
@@ -283,7 +282,6 @@ templ ImageUpdateSettingsForm(u ImageUpdateSettings) {
 		if u.Notice != "" {
 			@Alert("success", u.Notice)
 		}
-		<button class="primary-btn" type="submit" data-busy-label="Saving…">Save image update settings</button>
 	</form>
 }
 
