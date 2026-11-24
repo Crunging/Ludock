@@ -275,7 +275,7 @@ func (h *Helpers) archive(ctx context.Context, id, base, root string, assertAcce
 	}
 	var expired atomic.Bool
 	timer := time.AfterFunc(h.backupLimit(), func() { expired.Store(true); conn.Close() })
-	stderr := &limitedBuffer{limit: 4096}
+	stderr := &launch.FirstBytes{Limit: 4096}
 	reader, writer := io.Pipe()
 	go func() { writer.CloseWithError(docker.Demux(conn, writer, stderr)) }()
 	closer := &closeFunc{Reader: reader, close: func() error { timer.Stop(); conn.Close(); return reader.Close() }}
@@ -285,50 +285,19 @@ func (h *Helpers) archive(ctx context.Context, id, base, root string, assertAcce
 		}
 		// Docker away as the stream ends means it cut the copy short, even if
 		// the exec it kept then exits with an error once Docker is back.
-		result, err := h.Docker.InspectExec(docker.Promptly(context.WithoutCancel(ctx)), execID)
-		if docker.Unavailable(err) {
+		code, err := launch.FileExit(ctx, h.Docker, execID, stderr)
+		if err != nil {
 			return err
 		}
-		// An exec Docker no longer knows was lost with a restart of Docker.
-		if docker.IsNotFound(err) {
-			return docker.ErrRequestFailed
-		}
-		// The helper reports its own failures; an exec that ended without
-		// one never ran it, as when Docker fails to start the command.
-		// Docker never ends a command with the helper's own refusal.
-		if err == nil && !result.Running && result.ExitCode != nil && *result.ExitCode == helper.FileMounted {
+		if code == helper.FileMounted {
 			return ErrHostMount
 		}
-		if err == nil && !result.Running && result.ExitCode != nil && *result.ExitCode != 0 && !strings.Contains(stderr.String(), helper.FileFailure) {
-			return docker.ErrRequestFailed
-		}
-		if err != nil || result.Running || result.ExitCode == nil || *result.ExitCode != 0 {
+		if code != 0 {
 			return fail("UNSAFE_ARCHIVE", "Ludock couldn’t read everything in the server’s data folders, so the backup was stopped. A backup takes only ordinary files and folders that Ludock can read, not links (symbolic or hard) or device files.")
 		}
 		return nil
 	}
 	return closer, complete, nil
-}
-
-// limitedBuffer keeps the first limit bytes written to it, for reading while
-// a stream may still write.
-type limitedBuffer struct {
-	mu    sync.Mutex
-	data  []byte
-	limit int
-}
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.data = append(b.data, p[:min(len(p), max(0, b.limit-len(b.data)))]...)
-	return len(p), nil
-}
-
-func (b *limitedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return string(b.data)
 }
 
 type closeFunc struct {
@@ -669,7 +638,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		items[target.Root.ID] = target.Item
 		mu.Unlock()
 		go func() {
-			out := &limitedBuffer{limit: 64}
+			out := &launch.FirstBytes{Limit: 64}
 			err := docker.Demux(conn, out, nil)
 			result := launch.WaitForExit(h.Docker, helperID, execID, h.pollInterval, expired)
 			switch {
