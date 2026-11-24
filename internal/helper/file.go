@@ -447,34 +447,43 @@ func (h *fileHelper) stages(root fd, relative string) ([]string, error) {
 	found, count := []string{}, 0
 	var walk func(directory fd, relative string, depth int) error
 	walk = func(directory fd, relative string, depth int) error {
-		entries, err := entriesOf(directory)
+		children, err := names(directory)
 		if err != nil {
 			return err
 		}
 		// The root's children are at depth 1 here and 0 in a restore's walk.
-		if count += len(entries); depth > 65 || count > 1000000 {
+		if count += len(children); depth > 65 || count > 1000000 {
 			return errors.New("the folder has too many entries to check")
 		}
-		for _, entry := range entries {
+		for _, child := range children {
 			if len(found) == 3 {
 				return nil
 			}
-			if !entry.IsDir() {
+			// Each entry is checked with lstat: some network file systems
+			// list every entry's type as unknown.
+			info, err := lstatAt(directory, child)
+			if isNotExist(err) {
 				continue
 			}
-			name := path.Join(relative, entry.Name())
-			if relative != "" && validStage(entry.Name()) {
-				found = append(found, name)
-			}
-			if Reserved(entry.Name()) {
-				continue
-			}
-			child, err := h.t.openAt(directory, entry.Name(), directoryFlags, 0)
 			if err != nil {
 				return err
 			}
-			err = walk(child, name, depth+1)
-			h.t.close(child)
+			if !isDir(info) {
+				continue
+			}
+			name := path.Join(relative, child)
+			if relative != "" && validStage(child) {
+				found = append(found, name)
+			}
+			if Reserved(child) {
+				continue
+			}
+			opened, err := h.t.openAt(directory, child, directoryFlags, 0)
+			if err != nil {
+				return err
+			}
+			err = walk(opened, name, depth+1)
+			h.t.close(opened)
 			if err != nil {
 				return err
 			}

@@ -602,6 +602,23 @@ func TestRestoreKeepsOtherStages(t *testing.T) {
 	if job := f.run(t, "backup", nil); job.Status != ops.Succeeded || job.Result["leftOut"] != f.data+"/world" {
 		t.Errorf("backup: %s %v", job.Status, job.Result)
 	}
+	// A warned backup checks again after the warning; a stage gone by then
+	// isn't reported.
+	plain, checks := f.engine.Exec, 0
+	f.jobs.WarningLead = 100 * time.Millisecond
+	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+		code := plain(c, cmd, stdin, stdout, stderr)
+		if len(cmd) > 3 && cmd[2] == "file" && strings.Contains(cmd[3], `"operation":"mounts"`) {
+			if checks++; checks == 1 {
+				os.RemoveAll(stage)
+			}
+		}
+		return code
+	}
+	if job := f.run(t, "backup", map[string]any{WarnInput: true}); job.Status != ops.Succeeded || checks != 2 || job.Result["leftOut"] != nil {
+		t.Errorf("warned backup: %s %v, %d checks", job.Status, job.Result, checks)
+	}
+	f.engine.Exec = plain
 	os.RemoveAll(stage)
 	for _, top := range tops {
 		os.RemoveAll(filepath.Join(f.data, strings.Split(top, "/")[0]))

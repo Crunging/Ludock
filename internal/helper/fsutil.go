@@ -110,37 +110,16 @@ func sameInode(a, b *unix.Stat_t) bool { return a.Dev == b.Dev && a.Ino == b.Ino
 
 // names lists a pinned directory without consuming its offset.
 func names(directory fd) ([]string, error) {
-	file, err := reread(directory)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	return file.Readdirnames(-1)
-}
-
-// entriesOf is names with each entry's type, which most file systems give
-// without a stat per entry.
-func entriesOf(directory fd) ([]os.DirEntry, error) {
-	file, err := reread(directory)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	return file.ReadDir(-1)
-}
-
-// reread opens a directory's descriptor again, from its first entry.
-func reread(directory fd) (*os.File, error) {
 	duplicate, err := unix.Dup(int(directory))
 	if err != nil {
 		return nil, err
 	}
 	file := os.NewFile(uintptr(duplicate), "directory")
+	defer file.Close()
 	if _, err := file.Seek(0, 0); err != nil {
-		file.Close()
 		return nil, err
 	}
-	return file, nil
+	return file.Readdirnames(-1)
 }
 
 func mtimeMs(info *unix.Stat_t) float64 {
