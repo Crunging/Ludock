@@ -202,6 +202,12 @@ func Roots(gameType string, labels map[string]string, mounts []identity.Mount) [
 	return roots
 }
 
+// HoldsMount reports a Docker mount inside rootPath, which a backup can't
+// take as one folder.
+func HoldsMount(rootPath string, mounts []identity.Mount) bool {
+	return slices.ContainsFunc(mounts, func(mount identity.Mount) bool { return strings.HasPrefix(mount.Destination, rootPath+"/") })
+}
+
 // RootMount is the deepest mount that holds rootPath.
 func RootMount(rootPath string, mounts []identity.Mount) (identity.Mount, bool) {
 	var owners []identity.Mount

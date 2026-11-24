@@ -3,6 +3,8 @@ package helper
 import (
 	"encoding/json"
 	"io"
+	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -104,4 +106,51 @@ func RunIdle(timeoutMs string) int {
 	}
 	time.Sleep(time.Duration(ms) * time.Millisecond)
 	return 0
+}
+
+// MountTable is the helper's own mount table; tests replace it, since they
+// can't mount.
+var MountTable = func() ([]byte, error) { return os.ReadFile("/proc/self/mountinfo") }
+
+// ownMount refuses a root that has another mount on it, inside it, or on the
+// path down to it from base, the helper's mount of the data: a backup or
+// restore would read, write, or move another disk's data. The table needs no
+// walk of the data, so it is read before anything stops or moves.
+func ownMount(base, root string) error {
+	base, root = path.Clean(base), path.Clean(root)
+	if !strings.HasPrefix(base, "/") || base == "/" || !within(root, base) {
+		return errUnsafe
+	}
+	table, err := MountTable()
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(string(table), "\n") {
+		// The fifth field is the mount point, with space, tab, newline, and
+		// backslash escaped as octal.
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		point := unescapeMount(fields[4])
+		if point != base && within(point, base) && (within(point, root) || within(root, point)) {
+			return errMounted
+		}
+	}
+	return nil
+}
+
+func unescapeMount(value string) string {
+	var out strings.Builder
+	for index := 0; index < len(value); index++ {
+		if value[index] == '\\' && index+4 <= len(value) {
+			if code, err := strconv.ParseUint(value[index+1:index+4], 8, 8); err == nil {
+				out.WriteByte(byte(code))
+				index += 3
+				continue
+			}
+		}
+		out.WriteByte(value[index])
+	}
+	return out.String()
 }

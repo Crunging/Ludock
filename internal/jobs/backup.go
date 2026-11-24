@@ -173,6 +173,7 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 			break
 		}
 	}
+	j.Backups.NoteHostMount(server, err)
 	if err != nil && !recorded {
 		removeErr := j.Backups.Storage.Remove(settings.Destination, id, nil)
 		if removeErr == nil {
@@ -190,6 +191,24 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 	return backup, err
 }
 
+// assertBackupPossible runs every check a backup can fail without the server
+// stopping. The check of the data's mounts starts a helper, so a job that
+// warns players makes it once, before the warning (warned).
+func (j *Jobs) assertBackupPossible(ctx context.Context, server *servers.Context, job *ops.Context, warned bool) error {
+	if err := j.Backups.AssertReady(ctx, server); err != nil {
+		return err
+	}
+	if warned {
+		return nil
+	}
+	return j.Backups.AssertOwnMounts(ctx, server, job.Job.ID)
+}
+
+// backsUpFirst reports work that backs up before its own stop.
+func backsUpFirst(job *ops.Context) bool {
+	return job.Job.Kind == "backup" || (job.Job.Kind == "restart" && job.Job.Input["createBackup"] == true)
+}
+
 func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any, error) {
 	server, err := j.resolve(ctx, job, authz.BackupsCreate, true)
 	if err != nil {
@@ -202,7 +221,7 @@ func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any,
 		if err := j.assertCapability(ctx, job, authz.BackupsCreate); err != nil {
 			return nil, err
 		}
-		if err := j.Backups.AssertReady(ctx, server); err != nil {
+		if err := j.assertBackupPossible(ctx, server, job, warnRequested(job)); err != nil {
 			return nil, err
 		}
 		defer func() {

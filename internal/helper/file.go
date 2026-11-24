@@ -40,6 +40,9 @@ type FileRequest struct {
 	Mounts []string `json:"mounts,omitempty"`
 	// Reserve is the free space an unpack leaves.
 	Reserve *int64 `json:"reserve,omitempty"`
+	// Base is the helper's mount that holds Root. A backup, and the mounts
+	// check, refuse any other mount at or below Root or between them.
+	Base string `json:"base,omitempty"`
 }
 
 // FileVersion identifies a file's content by size and SHA-256.
@@ -89,6 +92,9 @@ const (
 	// FileMounted refuses a change to a folder that is, or holds, a separate
 	// mount.
 	FileMounted = 10
+	// FileHoldsRestore refuses deleting or moving a folder that holds a
+	// restore's stage folder.
+	FileHoldsRestore = 11
 )
 
 type fileHelper struct {
@@ -276,6 +282,15 @@ func (h *fileHelper) archiveEntry(parent fd, name, relative string, depth int) e
 	if err != nil {
 		return err
 	}
+	// Checked as the walk goes, not only before it, in case a mount appeared
+	// since.
+	if h.request.Operation == "backup" {
+		if same, err := sameMount(parent, file); err != nil {
+			return err
+		} else if !same {
+			return errMounted
+		}
+	}
 	if isDir(info) {
 		if err := h.header(relative+"/", info, true); err != nil {
 			return err
@@ -336,6 +351,9 @@ func (h *fileHelper) removeEntry(parent fd, name string, depth int) error {
 	if err != nil {
 		return err
 	}
+	if slices.ContainsFunc(children, validStage) {
+		return errHoldsRestore
+	}
 	for _, child := range children {
 		if err := h.removeEntry(directory, child, depth+1); err != nil {
 			return err
@@ -346,8 +364,11 @@ func (h *fileHelper) removeEntry(parent fd, name string, depth int) error {
 }
 
 // unmounted refuses an entry that is, or holds, a separate mount, whether
-// the request declared it or only the file system shows it, before a change
-// that would delete or move what is inside it.
+// the request declared it or only the file system shows it, or that holds a
+// restore's stage folder, which can be the only copy of the previous data,
+// before a change that would delete or move what is inside it. A stage is
+// below the top of a data folder when another server's, or a wider
+// ludock.files, shows the folder that holds it.
 func (h *fileHelper) unmounted(parent fd, name, relative string) error {
 	absolute := h.absolute(relative)
 	if slices.ContainsFunc(h.request.Mounts, func(mount string) bool { return within(mount, absolute) }) {
@@ -387,6 +408,9 @@ func (h *fileHelper) oneMount(parent fd, name string, depth int, count *int) err
 	children, err := names(entry)
 	if err != nil {
 		return err
+	}
+	if slices.ContainsFunc(children, validStage) {
+		return errHoldsRestore
 	}
 	for _, child := range children {
 		if err := h.oneMount(entry, child, depth+1, count); err != nil {
@@ -630,8 +654,16 @@ func (h *fileHelper) run() error {
 			return err
 		}
 		return h.json(Space(&stat))
+	case "mounts":
+		if err := ownMount(h.request.Base, h.absolute(relative)); err != nil {
+			return err
+		}
+		return h.json(map[string]bool{"safe": true})
 	case "backup":
 		if err := h.check(relative, true); err != nil {
+			return err
+		}
+		if err := ownMount(h.request.Base, h.request.Root); err != nil {
 			return err
 		}
 		info, err := fstat(root)
@@ -896,6 +928,8 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return FilePartial
 		case errors.Is(err, errMounted):
 			return FileMounted
+		case errors.Is(err, errHoldsRestore):
+			return FileHoldsRestore
 		}
 		return 1
 	}
@@ -903,10 +937,11 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 var (
-	errNameTaken   = errors.New("the name is in use")
-	errFileChanged = errors.New("the file changed")
-	errPartial     = errors.New("part of the selection changed")
-	errMounted     = errors.New("the folder is or holds a separate mount")
+	errNameTaken    = errors.New("the name is in use")
+	errFileChanged  = errors.New("the file changed")
+	errPartial      = errors.New("part of the selection changed")
+	errMounted      = errors.New("the folder is or holds a separate mount")
+	errHoldsRestore = errors.New("the folder holds a restore's stage folder")
 )
 
 func nameTaken(err error) error {

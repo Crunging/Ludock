@@ -27,10 +27,18 @@ type RestoreRequest struct {
 	Item string `json:"item,omitempty"`
 	// Aside names the folder below Root that setAside moves live data into.
 	Aside string `json:"aside,omitempty"`
+	// Base is the helper's mount that holds Root. Moving live data out
+	// refuses any other mount on its way or inside it.
+	Base string `json:"base,omitempty"`
 }
 
 // RestoreFailure is the only error text the restore helper prints.
 const RestoreFailure = "Restore data changed, is unsafe, or cannot be accessed. Keep the server stopped and review recovery."
+
+// RestoreMounted is the restore helper's exit code for data that holds, or
+// is reached through, another mount. It matches FileMounted, so one refusal
+// covers both helpers.
+const RestoreMounted = FileMounted
 
 // StagePrefix starts the name of a restore's stage folder, which sits in the
 // root it restores; no restored path may start with it.
@@ -348,6 +356,14 @@ func (h *restoreHelper) run() (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Cleanup could never remove a mount that moved into the stage, which
+		// would leave the old data there with the live paths changed.
+		if err := ownMount(h.request.Base, h.request.Root); err != nil {
+			return nil, err
+		}
+		if err := h.ownTree(root); err != nil {
+			return nil, err
+		}
 		if err := h.recordRoot(root, stage); err != nil {
 			return nil, err
 		}
@@ -513,8 +529,10 @@ func (h *restoreHelper) removable(parent fd, name string, depth int) error {
 		return err
 	}
 	defer h.t.close(directory)
-	if same, err := sameMount(parent, directory); err != nil || !same {
-		return errUnsafe
+	if same, err := sameMount(parent, directory); err != nil {
+		return err
+	} else if !same {
+		return errMounted
 	}
 	children, err := names(directory)
 	if err != nil {
@@ -531,6 +549,44 @@ func (h *restoreHelper) removable(parent fd, name string, depth int) error {
 			}
 		} else if !isRegular(info) && !isSymlink(info) {
 			return errUnsafe
+		}
+	}
+	return nil
+}
+
+// ownTree refuses, before anything moves, live data that cleanup could not
+// remove once moved: an entry on another mount, or a folder holding one or a
+// special file.
+func (h *restoreHelper) ownTree(root fd) error {
+	children, err := names(root)
+	if err != nil {
+		return err
+	}
+	for _, name := range children {
+		if Reserved(name) {
+			continue
+		}
+		info, err := lstatAt(root, name)
+		if err != nil {
+			return err
+		}
+		if isDir(info) {
+			if err := h.removable(root, name, 0); err != nil {
+				return err
+			}
+			continue
+		}
+		entry, err := h.t.openAt(root, name, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return err
+		}
+		same, err := sameMount(root, entry)
+		h.t.close(entry)
+		if err != nil {
+			return err
+		}
+		if !same {
+			return errMounted
 		}
 	}
 	return nil
@@ -623,6 +679,9 @@ func move(from fd, name string, to fd, target string, info *unix.Stat_t) error {
 // checkItem reports, before the server stops, whether the item's folder
 // exists, and refuses an item that cannot be replaced.
 func (h *restoreHelper) checkItem(root fd, parts []string) (any, error) {
+	if err := ownMount(h.request.Base, h.request.Root+"/"+strings.Join(parts, "/")); err != nil {
+		return nil, err
+	}
 	parent, err := h.itemParent(root, parts)
 	if isNotExist(err) {
 		return map[string]bool{"parent": false}, nil
@@ -656,6 +715,9 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 	case "moveOld":
 		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 		if err != nil {
+			return err
+		}
+		if err := ownMount(h.request.Base, h.request.Root+"/"+strings.Join(parts, "/")); err != nil {
 			return err
 		}
 		parent, err := h.itemParent(root, parts)
@@ -771,6 +833,9 @@ func RunRestore(argument string, stdout, stderr io.Writer) int {
 	}
 	if err != nil {
 		io.WriteString(stderr, RestoreFailure)
+		if errors.Is(err, errMounted) {
+			return RestoreMounted
+		}
 		return 1
 	}
 	encoded, _ := json.Marshal(result)

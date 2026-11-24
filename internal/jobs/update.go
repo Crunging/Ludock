@@ -52,7 +52,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 		if err := AssertRunningForBackupRestart(current.Container.State); err != nil {
 			return nil, err
 		}
-		if err := j.Backups.AssertReady(ctx, current); err != nil {
+		if err := j.assertBackupPossible(ctx, current, job, warnRequested(job)); err != nil {
 			return nil, err
 		}
 		if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
@@ -436,6 +436,11 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	}
 	if !request.CreateBackup && request.SkipBackupConfirmation != server.Container.DisplayName {
 		return nil, apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping the backup")
+	}
+	if request.CreateBackup {
+		if err := j.assertBackupPossible(ctx, server, job, false); err != nil {
+			return nil, err
+		}
 	}
 	// Warned only now, once the update is sure to replace the server.
 	if err := j.warnFirst(ctx, job, capability, true); err != nil {
