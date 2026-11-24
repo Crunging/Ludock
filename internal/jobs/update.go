@@ -3,6 +3,7 @@ package jobs
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -56,7 +57,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 		if err := j.assertBackupPossible(ctx, current, job); err != nil {
 			return nil, err
 		}
-		if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
+		if err := j.Monitor.Suppress(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.dataAuthorityIn(ctx, tx, job) }); err != nil {
 			return nil, err
 		}
 		defer func() {
@@ -68,7 +69,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 					err = restoreErr
 				}
 			}
-			j.noteAvailability(j.Monitor.Suppress(background, server.Logical.ID))
+			j.noteAvailability(j.Monitor.Suppress(background, server.Logical.ID, nil))
 		}()
 		result, err = func() (map[string]any, error) {
 			if err := j.saveWorld(ctx, job, current, func() error {
@@ -410,7 +411,7 @@ func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (map[string]any,
 		defer func() {
 			// A cancelled update never touched the server, so outage tracking stays as it was.
 			if !errors.Is(err, ops.ErrCancelled) {
-				j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID))
+				j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID, nil))
 			}
 		}()
 		result, err = j.update(ctx, job, server, request, capability, plan)
@@ -510,7 +511,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if err := j.warnFirst(ctx, job, capability, true); err != nil {
 		return nil, err
 	}
-	if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
+	if err := j.Monitor.Suppress(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.allowedIn(ctx, tx, job, capability) }); err != nil {
 		return nil, err
 	}
 	if err := job.Progress("stopping", nil, nil); err != nil {

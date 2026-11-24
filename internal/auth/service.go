@@ -613,8 +613,11 @@ func (s *Service) Sessions(ctx context.Context, principal *Principal) ([]db.Sess
 // RevokeSession ends one of the account's sessions; the revocation and its
 // audit entry commit together.
 func (s *Service) RevokeSession(ctx context.Context, principal *Principal, sessionID string, client Client) error {
-	removed, err := s.DB.DeleteUserSessionByID(ctx, principal.User.ID, sessionID, db.AuditEntry{UserID: principal.User.ID,
+	removed, err := s.DB.DeleteUserSessionByID(ctx, principal.User.ID, principal.TokenHash, sessionID, s.Now(), db.AuditEntry{UserID: principal.User.ID,
 		Action: "auth.session.revoked", TargetType: "session", TargetID: sessionID, IPAddress: client.IP})
+	if errors.Is(err, db.ErrSessionGone) {
+		return errAuthRequired
+	}
 	if err != nil {
 		return err
 	}

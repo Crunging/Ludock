@@ -338,6 +338,11 @@ func (s *Store) Get(ctx context.Context, id string) (*Server, error) {
 	return getServer(ctx, s.DB, id)
 }
 
+// GetIn is Get through tx.
+func (s *Store) GetIn(ctx context.Context, tx *sql.Tx, id string) (*Server, error) {
+	return getServer(ctx, tx, id)
+}
+
 func getServer(ctx context.Context, q queryer, id string) (*Server, error) {
 	server, err := scanServer(q.QueryRowContext(ctx, "SELECT "+serverColumns+" FROM logical_servers WHERE id = ?", id))
 	if errors.Is(err, sql.ErrNoRows) {

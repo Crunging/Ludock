@@ -95,11 +95,11 @@ func (d *DB) CreateUser(ctx context.Context, user UserRecord) error {
 	return err
 }
 
-func (d *DB) findUser(ctx context.Context, column, value string) (*UserRecord, error) {
+func findUser(ctx context.Context, q queryer, column, value string) (*UserRecord, error) {
 	var user UserRecord
 	var disabled int
 	var role string
-	err := d.QueryRowContext(ctx, `SELECT id, username, password_hash, role, disabled, created_at, totp_secret IS NOT NULL
+	err := q.QueryRowContext(ctx, `SELECT id, username, password_hash, role, disabled, created_at, totp_secret IS NOT NULL
     FROM users WHERE `+column+` = ?`, value).Scan(&user.ID, &user.Username, &user.PasswordHash, &role, &disabled, &user.CreatedAt,
 		&user.TwoFactor)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -114,11 +114,16 @@ func (d *DB) findUser(ctx context.Context, column, value string) (*UserRecord, e
 
 // FindUserByUsername looks up an account case-insensitively.
 func (d *DB) FindUserByUsername(ctx context.Context, username string) (*UserRecord, error) {
-	return d.findUser(ctx, "username", username)
+	return findUser(ctx, d, "username", username)
 }
 
 func (d *DB) FindUserByID(ctx context.Context, id string) (*UserRecord, error) {
-	return d.findUser(ctx, "id", id)
+	return findUser(ctx, d, "id", id)
+}
+
+// FindUserIn is FindUserByID through tx.
+func FindUserIn(ctx context.Context, tx *sql.Tx, id string) (*UserRecord, error) {
+	return findUser(ctx, tx, "id", id)
 }
 
 // ListUsers lists accounts by username.
@@ -303,10 +308,14 @@ func (d *DB) ListUserSessions(ctx context.Context, userID, currentTokenHash stri
 }
 
 // DeleteUserSessionByID revokes one of the account's sessions and writes
-// audit in the same transaction. Nothing is written when no session matched.
-func (d *DB) DeleteUserSessionByID(ctx context.Context, userID, sessionID string, audit AuditEntry) (bool, error) {
+// audit in the same transaction, while the requesting session tokenHash is
+// still valid. Nothing is written when no session matched.
+func (d *DB) DeleteUserSessionByID(ctx context.Context, userID, tokenHash, sessionID string, now int64, audit AuditEntry) (bool, error) {
 	var removed bool
 	err := d.Tx(ctx, func(tx *sql.Tx) error {
+		if err := AssertSession(ctx, tx, userID, tokenHash, now); err != nil {
+			return err
+		}
 		result, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ? AND session_id = ?", userID, sessionID)
 		if err != nil {
 			return err

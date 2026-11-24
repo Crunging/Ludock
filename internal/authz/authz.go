@@ -354,6 +354,19 @@ func (s *Service) AssertIn(ctx context.Context, tx *sql.Tx, actorID, tokenHash, 
 	if err := db.AssertSession(ctx, tx, actorID, tokenHash, db.Now()); err != nil {
 		return AdminMutationError(err)
 	}
+	return assertAccountIn(ctx, tx, actorID, serverID, capabilities)
+}
+
+// AssertAccountIn is AssertIn for queued work, which runs on its account's
+// authority rather than a session's.
+func (s *Service) AssertAccountIn(ctx context.Context, tx *sql.Tx, actorID, serverID string, capabilities ...Capability) error {
+	if s.Rechecking != nil {
+		s.Rechecking(tx)
+	}
+	return assertAccountIn(ctx, tx, actorID, serverID, capabilities)
+}
+
+func assertAccountIn(ctx context.Context, tx *sql.Tx, actorID, serverID string, capabilities []Capability) error {
 	held, _, err := access(tx.QueryRowContext(ctx, accessQuery, actorID, serverID), actorID)
 	if err != nil {
 		return err

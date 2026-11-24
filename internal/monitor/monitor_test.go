@@ -134,12 +134,12 @@ func TestMonitorSuppression(t *testing.T) {
 // automatic restart, which announces its own outcome, ends it.
 func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 	const down, silent, back = "Minecraft: the server is down.", "Minecraft: running, but the game stopped answering.", "Minecraft: the server is back up."
-	start := func(s *Service, id string) { s.Suppress(ctx, id); s.SetIntentionalStop(ctx, id, false) }
+	start := func(s *Service, id string) { s.Suppress(ctx, id, nil); s.SetIntentionalStop(ctx, id, false) }
 	restart := func(s *Service, id string) {
-		s.Suppress(ctx, id)
+		s.Suppress(ctx, id, nil)
 		s.SetIntentionalStop(ctx, id, false)
 		s.SetIntentionalStop(ctx, id, false)
-		s.Suppress(ctx, id)
+		s.Suppress(ctx, id, nil)
 	}
 	for _, c := range []struct {
 		name            string
@@ -159,20 +159,20 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 		{name: "restarted", silent: true, alerted: true, act: restart, after: "running", game: GameWaiting, want: []string{silent},
 			stillDown: true, answersBack: true},
 		{name: "restarted and answering", silent: true, alerted: true, act: restart, after: "running", game: GameAnswering, want: []string{silent, back}},
-		{name: "left stopped by other work", alerted: true, act: func(s *Service, id string) { s.Suppress(ctx, id); s.Suppress(ctx, id) },
+		{name: "left stopped by other work", alerted: true, act: func(s *Service, id string) { s.Suppress(ctx, id, nil); s.Suppress(ctx, id, nil) },
 			after: "exited", want: []string{down}, stillDown: true},
 		{name: "stopped", silent: true, alerted: true, after: "exited", want: []string{silent}, act: func(s *Service, id string) {
-			s.Suppress(ctx, id)
+			s.Suppress(ctx, id, nil)
 			s.SetIntentionalStop(ctx, id, true)
-			s.Suppress(ctx, id)
+			s.Suppress(ctx, id, nil)
 		}},
 		{name: "started within grace", act: start, after: "running"},
 		{name: "restarted automatically", silent: true, alerted: true, after: "running", game: GameAnswering, want: []string{silent},
 			act: func(s *Service, id string) {
-				s.Suppress(ctx, id)
+				s.Suppress(ctx, id, nil)
 				s.SetIntentionalStop(ctx, id, false)
 				s.SetIntentionalStop(ctx, id, false)
-				s.SuppressRecovered(ctx, id)
+				s.SuppressRecovered(ctx, id, nil)
 			}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -300,7 +300,7 @@ func TestAStopRecordedDuringACheckIsKept(t *testing.T) {
 	// the check read the row but before it saved the start it observed.
 	testHook = func(string) {
 		testHook = nil
-		s.Suppress(ctx, server.ID)
+		s.Suppress(ctx, server.ID, nil)
 		s.SetIntentionalStop(ctx, server.ID, true)
 	}
 	t.Cleanup(func() { testHook = nil })

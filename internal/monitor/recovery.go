@@ -73,8 +73,16 @@ func (p Policy) RecoveryOn() bool { return p.Recover && p.Enabled && !p.Maintena
 
 // Recovery reads what recovery last did on a server.
 func (s *Service) Recovery(ctx context.Context, serverID string) (Recovery, error) {
+	return recoveryOf(s.row(ctx, serverID))
+}
+
+// RecoveryIn is Recovery through tx.
+func (s *Service) RecoveryIn(ctx context.Context, tx *sql.Tx, serverID string) (Recovery, error) {
+	return recoveryOf(rowIn(ctx, tx, serverID))
+}
+
+func recoveryOf(r *row, err error) (Recovery, error) {
 	var state Recovery
-	r, err := s.row(ctx, serverID)
 	if err != nil || r == nil {
 		return state, err
 	}

@@ -102,23 +102,35 @@ func (d *DB) TwoFactor(ctx context.Context, userID string) (TwoFactor, error) {
 	return state, err
 }
 
-// SetPendingTwoFactor stores a secret the account is setting up. It has no
-// effect on sign-in until EnableTwoFactor confirms it.
-func (d *DB) SetPendingTwoFactor(ctx context.Context, userID, sealed string) error {
-	result, err := d.ExecContext(ctx, "UPDATE users SET totp_pending = ? WHERE id = ? AND totp_secret IS NULL", sealed, userID)
-	if err != nil {
-		return err
-	}
-	if changed, _ := result.RowsAffected(); changed != 1 {
-		return ErrTwoFactorChanged
-	}
-	return nil
+// SetPendingTwoFactor stores a secret the account is setting up while the
+// requesting session tokenHash is still valid. It has no effect on sign-in
+// until EnableTwoFactor confirms it.
+func (d *DB) SetPendingTwoFactor(ctx context.Context, userID, tokenHash, sealed string, now int64) error {
+	return d.Tx(ctx, func(tx *sql.Tx) error {
+		if err := AssertSession(ctx, tx, userID, tokenHash, now); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, "UPDATE users SET totp_pending = ? WHERE id = ? AND totp_secret IS NULL", sealed, userID)
+		if err != nil {
+			return err
+		}
+		if changed, _ := result.RowsAffected(); changed != 1 {
+			return ErrTwoFactorChanged
+		}
+		return nil
+	})
 }
 
-// ClearPendingTwoFactor drops a secret the account was setting up.
-func (d *DB) ClearPendingTwoFactor(ctx context.Context, userID string) error {
-	_, err := d.ExecContext(ctx, "UPDATE users SET totp_pending = NULL WHERE id = ? AND totp_secret IS NULL", userID)
-	return err
+// ClearPendingTwoFactor drops a secret the account was setting up, while the
+// requesting session tokenHash is still valid.
+func (d *DB) ClearPendingTwoFactor(ctx context.Context, userID, tokenHash string, now int64) error {
+	return d.Tx(ctx, func(tx *sql.Tx) error {
+		if err := AssertSession(ctx, tx, userID, tokenHash, now); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "UPDATE users SET totp_pending = NULL WHERE id = ? AND totp_secret IS NULL", userID)
+		return err
+	})
 }
 
 // TwoFactorChange turns two-factor sign-in on or off for the signed-in

@@ -218,8 +218,14 @@ func (r *row) fields() []any {
 }
 
 func (s *Service) row(ctx context.Context, serverID string) (*row, error) {
+	return rowIn(ctx, s.DB, serverID)
+}
+
+func rowIn(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, serverID string) (*row, error) {
 	var r row
-	err := s.DB.QueryRowContext(ctx, "SELECT "+rowColumns+" FROM availability WHERE server_id=?", serverID).Scan(r.fields()...)
+	err := q.QueryRowContext(ctx, "SELECT "+rowColumns+" FROM availability WHERE server_id=?", serverID).Scan(r.fields()...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -263,7 +269,15 @@ func (s *Service) active(ctx context.Context) (map[string]bool, error) {
 }
 
 func (s *Service) Get(ctx context.Context, serverID string) (*Availability, error) {
-	r, err := s.row(ctx, serverID)
+	return availabilityOf(s.row(ctx, serverID))
+}
+
+// GetIn is Get through tx.
+func (s *Service) GetIn(ctx context.Context, tx *sql.Tx, serverID string) (*Availability, error) {
+	return availabilityOf(rowIn(ctx, tx, serverID))
+}
+
+func availabilityOf(r *row, err error) (*Availability, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -304,9 +318,11 @@ func (s *Service) Configure(ctx context.Context, adminID, tokenHash, serverID st
 
 // ensureRow adds the default policy only if none exists, so it never
 // replaces one saved concurrently.
-func (s *Service) ensureRow(ctx context.Context, serverID string) error {
+func ensureRow(ctx context.Context, q interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, serverID string) error {
 	encoded, _ := json.Marshal(DefaultPolicy())
-	_, err := s.DB.ExecContext(ctx, "INSERT INTO availability(server_id,policy_json,updated_at) VALUES(?,?,?) ON CONFLICT(server_id) DO NOTHING",
+	_, err := q.ExecContext(ctx, "INSERT INTO availability(server_id,policy_json,updated_at) VALUES(?,?,?) ON CONFLICT(server_id) DO NOTHING",
 		serverID, string(encoded), db.Now())
 	return err
 }
@@ -319,7 +335,7 @@ const keepAlerted = "outage_started_at=CASE WHEN notified=1 THEN outage_started_
 // SetIntentionalStop records that a stop was requested, which ends any
 // outage, or cleared.
 func (s *Service) SetIntentionalStop(ctx context.Context, serverID string, stopped bool) error {
-	if err := s.ensureRow(ctx, serverID); err != nil {
+	if err := ensureRow(ctx, s.DB, serverID); err != nil {
 		return err
 	}
 	set := "intentionally_stopped=1,outage_started_at=NULL,notified=0"
@@ -332,27 +348,36 @@ func (s *Service) SetIntentionalStop(ctx context.Context, serverID string, stopp
 
 // Suppress pauses outage tracking for one grace period after Ludock acted
 // on the server, and starts the grace of an outage not yet alerted again.
-func (s *Service) Suppress(ctx context.Context, serverID string) error {
-	return s.suppress(ctx, serverID, keepAlerted)
+// allowed, when set, confirms through the pause's transaction that the work
+// it is for may go ahead; a refusal writes nothing.
+func (s *Service) Suppress(ctx context.Context, serverID string, allowed func(*sql.Tx) error) error {
+	return s.suppress(ctx, serverID, keepAlerted, allowed)
 }
 
 // SuppressRecovered is Suppress after an automatic restart, which announces
 // its own outcome, so it ends the outage even if alerted.
-func (s *Service) SuppressRecovered(ctx context.Context, serverID string) error {
-	return s.suppress(ctx, serverID, "outage_started_at=NULL,notified=0")
+func (s *Service) SuppressRecovered(ctx context.Context, serverID string, allowed func(*sql.Tx) error) error {
+	return s.suppress(ctx, serverID, "outage_started_at=NULL,notified=0", allowed)
 }
 
-func (s *Service) suppress(ctx context.Context, serverID, outage string) error {
-	if err := s.ensureRow(ctx, serverID); err != nil {
+func (s *Service) suppress(ctx context.Context, serverID, outage string, allowed func(*sql.Tx) error) error {
+	return s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		if allowed != nil {
+			if err := allowed(tx); err != nil {
+				return err
+			}
+		}
+		if err := ensureRow(ctx, tx, serverID); err != nil {
+			return err
+		}
+		availability, err := s.GetIn(ctx, tx, serverID)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "UPDATE availability SET suppressed_until=?,"+outage+" WHERE server_id=?",
+			db.Now()+int64(availability.Policy.GraceSeconds)*1000, serverID)
 		return err
-	}
-	availability, err := s.Get(ctx, serverID)
-	if err != nil {
-		return err
-	}
-	_, err = s.DB.ExecContext(ctx, "UPDATE availability SET suppressed_until=?,"+outage+" WHERE server_id=?",
-		db.Now()+int64(availability.Policy.GraceSeconds)*1000, serverID)
-	return err
+	})
 }
 
 func (s *Service) suppressed(serverID string, policy Policy, until, now int64, active bool) bool {

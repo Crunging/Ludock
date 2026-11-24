@@ -352,8 +352,9 @@ func TestBackupsTabFollowsRunningWork(t *testing.T) {
 // Access taken away after a request's first check and before its write
 // stops the write: nothing is queued, cancelled, deleted, or asked of the
 // registry, and the request gets the refusal it would have had earlier. A
-// settings form refused for its input shows nothing saved to a session that
-// ended after it was checked.
+// start pauses no outage tracking. A settings form refused for its input
+// shows nothing saved, and an account change writes nothing, for a session
+// that ended after it was checked.
 func TestWritesRecheckAccessInside(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -420,6 +421,15 @@ func TestWritesRecheckAccessInside(t *testing.T) {
 				return p.admin, "/servers/" + p.server + "/update-check"
 			},
 			written: func(t *testing.T, p *pages) bool { return len(p.engine.RegistryAuth) != 0 }},
+		{name: "start", revoke: "DELETE FROM server_grants WHERE user_id=?1", status: http.StatusNotFound,
+			setup: func(t *testing.T, p *pages) (*auth.Principal, string) {
+				return member(p, authz.ServerView, authz.ServerStart), "/servers/" + p.server + "/start"
+			},
+			written: func(t *testing.T, p *pages) bool {
+				var paused int
+				p.app.DB.QueryRow("SELECT COUNT(*) FROM availability WHERE suppressed_until > 0").Scan(&paused)
+				return paused != 0 || p.running()
+			}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -436,21 +446,81 @@ func TestWritesRecheckAccessInside(t *testing.T) {
 			}
 		})
 	}
-	t.Run("settings form", func(t *testing.T) {
-		t.Parallel()
-		p := newPages(t)
-		// The administrator's form was checked; then they signed out.
-		request := &Request{Principal: p.admin, CSRF: CSRFToken(p.admin.Token)}
-		if _, err := p.app.DB.Exec("DELETE FROM sessions WHERE token_hash=?", p.admin.TokenHash); err != nil {
-			t.Fatal(err)
-		}
-		form := httptest.NewRequest("POST", "http://panel.example/settings/upload-limit", strings.NewReader("limit=lots"))
-		form.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		form.Header.Set("HX-Request", "true")
-		response := httptest.NewRecorder()
-		p.web.saveUploadLimit(response, form, request)
-		if response.Code != http.StatusUnauthorized || strings.Contains(response.Body.String(), "limit") {
-			t.Fatal(response.Code, response.Body.String())
-		}
-	})
+	// These requests passed the sign-in check; then their session ended, or
+	// the account was disabled, before the handler wrote.
+	for _, test := range []struct {
+		name, revoke, target, form string
+		handler                    func(p *pages) func(http.ResponseWriter, *http.Request, *Request)
+		// setup returns the path's session ID, if it has one.
+		setup func(t *testing.T, p *pages, who *auth.Principal) string
+		// written reports whether the change went through, or for a form,
+		// whether it showed what is saved.
+		written func(t *testing.T, p *pages, who *auth.Principal, body string) bool
+	}{
+		{name: "settings form", revoke: "DELETE FROM sessions WHERE token_hash=?2", target: "/settings/upload-limit", form: "limit=lots",
+			handler: func(p *pages) func(http.ResponseWriter, *http.Request, *Request) { return p.web.saveUploadLimit },
+			written: func(t *testing.T, p *pages, who *auth.Principal, body string) bool {
+				return strings.Contains(body, "limit")
+			}},
+		{name: "sign out a session", revoke: "UPDATE users SET disabled=1 WHERE id=?1", target: "/account/sessions/{id}/revoke",
+			handler: func(p *pages) func(http.ResponseWriter, *http.Request, *Request) { return p.web.revokeSession },
+			setup: func(t *testing.T, p *pages, who *auth.Principal) string {
+				other, err := p.app.Auth.Login(ctx, who.User.Username, "password-"+who.User.ID, auth.Client{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var id string
+				p.app.DB.QueryRow("SELECT session_id FROM sessions WHERE token_hash=?", other.TokenHash).Scan(&id)
+				return id
+			},
+			written: func(t *testing.T, p *pages, who *auth.Principal, body string) bool {
+				var sessions int
+				p.app.DB.QueryRow("SELECT COUNT(*) FROM sessions WHERE user_id=?", who.User.ID).Scan(&sessions)
+				return sessions != 2
+			}},
+		{name: "set up two-factor", revoke: "DELETE FROM sessions WHERE token_hash=?2", target: "/account/two-factor/setup",
+			handler: func(p *pages) func(http.ResponseWriter, *http.Request, *Request) { return p.web.beginTwoFactor },
+			written: func(t *testing.T, p *pages, who *auth.Principal, body string) bool {
+				var pending int
+				p.app.DB.QueryRow("SELECT COUNT(*) FROM users WHERE id=? AND totp_pending IS NOT NULL", who.User.ID).Scan(&pending)
+				return pending != 0
+			}},
+		{name: "cancel two-factor setup", revoke: "DELETE FROM sessions WHERE token_hash=?2", target: "/account/two-factor/cancel",
+			handler: func(p *pages) func(http.ResponseWriter, *http.Request, *Request) { return p.web.cancelTwoFactor },
+			setup: func(t *testing.T, p *pages, who *auth.Principal) string {
+				if _, err := p.app.Auth.BeginTwoFactor(ctx, who); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
+			written: func(t *testing.T, p *pages, who *auth.Principal, body string) bool {
+				var pending int
+				p.app.DB.QueryRow("SELECT COUNT(*) FROM users WHERE id=? AND totp_pending IS NOT NULL", who.User.ID).Scan(&pending)
+				return pending == 0
+			}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			p := newPages(t)
+			who := p.admin
+			sessionID := ""
+			if test.setup != nil {
+				sessionID = test.setup(t, p, who)
+			}
+			request := &Request{Principal: who, CSRF: CSRFToken(who.Token)}
+			if _, err := p.app.DB.Exec(test.revoke, who.User.ID, who.TokenHash); err != nil {
+				t.Fatal(err)
+			}
+			form := httptest.NewRequest("POST", "http://panel.example"+strings.Replace(test.target, "{id}", sessionID, 1),
+				strings.NewReader(test.form))
+			form.SetPathValue("id", sessionID)
+			form.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			form.Header.Set("HX-Request", "true")
+			response := httptest.NewRecorder()
+			test.handler(p)(response, form, request)
+			if body := response.Body.String(); response.Code != http.StatusUnauthorized || test.written(t, p, who, body) {
+				t.Fatal(response.Code, test.written(t, p, who, body), body)
+			}
+		})
+	}
 }

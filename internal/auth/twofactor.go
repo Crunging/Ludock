@@ -181,10 +181,10 @@ func (s *Service) BeginTwoFactor(ctx context.Context, principal *Principal) (*En
 	if err != nil {
 		return nil, err
 	}
-	if err := s.DB.SetPendingTwoFactor(ctx, principal.User.ID, sealed); errors.Is(err, db.ErrTwoFactorChanged) {
+	if err := s.DB.SetPendingTwoFactor(ctx, principal.User.ID, principal.TokenHash, sealed, s.Now()); errors.Is(err, db.ErrTwoFactorChanged) {
 		return nil, errTwoFactorOn
 	} else if err != nil {
-		return nil, err
+		return nil, twoFactorChangeError(err)
 	}
 	enrollment := newEnrollment(secret, principal.User.Username)
 	return &enrollment, nil
@@ -192,7 +192,7 @@ func (s *Service) BeginTwoFactor(ctx context.Context, principal *Principal) (*En
 
 // CancelTwoFactor drops the unconfirmed secret.
 func (s *Service) CancelTwoFactor(ctx context.Context, principal *Principal) error {
-	return s.DB.ClearPendingTwoFactor(ctx, principal.User.ID)
+	return twoFactorChangeError(s.DB.ClearPendingTwoFactor(ctx, principal.User.ID, principal.TokenHash, s.Now()))
 }
 
 // PendingTwoFactor returns the unconfirmed secret again to the session that
