@@ -86,6 +86,9 @@ const (
 	FileNotArchive    = 8
 	// FilePartial is a selection that failed after changing some entries.
 	FilePartial = 9
+	// FileMounted refuses a change to a folder that is, or holds, a separate
+	// mount.
+	FileMounted = 10
 )
 
 type fileHelper struct {
@@ -118,6 +121,16 @@ func components(value string) ([]string, error) {
 	return parts, nil
 }
 
+// ownParts splits a request's path below the root, refusing Ludock's own
+// names.
+func ownParts(value string) ([]string, error) {
+	parts, err := components(value)
+	if err == nil && slices.ContainsFunc(parts, Reserved) {
+		return nil, errUnsafe
+	}
+	return parts, err
+}
+
 func (h *fileHelper) blocked(value string, recursive bool) bool {
 	for _, root := range h.request.Blocked {
 		if within(value, root) || (recursive && within(root, value)) {
@@ -148,7 +161,7 @@ func (h *fileHelper) pinRoot() (fd, error) {
 }
 
 func (h *fileHelper) pinDirectory(root fd, relative string) (fd, error) {
-	parts, err := components(relative)
+	parts, err := ownParts(relative)
 	if err != nil {
 		return -1, err
 	}
@@ -162,7 +175,7 @@ func (h *fileHelper) pinDirectory(root fd, relative string) (fd, error) {
 }
 
 func (h *fileHelper) parentOf(root fd, relative string) (fd, string, error) {
-	parts, err := components(relative)
+	parts, err := ownParts(relative)
 	if err != nil {
 		return -1, "", err
 	}
@@ -272,6 +285,9 @@ func (h *fileHelper) archiveEntry(parent fd, name, relative string, depth int) e
 			return err
 		}
 		for _, child := range children {
+			if Reserved(child) {
+				continue
+			}
 			if err := h.archiveEntry(file, child, relative+"/"+child, depth+1); err != nil {
 				return err
 			}
@@ -309,6 +325,13 @@ func (h *fileHelper) removeEntry(parent fd, name string, depth int) error {
 	if err != nil {
 		return err
 	}
+	// Checked again here, not only before the change, in case a mount
+	// appeared since.
+	if same, err := sameMount(parent, directory); err != nil {
+		return err
+	} else if !same {
+		return errMounted
+	}
 	children, err := names(directory)
 	if err != nil {
 		return err
@@ -320,6 +343,54 @@ func (h *fileHelper) removeEntry(parent fd, name string, depth int) error {
 	}
 	h.t.close(directory)
 	return unix.Unlinkat(int(parent), name, unix.AT_REMOVEDIR)
+}
+
+// unmounted refuses an entry that is, or holds, a separate mount, whether
+// the request declared it or only the file system shows it, before a change
+// that would delete or move what is inside it.
+func (h *fileHelper) unmounted(parent fd, name, relative string) error {
+	absolute := h.absolute(relative)
+	if slices.ContainsFunc(h.request.Mounts, func(mount string) bool { return within(mount, absolute) }) {
+		return errMounted
+	}
+	info, err := lstatAt(parent, name)
+	if err != nil || !isDir(info) {
+		return err
+	}
+	count := 0
+	return h.oneMount(parent, name, 0, &count)
+}
+
+func (h *fileHelper) oneMount(parent fd, name string, depth int, count *int) error {
+	if *count++; depth > 64 || *count > 1000000 {
+		return errors.New("the folder has too many entries to check")
+	}
+	directory, err := h.t.openAt(parent, name, directoryFlags, 0)
+	if err != nil {
+		return err
+	}
+	defer h.t.close(directory)
+	if same, err := sameMount(parent, directory); err != nil {
+		return err
+	} else if !same {
+		return errMounted
+	}
+	children, err := names(directory)
+	if err != nil {
+		return err
+	}
+	for _, child := range children {
+		info, err := lstatAt(directory, child)
+		if err != nil {
+			return err
+		}
+		if isDir(info) {
+			if err := h.oneMount(directory, child, depth+1, count); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (h *fileHelper) abortUpload(err error) {
@@ -530,7 +601,7 @@ func (h *fileHelper) run() error {
 	if err != nil {
 		return err
 	}
-	parts, err := components(h.request.Path)
+	parts, err := ownParts(h.request.Path)
 	if err != nil {
 		return err
 	}
@@ -572,6 +643,9 @@ func (h *fileHelper) run() error {
 			return err
 		}
 		for _, name := range children {
+			if Reserved(name) {
+				continue
+			}
 			if err := h.archiveEntry(root, name, "source/"+name, 0); err != nil {
 				return err
 			}
@@ -592,7 +666,7 @@ func (h *fileHelper) run() error {
 		}
 		entries := []FileEntry{}
 		for _, name := range children {
-			if h.blocked(h.absolute(path.Join(relative, name)), false) {
+			if Reserved(name) || h.blocked(h.absolute(path.Join(relative, name)), false) {
 				continue
 			}
 			info, err := lstatAt(directory, name)
@@ -655,12 +729,15 @@ func (h *fileHelper) run() error {
 		}
 		return h.json(map[string]bool{"ok": true})
 	case "delete":
+		if err := h.unmounted(parent, name, relative); err != nil {
+			return err
+		}
 		if err := h.removeEntry(parent, name, 0); err != nil {
 			return err
 		}
 		return h.json(map[string]bool{"ok": true})
 	case "rename":
-		destinationParts, err := components(h.request.Destination)
+		destinationParts, err := ownParts(h.request.Destination)
 		if err != nil {
 			return err
 		}
@@ -678,6 +755,9 @@ func (h *fileHelper) run() error {
 		}
 		if isSymlink(info) {
 			return errors.New("symbolic links cannot be renamed")
+		}
+		if err := h.unmounted(parent, name, relative); err != nil {
+			return err
 		}
 		if _, err := lstatAt(targetParent, targetName); err == nil {
 			return errNameTaken
@@ -811,6 +891,8 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return FileNotArchive
 		case errors.Is(err, errPartial):
 			return FilePartial
+		case errors.Is(err, errMounted):
+			return FileMounted
 		}
 		return 1
 	}
@@ -821,6 +903,7 @@ var (
 	errNameTaken   = errors.New("the name is in use")
 	errFileChanged = errors.New("the file changed")
 	errPartial     = errors.New("part of the selection changed")
+	errMounted     = errors.New("the folder is or holds a separate mount")
 )
 
 func nameTaken(err error) error {

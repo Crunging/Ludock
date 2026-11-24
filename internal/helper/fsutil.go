@@ -16,6 +16,16 @@ import (
 
 var errUnsafe = errors.New("unsafe path")
 
+// ReservedPrefix starts, in any letter case, every name Ludock gives its own
+// folders and files inside a server's data. Files never shows or changes
+// them, backups leave them out, and restores leave them where they are.
+const ReservedPrefix = ".ludock-"
+
+// Reserved reports whether a file or folder name is one of Ludock's own.
+func Reserved(name string) bool {
+	return len(name) >= len(ReservedPrefix) && strings.EqualFold(name[:len(ReservedPrefix)], ReservedPrefix)
+}
+
 const (
 	directoryFlags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
 	fileFlags      = unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"path"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -60,7 +59,7 @@ func unpackName(id string) (string, error) {
 
 // archiveParts splits an entry name into the components it creates. Names a
 // backup would refuse are refused here too, so unpacked data never breaks a
-// later backup; .ludock- names are reserved for Ludock's own staging.
+// later backup, and Ludock's own names are refused.
 func archiveParts(name string, depth int) ([]string, error) {
 	// A name that isn't UTF-8 would be listed with replacement characters,
 	// which no later request could turn back into the file's name.
@@ -72,7 +71,7 @@ func archiveParts(name string, depth int) ([]string, error) {
 		switch {
 		case part == "" || part == ".":
 			continue
-		case part == ".." || len(part) > 255 || strings.HasPrefix(part, ".ludock-") ||
+		case part == ".." || len(part) > 255 || Reserved(part) ||
 			strings.IndexFunc(part, func(r rune) bool { return r < 32 || r == 127 }) >= 0:
 			return nil, errArchiveUnsafe
 		}
@@ -383,9 +382,11 @@ func (h *fileHelper) removeStage(parent fd, name string) error {
 	// An excluded mount isn't in the helper, so it would see and delete the
 	// files the mount hides from the game; a nested mount isn't staging.
 	relative := path.Join(h.stageFolder(), name)
-	absolute := h.absolute(relative)
-	if h.check(relative, true) != nil || slices.ContainsFunc(h.request.Mounts, func(mount string) bool { return within(mount, absolute) }) {
+	if h.check(relative, true) != nil {
 		return errUnsafe
+	}
+	if err := h.unmounted(parent, name, relative); err != nil {
+		return err
 	}
 	return h.removeEntry(parent, name, 0)
 }

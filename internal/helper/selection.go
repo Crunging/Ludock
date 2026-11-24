@@ -20,13 +20,13 @@ func (h *fileHelper) selection(root fd, operation string) error {
 	if len(h.request.Paths) == 0 || len(h.request.Paths) > 1000 {
 		return errUnsafe
 	}
-	folder, err := components(h.request.Path)
+	folder, err := ownParts(h.request.Path)
 	if err != nil {
 		return err
 	}
 	var items []selected
 	for _, name := range h.request.Paths {
-		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") || Reserved(name) {
 			return errUnsafe
 		}
 		relative := strings.Join(append(slices.Clone(folder), name), "/")
@@ -45,6 +45,14 @@ func (h *fileHelper) selection(root fd, operation string) error {
 	for index := range items {
 		if items[index].info, err = lstatAt(parent, items[index].name); err != nil {
 			return err
+		}
+	}
+	switch operation {
+	case "delete-paths", "move":
+		for _, item := range items {
+			if err := h.unmounted(parent, item.name, item.relative); err != nil {
+				return err
+			}
 		}
 	}
 	switch operation {
@@ -101,7 +109,7 @@ func (h *fileHelper) mountOf(value string) string {
 // move renames each entry into Destination, a folder of the same mount,
 // never replacing a name there and never moving a link or a mount.
 func (h *fileHelper) move(root, parent fd, items []selected) error {
-	parts, err := components(h.request.Destination)
+	parts, err := ownParts(h.request.Destination)
 	if err != nil {
 		return err
 	}
@@ -120,8 +128,7 @@ func (h *fileHelper) move(root, parent fd, items []selected) error {
 	for _, item := range items {
 		absolute := h.absolute(item.relative)
 		if isSymlink(item.info) || within(destination, item.relative) || item.info.Dev != targetInfo.Dev ||
-			h.mountOf(absolute) != h.mountOf(h.absolute(destination)) ||
-			slices.ContainsFunc(h.request.Mounts, func(mount string) bool { return within(mount, absolute) }) {
+			h.mountOf(absolute) != h.mountOf(h.absolute(destination)) {
 			return errUnsafe
 		}
 		if _, err := lstatAt(target, item.name); err == nil {

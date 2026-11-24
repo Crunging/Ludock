@@ -40,7 +40,7 @@ func CleanPath(value string) (string, error) {
 	parts := strings.Split(value, "/")
 	if strings.ContainsAny(value, "\x00\\") || len(parts) > 62 || textutil.Length(value) > 4000 ||
 		slices.ContainsFunc(parts, func(part string) bool {
-			return part == "" || part == "." || part == ".." || strings.HasPrefix(part, helper.StagePrefix)
+			return part == "" || part == "." || part == ".." || helper.Reserved(part)
 		}) {
 		return "", errUnsafePath
 	}

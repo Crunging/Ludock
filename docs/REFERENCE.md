@@ -721,6 +721,33 @@ Ludock runs short-lived helper containers from its own image:
   network and connect on `127.0.0.1`, so console and query ports needn't be
   published. A console password reaches its helper over standard input.
 
+### Ludock's folders in server data
+
+Ludock keeps a few working folders and files inside a server's data folders.
+Every name that starts with `.ludock-`, in any letter case, is Ludock's:
+
+| Name | What it is | When it goes |
+| --- | --- | --- |
+| `.ludock-restore-<id>` | A restore's staging folder, at the top of a data folder: the backup's data before it moves in, then the data it replaced | When the restore ends; one that stopped partway stays until it is finished or undone |
+| `.ludock-unpack-<id>` | An unpack in progress, beside the archive | When the unpack ends, or at Ludock's next start |
+| `.ludock-upload-<id>.tmp` | An upload or edit in progress, beside the file | When the upload ends |
+
+Files doesn't show these names, and no one can create, rename, move, upload,
+unpack, download, or delete one there; a folder holding one can still be
+deleted as a whole, except that a restore's folder is only ever at the top of
+a data folder. Backups leave them out, and restores leave them where they are,
+so one left over, or made by hand, never blocks a backup or a restore. To
+remove one Ludock no longer needs, delete it on the host. The previous data of
+a restore that stopped partway is in its `.ludock-restore-<id>/old`.
+
+`ludock-set-aside-<id>`, without the leading dot, holds what a server wrote
+while a stopped restore waited to be undone. It is ordinary data: Files shows
+it, backups include it, and you can delete it once you've kept what you need.
+
+Ludock never deletes, renames, or moves a folder that is, or holds, a folder
+mounted into the server separately, such as `./mods:/data/mods` inside
+`./data:/data`; it says so instead. Delete what's inside that folder.
+
 ### Activity results
 
 Each piece of work in **Activity** shows one result:

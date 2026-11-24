@@ -32,6 +32,11 @@ async function setUploadLimit(page, limit, notice) {
 }
 
 test("browsing, previewing, uploading, and changing server files", async ({ page, ownServer }) => {
+  // A restore that stopped partway keeps the previous data in its own folder,
+  // which Files neither shows nor lets anyone take.
+  const stage = join(ownServer.data, ".ludock-restore-6f9619ff-8b86-4011-b42d-00c04fc964ff");
+  mkdirSync(join(stage, "old"), { recursive: true });
+  writeFileSync(join(stage, "old", "level.dat"), "previous");
   await page.goto("/");
   await serverRow(page, ownServer.name).getByRole("button", { name: /More actions/ }).click();
   await serverRow(page, ownServer.name).getByRole("link", { name: "Files" }).click();
@@ -83,6 +88,9 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   await page.locator(".file-breadcrumbs").getByRole("link", { name: ownServer.container }).click();
 
   await page.getByRole("button", { name: "New folder" }).click();
+  await dialog.getByLabel("Folder name").fill(".ludock-restore-mine");
+  await dialog.getByRole("button", { name: "Create folder" }).click();
+  await expect(dialog.locator(".alert--error")).toHaveText("Names starting with .ludock- are kept for Ludock’s own work folders. Choose another name.");
   await dialog.getByLabel("Folder name").fill("world");
   await dialog.getByRole("button", { name: "Create folder" }).click();
   await expect(dialog.locator(".alert--error")).toHaveText("A file or folder with that name already exists");
@@ -115,6 +123,7 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   await expect(page).toHaveURL(/q=server/);
   await expect(names).toHaveText(["server.properties"]);
   await expect(page.locator(".file-filter-summary")).toContainText("Showing 1 of 2 entries");
+  expect(readFileSync(join(stage, "old", "level.dat"), "utf8")).toBe("previous");
 
   // The page names the server it belongs to and leads back to it.
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Files");

@@ -277,7 +277,7 @@ func TestFailedRestoreRollsBack(t *testing.T) {
 
 // A restore whose staging cleanup fails after the new data is in place
 // cleans up through a fresh helper; if that fails too, it says which folder
-// to remove, since the folder blocks every later backup.
+// holds the replaced data.
 func TestRestoreCleanupAfterCommit(t *testing.T) {
 	f := setup(t)
 	backup := f.run(t, "backup", nil)

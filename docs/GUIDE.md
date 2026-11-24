@@ -380,6 +380,8 @@ such as Valheim's `/opt/valheim`. It shows container paths, never host paths.
 - **Unpack** extracts a zip, tar, or tar.gz (including `.mcworld`, `.mcpack`,
   and `.mrpack`) into a new folder beside it. It never replaces anything.
 - **Select** picks several entries to download as one tar, move, or delete.
+- A folder mounted separately inside another, such as a mods folder, can't
+  be deleted, renamed, or moved with what holds it; change what's inside it.
 
 Stop a game before replacing a world or configuration it has open. Many
 images write some settings from their environment variables each time they
@@ -388,8 +390,9 @@ start, such as `MOTD` into Minecraft's `server.properties` on
 start; change it where you define the server instead. Ludock
 never follows symbolic links, and blocks system and sensitive paths and Docker
 sockets. To limit access to some folders, set
-[`ludock.files`](REFERENCE.md#labels). Size and time limits are in the
-[reference](REFERENCE.md#limits).
+[`ludock.files`](REFERENCE.md#labels). Ludock's own working folders, named
+`.ludock-…`, [stay out of Files](REFERENCE.md#ludocks-folders-in-server-data).
+Size and time limits are in the [reference](REFERENCE.md#limits).
 
 ### Backups
 
@@ -427,7 +430,8 @@ as. Usually the restore was undone and the data is as it was.
 If something outside Ludock started the server partway, the restore stops there
 and leaves the server running. If the server's previous data had already been
 moved out, it waits, safe but not in place, in the restore's
-`.ludock-restore-*` folder; don't delete those folders. **Needs attention**
+`.ludock-restore-*` folder, which Files doesn't show and no one can change
+there. **Needs attention**
 offers administrators **Undo the restore**, which stops the server (warning
 players first when it can), puts the previous data back, and starts it again if
 it was running. Anything the game wrote meanwhile is kept in a

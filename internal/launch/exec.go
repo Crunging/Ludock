@@ -47,6 +47,7 @@ var fileErrors = &ExecErrors{Timeout: ErrTimeout, Failed: ErrFailed, Unsafe: Err
 	helper.FileNotArchive:  apperr.New("NOT_AN_ARCHIVE", 415, "This file isn’t a zip, tar, or tar.gz archive, or it is damaged."),
 	// A 5xx status reports the result as unconfirmed.
 	helper.FilePartial: apperr.New("FILE_PARTIAL", 500, "Only part of the selection was changed"),
+	helper.FileMounted: apperr.New("MOUNTED_FOLDER", 409, "This is, or holds, a folder mounted into the server separately, which Ludock won’t delete, rename, or move. Change what’s inside that folder instead."),
 }}
 
 // exit is the error of a command Docker reports as ended with info.
