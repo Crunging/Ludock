@@ -73,12 +73,11 @@ func rootsEqual(left, right []Root) bool {
 	return len(left) == len(right) && len(rootPaths(left, right)) == 0 && len(rootPaths(right, left)) == 0
 }
 
-// rootPaths lists the paths of roots that others lacks. Paths alone are
-// compared: 0.6.0 numbered roots, where IDs now derive from paths.
+// rootPaths lists the paths of roots that others lacks.
 func rootPaths(roots, others []Root) []string {
 	var paths []string
 	for _, root := range roots {
-		if !slices.ContainsFunc(others, func(other Root) bool { return other.Path == root.Path }) {
+		if !slices.Contains(others, root) {
 			paths = append(paths, root.Path)
 		}
 	}

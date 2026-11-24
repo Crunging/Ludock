@@ -1,6 +1,10 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { createServer } from "node:http";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test, expect, createUser, signIn, shareServer } from "./fixtures.mjs";
 import { freshStack } from "../setup.mjs";
 
@@ -195,4 +199,43 @@ test("a server with no data folders says why it can't be backed up", async ({ se
   await expect(why).toContainText("give its game data a writable volume or bind mount");
   await expect(page.getByRole("button", { name: "Create backup" })).toHaveCount(0);
   await expect(page.locator("main")).not.toContainText("Ludock found no data folder it can back up");
+});
+
+test("starting on a beta's data says to start fresh, and leaves the data as it was", async ({ page }) => {
+  const dir = mkdtempSync(join(tmpdir(), "ludock-e2e-beta-"));
+  const database = join(dir, "ludock.db");
+  // A database a 0.6 beta wrote: its marker, and a version 1.0 also has.
+  const beta = new DatabaseSync(database);
+  beta.exec("CREATE TABLE users (id TEXT PRIMARY KEY); PRAGMA application_id = 1279542091; PRAGMA user_version = 1;");
+  beta.close();
+  const before = readFileSync(database);
+  const probe = createServer().listen(0, "127.0.0.1");
+  await once(probe, "listening");
+  const port = probe.address().port;
+  probe.close();
+  const ludock = spawn(join(process.env.LUDOCK_E2E_BIN, "ludock"), ["serve"], {
+    env: { ...process.env, LUDOCK_LISTEN: `127.0.0.1:${port}`, LUDOCK_DATA_DIR: dir,
+      LUDOCK_DOCKER_SOCKET: join(dir, "no-docker.sock") }, stdio: ["ignore", "pipe", "pipe"] });
+  let log = "";
+  ludock.stdout.on("data", (chunk) => (log += chunk));
+  ludock.stderr.on("data", (chunk) => (log += chunk));
+  try {
+    await expect(async () => {
+      expect((await page.goto(`http://127.0.0.1:${port}/`)).status()).toBe(503);
+    }).toPass({ timeout: 15_000 });
+    await expect(page.locator("body")).toContainText(
+      "This data is from a Ludock beta, and Ludock 1.0 starts fresh, so it can’t use it. Start Ludock with a new, empty data volume");
+    await expect(page.locator("body")).toContainText("your game servers and your backup archives are not affected");
+    // It waits with the message instead of exiting, which would have its
+    // container restarted over and over, and says why in its log once.
+    await page.waitForTimeout(1_000);
+    expect(ludock.exitCode).toBeNull();
+    expect(log.split("This data is from a Ludock beta").length).toBe(2);
+    expect(readFileSync(database).equals(before)).toBe(true);
+    expect(readdirSync(dir)).toEqual(["ludock.db"]);
+  } finally {
+    ludock.kill("SIGTERM");
+    if (ludock.exitCode === null) await once(ludock, "exit");
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

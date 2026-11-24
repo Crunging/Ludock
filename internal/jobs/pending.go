@@ -58,8 +58,7 @@ func journalMatches(entries []journal, server *servers.Context) bool {
 		return false
 	}
 	for _, entry := range entries {
-		// IDs aren't compared: a 0.6.0 backup's journal numbers its roots.
-		if !slices.ContainsFunc(server.Container.FileRoots, func(root files.Root) bool { return root.Path == entry.Root.Path }) {
+		if !slices.ContainsFunc(server.Container.FileRoots, func(root files.Root) bool { return root.ID == entry.Root.ID && root.Path == entry.Root.Path }) {
 			return false
 		}
 	}

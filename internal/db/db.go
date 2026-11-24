@@ -5,9 +5,12 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,6 +45,12 @@ func inspect(path string) error {
 		return err
 	}
 	canonical, _ = filepath.Abs(canonical)
+	// A beta's marker is read from the file header: opening a database with a
+	// WAL left behind creates a shared-memory file beside it.
+	if header, err := readHeader(canonical); err == nil && string(header[:16]) == "SQLite format 3\x00" &&
+		slices.Contains(betaApplicationIDs, int64(binary.BigEndian.Uint32(header[68:72]))) {
+		return ErrBetaDatabase
+	}
 	hasJournal := false
 	for _, suffix := range []string{"-wal", "-journal"} {
 		if info, ok := exists(canonical + suffix); ok && info.Size() > 0 {
@@ -61,6 +70,16 @@ func inspect(path string) error {
 	}
 	defer existing.Close()
 	return AssertCompatible(bg, existing, BaseSchemaVersion, LatestVersion())
+}
+
+func readHeader(path string) (header [100]byte, err error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return header, err
+	}
+	defer file.Close()
+	_, err = io.ReadFull(file, header[:])
+	return header, err
 }
 
 // Open opens or initializes the database at path (":memory:" for tests).

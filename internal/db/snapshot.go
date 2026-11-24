@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -134,6 +135,25 @@ func settleOperations(ctx context.Context, path string) error {
 	return err
 }
 
+// IsOwnSave reports whether archive is a saved copy of this installation's
+// data: one holding its identity key.
+func (d *DB) IsOwnSave(archive io.Reader) bool {
+	name := filepath.Base(d.path) + ".identity-key/" + keyFilename
+	reader := tar.NewReader(archive)
+	for {
+		header, err := reader.Next()
+		if err != nil {
+			return false
+		}
+		if header.Name == name && header.Typeflag == tar.TypeReg && header.Size == keyBytes {
+			key := make([]byte, keyBytes)
+			defer clear(key)
+			_, err := io.ReadFull(reader, key)
+			return err == nil && subtle.ConstantTimeCompare(key, d.key) == 1
+		}
+	}
+}
+
 type countingWriter struct{ n int64 }
 
 func (c *countingWriter) Write(p []byte) (int, error) {
@@ -164,6 +184,7 @@ var (
 	errRestoreArchive = apperr.New("RESTORE_ARCHIVE", 400,
 		"This file isn’t a saved copy of Ludock’s data, or it is damaged. Choose a ludock-data-….tar file from the backup folder or the second folder.")
 	errRestoreNewer = apperr.New("RESTORE_NEWER", 400, "This copy was saved by a newer version of Ludock. Restore it with that version or a later one.")
+	errRestoreBeta  = apperr.New("RESTORE_BETA", 400, "This copy was saved by a Ludock beta, and Ludock 1.0 starts fresh, so it can’t restore it. Start Ludock with the empty data folder and set up the first administrator. Nothing was changed: the copy, your game servers, and your backup archives are as they were.")
 )
 
 // RestoreSnapshot restores a saved copy into the data folder of dbPath, which
@@ -313,10 +334,13 @@ func checkRestored(path string, key []byte) error {
 		return err
 	}
 	defer restored.Close()
-	if err := AssertCompatible(bg, restored, BaseSchemaVersion, LatestVersion()); err != nil {
-		if version, _ := pragmaInt(bg, restored, "user_version"); version > int64(LatestVersion()) {
-			return errRestoreNewer
-		}
+	switch err := AssertCompatible(bg, restored, BaseSchemaVersion, LatestVersion()); err {
+	case nil:
+	case ErrNewerDatabase:
+		return errRestoreNewer
+	case ErrBetaDatabase:
+		return errRestoreBeta
+	default:
 		return errRestoreArchive
 	}
 	var result string

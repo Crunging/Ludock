@@ -5,18 +5,21 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 )
 
-// ApplicationID marks Ludock-owned SQLite files ("LDCK") independently of the
-// schema version. Never infer ownership merely from a familiar table name.
-// Releases up to 0.5 used "LUDK" with a different schema; Ludock refuses
-// those files without writing to them.
-const ApplicationID = 0x4c44434b
+// ApplicationID marks a Ludock 1.x database ("LDK1"), whatever its schema
+// version.
+const ApplicationID = 0x4c444b31
 
-// BaseSchemaVersion is the initial schema. Add later changes as consecutive
-// migrations; never edit a released one.
+// betaApplicationIDs are the markers betas wrote: "LUDK" up to 0.5 and
+// "LDCK" from 0.6. 1.0 started fresh, so their data is refused.
+var betaApplicationIDs = []int64{0x4c55444b, 0x4c44434b}
+
+// BaseSchemaVersion is the schema 1.0 ships with. Add later changes as
+// consecutive migrations; never edit a released one.
 const BaseSchemaVersion = 1
 
 // Migration is one schema version. Upgrade runs inside the migration
@@ -27,22 +30,32 @@ type Migration struct {
 	Upgrade func(tx *sql.Tx, key []byte) error
 }
 
-// ErrIncompatible reports a database that Ludock does not own or cannot upgrade.
-var ErrIncompatible = apperr.New("DATABASE_INCOMPATIBLE", 500, "This database is incompatible with Ludock. Use a new application data volume or LUDOCK_DATA_DIR and complete first-administrator setup. The existing database and game data have not been changed.")
+// Every refusal shares one code: the server waits with its message instead
+// of exiting.
+var (
+	ErrIncompatible  = apperr.New("DATABASE_INCOMPATIBLE", 500, "The data folder holds a database Ludock can’t use: it isn’t Ludock’s, or it is from an early Ludock beta. Start Ludock with a new, empty data volume (or LUDOCK_DATA_DIR) and set up the first administrator. Nothing was changed: the old database, your game servers, and your backup archives are as they were.")
+	ErrBetaDatabase  = apperr.New("DATABASE_INCOMPATIBLE", 500, "This data is from a Ludock beta, and Ludock 1.0 starts fresh, so it can’t use it. Start Ludock with a new, empty data volume (or LUDOCK_DATA_DIR) and set up the first administrator; keep the old volume or remove it, as you like. Nothing was changed: your game servers and your backup archives are not affected.")
+	ErrNewerDatabase = apperr.New("DATABASE_INCOMPATIBLE", 500, "This data was written by a newer version of Ludock. Run that version or a later one. Nothing was changed.")
+)
 
 // Migrations is the complete schema history.
 var Migrations = []Migration{
 	{
 		Version: BaseSchemaVersion,
 		SQL: `
+      -- TOTP secrets are sealed with the identity key. totp_step is the last
+      -- accepted time step, so a code works once.
       CREATE TABLE users (
         id TEXT PRIMARY KEY,
         username TEXT NOT NULL UNIQUE COLLATE NOCASE,
         password_hash TEXT NOT NULL,
-        role TEXT NOT NULL CHECK (role IN ('admin', 'operator', 'viewer')),
+        role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
         disabled INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        totp_secret TEXT,
+        totp_pending TEXT,
+        totp_step INTEGER NOT NULL DEFAULT 0 CHECK (totp_step >= 0)
       ) STRICT;
       CREATE TABLE sessions (
         token_hash TEXT PRIMARY KEY,
@@ -56,6 +69,38 @@ var Migrations = []Migration{
       ) STRICT;
       CREATE INDEX sessions_user_id_idx ON sessions(user_id);
       CREATE INDEX sessions_expires_at_idx ON sessions(expires_at);
+      CREATE TABLE recovery_codes (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_hash TEXT NOT NULL,
+        PRIMARY KEY (user_id, code_hash)
+      ) STRICT, WITHOUT ROWID;
+      -- The password step of a two-factor sign-in, bound to the password hash
+      -- it verified.
+      CREATE TABLE sign_in_challenges (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        password_hash TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        expires_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX sign_in_challenges_user_idx ON sign_in_challenges(user_id);
+      -- One invite or password reset link per account. It works only while
+      -- the account still has password_hash; an invited account's is empty.
+      CREATE TABLE account_links (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        purpose TEXT NOT NULL CHECK (purpose IN ('invite', 'reset')),
+        password_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE login_attempts (
+        attempt_key TEXT PRIMARY KEY,
+        failures INTEGER NOT NULL,
+        window_started_at INTEGER NOT NULL,
+        blocked_until INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
       CREATE TABLE audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -72,18 +117,13 @@ var Migrations = []Migration{
         CASE WHEN json_valid(details_json) THEN CASE WHEN json_type(details_json, '$.operationId') = 'text' THEN json_extract(details_json, '$.operationId') END END,
         created_at DESC, id DESC
       );
-      CREATE TABLE login_attempts (
-        attempt_key TEXT PRIMARY KEY,
-        failures INTEGER NOT NULL,
-        window_started_at INTEGER NOT NULL,
-        blocked_until INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      ) STRICT;
       CREATE TABLE docker_hosts (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
         created_at INTEGER NOT NULL
       ) STRICT;
+      -- sharing_paused: a change to the server's game or data folders paused
+      -- its grants until an administrator confirms it.
       CREATE TABLE logical_servers (
         id TEXT PRIMARY KEY,
         host_id TEXT NOT NULL REFERENCES docker_hosts(id),
@@ -91,27 +131,15 @@ var Migrations = []Migration{
         container_id TEXT,
         display_name TEXT NOT NULL,
         game_type TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('active','missing','ambiguous','review_required')),
+        status TEXT NOT NULL CHECK (status IN ('active','missing','ambiguous')),
         binding_revision INTEGER NOT NULL,
         binding_fingerprint TEXT NOT NULL,
-        pending_fingerprint TEXT,
-        pending_game_type TEXT,
-        review_required INTEGER NOT NULL DEFAULT 0 CHECK (review_required IN (0,1)),
+        sharing_paused INTEGER NOT NULL DEFAULT 0 CHECK (sharing_paused IN (0,1)),
         first_seen_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL,
         UNIQUE (host_id, external_identity)
       ) STRICT;
       CREATE INDEX logical_servers_container_idx ON logical_servers(host_id, container_id);
-      CREATE TABLE server_bindings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        server_id TEXT NOT NULL REFERENCES logical_servers(id),
-        binding_revision INTEGER NOT NULL,
-        container_id TEXT NOT NULL,
-        binding_fingerprint TEXT NOT NULL,
-        observed_at INTEGER NOT NULL,
-        accepted INTEGER NOT NULL CHECK (accepted IN (0,1))
-      ) STRICT;
-      CREATE INDEX server_bindings_server_idx ON server_bindings(server_id, observed_at DESC);
       CREATE TABLE server_grants (
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         server_id TEXT NOT NULL REFERENCES logical_servers(id) ON DELETE CASCADE,
@@ -133,79 +161,68 @@ var Migrations = []Migration{
       -- Server lists and the runner read active work on every refresh.
       CREATE INDEX operations_active_server_idx ON operations(server_id) WHERE status IN ('queued','running');
       CREATE INDEX operations_queued_idx ON operations(created_at, id) WHERE status = 'queued';
+      -- Retention never removes a kept backup (kept_at set); reason names the
+      -- work that took one for its own protection. game_type lets a backup
+      -- restore onto the same folders after they move to other host storage.
+      -- The second copy: copy_state is '' (none), 'pending', 'complete',
+      -- 'failed', or 'removing' (its backup was removed); copy_next_at is when
+      -- the copier tries again; copy_previous is a folder holding a verified
+      -- copy from before the second folder changed, kept until the new one
+      -- has one.
       CREATE TABLE backups (
         id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES logical_servers(id),
         binding_fingerprint TEXT NOT NULL, destination TEXT NOT NULL,
         roots_json TEXT NOT NULL, size INTEGER NOT NULL, checksum TEXT NOT NULL,
-        created_at INTEGER NOT NULL, state TEXT NOT NULL
+        created_at INTEGER NOT NULL, state TEXT NOT NULL,
+        kept_at INTEGER CHECK (kept_at >= 0),
+        note TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '' CHECK (reason IN ('', 'restore', 'update')),
+        copy_destination TEXT NOT NULL DEFAULT '',
+        copy_state TEXT NOT NULL DEFAULT '' CHECK (copy_state IN ('', 'pending', 'complete', 'failed', 'removing')),
+        copy_attempts INTEGER NOT NULL DEFAULT 0 CHECK (copy_attempts >= 0),
+        copy_next_at INTEGER NOT NULL DEFAULT 0,
+        copy_error TEXT NOT NULL DEFAULT '',
+        copy_previous TEXT NOT NULL DEFAULT '',
+        game_type TEXT NOT NULL DEFAULT ''
       ) STRICT;
       CREATE INDEX backups_server_idx ON backups(server_id, created_at DESC, id);
+      CREATE INDEX backups_deleting_idx ON backups(created_at, id) WHERE state = 'deleting';
+      CREATE INDEX backups_copy_idx ON backups(copy_next_at, created_at, id) WHERE copy_state IN ('pending', 'failed');
+      -- A recurring run may start late, but never for a minute before
+      -- changed_at, when the schedule was last saved.
       CREATE TABLE schedules (
         id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES logical_servers(id),
         owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         input_json TEXT NOT NULL, binding_revision INTEGER NOT NULL,
         last_slot TEXT, last_result TEXT, created_at INTEGER NOT NULL,
         revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
-        last_operation_id TEXT, last_run_at INTEGER CHECK (last_run_at >= 0)
+        last_operation_id TEXT, last_run_at INTEGER CHECK (last_run_at >= 0),
+        changed_at INTEGER CHECK (changed_at >= 0)
       ) STRICT;
       CREATE INDEX schedules_server_idx ON schedules(server_id, created_at, id);
       -- Claimed countdown warnings, so a restart never repeats one. Repeated
       -- fall-back hours share a slot, so each lead time is claimed separately.
+      -- heard_binding is the binding revision a warning was delivered on;
+      -- NULL while it is only claimed, or when it never reached players.
       CREATE TABLE schedule_announcements (
         schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
         slot TEXT NOT NULL, lead_minutes INTEGER NOT NULL,
+        heard_binding INTEGER,
         PRIMARY KEY (schedule_id, slot, lead_minutes)
       ) STRICT;
+      -- A server's monitoring policy and the disk, memory, and recovery state
+      -- judged by it. answered_json is when the game last answered in its
+      -- container run.
       CREATE TABLE availability (
         server_id TEXT PRIMARY KEY REFERENCES logical_servers(id), policy_json TEXT NOT NULL,
         outage_started_at INTEGER, notified INTEGER NOT NULL DEFAULT 0,
         suppressed_until INTEGER NOT NULL DEFAULT 0, intentionally_stopped INTEGER NOT NULL DEFAULT 0,
-        last_state TEXT, updated_at INTEGER NOT NULL
+        last_state TEXT, updated_at INTEGER NOT NULL,
+        disk_json TEXT, memory_json TEXT, recovery_json TEXT, answered_json TEXT
       ) STRICT;
+      -- Each event is delivered to each destination separately, and the
+      -- message is formatted when it is sent.
       CREATE TABLE notification_deliveries (
-        id TEXT PRIMARY KEY, event_key TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL,
-        state TEXT NOT NULL DEFAULT 'queued', created_at INTEGER NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event','test')),
-        retry_attempts INTEGER NOT NULL DEFAULT 0 CHECK (retry_attempts >= 0),
-        last_attempt_at INTEGER CHECK (last_attempt_at >= 0),
-        delivered_at INTEGER CHECK (delivered_at >= 0),
-        failure_code TEXT
-      ) STRICT;
-      CREATE INDEX notification_deliveries_recent_idx ON notification_deliveries(created_at DESC, id DESC);
-      CREATE INDEX notification_deliveries_due_idx ON notification_deliveries(state, next_attempt_at);
-    `,
-		Upgrade: initializeKeyCheck,
-	},
-	{
-		// Schedule runs look up the accepted binding of a revision, and every
-		// tick looks for backups still being deleted.
-		Version: 2,
-		SQL: `
-      CREATE INDEX server_bindings_revision_idx ON server_bindings(server_id, binding_revision) WHERE accepted = 1;
-      CREATE INDEX backups_deleting_idx ON backups(created_at, id) WHERE state = 'deleting';
-    `,
-	},
-	{
-		// Resource history: one sample per running server a minute, kept for a
-		// day. CPU is in hundredths of a percent and memory in KiB, so a row
-		// stays a few dozen bytes.
-		Version: 3,
-		SQL: `
-      CREATE TABLE resource_samples (
-        server_id TEXT NOT NULL REFERENCES logical_servers(id) ON DELETE CASCADE,
-        at INTEGER NOT NULL, cpu INTEGER NOT NULL CHECK (cpu >= 0), memory INTEGER NOT NULL CHECK (memory >= 0),
-        PRIMARY KEY (server_id, at)
-      ) STRICT, WITHOUT ROWID;
-    `,
-	},
-	{
-		// Notifications go to several destinations: each event is delivered to
-		// each one separately, and the message is formatted when it is sent.
-		// Discord, the only earlier destination, keeps its settings and queue.
-		Version: 4,
-		SQL: `
-      CREATE TABLE notification_deliveries_v4 (
         id TEXT PRIMARY KEY, event_key TEXT NOT NULL, destination TEXT NOT NULL, message TEXT NOT NULL,
         attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL,
         state TEXT NOT NULL DEFAULT 'queued', created_at INTEGER NOT NULL,
@@ -216,202 +233,17 @@ var Migrations = []Migration{
         failure_code TEXT,
         UNIQUE (event_key, destination)
       ) STRICT;
-      INSERT INTO notification_deliveries_v4 (id, event_key, destination, message, attempts, next_attempt_at, state, created_at,
-        kind, retry_attempts, last_attempt_at, delivered_at, failure_code)
-        SELECT id, event_key, 'discord', COALESCE(json_extract(payload_json, '$.content'), ''), attempts, next_attempt_at, state,
-          created_at, kind, retry_attempts, last_attempt_at, delivered_at, failure_code FROM notification_deliveries;
-      DROP TABLE notification_deliveries;
-      ALTER TABLE notification_deliveries_v4 RENAME TO notification_deliveries;
       CREATE INDEX notification_deliveries_recent_idx ON notification_deliveries(created_at DESC, id DESC);
       CREATE INDEX notification_deliveries_due_idx ON notification_deliveries(state, next_attempt_at);
-      UPDATE settings SET value_json = json_object('discord', json_object(
-          'enabled', json(CASE WHEN json_extract(value_json, '$.enabled') THEN 'true' ELSE 'false' END),
-          'url', COALESCE(json_extract(value_json, '$.webhookUrl'), '')))
-        WHERE key = 'notifications';
-    `,
-	},
-	{
-		// A recurring run may start late, but never for a minute before its
-		// schedule was last saved.
-		Version: 5,
-		SQL: `
-      ALTER TABLE schedules ADD COLUMN changed_at INTEGER CHECK (changed_at >= 0);
-      -- Earlier saves weren't recorded, so existing schedules run nothing late
-      -- from before this upgrade.
-      UPDATE schedules SET changed_at = CAST(unixepoch('subsec') * 1000 AS INTEGER);
-    `,
-	},
-	{
-		// Two-factor sign-in. Secrets are sealed with the identity key;
-		// totp_step is the last accepted time step, so a code works once.
-		// A sign-in challenge is the password step of a two-factor sign-in,
-		// bound to the password hash it verified.
-		Version: 6,
-		SQL: `
-      ALTER TABLE users ADD COLUMN totp_secret TEXT;
-      ALTER TABLE users ADD COLUMN totp_pending TEXT;
-      ALTER TABLE users ADD COLUMN totp_step INTEGER NOT NULL DEFAULT 0 CHECK (totp_step >= 0);
-      CREATE TABLE recovery_codes (
-        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        code_hash TEXT NOT NULL,
-        PRIMARY KEY (user_id, code_hash)
+      -- One sample per running server a minute, kept for a day. CPU is in
+      -- hundredths of a percent and memory in KiB.
+      CREATE TABLE resource_samples (
+        server_id TEXT NOT NULL REFERENCES logical_servers(id) ON DELETE CASCADE,
+        at INTEGER NOT NULL, cpu INTEGER NOT NULL CHECK (cpu >= 0), memory INTEGER NOT NULL CHECK (memory >= 0),
+        PRIMARY KEY (server_id, at)
       ) STRICT, WITHOUT ROWID;
-      CREATE TABLE sign_in_challenges (
-        token_hash TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        password_hash TEXT NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        expires_at INTEGER NOT NULL
-      ) STRICT;
-      CREATE INDEX sign_in_challenges_user_idx ON sign_in_challenges(user_id);
     `,
-	},
-	{
-		// One-time invite and password reset links, one per account. A link
-		// works only while the account still has password_hash, the hash it
-		// had when the link was made; an invited account's is empty.
-		Version: 7,
-		SQL: `
-      CREATE TABLE account_links (
-        token_hash TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-        purpose TEXT NOT NULL CHECK (purpose IN ('invite', 'reset')),
-        password_hash TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL
-      ) STRICT;
-    `,
-	},
-	{
-		// Retention never removes a kept backup (kept_at set). reason names
-		// the work that took a backup for its own protection. Retention is a
-		// fixed rule, so the count 0.6.0 saved goes.
-		Version: 8,
-		SQL: `
-      ALTER TABLE backups ADD COLUMN kept_at INTEGER CHECK (kept_at >= 0);
-      ALTER TABLE backups ADD COLUMN note TEXT NOT NULL DEFAULT '';
-      ALTER TABLE backups ADD COLUMN reason TEXT NOT NULL DEFAULT '' CHECK (reason IN ('', 'restore', 'update'));
-      UPDATE settings SET value_json = json_remove(value_json, '$.retentionCount')
-        WHERE key = 'backups' AND json_valid(value_json) AND json_type(value_json) = 'object';
-    `,
-	},
-	{
-		// Two kinds of account: administrators and members, whose access is
-		// set per server. Former viewers keep only grants their role allowed,
-		// and administrators hold no grants, so making one a member again
-		// starts with nothing shared.
-		Version: 9,
-		SQL: `
-      CREATE TABLE users_v9 (
-        id TEXT PRIMARY KEY,
-        username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-        password_hash TEXT NOT NULL,
-        role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
-        disabled INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        totp_secret TEXT,
-        totp_pending TEXT,
-        totp_step INTEGER NOT NULL DEFAULT 0 CHECK (totp_step >= 0)
-      ) STRICT;
-      INSERT INTO users_v9 SELECT id, username, password_hash, CASE role WHEN 'admin' THEN 'admin' ELSE 'member' END,
-        disabled, created_at, updated_at, totp_secret, totp_pending, totp_step FROM users;
-      -- A viewer grant that isn't a list of names is cleared.
-      UPDATE server_grants SET capabilities_json = CASE
-          WHEN json_valid(capabilities_json) AND json_type(capabilities_json) = 'array'
-            AND NOT EXISTS (SELECT 1 FROM json_each(server_grants.capabilities_json) WHERE type != 'text')
-          THEN (SELECT json_group_array(value) FROM json_each(server_grants.capabilities_json)
-            WHERE value IN ('server.view', 'logs.read', 'files.read'))
-          ELSE '[]' END
-        WHERE user_id IN (SELECT id FROM users WHERE role = 'viewer');
-      DELETE FROM server_grants WHERE user_id IN (SELECT id FROM users WHERE role = 'admin');
-      DROP TABLE users;
-      ALTER TABLE users_v9 RENAME TO users;
-    `,
-	},
-	{
-		// A backup's second copy in another folder: copy_state is '' (none),
-		// 'pending', 'complete', 'failed', or 'removing' (its backup was
-		// removed), and copy_next_at is when the copier tries again.
-		// copy_previous is a folder that holds a verified copy from before the
-		// second folder changed, kept until the new folder has one.
-		Version: 10,
-		SQL: `
-      ALTER TABLE backups ADD COLUMN copy_destination TEXT NOT NULL DEFAULT '';
-      ALTER TABLE backups ADD COLUMN copy_state TEXT NOT NULL DEFAULT '' CHECK (copy_state IN ('', 'pending', 'complete', 'failed', 'removing'));
-      ALTER TABLE backups ADD COLUMN copy_attempts INTEGER NOT NULL DEFAULT 0 CHECK (copy_attempts >= 0);
-      ALTER TABLE backups ADD COLUMN copy_next_at INTEGER NOT NULL DEFAULT 0;
-      ALTER TABLE backups ADD COLUMN copy_error TEXT NOT NULL DEFAULT '';
-      ALTER TABLE backups ADD COLUMN copy_previous TEXT NOT NULL DEFAULT '';
-      CREATE INDEX backups_copy_idx ON backups(copy_next_at, created_at, id) WHERE copy_state IN ('pending', 'failed');
-    `,
-	},
-	{
-		// The game a backup holds, so it can restore onto the same folders
-		// after they move to other host storage.
-		Version: 11,
-		SQL:     `ALTER TABLE backups ADD COLUMN game_type TEXT NOT NULL DEFAULT '';`,
-	},
-	{
-		// The binding revision a countdown warning was delivered on; NULL
-		// while it is only claimed, or when it never reached players.
-		Version: 12,
-		SQL:     `ALTER TABLE schedule_announcements ADD COLUMN heard_binding INTEGER;`,
-	},
-	{
-		// sharing_paused: a change to the server's game or data folders paused
-		// its grants until an administrator confirms it. The binding history
-		// and the review fields before it had no readers. A server 0.6.0 left
-		// waiting for review becomes missing, still not usable, until the next
-		// discovery settles it as it would have. 0.6.0 fingerprinted more of
-		// the container, so its fingerprints are marked for discovery to
-		// replace (identity.LegacyFingerprint).
-		Version: 13,
-		SQL: `
-      DROP TABLE server_bindings;
-      CREATE TABLE logical_servers_v13 (
-        id TEXT PRIMARY KEY,
-        host_id TEXT NOT NULL REFERENCES docker_hosts(id),
-        external_identity TEXT NOT NULL,
-        container_id TEXT,
-        display_name TEXT NOT NULL,
-        game_type TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('active','missing','ambiguous')),
-        binding_revision INTEGER NOT NULL,
-        binding_fingerprint TEXT NOT NULL,
-        sharing_paused INTEGER NOT NULL DEFAULT 0 CHECK (sharing_paused IN (0,1)),
-        first_seen_at INTEGER NOT NULL,
-        last_seen_at INTEGER NOT NULL,
-        UNIQUE (host_id, external_identity)
-      ) STRICT;
-      INSERT INTO logical_servers_v13 (id, host_id, external_identity, container_id, display_name, game_type, status,
-        binding_revision, binding_fingerprint, sharing_paused, first_seen_at, last_seen_at)
-        SELECT id, host_id, external_identity, container_id, display_name, game_type,
-          CASE status WHEN 'review_required' THEN 'missing' ELSE status END,
-          binding_revision, CASE binding_fingerprint WHEN '' THEN '' ELSE 'legacy:' || binding_fingerprint END, review_required,
-          first_seen_at, last_seen_at FROM logical_servers;
-      DROP TABLE logical_servers;
-      ALTER TABLE logical_servers_v13 RENAME TO logical_servers;
-      CREATE INDEX logical_servers_container_idx ON logical_servers(host_id, container_id);
-    `,
-	},
-	{
-		// A server's disk, memory, and recovery state join the policy they are
-		// judged by, from the settings that held them. A state without a
-		// monitoring row had no effect and is dropped. answered_json is when
-		// the game last answered in its container run.
-		Version: 14,
-		SQL: `
-      ALTER TABLE availability ADD COLUMN disk_json TEXT;
-      ALTER TABLE availability ADD COLUMN memory_json TEXT;
-      ALTER TABLE availability ADD COLUMN recovery_json TEXT;
-      ALTER TABLE availability ADD COLUMN answered_json TEXT;
-      UPDATE availability SET
-        disk_json = (SELECT value_json FROM settings WHERE key = 'monitor.disk:' || availability.server_id),
-        memory_json = (SELECT value_json FROM settings WHERE key = 'monitor.memory:' || availability.server_id),
-        recovery_json = (SELECT value_json FROM settings WHERE key = 'monitor.recovery:' || availability.server_id);
-      DELETE FROM settings WHERE key GLOB 'monitor.disk:*' OR key GLOB 'monitor.memory:*' OR key GLOB 'monitor.recovery:*';
-    `,
+		Upgrade: initializeKeyCheck,
 	},
 }
 
@@ -428,8 +260,9 @@ func pragmaInt(ctx context.Context, q queryer, name string) (int64, error) {
 	return value, err
 }
 
-// AssertCompatible accepts an empty database or a Ludock database whose
-// schema version is within [earliest, latest].
+// AssertCompatible accepts an empty database or a Ludock 1.x database whose
+// schema version is within [earliest, latest]. The marker, not the version,
+// tells a beta's database apart: betas numbered their schemas from 1 too.
 func AssertCompatible(ctx context.Context, q queryer, earliest, latest int) error {
 	marker, err := pragmaInt(ctx, q, "application_id")
 	if err != nil {
@@ -441,20 +274,25 @@ func AssertCompatible(ctx context.Context, q queryer, earliest, latest int) erro
 	}
 	var tables int
 	if err := q.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
+		`SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite\_%' ESCAPE '\'`).Scan(&tables); err != nil {
 		return err
 	}
 	if marker == 0 && version == 0 && tables == 0 {
 		return nil
 	}
-	if marker != ApplicationID || version < int64(earliest) || version > int64(latest) {
+	switch {
+	case slices.Contains(betaApplicationIDs, marker):
+		return ErrBetaDatabase
+	case marker == ApplicationID && version > int64(latest):
+		return ErrNewerDatabase
+	case marker != ApplicationID || version < int64(earliest):
 		return ErrIncompatible
 	}
 	return nil
 }
 
-// ApplyMigrations upgrades the schema in one immediate transaction, so a
-// failed upgrade never leaves half a schema behind.
+// ApplyMigrations brings the schema to the latest version in one immediate
+// transaction, so a failed migration never leaves half a schema behind.
 func ApplyMigrations(ctx context.Context, conn *sql.Conn, migrations []Migration, key []byte) error {
 	if len(migrations) == 0 || migrations[0].Version != BaseSchemaVersion {
 		return fmt.Errorf("database migrations must start at version %d", BaseSchemaVersion)

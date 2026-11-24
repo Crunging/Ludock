@@ -47,7 +47,7 @@ func TestFreshDatabaseAndReopen(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fresh.db")
 	d := mustOpen(t, path)
-	if got := pragma(t, d.DB, "application_id"); got != "1279542091" {
+	if got := pragma(t, d.DB, "application_id"); got != "1279544113" {
 		t.Fatalf("application_id = %s", got)
 	}
 	if got := pragma(t, d.DB, "user_version"); got != strconv.Itoa(LatestVersion()) {
@@ -98,50 +98,54 @@ func TestFreshDatabaseAndReopen(t *testing.T) {
 	}
 }
 
-// Rejects unrelated database without writing.
-func TestRejectsUnrelatedDatabase(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "unrelated.db")
-	raw, _ := sql.Open("sqlite", path)
-	raw.Exec("CREATE TABLE inventory_items (id TEXT, description TEXT); INSERT INTO inventory_items VALUES ('asset-1', 'preserve-this');")
-	raw.Close()
-	os.Chmod(path, 0o640)
-	original, _ := os.ReadFile(path)
-	if _, err := Open(path); !errors.Is(err, ErrIncompatible) || !strings.Contains(err.Error(), "new application data volume") {
-		t.Fatalf("err = %v", err)
-	}
-	after, _ := os.ReadFile(path)
-	if !bytes.Equal(original, after) || mode(t, path) != 0o640 {
-		t.Fatal("database changed")
-	}
-	for _, suffix := range []string{"-wal", ".identity-key"} {
-		if _, err := os.Lstat(path + suffix); err == nil {
-			t.Fatalf("%s created", suffix)
-		}
-	}
-}
-
-// A database from releases up to 0.5 carries their marker and schema; it is
-// refused before anything writes to it.
-func TestRejectsOldReleaseDatabase(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "old.db")
-	raw, _ := sql.Open("sqlite", path)
-	raw.Exec("CREATE TABLE users (id TEXT PRIMARY KEY); PRAGMA application_id = 1280656459; PRAGMA user_version = 9")
-	raw.Close()
-	os.Chmod(path, 0o640)
-	original, _ := os.ReadFile(path)
-	if _, err := Open(path); !errors.Is(err, ErrIncompatible) {
-		t.Fatalf("err = %v", err)
-	}
-	after, _ := os.ReadFile(path)
-	if !bytes.Equal(original, after) || mode(t, path) != 0o640 {
-		t.Fatal("database changed")
-	}
-	for _, suffix := range []string{"-wal", "-journal", ".identity-key"} {
-		if _, err := os.Lstat(path + suffix); err == nil {
-			t.Fatalf("%s created", suffix)
-		}
+// Any database other than an empty one or this version's is refused with its
+// reason before anything writes to it: one unrelated to Ludock, a beta's (up
+// to 0.5, 0.6.0, and 0.6's later development schemas, whose versions overlap
+// 1.0's, and one whose WAL was left behind), a newer version's, and one
+// holding only a view.
+func TestRefusesOtherDatabasesUnchanged(t *testing.T) {
+	for _, test := range []struct {
+		name, setup string
+		want        error
+		wal         bool
+	}{
+		{"unrelated", "CREATE TABLE inventory_items (id TEXT); INSERT INTO inventory_items VALUES ('preserve-this')", ErrIncompatible, false},
+		{"unmarked 0.1", "CREATE TABLE users (id TEXT PRIMARY KEY)", ErrIncompatible, false},
+		{"0.5", "CREATE TABLE users (id TEXT PRIMARY KEY); PRAGMA application_id = 1280656459; PRAGMA user_version = 9", ErrBetaDatabase, false},
+		{"0.6.0", "CREATE TABLE users (id TEXT PRIMARY KEY); PRAGMA application_id = 1279542091; PRAGMA user_version = 4", ErrBetaDatabase, false},
+		{"0.6 development", "CREATE TABLE users (id TEXT PRIMARY KEY); PRAGMA application_id = 1279542091; PRAGMA user_version = 14", ErrBetaDatabase, false},
+		{"beta at version 1", "CREATE TABLE users (id TEXT PRIMARY KEY); PRAGMA application_id = 1279542091; PRAGMA user_version = 1", ErrBetaDatabase, false},
+		{"beta with a WAL", "CREATE TABLE users (id TEXT PRIMARY KEY); PRAGMA application_id = 1279542091; PRAGMA user_version = 4", ErrBetaDatabase, true},
+		{"only a view", "CREATE VIEW inventory AS SELECT 1", ErrIncompatible, false},
+		{"newer", "CREATE TABLE users (id TEXT PRIMARY KEY); PRAGMA application_id = 1279544113; PRAGMA user_version = 999", ErrNewerDatabase, false},
+		{"foreign marker", "CREATE TABLE users (id TEXT PRIMARY KEY); PRAGMA application_id = 123; PRAGMA user_version = 1", ErrIncompatible, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "ludock.db")
+			raw, _ := sql.Open("sqlite", path)
+			if _, err := raw.Exec(test.setup); err != nil {
+				t.Fatal(err)
+			}
+			raw.Close()
+			if test.wal {
+				os.WriteFile(path+"-wal", []byte("left by a crash"), 0o600)
+			}
+			os.Chmod(path, 0o640)
+			original, _ := os.ReadFile(path)
+			if _, err := Open(path); err != test.want {
+				t.Fatalf("err = %v", err)
+			}
+			after, _ := os.ReadFile(path)
+			if !bytes.Equal(original, after) || mode(t, path) != 0o640 {
+				t.Fatal("database changed")
+			}
+			for _, suffix := range []string{"-wal", "-journal", "-shm", ".identity-key"} {
+				if _, err := os.Lstat(path + suffix); err == nil && !(test.wal && suffix == "-wal") {
+					t.Fatalf("%s created", suffix)
+				}
+			}
+		})
 	}
 }
 
@@ -332,40 +336,6 @@ func TestFutureMigrationKeepsRecords(t *testing.T) {
 	}
 }
 
-// A database with Discord-only notifications keeps its webhook and queue
-// when notifications gain more destinations.
-func TestNotificationDestinationsMigration(t *testing.T) {
-	_, conn := memoryConn(t)
-	if err := ApplyMigrations(bg, conn, Migrations[:3], testKey); err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		`INSERT INTO settings VALUES ('notifications', '{"enabled":true,"webhookUrl":"https://discord.com/api/webhooks/1/a"}')`,
-		`INSERT INTO notification_deliveries (id,event_key,payload_json,next_attempt_at,created_at,attempts,failure_code)
-		  VALUES ('d1','outage:1','{"content":"Survival is unavailable.","allowed_mentions":{"parse":[]}}',5,4,2,'network')`,
-	} {
-		if _, err := conn.ExecContext(bg, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := ApplyMigrations(bg, conn, Migrations[:4], testKey); err != nil {
-		t.Fatal(err)
-	}
-	var settings, row string
-	conn.QueryRowContext(bg, "SELECT value_json FROM settings WHERE key='notifications'").Scan(&settings)
-	conn.QueryRowContext(bg, `SELECT event_key||'|'||destination||'|'||message||'|'||attempts||'|'||failure_code
-	  FROM notification_deliveries WHERE id='d1'`).Scan(&row)
-	if settings != `{"discord":{"enabled":true,"url":"https://discord.com/api/webhooks/1/a"}}` ||
-		row != "outage:1|discord|Survival is unavailable.|2|network" {
-		t.Fatal(settings, row)
-	}
-	// Each destination gets its own delivery of an event.
-	if _, err := conn.ExecContext(bg, `INSERT INTO notification_deliveries (id,event_key,destination,message,next_attempt_at,created_at)
-	  VALUES ('d2','outage:1','ntfy','Survival is unavailable.',5,4)`); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestInterruptedMigrationRollsBack(t *testing.T) {
 	_, conn := memoryConn(t)
 	if err := ApplyMigrations(bg, conn, Migrations, testKey); err != nil {
@@ -387,19 +357,6 @@ func TestInterruptedMigrationRollsBack(t *testing.T) {
 	}
 }
 
-func TestRejectsNewerSchemaAndForeignMarker(t *testing.T) {
-	_, conn := memoryConn(t)
-	ApplyMigrations(bg, conn, Migrations, testKey)
-	conn.ExecContext(bg, "PRAGMA user_version = 999")
-	if err := AssertCompatible(bg, conn, BaseSchemaVersion, LatestVersion()); !errors.Is(err, ErrIncompatible) {
-		t.Fatalf("err = %v", err)
-	}
-	conn.ExecContext(bg, "PRAGMA user_version = 1; PRAGMA application_id = 123")
-	if err := ApplyMigrations(bg, conn, Migrations, testKey); !errors.Is(err, ErrIncompatible) {
-		t.Fatalf("err = %v", err)
-	}
-}
-
 // Reading a throttle reports an active window and removes an expired one.
 func TestGetLoginThrottleExpiry(t *testing.T) {
 	d := mustOpen(t, filepath.Join(t.TempDir(), "throttle.db"))
@@ -417,296 +374,6 @@ func TestGetLoginThrottleExpiry(t *testing.T) {
 	d.QueryRow("SELECT COUNT(*) FROM login_attempts").Scan(&rows)
 	if rows != 0 {
 		t.Fatal("expired window kept")
-	}
-}
-
-// Schedules saved before their save time was recorded get the upgrade time,
-// so none runs late for a minute before the upgrade.
-func TestScheduleSaveTimeMigration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "schedules.db")
-	before, err := open(path, Migrations[:4])
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		`INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES('u','u','x','admin',1,1)`,
-		`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
-		`INSERT INTO logical_servers(id,host_id,external_identity,display_name,game_type,status,binding_revision,binding_fingerprint,first_seen_at,last_seen_at)
-      VALUES('s','h','standalone:mc','mc','minecraft','active',1,'',1,1)`,
-		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES('a','s','u','{}',1,1)`,
-	} {
-		if _, err := before.Exec(statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	before.Close()
-	started := Now()
-	after := mustOpen(t, path)
-	var changed int64
-	if err := after.QueryRow("SELECT changed_at FROM schedules WHERE id='a'").Scan(&changed); err != nil || changed < started-1000 {
-		t.Fatal(changed, err)
-	}
-}
-
-// The backup settings 0.6.0 saved keep their folder and limits but lose the
-// retention count, which a fixed rule replaced and settings now refuse.
-func TestRetentionCountMigration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "settings.db")
-	before, err := open(path, Migrations[:7])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := before.Exec(`INSERT INTO settings(key,value_json)
-    VALUES('backups','{"destination":"/backups","retentionCount":10,"maxBytes":0,"reserveBytes":5368709120}')`); err != nil {
-		t.Fatal(err)
-	}
-	before.Close()
-	var value string
-	if err := mustOpen(t, path).QueryRow("SELECT value_json FROM settings WHERE key='backups'").Scan(&value); err != nil ||
-		value != `{"destination":"/backups","maxBytes":0,"reserveBytes":5368709120}` {
-		t.Fatal(value, err)
-	}
-}
-
-// Countdown warnings claimed before deliveries were recorded upgrade as not
-// heard, so no call-off follows one nobody may have heard; a delivery can
-// then be recorded on them.
-func TestHeardBindingMigration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "announcements.db")
-	before, err := open(path, Migrations[:11])
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		`INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES('u','u','x','admin',1,1)`,
-		`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
-		`INSERT INTO logical_servers(id,host_id,external_identity,display_name,game_type,status,binding_revision,binding_fingerprint,first_seen_at,last_seen_at)
-      VALUES('s','h','standalone:mc','mc','minecraft','active',1,'',1,1)`,
-		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES('a','s','u','{}',1,1)`,
-		`INSERT INTO schedule_announcements(schedule_id,slot,lead_minutes) VALUES('a','2026-01-01T05:00:UTC',5)`,
-	} {
-		if _, err := before.Exec(statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	before.Close()
-	after := mustOpen(t, path)
-	var heard sql.NullInt64
-	if err := after.QueryRow("SELECT heard_binding FROM schedule_announcements WHERE schedule_id='a'").Scan(&heard); err != nil || heard.Valid {
-		t.Fatal(heard, err)
-	}
-	if _, err := after.Exec("UPDATE schedule_announcements SET heard_binding=1 WHERE schedule_id='a'"); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// Operators and viewers become members without losing their sessions or
-// schedules; a viewer gains nothing their role withheld, even from a malformed
-// grant, and an administrator's leftover grant is gone.
-func TestMemberRoleMigration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "roles.db")
-	before, err := open(path, Migrations[:8])
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		`INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES('a','a','x','admin',1,1),
-      ('o','o','x','operator',1,1),('v','v','x','viewer',1,1)`,
-		`INSERT INTO sessions(token_hash,session_id,user_id,created_at,expires_at,last_seen_at) VALUES('t','s','v',1,9,1)`,
-		`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
-		`INSERT INTO logical_servers(id,host_id,external_identity,display_name,game_type,status,binding_revision,binding_fingerprint,first_seen_at,last_seen_at)
-      VALUES('s','h','standalone:mc','mc','minecraft','active',1,'',1,1),('t','h','standalone:t','t','minecraft','active',1,'',1,1),
-      ('u','h','standalone:u','u','minecraft','active',1,'',1,1)`,
-		`INSERT INTO server_grants VALUES('v','t','{"entry":"server.view"}',1),('v','u','["server.view",1e400]',1),('a','s','["server.view"]',1),('o','s','["server.view","server.start"]',1),
-      ('v','s','["server.view","server.start","files.read"]',1)`,
-		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES('x','s','o','{}',1,1)`,
-	} {
-		if _, err := before.Exec(statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	before.Close()
-	after := mustOpen(t, path)
-	var roles, grants string
-	var sessions, schedules int
-	after.QueryRow("SELECT group_concat(id||'='||role, ',') FROM (SELECT * FROM users ORDER BY id)").Scan(&roles)
-	after.QueryRow("SELECT group_concat(user_id||'='||capabilities_json, ' ') FROM (SELECT * FROM server_grants ORDER BY user_id, server_id)").Scan(&grants)
-	after.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sessions)
-	after.QueryRow("SELECT COUNT(*) FROM schedules").Scan(&schedules)
-	if roles != "a=admin,o=member,v=member" || sessions != 1 || schedules != 1 ||
-		grants != `o=["server.view","server.start"] v=["server.view","files.read"] v=[] v=[]` {
-		t.Fatal(roles, grants, sessions, schedules)
-	}
-	if got := pragma(t, after.DB, "foreign_keys"); got != "1" {
-		t.Fatalf("foreign_keys = %s", got)
-	}
-	if _, err := after.Exec("INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES('z','z','x','viewer',1,1)"); err == nil {
-		t.Fatal("old role accepted")
-	}
-}
-
-// Servers keep their bindings, paused sharing, and everything that refers to
-// them when the review fields and binding history go; one 0.6.0 left waiting
-// for review stays unusable until discovery settles it, and the schema ends
-// as a fresh database's does. 0.6.0's fingerprints are marked for discovery to
-// replace.
-func TestSharingPausedMigration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "servers.db")
-	before, err := open(path, Migrations[:12])
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		`INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES('a','a','x','admin',1,1),('m','m','x','member',1,1)`,
-		`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
-		`INSERT INTO logical_servers(id,host_id,external_identity,container_id,display_name,game_type,status,binding_revision,
-        binding_fingerprint,pending_fingerprint,pending_game_type,review_required,first_seen_at,last_seen_at)
-      VALUES('s','h','standalone:mc','c1','mc','minecraft','active',3,'f3',NULL,NULL,0,1,2),
-        ('p','h','standalone:p','c2','p','valheim','active',5,'f5',NULL,NULL,1,1,2),
-        ('r','h','standalone:r','c3','r','minecraft','review_required',2,'f1','f2','terraria',1,1,2),
-        ('g','h','standalone:g',NULL,'g','unknown','ambiguous',0,'',NULL,NULL,0,1,2)`,
-		`INSERT INTO server_bindings(server_id,binding_revision,container_id,binding_fingerprint,observed_at,accepted)
-      VALUES('s',3,'c1','f3',2,1),('r',2,'c3','f2',2,0)`,
-		`INSERT INTO server_grants VALUES('m','p','["server.view"]',1),('m','g','["server.view"]',1)`,
-		`INSERT INTO operations(id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at)
-      VALUES('o','s','a','start','succeeded','done','{}',3,1,1)`,
-		`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
-      VALUES('b','p','f5','/b','[]',1,'x',1,'complete')`,
-		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES('x','s','a','{}',3,1)`,
-		`INSERT INTO availability(server_id,policy_json,updated_at) VALUES('s','{}',1)`,
-		`INSERT INTO resource_samples VALUES('p',1,1,1)`,
-	} {
-		if _, err := before.Exec(statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	before.Close()
-	after := mustOpen(t, path)
-	var servers string
-	after.QueryRow(`SELECT group_concat(row, ' ') FROM (SELECT id||'='||COALESCE(container_id,'-')||','||game_type||','||status||','||
-      binding_revision||','||binding_fingerprint||','||sharing_paused||','||first_seen_at||','||last_seen_at AS row
-      FROM logical_servers ORDER BY id)`).Scan(&servers)
-	if servers != "g=-,unknown,ambiguous,0,,0,1,2 p=c2,valheim,active,5,legacy:f5,1,1,2 r=c3,minecraft,missing,2,legacy:f1,1,1,2 s=c1,minecraft,active,3,legacy:f3,0,1,2" {
-		t.Fatal(servers)
-	}
-	var references int
-	after.QueryRow(`SELECT (SELECT COUNT(*) FROM server_grants) + (SELECT COUNT(*) FROM operations) + (SELECT COUNT(*) FROM backups) +
-      (SELECT COUNT(*) FROM schedules) + (SELECT COUNT(*) FROM availability) + (SELECT COUNT(*) FROM resource_samples)`).Scan(&references)
-	if references != 7 {
-		t.Fatal(references)
-	}
-	if _, err := after.Exec("UPDATE logical_servers SET status='review_required' WHERE id='s'"); err == nil {
-		t.Fatal("review status accepted")
-	}
-	if _, err := after.Exec(`INSERT INTO operations(id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at)
-      VALUES('o2','nobody','a','start','queued','queued','{}',1,1,1)`); err == nil {
-		t.Fatal("operation for an unknown server accepted")
-	}
-	// Removing a server still removes its grants.
-	if _, err := after.Exec("DELETE FROM logical_servers WHERE id='g'"); err != nil {
-		t.Fatal(err)
-	}
-	var grants int
-	if err := after.QueryRow("SELECT COUNT(*) FROM server_grants WHERE server_id='g'").Scan(&grants); err != nil || grants != 0 {
-		t.Fatal(grants, err)
-	}
-	fresh := mustOpen(t, filepath.Join(t.TempDir(), "fresh.db"))
-	if got, want := schema(t, after.DB), schema(t, fresh.DB); got != want {
-		t.Fatalf("migrated schema differs from a fresh one:\n%s\n---\n%s", got, want)
-	}
-	for _, retired := range []string{"server_bindings", "review_required", "pending_"} {
-		if strings.Contains(schema(t, after.DB), retired) {
-			t.Fatal(retired)
-		}
-	}
-}
-
-func schema(t *testing.T, d *sql.DB) string {
-	t.Helper()
-	var text string
-	if err := d.QueryRow("SELECT group_concat(type||' '||name||' '||COALESCE(sql,''), char(10)) FROM (SELECT * FROM sqlite_schema ORDER BY name)").Scan(&text); err != nil {
-		t.Fatal(err)
-	}
-	return text
-}
-
-// Disk and memory alerts in progress and a recovery in each of its states
-// move from settings onto their servers' monitoring rows unchanged; a state
-// without a row and the old keys go, other settings stay, and the schema
-// ends as a fresh database's does.
-func TestMonitorStateMigration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "monitor.db")
-	before, err := open(path, Migrations[:13])
-	if err != nil {
-		t.Fatal(err)
-	}
-	disk := `{"checkedAt":5,"folders":[{"path":"/data","total":100,"available":5,"used":95,"measuredAt":5,"alertSince":4,"notified":true},` +
-		`{"path":"/logs","total":10,"available":1,"used":9,"measuredAt":3,"unknown":true,"alertSince":5}],"revision":3}`
-	memory := `{"alertSince":600000,"revision":3,"from":540000}`
-	recoveries := map[string]string{
-		"pending":      `{"attempts":[1000],"operationId":"o","restartedAt":1000,"pending":true,"last":"restarted","lastAt":1000,"silentSince":500,"silentRun":400}`,
-		"answered":     `{"attempts":[1000],"operationId":"o","restartedAt":1500,"last":"answered","lastAt":2000}`,
-		"not_answered": `{"attempts":[1000],"operationId":"o","restartedAt":1500,"pending":true,"last":"not_answered","lastAt":2000,"watchRun":1200}`,
-		"failed":       `{"attempts":[1000],"operationId":"o","restartedAt":1500,"last":"failed","lastAt":2000}`,
-		"skipped":      `{"operationId":"o","restartedAt":1000,"last":"skipped","lastAt":2000}`,
-		"gave_up":      `{"attempts":[1,2,3],"restartedAt":3,"last":"gave_up","lastAt":4,"silentSince":3,"silentRun":2}`,
-		"silent":       `{"silentSince":700,"silentRun":650}`,
-	}
-	statements := []string{
-		`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
-		`INSERT INTO logical_servers(id,host_id,external_identity,container_id,display_name,game_type,status,binding_revision,
-        binding_fingerprint,first_seen_at,last_seen_at) VALUES('alerts','h','standalone:alerts','c','alerts','minecraft','active',3,'f',1,2),
-        ('quiet','h','standalone:quiet','q','quiet','minecraft','active',1,'f',1,2),
-        ('unwatched','h','standalone:unwatched','u','unwatched','minecraft','active',1,'f',1,2)`,
-		`INSERT INTO availability(server_id,policy_json,outage_started_at,notified,suppressed_until,intentionally_stopped,last_state,updated_at)
-      VALUES('alerts','{"enabled":true,"recover":true}',7,1,8,0,'not_answering',9),('quiet','{"enabled":false}',NULL,0,0,1,'exited',9)`,
-		`INSERT INTO settings(key,value_json) VALUES('notifications','{}'),('monitor.disk:alerts','` + disk + `'),
-      ('monitor.memory:alerts','` + memory + `'),('monitor.disk:unwatched','{"checkedAt":1}'),('monitor.recovery:unwatched','{"last":"failed"}')`,
-	}
-	for state := range recoveries {
-		statements = append(statements,
-			`INSERT INTO logical_servers(id,host_id,external_identity,container_id,display_name,game_type,status,binding_revision,
-          binding_fingerprint,first_seen_at,last_seen_at) VALUES('`+state+`','h','standalone:`+state+`','`+state+`','x','valheim','active',1,'f',1,2)`,
-			`INSERT INTO availability(server_id,policy_json,updated_at) VALUES('`+state+`','{"enabled":true,"recover":true}',9)`,
-			`INSERT INTO settings(key,value_json) VALUES('monitor.recovery:`+state+`','`+recoveries[state]+`')`)
-	}
-	for _, statement := range statements {
-		if _, err := before.Exec(statement); err != nil {
-			t.Fatal(statement, err)
-		}
-	}
-	before.Close()
-	after := mustOpen(t, path)
-	read := func(serverID string) (row string) {
-		t.Helper()
-		if err := after.QueryRow(`SELECT policy_json||'|'||COALESCE(outage_started_at,'-')||'|'||notified||'|'||suppressed_until||'|'||
-        intentionally_stopped||'|'||COALESCE(last_state,'-')||'|'||updated_at||'|'||COALESCE(disk_json,'-')||'|'||COALESCE(memory_json,'-')||'|'||
-        COALESCE(recovery_json,'-') FROM availability WHERE server_id=?`, serverID).Scan(&row); err != nil {
-			t.Fatal(serverID, err)
-		}
-		return row
-	}
-	if got, want := read("alerts"), `{"enabled":true,"recover":true}|7|1|8|0|not_answering|9|`+disk+`|`+memory+`|-`; got != want {
-		t.Fatalf("%s\n%s", got, want)
-	}
-	if got := read("quiet"); got != `{"enabled":false}|-|0|0|1|exited|9|-|-|-` {
-		t.Fatal(got)
-	}
-	for state, recovery := range recoveries {
-		if got := read(state); got != `{"enabled":true,"recover":true}|-|0|0|0|-|9|-|-|`+recovery {
-			t.Fatal(state, got)
-		}
-	}
-	var rows int
-	after.QueryRow("SELECT COUNT(*) FROM availability").Scan(&rows)
-	var settings string
-	after.QueryRow("SELECT group_concat(key) FROM settings WHERE key NOT LIKE 'identity%'").Scan(&settings)
-	if rows != 2+len(recoveries) || settings != "notifications" {
-		t.Fatal(rows, settings)
-	}
-	fresh := mustOpen(t, filepath.Join(t.TempDir(), "fresh.db"))
-	if got, want := schema(t, after.DB), schema(t, fresh.DB); got != want {
-		t.Fatalf("migrated schema differs from a fresh one:\n%s\n---\n%s", got, want)
 	}
 }
 

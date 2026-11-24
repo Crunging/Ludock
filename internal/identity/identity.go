@@ -219,10 +219,6 @@ func BindingDigest(o Observation) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// LegacyFingerprint starts a fingerprint 0.6.0 stored, which counted more
-// than BindingDigest does.
-const LegacyFingerprint = "legacy:"
-
 // BindingFingerprint is the keyed binding fingerprint stored for a server.
 func (s *Store) BindingFingerprint(o Observation) (string, error) {
 	return s.DB.BindingFingerprint(BindingDigest(o))
@@ -463,16 +459,6 @@ func (s *Store) Apply(ctx context.Context, observations []Observation, hostID st
 				continue
 			}
 			fingerprint := fingerprints[external]
-			// The first discovery since 0.6.0 takes a server running the same
-			// game as it is now, and its backups with it.
-			legacy, isLegacy := strings.CutPrefix(server.BindingFingerprint, LegacyFingerprint)
-			if isLegacy && fingerprint != "" && server.GameType == o.GameType && server.ContainerID == o.ContainerID {
-				if _, err := tx.ExecContext(ctx, `UPDATE backups SET binding_fingerprint = ?, game_type = CASE game_type WHEN '' THEN ? ELSE game_type END
-          WHERE server_id = ? AND binding_fingerprint = ?`, fingerprint, o.GameType, server.ID, legacy); err != nil {
-					return err
-				}
-				server.BindingFingerprint = fingerprint
-			}
 			changed := server.ContainerID != o.ContainerID || server.BindingFingerprint != fingerprint
 			paused := server.SharingPaused
 			// A new game or other data folders make it a different server in
@@ -482,7 +468,7 @@ func (s *Store) Apply(ctx context.Context, observations []Observation, hostID st
 					return err
 				}
 			}
-			if !changed && !isLegacy && seenRecently && server.DisplayName == o.DisplayName && server.Status == StatusActive &&
+			if !changed && seenRecently && server.DisplayName == o.DisplayName && server.Status == StatusActive &&
 				server.GameType == o.GameType && paused == server.SharingPaused {
 				continue
 			}

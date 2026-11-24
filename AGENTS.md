@@ -43,12 +43,12 @@ htmx; the code is in `internal/`. `cmd/fakedocker` is an in-memory Docker
 Engine API for development and tests. Never point development or tests at a
 Docker daemon running real game servers.
 
-There are no users yet: don't add compatibility shims, legacy aliases, or
-migrations for old development states unless asked. The schema starts at
-version 1; add changes as new consecutive entries in
-`internal/db/migrations.go` and never edit a released one. After editing
-`.templ` files, run `go tool templ generate -path internal/web/views` and
-commit the output.
+Version 1 in `internal/db/migrations.go` is the schema 1.0 ships with; until
+1.0 is tagged it may still change in place. After that, schema changes are new
+consecutive entries, a released entry is never edited, and data written by a
+released version must keep working. Beta data is refused, never migrated.
+After editing `.templ` files, run `go tool templ generate -path
+internal/web/views` and commit the output.
 
 ## Frontend
 
