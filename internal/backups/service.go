@@ -772,7 +772,8 @@ func (s *Service) planRoots(ctx context.Context, server *servers.Context) (*Plan
 // AssertReady runs the checks that need no stop, so a backup that cannot
 // succeed never takes the server offline.
 func (s *Service) AssertReady(ctx context.Context, server *servers.Context) error {
-	if _, err := s.planRoots(ctx, server); err != nil {
+	plan, err := s.planRoots(ctx, server)
+	if err != nil {
 		return err
 	}
 	settings, err := s.ForBackup(ctx)
@@ -782,16 +783,20 @@ func (s *Service) AssertReady(ctx context.Context, server *servers.Context) erro
 	if err := s.AssertSeparateDestination(ctx, server.Observation, settings); err != nil {
 		return err
 	}
-	if err := s.Storage.AssertSpace(settings.Destination, settings.ReserveBytes, 0); err != nil {
+	smallest := smallestArchive(plan.Roots)
+	if err := s.Storage.AssertSpace(settings.Destination, settings.ReserveBytes, smallest); err != nil {
 		return err
 	}
 	// Retention makes room only after a backup is written, so backups that
-	// already fill the total limit refuse the next one once the server
-	// stops. A total that can't be read is left to that check.
+	// leave less than the smallest archive under the total limit refuse the
+	// next one once the server stops. A total that can't be read is left to
+	// that check.
 	if settings.MaxBytes > 0 {
 		if used, kept, err := s.FoundBytes(ctx); err == nil {
-			if _, err := Remaining(settings, used, kept); err != nil {
+			if remaining, err := Remaining(settings, used, kept); err != nil {
 				return err
+			} else if remaining < smallest {
+				return CapacityError(codeLimit, kept)
 			}
 		}
 	}
