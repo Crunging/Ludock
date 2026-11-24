@@ -466,8 +466,7 @@ func TestInternalErrorsLeaveTheSlotToRetry(t *testing.T) {
 // Schedule removed right after creation is not found.
 func TestScheduleRemovedAfterCreate(t *testing.T) {
 	f := setup(t)
-	// The owner's account is deleted as soon as the schedule commits, which
-	// takes the schedule with it.
+	// The schedule is deleted as soon as it commits.
 	if _, err := f.s.DB.Exec(`CREATE TRIGGER gone AFTER INSERT ON schedules BEGIN DELETE FROM schedules WHERE id = NEW.id; END`); err != nil {
 		t.Fatal(err)
 	}

@@ -260,7 +260,7 @@ func (s *Service) latestOperation(ctx context.Context, r *row) *ops.Job {
 	}
 	job, err := s.Runner.Get(ctx, r.lastOpID.String)
 	// Corrupt or unrelated history never exposes an operation's private state.
-	if err != nil || job == nil || job.ServerID != r.serverID || job.ActorID != r.ownerID || job.Input["scheduleId"] != r.id {
+	if err != nil || job == nil || job.ServerID != r.serverID || job.Input["scheduleId"] != r.id {
 		return nil
 	}
 	return job
