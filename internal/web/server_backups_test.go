@@ -209,13 +209,13 @@ func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 		t.Fatal(err)
 	}
 	backup = "/servers/" + p.server + "/backups/" + id
-	page := p.do("GET", "/servers/"+p.server+"?tab=backups", p.admin, nil, nil).Body.String()
+	page := p.do("GET", "/servers/"+p.server+"?tab=backups&keep="+id, p.admin, nil, nil).Body.String()
 	for _, want := range []string{backup + "/download", "browse=" + id, backup + "/delete"} {
 		if !strings.Contains(page, want) {
 			t.Fatal(want, page)
 		}
 	}
-	for _, offered := range []string{"can’t be shown", "restore=" + id, "keep=" + id, "backup-readiness"} {
+	for _, offered := range []string{"can’t be shown", "restore=" + id, "keep=" + id, "keep-backup", "backup-readiness"} {
 		if strings.Contains(page, offered) {
 			t.Fatal(offered, page)
 		}

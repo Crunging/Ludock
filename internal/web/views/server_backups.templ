@@ -585,7 +585,11 @@ templ BackupBrowserView(b BackupBrowser) {
 			</h2>
 			<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups") } { inPage()... }>All backups</a>
 		</div>
-		<p class="section-lede">Download a file, or put one file or folder back the way it was in this backup.</p>
+		if b.CanRestore {
+			<p class="section-lede">Download a file, or put one file or folder back the way it was in this backup.</p>
+		} else {
+			<p class="section-lede">Download a file from this backup.</p>
+		}
 		if b.Backup.FromCopy {
 			@Alert("warning", "This backup is missing or damaged in the backup folder, so Ludock is reading the second copy.")
 		}

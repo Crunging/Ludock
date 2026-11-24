@@ -76,7 +76,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 			if backup.ID == restore && restoreOffered(view, d.DiscoveryUnavailable) && b.Fits[backup.ID].Refusal == "" && !backup.Missing && !backup.CopyAway {
 				b.Restore = backup
 			}
-			if backup.ID == keep && backup.KeptAt == 0 {
+			if backup.ID == keep && backup.KeptAt == 0 && !b.Gone {
 				b.Keep = backup
 			}
 		}
