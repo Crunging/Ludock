@@ -197,7 +197,6 @@ func running(info *docker.ContainerInspect) bool {
 	return info.State.Running || info.State.Status == "running"
 }
 
-// wasRunning says the server was running when this work stopped it.
 func wasRunning(job *ops.Context) bool {
 	initial := job.Job.Recovery.InitialRunning
 	return initial != nil && *initial
