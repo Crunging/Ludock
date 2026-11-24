@@ -1290,12 +1290,6 @@ td > .cancel-form { display: block; margin-top: 6px; }
   /* A floating password field would run off the screen's edge. */
   .password-reset__manual[open] { flex-basis: 100%; }
   .password-reset__manual form { position: static; width: auto; max-width: none; margin-top: 8px; box-shadow: none; }
-  /* In one column, the account choice comes before the button that creates it. */
-  .create-user { display: flex; flex-direction: column; }
-  .create-user .form-grid { display: contents; }
-  .create-user .form-grid > * + * { margin-top: 14px; }
-  .create-user .form-grid > button { order: 1; margin-top: 18px; }
-  .create-user .admin-form-help { order: 2; }
 }
 @media (pointer: coarse) {
   .primary-btn, .secondary-btn, .console-retry, .console-pause { min-height: 44px; }
@@ -1310,6 +1304,7 @@ td > .cancel-form { display: block; margin-top: 6px; }
     content: ""; position: absolute; inset: 50% 50%; min-width: 44px; min-height: 44px; width: 100%; height: 100%; translate: -50% -50%;
   }
   .file-row__name > a, .file-row__name > button { padding-block: 11px; margin-block: -11px; }
+  .file-row__select { width: 24px; height: 24px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

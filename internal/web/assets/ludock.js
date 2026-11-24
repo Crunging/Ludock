@@ -533,7 +533,8 @@
       var opener = document.activeElement;
       dialog.addEventListener("close", function () {
         dialog.remove();
-        if (document.activeElement && document.activeElement !== document.body) return;
+        var focused = document.activeElement;
+        if (focused && focused !== document.body && focused.getClientRects().length) return;
         var menu = opener && opener.closest && opener.closest("[data-action-menu]");
         var target = opener && opener.isConnected && opener.getClientRects().length ? opener : menu && menu.isConnected && menu.querySelector(":scope > button");
         if (target) target.focus();
@@ -793,7 +794,7 @@
   document.addEventListener("htmx:finally:request", function (event) {
     var elt = event.detail.ctx.sourceElement;
     if (!stream(elt) || (elt._htmx && elt._htmx.sse)) return;
-    liveStatus(false);
+    if (!leaving) liveStatus(false);
     streamed = true;
     setTimeout(function () { htmx.trigger(elt, "live-retry"); }, 5000);
   });

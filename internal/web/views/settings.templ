@@ -200,7 +200,7 @@ templ UploadLimitForm(u UploadLimitSettings) {
 }
 
 templ LoggingForm(l LoggingSettings) {
-	<form class="stack-form settings-group" id="logging-form" hx-post="/settings/logging" hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form settings-group" id="logging-form" hx-post="/settings/logging" hx-target="this" hx-swap="outerHTML" hx-sync="this:replace">
 		<h3>Verbose logging</h3>
 		if l.Fixed {
 			<p>Ludock logs at the <strong>{ l.Level }</strong> level.</p>
@@ -270,7 +270,7 @@ templ ConnectionForm(c ConnectionSettings) {
 }
 
 templ ImageUpdateSettingsForm(u ImageUpdateSettings) {
-	<form class="stack-form" id="image-update-settings-form" hx-post="/settings/image-updates" hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form" id="image-update-settings-form" hx-post="/settings/image-updates" hx-target="this" hx-swap="outerHTML" hx-sync="this:replace">
 		<label class="check-label">
 			<input type="checkbox" id="image-update-enabled" name="enabled" value="true" checked?={ u.Enabled } aria-describedby="image-update-help" data-autosubmit/>
 			Check for newer server images
