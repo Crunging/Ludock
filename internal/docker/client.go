@@ -140,6 +140,7 @@ func (c *Client) negotiate(ctx context.Context) (string, error) {
 	}
 	var info struct{ ApiVersion, MinAPIVersion string }
 	if err := c.read(ctx, "/version", func(body io.Reader) error { return json.NewDecoder(body).Decode(&info) }); err != nil {
+		c.refuse(nil)
 		return "", err
 	}
 	minor, err := apiMinor(info.ApiVersion)
@@ -173,8 +174,8 @@ func (c *Client) refuse(err error) error {
 	return err
 }
 
-// Incompatible is the last refusal of this engine's API versions, without
-// asking Docker again. An engine upgrade replaces the socket, which restarts
+// Incompatible is the refusal of the engine's API versions from the last
+// negotiation, without asking Docker again. An engine upgrade replaces the socket, which restarts
 // Ludock.
 func (c *Client) Incompatible() error {
 	c.mu.Lock()
