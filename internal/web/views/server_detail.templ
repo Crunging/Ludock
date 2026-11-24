@@ -40,6 +40,8 @@ type ServerDetail struct {
 	ShowSchedule   bool
 	SchedulesReady bool
 	NextSchedule   *schedules.Schedule
+	// Suspended counts enabled schedules that can't run.
+	Suspended int
 	// WaitingSchedule is a run waiting for players to leave.
 	WaitingSchedule *schedules.Schedule
 	WaitingCancel   bool
@@ -412,6 +414,9 @@ templ OverviewLive(d ServerDetail) {
 							@Time(next.NextRunAt, "plain", "")
 						} else {
 							Nothing scheduled
+						}
+						if d.Suspended > 0 {
+							<span class="muted">{ map[bool]string{true: "1 schedule is", false: intText(d.Suspended) + " schedules are"}[d.Suspended == 1] } suspended</span>
 						}
 						<a class="text-link" href={ detailURL(server.ID, "tab=schedules") } { inPage()... }>Schedules</a>
 					</dd>

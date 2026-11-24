@@ -140,6 +140,7 @@ func (s *Server) schedulesView(r *http.Request, request *Request, d *views.Serve
 		} else {
 			v.Form.Input, v.Form.Revision = list[index].Input, list[index].Revision
 			v.Form.TakesOver = takesOver(request, &list[index])
+			v.Form.Suspended = list[index].NextRunUnavailableReason != ""
 			if v.Form.Input.Announcements != nil {
 				v.Form.LeadText = views.LeadText(v.Form.Input.Announcements.LeadMinutes)
 			}
@@ -248,6 +249,7 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 	form.Revision, _ = strconv.ParseInt(r.PostFormValue("revision"), 10, 64)
 	// Only the form's note depends on it.
 	form.TakesOver = r.PostFormValue("takesOver") == "true"
+	form.Suspended = r.PostFormValue("suspended") == "true"
 	latest := func() (*schedules.Schedule, error) {
 		list, err := s.App.Schedules.List(ctx, request.User(), serverID)
 		for index := range list {
@@ -266,7 +268,7 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 		}
 		if saved != nil {
 			form.Revision, form.Input.Enabled = saved.Revision, saved.Enabled
-			form.TakesOver = takesOver(request, saved)
+			form.TakesOver, form.Suspended = takesOver(request, saved), saved.NextRunUnavailableReason != ""
 		} else {
 			form.Missing = true
 		}
@@ -305,7 +307,7 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 			if current == nil {
 				form.Missing = true
 			} else {
-				form.Conflict, form.TakesOver = current, takesOver(request, current)
+				form.Conflict, form.TakesOver, form.Suspended = current, takesOver(request, current), current.NextRunUnavailableReason != ""
 			}
 		}
 		w.Header().Set("HX-Trigger", "schedules-changed")
