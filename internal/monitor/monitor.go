@@ -311,23 +311,38 @@ func (s *Service) ensureRow(ctx context.Context, serverID string) error {
 	return err
 }
 
-// SetIntentionalStop records that a stop was requested, or cleared.
+// keepAlerted forgets an outage only if it wasn't alerted: one that was ends
+// with its recovery alert, whoever brings the server back, and never alerts
+// again.
+const keepAlerted = "outage_started_at=CASE WHEN notified=1 THEN outage_started_at END"
+
+// SetIntentionalStop records that a stop was requested, which ends any
+// outage, or cleared.
 func (s *Service) SetIntentionalStop(ctx context.Context, serverID string, stopped bool) error {
 	if err := s.ensureRow(ctx, serverID); err != nil {
 		return err
 	}
-	value := 0
-	if stopped {
-		value = 1
+	set := "intentionally_stopped=1,outage_started_at=NULL,notified=0"
+	if !stopped {
+		set = "intentionally_stopped=0," + keepAlerted
 	}
-	_, err := s.DB.ExecContext(ctx, "UPDATE availability SET intentionally_stopped=?,outage_started_at=NULL,notified=0,updated_at=? WHERE server_id=?",
-		value, db.Now(), serverID)
+	_, err := s.DB.ExecContext(ctx, "UPDATE availability SET "+set+",updated_at=? WHERE server_id=?", db.Now(), serverID)
 	return err
 }
 
 // Suppress pauses outage tracking for one grace period after Ludock acted
-// on the server.
+// on the server, and starts the grace of an outage not yet alerted again.
 func (s *Service) Suppress(ctx context.Context, serverID string) error {
+	return s.suppress(ctx, serverID, keepAlerted)
+}
+
+// SuppressRecovered is Suppress after an automatic restart, which announces
+// its own outcome, so it ends the outage even if alerted.
+func (s *Service) SuppressRecovered(ctx context.Context, serverID string) error {
+	return s.suppress(ctx, serverID, "outage_started_at=NULL,notified=0")
+}
+
+func (s *Service) suppress(ctx context.Context, serverID, outage string) error {
 	if err := s.ensureRow(ctx, serverID); err != nil {
 		return err
 	}
@@ -335,7 +350,7 @@ func (s *Service) Suppress(ctx context.Context, serverID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.DB.ExecContext(ctx, "UPDATE availability SET suppressed_until=?,outage_started_at=NULL,notified=0 WHERE server_id=?",
+	_, err = s.DB.ExecContext(ctx, "UPDATE availability SET suppressed_until=?,"+outage+" WHERE server_id=?",
 		db.Now()+int64(availability.Policy.GraceSeconds)*1000, serverID)
 	return err
 }

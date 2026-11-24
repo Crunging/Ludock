@@ -527,7 +527,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 		}
 		// server is nil after a failed resolve, so the ID is kept apart.
 		serverID := server.Logical.ID
-		defer func() { j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), serverID)) }()
+		defer j.suppressAfter(ctx, job, serverID)
 		if action != servers.Start {
 			if err := j.saveWorld(ctx, job, server, assertAccess); err != nil {
 				return nil, err
@@ -562,6 +562,15 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 		}
 		return lifecycleResult(job.Job.Kind, job.Job.Recovery), nil
 	})
+}
+
+// suppressAfter pauses outage tracking once a lifecycle action ends.
+func (j *Jobs) suppressAfter(ctx context.Context, job *ops.Context, serverID string) {
+	suppress := j.Monitor.Suppress
+	if job.Job.ActorID == ops.RecoveryActor {
+		suppress = j.Monitor.SuppressRecovered
+	}
+	j.noteAvailability(suppress(context.WithoutCancel(ctx), serverID))
 }
 
 var (
@@ -644,7 +653,7 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 	if err != nil {
 		return nil, j.awaitStopDeadline(ctx, job, unsettled, err)
 	}
-	defer func() { j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID)) }()
+	defer j.suppressAfter(ctx, job, server.Logical.ID)
 	if unsettled && recovery.ContainerID == server.Container.ID {
 		deadline, initialStarted := recovery.StopRecoveryDeadlineAt, recovery.StopInitialStartedAt
 		if err := record(job, "reconciling_stop", nil); err != nil {
