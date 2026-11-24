@@ -3,6 +3,7 @@ package backups
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -191,5 +192,84 @@ func TestRetentionSpacePressure(t *testing.T) {
 	left := remaining(list, planRemovals(list, zone, nothingProtected, -1000, 100))
 	if len(left) != keepNewest+1 || left[keepNewest].ID != list[9].ID {
 		t.Fatal(left)
+	}
+}
+
+// Safety backups taken before a restore or update are counted apart: the 3
+// newest stay, they take no place among the owner's own, and space removes
+// them first, but never the newest backup or the owner's 3 newest. Backups
+// are at "MM-DD hh:mm" in January 2026 UTC; marks are r (taken before a
+// restore), kept, deleting, missing, and protected.
+func TestRetentionSafetyBackups(t *testing.T) {
+	zone := time.UTC
+	cases := []struct {
+		name       string
+		backups    []string
+		room, need int64
+		want       []string
+	}{
+		{"own, two restores, own again", []string{"01-01 12:00", "01-01 12:02 r", "01-01 12:05 r", "01-01 12:08"}, 0, 0,
+			[]string{"01-01 12:08", "01-01 12:05", "01-01 12:02", "01-01 12:00"}},
+		{"a fourth safety backup", []string{"01-01 12:00", "01-01 12:02 r", "01-01 12:05 r", "01-01 12:08", "01-01 12:10 r", "01-01 12:12 r"}, 0, 0,
+			[]string{"01-01 12:12", "01-01 12:10", "01-01 12:08", "01-01 12:05", "01-01 12:00"}},
+		// January 1's safety backup is that day's newest, but the day's place
+		// stays with the owner's backup from before it.
+		{"a day's place", []string{"01-01 09:00", "01-01 10:00 r", "01-02 01:00", "01-02 02:00", "01-02 03:00",
+			"01-02 04:00 r", "01-02 05:00 r", "01-02 06:00 r"}, 0, 0,
+			[]string{"01-02 06:00", "01-02 05:00", "01-02 04:00", "01-02 03:00", "01-02 02:00", "01-02 01:00", "01-01 09:00"}},
+		{"only safety backups", []string{"01-01 12:00 r", "01-01 12:01 r", "01-01 12:02 r", "01-01 12:03 r", "01-01 12:04 r"}, 0, 0,
+			[]string{"01-01 12:04", "01-01 12:03", "01-01 12:02"}},
+		{"only safety backups, no room", []string{"01-01 12:00 r", "01-01 12:01 r", "01-01 12:02 r", "01-01 12:03 r"}, -1000, 100,
+			[]string{"01-01 12:03"}},
+		{"short of room for one", []string{"01-01 03:00", "01-02 03:00", "01-03 03:00", "01-03 12:00 r", "01-04 03:00", "01-04 12:00 r", "01-05 03:00"}, 0, 10,
+			[]string{"01-05 03:00", "01-04 12:00", "01-04 03:00", "01-03 03:00", "01-02 03:00", "01-01 03:00"}},
+		{"no room", []string{"01-01 03:00", "01-02 03:00", "01-03 03:00", "01-03 12:00 r", "01-04 03:00", "01-05 03:00", "01-05 12:00 r"}, -1000, 100,
+			[]string{"01-05 12:00", "01-05 03:00", "01-04 03:00", "01-03 03:00"}},
+		{"no room, the newest a safety backup", []string{"01-01 03:00", "01-01 04:00 r", "01-01 05:00 r"}, -1000, 100,
+			[]string{"01-01 05:00", "01-01 03:00"}},
+		{"kept, deleting, missing, and protected", []string{"01-01 12:00 protected", "01-01 12:01 r", "01-01 12:02", "01-01 12:03 r deleting",
+			"01-01 12:04 r", "01-01 12:05 r", "01-01 12:06", "01-01 12:07", "01-01 12:08 r missing", "01-01 12:09 r kept",
+			"01-01 12:10 kept", "01-01 12:11"}, 0, 0,
+			[]string{"01-01 12:11", "01-01 12:10", "01-01 12:09", "01-01 12:08", "01-01 12:07", "01-01 12:06", "01-01 12:05",
+				"01-01 12:04", "01-01 12:03", "01-01 12:01", "01-01 12:00"}},
+		{"kept, deleting, missing, and protected, no room", []string{"01-01 12:00 protected", "01-01 12:01 r", "01-01 12:02", "01-01 12:03 r deleting",
+			"01-01 12:04 r", "01-01 12:05 r", "01-01 12:06", "01-01 12:07", "01-01 12:08 r missing", "01-01 12:09 r kept",
+			"01-01 12:10 kept", "01-01 12:11"}, -1000, 100,
+			[]string{"01-01 12:11", "01-01 12:10", "01-01 12:09", "01-01 12:08", "01-01 12:07", "01-01 12:06", "01-01 12:03", "01-01 12:00"}},
+	}
+	for _, c := range cases {
+		var list []Backup
+		protectedIDs := map[string]bool{}
+		for _, line := range c.backups {
+			fields := strings.Fields(line)
+			at, err := time.ParseInLocation("2006-01-02 15:04", "2026-"+fields[0]+" "+fields[1], zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			backup := Backup{ID: fields[0] + " " + fields[1], CreatedAt: at.UnixMilli(), Size: 10, State: "complete"}
+			for _, mark := range fields[2:] {
+				switch mark {
+				case "r":
+					backup.Reason = "restore"
+				case "kept":
+					backup.KeptAt = 1
+				case "deleting":
+					backup.State = "deleting"
+				case "missing":
+					backup.Missing = true
+				case "protected":
+					protectedIDs[backup.ID] = true
+				}
+			}
+			list = append(list, backup)
+		}
+		slices.SortFunc(list, func(a, b Backup) int { return int(b.CreatedAt - a.CreatedAt) })
+		var got []string
+		for _, backup := range remaining(list, planRemovals(list, zone, func(id string) bool { return protectedIDs[id] }, c.room, c.need)) {
+			got = append(got, backup.ID)
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: kept %v", c.name, got)
+		}
 	}
 }
