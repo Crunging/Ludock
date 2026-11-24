@@ -82,7 +82,7 @@ var fileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
 // already there. It leaves the reserve free, and once ctx ends it stops and
 // never publishes; progress is called after each write.
 func (s *Storage) CopyFile(ctx context.Context, source io.Reader, directory, name string, size int64, checksum string,
-	reserve int64, progress func()) error {
+	reserve int64, progress func(), modified time.Time) error {
 	if !fileName.MatchString(name) || strings.HasSuffix(name, ".partial") {
 		return fail("INVALID_REQUEST", "Invalid file name.")
 	}
@@ -136,6 +136,12 @@ func (s *Storage) CopyFile(ctx context.Context, source io.Reader, directory, nam
 	}
 	if written != size || sum != checksum {
 		return errCopySource
+	}
+	// A copy keeps its backup's time, so the newest file in either folder is
+	// the newest backup. Best effort: some network folders refuse it.
+	if !modified.IsZero() {
+		stamp := unix.NsecToTimeval(modified.UnixNano())
+		unix.Futimes(fd, []unix.Timeval{stamp, stamp})
 	}
 	if file.Sync() != nil {
 		return errCopyFailed
@@ -632,7 +638,8 @@ func (s *Service) makeCopy(ctx context.Context, backup *Backup, reserve int64) e
 			return errCopySource
 		}
 		defer source.Close()
-		return s.Storage.CopyFile(ctx, source, backup.copyDestination, backup.ID+".tar", backup.Size, backup.Checksum, reserve, progress)
+		return s.Storage.CopyFile(ctx, source, backup.copyDestination, backup.ID+".tar", backup.Size, backup.Checksum, reserve, progress,
+			time.UnixMilli(backup.CreatedAt))
 	})
 }
 

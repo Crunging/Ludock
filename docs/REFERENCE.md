@@ -551,8 +551,9 @@ docker run --rm -v <volume or folder>:/target -v "$PWD/backup.tar:/backup.tar:ro
 ```
 
 In the backup folder itself, each archive is `<id>.tar`. `ls -lt` lists the
-newest first, and `tar -tf` shows which game's files one holds, which tells
-servers of different games apart. Files starting `ludock-data-` are
+newest first (a second copy is dated as its backup, not when it was copied),
+and `tar -tf` shows which game's files one holds, which tells servers of
+different games apart. Files starting `ludock-data-` are
 [Ludock's own data](#ludocks-own-data), not game backups.
 
 ### Recover an administrator account
