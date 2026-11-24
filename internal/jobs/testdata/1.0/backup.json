@@ -1,0 +1,18 @@
+{
+  "id": "1af40def-035e-4343-943c-fbe3b685657c",
+  "size": 22016,
+  "checksum": "3098cd153c2a523ba60f057eb22edeba1eebc071d444a2a03eb8427192ac83bb",
+  "dataFolder": "/var/tmp/ludock-1.0/docker/data/minecraft",
+  "files": {
+    "eula.txt": "ee27072e4a23e088522f740ddaab0c7c4145c186969e90a86254faa3a5ec5ce6",
+    "logs/": "",
+    "ops.json": "2ed87ee25049f20cc2906f7962a4f77e3ecec515bce194d86ba79342041e3d1d",
+    "plugins/": "",
+    "server.properties": "72eddb3aafa48ae45eab89712e1414fe979d8f4df4adc3fe0c526592f42b5c89",
+    "whitelist.json": "084ce5a83a52de71c5dfcb2d0427562a85dec667adf38e59baed577fe1fa71d4",
+    "world/": "",
+    "world/level.dat": "f2b9f8d316f5ba16351a4c232dffe37fb51066d19ee0ff647c8395287edbb04e",
+    "world_nether/": "",
+    "world_the_end/": ""
+  }
+}
