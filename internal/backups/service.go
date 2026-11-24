@@ -778,6 +778,16 @@ func (s *Service) AssertReady(ctx context.Context, server *servers.Context) erro
 	if err := s.Storage.AssertSpace(settings.Destination, settings.ReserveBytes, 0); err != nil {
 		return err
 	}
+	// Retention makes room only after a backup is written, so backups that
+	// already fill the total limit refuse the next one once the server
+	// stops. A total that can't be read is left to that check.
+	if settings.MaxBytes > 0 {
+		if used, kept, err := s.FoundBytes(ctx); err == nil {
+			if _, err := Remaining(settings, used, kept); err != nil {
+				return err
+			}
+		}
+	}
 	return s.AssertNoOtherWriters(ctx, server, "")
 }
 
