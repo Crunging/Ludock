@@ -29,7 +29,7 @@ func AssertRunningForBackupRestart(state string) error {
 }
 
 // runBackupRestart restarts with a backup taken while the server is
-// stopped, starting it once.
+// stopped, starting it once if it was running when Ludock stopped it.
 func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[string]any, error) {
 	server, err := j.resolve(ctx, job, authz.ServerRestart, true)
 	if err != nil {
@@ -88,6 +88,11 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			}
 			if err := job.Progress("backup_complete", func(r *ops.Recovery) { r.BackupID = backup.ID }, nil); err != nil {
 				return nil, err
+			}
+			// One stopped outside Ludock after the check above stays stopped,
+			// as its owner left it.
+			if initial := job.Job.Recovery.InitialRunning; initial == nil || !*initial {
+				return withSave(job, map[string]any{"action": "restart", "backupId": backup.ID, "guidance": stoppedElsewhere}), nil
 			}
 			selected, err := j.resolve(ctx, job, authz.ServerRestart, true)
 			if err != nil {
@@ -148,13 +153,22 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[
 		return nil, err
 	}
 	result := map[string]any{"action": "restart"}
+	running := *job.Job.Recovery.InitialRunning
+	switch {
+	case completed && !running:
+		result["guidance"] = stoppedElsewhere
+	case !completed && running:
+		result["guidance"] = "Ludock restarted before the backup finished, so there’s no new backup. The server was started again."
+	case !completed:
+		result["guidance"] = "Ludock restarted before the backup finished, so there’s no new backup. Something outside Ludock had stopped the server before the backup, so Ludock didn’t start it."
+	}
 	if completed {
 		result["backupId"] = job.Job.Recovery.BackupID
-	} else {
-		result["guidance"] = "Ludock restarted before the backup finished, so there’s no new backup. The server was started again."
 	}
 	return withSave(job, result), nil
 }
+
+const stoppedElsewhere = "Something outside Ludock stopped the server before the restart did, so Ludock backed it up and left it stopped."
 
 // recoverUpdate reconciles an interrupted update. Once it began swapping
 // containers, the swap is settled first: undone before the original's
