@@ -169,12 +169,11 @@ type Access struct {
 	signature string
 	startedAt string
 	// created is when the helper started; its idle command exits after
-	// helperLife.
+	// helperLife, so it is reused only while that leaves the longest command,
+	// 30 minutes, time to finish.
 	created time.Time
 }
 
-// helperLife is how long a helper's idle command runs. A helper is reused
-// only while that leaves the longest command, 30 minutes, time to finish.
 const helperLife = 35 * time.Minute
 
 // Cleanup removes the helper and its validator. retry keeps trying until
@@ -363,7 +362,7 @@ func (s *Service) acquireIdle(ctx context.Context, target Target, root Root, rea
 	s.mu.Unlock()
 	if idle != nil {
 		// Taken from the map, the helper is this caller's to reuse or remove.
-		if idle.timer.Stop() && time.Since(idle.access.created) < helperLife-31*time.Minute && s.reusable(ctx, target, root, idle.access) {
+		if idle.timer.Stop() && time.Since(idle.access.created) < helperLife-33*time.Minute && s.reusable(ctx, target, root, idle.access, !readOnly) {
 			idle.access.assertAccess = assertAccess
 			return idle.access, s.idleReleaser(key, idle.access, readOnly), nil
 		}
@@ -383,10 +382,16 @@ func (s *Service) idleReleaser(key string, access *Access, readOnly bool) func(o
 	return s.releaserFor(key, access, writerIdle)
 }
 
-func (s *Service) reusable(ctx context.Context, target Target, root Root, access *Access) bool {
+// reusable reports whether a kept helper still has the game's own mounts.
+// A host folder replaced while the game is stopped changes nothing Docker
+// shows, so a writable helper is reused only while the game runs: a running
+// game keeps the folder it started with until a restart, which changes
+// StartedAt.
+func (s *Service) reusable(ctx context.Context, target Target, root Root, access *Access, writable bool) bool {
 	inspection, err := s.Docker.Inspect(ctx, target.ContainerID)
 	if err != nil || inspection.ID != target.ContainerID || strings.TrimPrefix(inspection.Name, "/") != target.Name ||
-		signature(inspection) != access.signature || inspection.State.StartedAt != access.startedAt {
+		signature(inspection) != access.signature || inspection.State.StartedAt != access.startedAt ||
+		(writable && !inspection.State.Running) {
 		return false
 	}
 	// A helper that can't be confirmed is replaced; Acquire reports why.

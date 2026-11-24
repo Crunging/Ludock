@@ -3,6 +3,7 @@ package files
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,10 +82,9 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		if space, err = access.space(ctx, root, normalized); err != nil {
 			release(false)
 		} else {
-			for index, entry := range entries {
-				if results[index] == nil && entry.Size > space.Available-helper.UploadSpare(space.Total) {
-					results[index] = uploadNoSpace(*space, entry.Size)
-				}
+			// The rest may fit once earlier files replace larger ones.
+			if index := slices.Index(results, nil); entries[index].Size > space.Available-helper.UploadSpare(space.Total) {
+				results[index] = uploadNoSpace(*space, entries[index].Size)
 			}
 		}
 	}
@@ -104,8 +104,11 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		release(true)
 		return results, nil
 	}
+	list, _ := json.Marshal(files)
+	input.trailer = binary.BigEndian.AppendUint64(nil, uint64(len(list)))
+	input.trailer = append(input.trailer, list...)
 	acks := &uploadAcks{limit: len(files)}
-	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized, Files: files},
+	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized},
 		launch.ExecOptions{Input: input, Stdout: acks})
 	// Exec can return while its input is still being read; once stopped, no
 	// further trailer is handed on, so sent covers every file that may be
@@ -130,20 +133,29 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		release(true)
 		return results, nil
 	}
-	// The helper removes its staging file unless it was cut off, and answers
-	// that may be lost don't say how far it got, so every unanswered file's
-	// is removed. Cleanup has no user-controlled input and runs even after
-	// cancellation or revocation.
+	// A failed upload may still be writing, so its helper is removed before
+	// the locks are released, as for Delete. The helper removes its staging
+	// file unless it was cut off, and answers that may be lost don't say how
+	// far it got, so a fresh helper then removes every unanswered file's.
+	// Cleanup has no user-controlled input and runs even after cancellation or
+	// revocation.
+	access.Cleanup(true)
 	if len(acks.results) < len(accepted) {
-		cleanup := &Access{service: s, container: access.container, blocked: access.blocked}
-		if _, cleanupErr := cleanup.request(context.WithoutCancel(ctx), helper.FileRequest{Operation: "upload-files-cleanup",
-			Root: root.Path, Path: normalized, Files: files[len(acks.results):]}, nil, nil); cleanupErr != nil {
+		var staged []helper.UploadFile
+		for _, file := range files[len(acks.results):] {
+			staged = append(staged, helper.UploadFile{UploadID: file.UploadID})
+		}
+		settled := context.WithoutCancel(ctx)
+		cleanup, cleanupErr := s.Acquire(settled, target, root, false, nil)
+		if cleanupErr == nil {
+			_, cleanupErr = cleanup.request(settled, helper.FileRequest{Operation: "upload-files-cleanup", Root: root.Path, Path: normalized,
+				Files: staged}, nil, nil)
+			cleanup.Cleanup(cleanupErr != nil)
+		}
+		if cleanupErr != nil {
 			log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
 		}
 	}
-	// A failed upload may still be writing, so its helper is removed before
-	// the locks are released, as for Delete.
-	access.Cleanup(true)
 	return results, err
 }
 

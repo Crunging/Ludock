@@ -178,6 +178,9 @@ func manifest(names ...string) string {
 // file, and the helper is removed with it.
 func TestUploadHelperFollowsGrant(t *testing.T) {
 	p, member, root, data := uploadPages(t)
+	// A stopped game's folder could be replaced unseen, so only a running
+	// game's helper is kept.
+	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.State.Running, c.State.Status = true, "running" })
 	server := httptest.NewServer(p.handler)
 	defer server.Close()
 	send := func(body io.Reader, length int64) (int, string) {

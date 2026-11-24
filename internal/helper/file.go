@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -40,7 +41,8 @@ type FileRequest struct {
 	Mounts []string `json:"mounts,omitempty"`
 	// Reserve is the free space an unpack leaves.
 	Reserve *int64 `json:"reserve,omitempty"`
-	// Files are a batch upload's files, all in the folder Path.
+	// Files are the files of a batch upload's cleanup, all in the folder
+	// Path. The upload itself reads them from stdin.
 	Files []UploadFile `json:"files,omitempty"`
 	// Base is the helper's mount that holds Root. A backup, and the mounts
 	// check, refuse any other mount at or below Root or between them.
@@ -737,7 +739,21 @@ type UploadResult struct {
 // follow the previous one's. A file that fails is skipped in step and
 // reported; only a broken stream ends the batch, and each line is flushed
 // once its file is committed or refused.
-func (h *fileHelper) uploadFiles(root, folder fd, relative string) error {
+func (h *fileHelper) uploadFiles(relative string) error {
+	// The files are listed on stdin, ahead of their bodies, since a long list
+	// could pass an argument's size limit: its length, then its JSON.
+	var length [8]byte
+	if _, err := io.ReadFull(h.stdin, length[:]); err != nil {
+		return errUploadStream
+	}
+	size := binary.BigEndian.Uint64(length[:])
+	if size > 4<<20 {
+		return errUploadStream
+	}
+	list := make([]byte, size)
+	if _, err := io.ReadFull(h.stdin, list); err != nil || json.Unmarshal(list, &h.request.Files) != nil {
+		return errUploadStream
+	}
 	for _, file := range h.request.Files {
 		if file.Size < 0 || file.Size > 1<<53-1 {
 			return errors.New("invalid upload size")
@@ -746,22 +762,24 @@ func (h *fileHelper) uploadFiles(root, folder fd, relative string) error {
 	h.buffer = make([]byte, 64*1024)
 	for _, file := range h.request.Files {
 		h.part = nil
+		opened := len(h.t.open)
 		err := h.check(path.Join(relative, file.Name), false)
 		if parts, partsErr := ownParts(file.Name); err == nil && (partsErr != nil || len(parts) != 1 || parts[0] != file.Name) {
 			err = errUnsafe
 		}
-		// The folder is found again for each file, as for a single upload, in
-		// case it was moved meanwhile.
-		current := folder
+		// The root and folder are found again for each file, as for a single
+		// upload, in case either was moved meanwhile.
+		var folder fd
+		if err == nil {
+			folder, err = h.pinRoot()
+		}
 		if err == nil && relative != "" {
-			current, err = h.pinDirectory(root, relative)
+			folder, err = h.pinDirectory(folder, relative)
 		}
 		if err == nil {
-			err = h.upload(current, file.Name, file.Size, file.UploadID, nil)
+			err = h.upload(folder, file.Name, file.Size, file.UploadID, nil)
 		}
-		if current != folder && current >= 0 {
-			h.t.close(current)
-		}
+		h.t.closeFrom(opened)
 		if errors.Is(err, errUploadStream) || h.uploadAborted() {
 			return errUploadStream
 		}
@@ -962,11 +980,7 @@ func (h *fileHelper) run() error {
 	case "delete-paths", "move", "download-paths":
 		return h.selection(root, operation)
 	case "upload-files":
-		folder, err := h.pinDirectory(root, relative)
-		if err != nil {
-			return err
-		}
-		return h.uploadFiles(root, folder, relative)
+		return h.uploadFiles(relative)
 	case "upload-files-cleanup":
 		folder, err := h.pinDirectory(root, relative)
 		if err != nil {
