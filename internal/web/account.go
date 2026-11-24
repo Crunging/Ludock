@@ -124,6 +124,10 @@ func (s *Server) beginTwoFactor(w http.ResponseWriter, r *http.Request, request 
 	s.accountResult(w, r, request, err, func(view *views.AccountView) { view.TwoFactor.Enrollment = enrollment })
 }
 
+func (s *Server) cancelTwoFactor(w http.ResponseWriter, r *http.Request, request *Request) {
+	s.accountResult(w, r, request, s.Auth.CancelTwoFactor(r.Context(), request.Principal), nil)
+}
+
 // enableTwoFactor replaces the session like a password change, and shows the
 // recovery codes on the page it returns: they can't be fetched again.
 func (s *Server) enableTwoFactor(w http.ResponseWriter, r *http.Request, request *Request) {

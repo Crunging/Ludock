@@ -70,7 +70,7 @@ test.describe("a game that hangs while Ludock restarts", () => {
     const attention = page.locator("#attention");
     await expect(attention).toContainText("Game not answering", { timeout: 90_000 });
     await openServer(page, "valheim");
-    await expect(page.locator("#availability-title + p")).toHaveText("The server is down.");
+    await expect(page.locator("#availability-title + p")).toHaveText("The game isn’t answering.");
     await expect(page.getByRole("region", { name: "Monitoring" }).locator(".metadata-list")).toContainText("Running, but the game isn’t answering");
 
     const saved = page.waitForResponse((response) => response.url().endsWith("/availability"));

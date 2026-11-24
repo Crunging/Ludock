@@ -73,7 +73,12 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 		if list.State != "" && list.State != "all" && view.State != list.State {
 			continue
 		}
-		if !strings.Contains(strings.ToLower(view.DisplayName+" "+view.GameName+" "+view.GameType+" "+view.Image), search) {
+		searched := view.DisplayName + " " + view.GameName + " " + view.GameType
+		// Members never see an image, so they can't search by one either.
+		if list.Admin {
+			searched += " " + view.Image
+		}
+		if !strings.Contains(strings.ToLower(searched), search) {
 			continue
 		}
 		row := s.serverRow(r, request, view, list.ShowBackup, list.DiscoveryUnavailable)

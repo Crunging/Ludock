@@ -16,6 +16,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /account/password", s.authed(s.changePassword))
 	m.HandleFunc("POST /account/sessions/{id}/revoke", s.authed(s.revokeSession))
 	m.HandleFunc("POST /account/two-factor/setup", s.authed(s.beginTwoFactor))
+	m.HandleFunc("POST /account/two-factor/cancel", s.authed(s.cancelTwoFactor))
 	m.HandleFunc("POST /account/two-factor/enable", s.authed(s.enableTwoFactor))
 	m.HandleFunc("POST /account/two-factor/disable", s.authed(s.disableTwoFactor))
 	m.HandleFunc("GET /servers/{id}", s.authed(s.serverDetail))

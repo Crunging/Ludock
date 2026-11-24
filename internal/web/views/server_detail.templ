@@ -574,10 +574,19 @@ func describeAvailability(a *monitor.Availability, paused bool, now int64) avail
 	case suppressed:
 		result.Status = "Paused briefly after a restart or stop."
 	case result.OutageSince != 0:
-		if now-result.OutageSince < int64(policy.GraceSeconds)*1000 {
-			result.Status = "The server looks down. Waiting a moment before alerting, in case it comes back."
-		} else {
+		waiting := now-result.OutageSince < int64(policy.GraceSeconds)*1000
+		switch {
+		case state.LastState == monitor.NotAnswering:
+			result.Status = "The game isn’t answering."
+		case state.LastState == monitor.DockerUnavailable:
+			result.Status = "Ludock can’t check the server."
+		case waiting:
+			result.Status = "The server looks down."
+		default:
 			result.Status = "The server is down."
+		}
+		if waiting {
+			result.Status += " Waiting a moment before alerting, in case it comes back."
 		}
 	case state.LastState == "":
 		result.Status = "Checking it for the first time."
@@ -601,6 +610,8 @@ templ AvailabilityStatus(d ServerDetail) {
 				<dd>
 					if a.State.LastState == monitor.NotAnswering {
 						Running, but the game isn’t answering
+					} else if a.State.LastState == monitor.DockerUnavailable {
+						Unknown: Ludock can’t reach Docker
 					} else if a.State.LastState != "" {
 						{ Capitalize(a.State.LastState) }
 					} else {
@@ -628,7 +639,7 @@ templ AvailabilityStatus(d ServerDetail) {
 		}
 		if described.OutageSince != 0 {
 			<p class="section-note">
-				if a.State.LastState == "docker_unavailable" {
+				if a.State.LastState == monitor.DockerUnavailable {
 					Ludock can’t reach Docker to check this server.
 					if d.Admin {
 						<a class="text-link" href="/settings/system">Check the connection</a>

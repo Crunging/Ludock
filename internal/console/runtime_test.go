@@ -336,7 +336,10 @@ func TestSevenDaysConsolePassword(t *testing.T) {
 				c.Files = nil
 			}
 		})
-		if _, _, _, err := resolveTarget(t, runtime, target, adapter); err == nil || !strings.Contains(err.Error(), "could not read the console password") {
+		// Shown as it is, and what a warning waits out while the image
+		// writes the file.
+		_, _, _, err := resolveTarget(t, runtime, target, adapter)
+		if public, ok := apperr.As(err); !ok || public.Code != PasswordUnreadable || !strings.Contains(err.Error(), "could not read the console password") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

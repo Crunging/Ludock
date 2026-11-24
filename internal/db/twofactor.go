@@ -115,6 +115,12 @@ func (d *DB) SetPendingTwoFactor(ctx context.Context, userID, sealed string) err
 	return nil
 }
 
+// ClearPendingTwoFactor drops a secret the account was setting up.
+func (d *DB) ClearPendingTwoFactor(ctx context.Context, userID string) error {
+	_, err := d.ExecContext(ctx, "UPDATE users SET totp_pending = NULL WHERE id = ? AND totp_secret IS NULL", userID)
+	return err
+}
+
 // TwoFactorChange turns two-factor sign-in on or off for the signed-in
 // account whose password was just verified.
 type TwoFactorChange struct {
