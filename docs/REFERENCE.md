@@ -181,7 +181,7 @@ services:
 | `ludock.console.password-env` | The **name** of the container's environment variable that holds the console password, never the password |
 | `ludock.query` | `minecraft-ping` or `a2s`; `disabled` or `none` turns the status check off |
 | `ludock.query.port` | The status check port inside the container |
-| `ludock.files` | Comma-separated container folders for files and backups, such as `"/data/worlds,/data/config"`; empty turns both off |
+| `ludock.files` | Comma-separated container folders for files and backups, such as `"/data/worlds,/data/config"`; empty turns both off. A folder that holds, or is inside, one of Ludock's own folders or volumes is never offered |
 | `ludock.secret-env` | Comma-separated **names** of more environment variables to hide from logs and consoles |
 
 A `ludock.game` label alone doesn't add an unsupported image; add the
@@ -189,7 +189,9 @@ container in the panel or with `ludock.enable`. Invalid label values are
 ignored. **Settings → System → Container label problems** lists an invalid
 `ludock.enable` or `ludock.address` and incomplete Compose labels.
 Variables whose names look like credentials, such as `RCON_PASSWORD`,
-`DB_PASS`, or `API_KEY`, and passwords inside URLs are hidden already.
+`DB_PASS`, or `API_KEY`, and passwords inside URLs are hidden already. A value
+is hidden only where it's printed exactly as set; a game that changes it, such
+as by encoding or shortening it, can still show it.
 
 **Which containers Ludock manages**, in order:
 
@@ -548,9 +550,10 @@ trusted network only through an HTTPS reverse proxy, and keep port 3000 itself
 reachable only from the proxy or your own network: the example `compose.yaml`
 publishes it on every interface. The proxy must keep the
 public host name, forward the original protocol, pass WebSocket upgrades and
-server-sent events without buffering, and overwrite any client-supplied
-`X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-Port`, and
-`X-Forwarded-For` headers.
+server-sent events without buffering, overwrite any client-supplied
+`X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-Port` headers, and
+add the visitor's address at the end of `X-Forwarded-For`, on the same line
+or a line of its own.
 
 Then trust the proxy in **Settings → Advanced → Reverse proxy**, so sign-in
 limits and the session list see each visitor's own address. When you open

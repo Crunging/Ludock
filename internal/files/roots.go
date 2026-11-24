@@ -56,7 +56,36 @@ func SafeWritableDataMount(mount identity.Mount) bool {
 			return false
 		}
 	}
-	return true
+	return !sharesOwnMount(mount)
+}
+
+var ownMounts atomic.Pointer[[]identity.Mount]
+
+// SetOwnMounts records the mounts of Ludock's own container. Its data and
+// backup folders hold password hashes and keys, so no game folder that
+// overlaps them is offered.
+func SetOwnMounts(mounts []identity.Mount) {
+	mounts = slices.Clone(mounts)
+	ownMounts.Store(&mounts)
+}
+
+func sharesOwnMount(mount identity.Mount) bool {
+	own := ownMounts.Load()
+	if own == nil {
+		return false
+	}
+	source := path.Clean(mount.Source)
+	for _, other := range *own {
+		switch {
+		case mount.Type == "volume" && other.Type == "volume" && mount.Name != "" && mount.Name == other.Name:
+			return true
+		case mount.Type == "bind" && other.Type == "bind" && strings.HasPrefix(other.Source, "/"):
+			if otherSource := path.Clean(other.Source); Within(source, otherSource) || Within(otherSource, source) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var protectedPaths = []string{"/proc", "/sys", "/dev", "/run", "/var/run", "/var/lib/docker", "/var/lib/containerd",

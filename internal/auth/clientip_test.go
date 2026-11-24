@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -26,10 +27,24 @@ func TestClientIPStopsAtFirstUntrustedHop(t *testing.T) {
 		{"198.51.100.1", "172.18.1.2", "172.18.1.2"},
 		{"198.51.100.1", "2001:db8:1235::2", "2001:db8:1235::2"},
 		{"198.51.100.1", "", ""},
+		// Hops a client prepends beyond the limit don't hide its address.
+		{strings.Repeat("198.51.100.9, ", 40) + "203.0.113.1", "172.18.0.2", "203.0.113.1"},
 	} {
 		if got := r.Resolve(c.header, c.peer); got != c.want {
 			t.Errorf("Resolve(%q, %q) = %q, want %q", c.header, c.peer, got, c.want)
 		}
+	}
+}
+
+// A proxy such as HAProxy adds its own X-Forwarded-For line after the one the
+// client sent; the client's line must not pick the address.
+func TestClientIPReadsEveryForwardedLine(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "172.18.0.2:5000"
+	r.Header.Add("X-Forwarded-For", "198.51.100.9")
+	r.Header.Add("X-Forwarded-For", "203.0.113.1")
+	if got := resolver(t, "172.18.0.2").Request(r); got != "203.0.113.1" {
+		t.Fatal(got)
 	}
 }
 
