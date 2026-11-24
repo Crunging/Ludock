@@ -129,6 +129,11 @@ func (s *Server) schedulesView(r *http.Request, request *Request, d *views.Serve
 		v.CanResume[item.ID] = canRunSchedule(view, item.Input)
 		v.CanCancelWait[item.ID] = item.WaitingUntil != 0 && s.App.Schedules.CanCancelWait(r.Context(), request.User(), &item)
 	}
+	// Someone else's schedule opens as the highlighted row, with who can
+	// change it, instead of the form.
+	if index := slices.IndexFunc(list, func(item schedules.Schedule) bool { return item.ID == v.Editing }); index >= 0 && !v.Editable(list[index]) {
+		v.Selected, v.Editing, v.NotEditable = v.Editing, "", views.NotEditableText(list[index])
+	}
 	if v.Selected != "" && err == nil && !slices.ContainsFunc(list, func(item schedules.Schedule) bool { return item.ID == v.Selected }) {
 		v.SelectedMissing = true
 	}

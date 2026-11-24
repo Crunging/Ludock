@@ -117,8 +117,8 @@ func TestScheduleWarningDraftStaysOpen(t *testing.T) {
 }
 
 // A member who manages schedules sees the administrator's schedule with its
-// owner but can't change it: the page offers no edit, pause, or delete, and
-// forged requests for them change nothing.
+// owner but can't change it: the page offers no edit, pause, or delete, an
+// edit link says who can, and forged requests change nothing.
 func TestOthersSchedulesAreReadOnly(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
@@ -133,8 +133,11 @@ func TestOthersSchedulesAreReadOnly(t *testing.T) {
 	if !strings.Contains(page, "Set up by "+p.admin.User.Username) || strings.Contains(page, `id="schedule-edit-`+owned.ID+`"`) {
 		t.Fatal(page)
 	}
-	if page := p.do("GET", "/servers/"+p.server+"?tab=schedules&edit="+owned.ID, member, nil, nil).Body.String(); !strings.Contains(page, "no longer available") {
-		t.Fatal("opened another owner's schedule for editing")
+	// An edit link says whose the schedule is instead of opening it.
+	page = p.do("GET", "/servers/"+p.server+"?tab=schedules&edit="+owned.ID, member, nil, nil).Body.String()
+	if !strings.Contains(page, "Set up by admin. Only admin or an administrator can change this.") || strings.Contains(page, `name="scheduleId"`) ||
+		strings.Contains(page, "no longer available") {
+		t.Fatal(page)
 	}
 	base := "/servers/" + p.server + "/schedules/" + owned.ID
 	for path, form := range map[string]url.Values{
