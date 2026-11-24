@@ -195,6 +195,11 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 		}
 		release()
 		if err != nil {
+			// A new container removed outside Ludock needs a person.
+			if apperr.Is(err, errReplacementGone.Code) {
+				j.notifyInterrupted(ctx, job, notify.Results, "operation:"+job.Job.ID,
+					"an update was cut short by a restart, and its new container has since been removed outside Ludock. Its Activity says what is left.")
+			}
 			return nil, err
 		}
 		// Ludock stopping mid-check judged nothing: the next start does.
@@ -256,19 +261,27 @@ func (j *Jobs) finishedUpdate(ctx context.Context, job *ops.Context, started err
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, true))
 		alert("the server’s new container is stopped. Check its logs, then start it.")
 		return map[string]any{"guidance": finished + " Its new container is stopped, so the server is stopped. Check its logs, then start it."}
+	case apperr.Is(started, errReplacementRemoved.Code):
+		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, true))
+		alert("the server’s new container was then removed outside Ludock. Recreate the server through the tool that created it.")
+		return map[string]any{"guidance": finished + " Its new container was then removed outside Ludock, so the server no longer exists. Recreate it through the tool that created it."}
 	case apperr.Is(started, errReplacementRestarted.Code):
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, false))
 		alert("the server’s new container restarted right after it started. Check its logs.")
 		return map[string]any{"guidance": finished + " Its new container restarted right after it started. Check its logs."}
 	default:
-		// Not known to be stopped: outage tracking reports it if it is.
-		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, false))
-		check := "check"
+		// Not known to be stopped: outage tracking reports it if it is. A
+		// server that was stopped was only checked for its new container.
+		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, !wasRunning(job)))
+		check, what := "check", "is running"
 		if docker.Unavailable(started) {
 			check = "reach Docker to check"
 		}
-		alert("Ludock couldn’t " + check + " that the server is running. Check it.")
-		return map[string]any{"guidance": finished + " Ludock couldn’t " + check + " that its new container is running. Check the server."}
+		if !wasRunning(job) {
+			what = "exists"
+		}
+		alert("Ludock couldn’t " + check + " that the server’s new container " + what + ". Check it.")
+		return map[string]any{"guidance": finished + " Ludock couldn’t " + check + " that its new container " + what + ". Check the server."}
 	}
 }
 
@@ -547,7 +560,9 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 		return nil, err
 	}
 	if err := j.startReplacement(ctx, job); err != nil {
-		if apperr.Is(err, errReplacementDown.Code) || apperr.Is(err, errReplacementNotStarted.Code) {
+		// Reported by the update itself, so outage tracking stays quiet.
+		if apperr.Is(err, errReplacementDown.Code) || apperr.Is(err, errReplacementNotStarted.Code) ||
+			apperr.Is(err, errReplacementRemoved.Code) {
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, true))
 		}
 		return nil, err
@@ -792,37 +807,37 @@ var (
 		"The server was updated, but its new container is stopped. Check its logs, then start it.")
 	errReplacementRestarted = apperr.New("REPLACEMENT_RESTARTED", 409,
 		"The server was updated, but its new container restarted right after it started. Check its logs.")
+	errReplacementRemoved = apperr.New("REPLACEMENT_REMOVED", 409,
+		"The server was updated, but its new container was then removed outside Ludock. Recreate the server through the tool that created it.")
 )
 
 // startReplacement starts the replacement of a server that was running once
 // it took over: during the swap neither container may restart on its own,
 // so one Docker stopped meanwhile stays stopped. A start that reached Docker
 // is never repeated, and the new run must last the settle time. It returns
-// nil only when the replacement is running, or the server was stopped.
+// nil only when the replacement exists and, if the server was running, runs.
 func (j *Jobs) startReplacement(ctx context.Context, job *ops.Context) error {
 	recovery := job.Job.Recovery
 	swap, err := savedSwap(job)
-	if err != nil || swap == nil || swap.Stage != swapReplaced || !wasRunning(job) {
+	if err != nil || swap == nil || swap.Stage != swapReplaced {
 		return err
 	}
 	info, err := j.Docker.Inspect(ctx, swap.Replacement)
 	if docker.IsNotFound(err) {
-		return errReplacementNotStarted
+		return errReplacementRemoved
 	}
-	if err != nil {
+	if err != nil || !wasRunning(job) {
 		return err
 	}
 	if info.State.Running || info.State.Restarting {
+		// A run not yet seen to last, started by Ludock or by Docker's own
+		// restart policy, is watched even after the state was restored; the
+		// one already verified isn't watched twice.
+		if info.State.Restarting || info.State.StartedAt != swap.VerifiedRun {
+			return j.verifyRun(ctx, job, swap)
+		}
 		if recovery.StateRestored {
 			return nil
-		}
-		// A run not yet seen to last, started by Ludock or by Docker's own
-		// restart policy, is watched; the one verified before the swap isn't
-		// watched twice.
-		if info.State.StartedAt != swap.VerifiedRun || info.State.Restarting {
-			if err := j.survives(ctx, swap.Replacement); err != nil {
-				return err
-			}
 		}
 		return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.StateRestored = true }, nil)
 	}
@@ -851,48 +866,64 @@ func (j *Jobs) startReplacement(ctx context.Context, job *ops.Context) error {
 		return job.Progress("restarting", func(r *ops.Recovery) { r.StartRequested = true }, nil)
 	}); err != nil {
 		info, inspectErr := j.Docker.Inspect(ctx, swap.Replacement)
-		if inspectErr != nil && !docker.IsNotFound(inspectErr) {
+		if docker.IsNotFound(inspectErr) {
+			return errReplacementRemoved
+		}
+		if inspectErr != nil {
 			return inspectErr
 		}
-		if inspectErr != nil || !info.State.Running {
+		if !info.State.Running {
 			return errReplacementNotStarted
 		}
 	}
-	if err := j.survives(ctx, swap.Replacement); err != nil {
+	return j.verifyRun(ctx, job, swap)
+}
+
+// verifyRun watches the replacement's current run through the settle time,
+// then saves it as verified with the restored state.
+func (j *Jobs) verifyRun(ctx context.Context, job *ops.Context, swap *swapState) error {
+	run, err := j.survives(ctx, swap.Replacement)
+	if err != nil {
 		return err
 	}
-	return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.StateRestored = true }, nil)
+	swap.VerifiedRun = run
+	encoded, err := json.Marshal(swap)
+	if err != nil {
+		return err
+	}
+	return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.Swap, r.StateRestored = encoded, true }, nil)
 }
 
 // survives confirms a started container keeps its run through the settle
-// time, as a replacement is checked before it takes over. One that ended
-// its run but runs again, or is restarting, is not called stopped.
-func (j *Jobs) survives(ctx context.Context, id string) error {
+// time, as a replacement is checked before it takes over, and returns that
+// run's start time. One that ended its run but runs again, or is restarting,
+// is not called stopped.
+func (j *Jobs) survives(ctx context.Context, id string) (string, error) {
 	var began time.Time
 	startedAt := ""
 	for {
 		info, err := j.Docker.Inspect(ctx, id)
 		if docker.IsNotFound(err) {
-			return errReplacementDown
+			return "", errReplacementRemoved
 		}
 		if err != nil {
-			return err
+			return "", err
 		}
 		if !info.State.Running && !info.State.Restarting {
-			return errReplacementDown
+			return "", errReplacementDown
 		}
 		if startedAt == "" {
 			startedAt, began = info.State.StartedAt, time.Now()
 		}
 		if info.State.Restarting || info.State.StartedAt != startedAt {
-			return errReplacementRestarted
+			return "", errReplacementRestarted
 		}
 		if time.Since(began) >= j.replacementSettle() {
-			return nil
+			return startedAt, nil
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return "", ctx.Err()
 		case <-time.After(j.poll()):
 		}
 	}
