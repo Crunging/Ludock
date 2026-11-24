@@ -90,9 +90,10 @@ func TestAttentionListsAResultWithoutForceStopped(t *testing.T) {
 
 // A failure leaves Needs attention once the same kind of work succeeds on
 // the server later; a force-stop and an error that asks for an
-// administrator stay, and so does a failure after the success. A restore
-// whose data is settled leaves once a backup, restore or update succeeds;
-// one stopped partway, or one whose end Ludock doesn't know, stays.
+// administrator stay, even on an undone restore, and so does a failure after
+// the success. A restore whose data is settled leaves once a backup, restore
+// or update succeeds; one stopped partway, or one whose end Ludock doesn't
+// know, stays.
 func TestAttentionSettlesFailuresByALaterSuccess(t *testing.T) {
 	d := dbtest.Open(t)
 	admin := &db.SessionUser{ID: "11111111-1111-4111-8111-111111111111", Username: "owner", Role: db.RoleAdmin}
@@ -114,7 +115,7 @@ func TestAttentionSettlesFailuresByALaterSuccess(t *testing.T) {
 	}{
 		{"01", "update", "failed", "The new server stopped right after starting.", "{}", "{}"},
 		{"02", "backup", "failed", "The backup folder is full.", "{}", "{}"},
-		{"03", "restore", "interrupted", "Recovery requires administrator attention. The server has been left stopped where possible.", "{}", "{}"},
+		{"03", "restore", "interrupted", "Recovery requires administrator attention. The server has been left stopped where possible.", "{}", undone},
 		{"04", "stop", "interrupted", "Recovery requires administrator attention. The server has been left stopped where possible.", "{}", "{}"},
 		{"05", "restart", "succeeded", "", `{"forceStopped":true}`, "{}"},
 		{"13", "restart", "failed", "The server didn't start again.", `{"forceStopped":true}`, "{}"},
