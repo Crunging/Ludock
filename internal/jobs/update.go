@@ -282,6 +282,9 @@ type swapState struct {
 	// Replacement is the replacement's ID once Docker returned it.
 	Replacement   string          `json:"replacement,omitempty"`
 	RestartPolicy json.RawMessage `json:"restartPolicy,omitempty"`
+	// VerifiedRun is the start time of the replacement's run that was seen
+	// to last before it took over.
+	VerifiedRun string `json:"verifiedRun,omitempty"`
 }
 
 func (s *swapState) reached(stage string) bool {
@@ -625,7 +628,7 @@ func (j *Jobs) swap(ctx context.Context, job *ops.Context, server *servers.Conte
 				return "", errStart
 			}
 		}
-		if verification, err = j.awaitReplacement(ctx, job, capability, replacement); err != nil {
+		if verification, state.VerifiedRun, err = j.awaitReplacement(ctx, job, capability, replacement); err != nil {
 			return "", err
 		}
 	}
@@ -647,39 +650,39 @@ func (j *Jobs) swap(ctx context.Context, job *ops.Context, server *servers.Conte
 // replacement stops, restarts, or turns unhealthy. A healthcheck still starting
 // after three minutes is accepted, since a game server can take that long to
 // download its files.
-func (j *Jobs) awaitReplacement(ctx context.Context, job *ops.Context, capability authz.Capability, id string) (string, error) {
+func (j *Jobs) awaitReplacement(ctx context.Context, job *ops.Context, capability authz.Capability, id string) (verification, run string, err error) {
 	settle := j.replacementSettle()
 	began := time.Now()
 	startedAt := ""
 	for {
 		info, err := j.Docker.Inspect(ctx, id)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if startedAt == "" {
 			startedAt = info.State.StartedAt
 		}
 		if !info.State.Running || info.State.Restarting || info.State.StartedAt != startedAt {
-			return "", errReplacementStopped
+			return "", "", errReplacementStopped
 		}
 		if health := info.State.Health; health != nil && health.Status != "" && health.Status != "none" {
 			switch {
 			case health.Status == "healthy":
-				return "docker-health", nil
+				return "docker-health", startedAt, nil
 			case health.Status == "unhealthy":
-				return "", errReplacementUnhealthy
+				return "", "", errReplacementUnhealthy
 			case time.Since(began) >= 3*time.Minute:
-				return "health-pending", nil
+				return "health-pending", startedAt, nil
 			}
 		} else if time.Since(began) >= settle {
-			return "docker-state", nil
+			return "docker-state", startedAt, nil
 		}
 		if err := j.assertCapability(ctx, job, capability); err != nil {
-			return "", err
+			return "", "", err
 		}
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", "", ctx.Err()
 		case <-time.After(j.poll()):
 		}
 	}
@@ -800,10 +803,13 @@ func (j *Jobs) startReplacement(ctx context.Context, job *ops.Context) error {
 		if recovery.StateRestored {
 			return nil
 		}
-		// Running, by Ludock's start or Docker's own restart policy, but not
-		// yet seen to last.
-		if err := j.survives(ctx, swap.Replacement); err != nil {
-			return err
+		// A run not yet seen to last, started by Ludock or by Docker's own
+		// restart policy, is watched; the one verified before the swap isn't
+		// watched twice.
+		if info.State.StartedAt != swap.VerifiedRun || info.State.Restarting {
+			if err := j.survives(ctx, swap.Replacement); err != nil {
+				return err
+			}
 		}
 		return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.StateRestored = true }, nil)
 	}
