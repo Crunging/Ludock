@@ -431,8 +431,9 @@ func PalworldAnnounce(ctx context.Context, host string, port int, password, mess
 var (
 	passwordPrompt = regexp.MustCompile(`(?i)password\s*[:>]?`)
 	endsSession    = regexp.MustCompile(`(?i)'exit' to end (the )?session`)
-	// A prompt ends its line, unlike banner text such as a game's name.
-	promptLine = regexp.MustCompile(`(?im)password\s*:\s*$`)
+	// 7 Days to Die's prompt is a line of its own, unlike banner text such
+	// as a game's name.
+	promptLine = regexp.MustCompile(`(?im)^\s*(please\s+)?enter\s+(the\s+)?password\s*:\s*$`)
 	// authFailed is a console's own rejection reply, which starts its line;
 	// streamed chat or log lines that mention one do not.
 	authFailed = regexp.MustCompile(`(?im)^\s*(password\s+(is\s+)?incorrect|incorrect\s+password|invalid\s+password|authentication\s+failed|login\s+failed)`)

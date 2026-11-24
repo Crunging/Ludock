@@ -157,7 +157,7 @@ func TestTelnet(t *testing.T) {
 func TestTelnetWithoutPassword(t *testing.T) {
 	banner := "*** Connected with 7DTD server.\r\n*** Server version: V 3.4.0 (b10) Compatibility Version: V 3.4.0\r\n" +
 		"*** Dedicated server only build\r\n\r\nServer IP:   203.0.113.10\r\nServer port: 26900\r\nMax players: 8\r\n" +
-		"Game mode:   GameModeSurvival\r\nWorld:       Navezgane\r\nGame name:   No Password PvE\r\nDifficulty:  1\r\n\r\n"
+		"Game mode:   GameModeSurvival\r\nWorld:       Navezgane\r\nGame name:   No Password: PvE\r\nDifficulty:  1\r\n\r\n"
 	footer := "Press 'help' to get a list of all commands. Press 'exit' to end session.\r\n\r\n"
 	exited := make(chan string, 1)
 	host, port := listen(t, func(conn net.Conn) {
