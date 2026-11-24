@@ -16,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -31,7 +32,7 @@ func recorded(t *testing.T) (*Service, Backup, string) {
 		t.Fatal(err)
 	}
 	destination := t.TempDir()
-	s := &Service{DB: d, Storage: &Storage{Roots: destination}, Locks: locks.New()}
+	s := &Service{DB: d, Storage: &Storage{Roots: destination, Own: self.New(nil, "")}, Locks: locks.New()}
 	backup := Backup{ID: "6f9619ff-8b86-4011-b42d-00c04fc964ff", ServerID: list[0].ID, CreatedAt: 1}
 	archive := filepath.Join(destination, backup.ID+".tar")
 	if err := os.WriteFile(archive, []byte("archive"), 0o600); err != nil {
@@ -112,7 +113,7 @@ func TestRefusedDeletionWritesNothing(t *testing.T) {
 
 func TestABackupWaitsForStorageSetupUnderWay(t *testing.T) {
 	d := dbtest.Open(t)
-	s := &Service{DB: d, Storage: &Storage{Roots: t.TempDir()}, Locks: locks.New()}
+	s := &Service{DB: d, Storage: &Storage{Roots: t.TempDir(), Own: self.New(nil, "")}, Locks: locks.New()}
 	// Background setup is saving the default settings when a backup that
 	// is due at startup looks for them.
 	entered, saved := make(chan struct{}), make(chan struct{})

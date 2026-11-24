@@ -24,6 +24,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/self"
 )
 
 type copyFixture struct {
@@ -62,7 +63,7 @@ func newCopyFixture(t *testing.T) *copyFixture {
 		{Type: "bind", Source: f.main, Destination: f.main, RW: true}, {Type: "bind", Source: f.copies, Destination: f.copies, RW: true},
 		{Type: "bind", Source: f.other, Destination: f.other, RW: true}}})
 	client := docker.New(engine.Socket)
-	f.s = &Service{DB: d, Docker: client, Storage: &Storage{Docker: client, Roots: f.main + ":" + f.copies + ":" + f.other, Self: "ludock"}, Locks: locks.New()}
+	f.s = &Service{DB: d, Docker: client, Storage: &Storage{Roots: f.main + ":" + f.copies + ":" + f.other, Own: self.New(client, "ludock")}, Locks: locks.New()}
 	f.s.CopyFailed = func(_ context.Context, _ *sql.Tx, _, _, problem string) error {
 		f.failures = append(f.failures, problem)
 		return nil
@@ -122,7 +123,7 @@ func TestCopyResumesAfterRestart(t *testing.T) {
 	os.WriteFile(partial, []byte("world"), 0o600)
 	f.s.DB.Exec("UPDATE backups SET copy_attempts=1, copy_next_at=? WHERE id=?", time.Now().Add(time.Minute).UnixMilli(), backup.ID)
 
-	restarted := &Service{DB: f.s.DB, Docker: f.s.Docker, Storage: &Storage{Docker: f.s.Docker, Roots: f.s.Storage.Roots, Self: "ludock"},
+	restarted := &Service{DB: f.s.DB, Docker: f.s.Docker, Storage: &Storage{Roots: f.s.Storage.Roots, Own: self.New(f.s.Docker, "ludock")},
 		Locks: locks.New()}
 	if err := restarted.CopyDue(ctx); err != nil {
 		t.Fatal(err)
@@ -354,6 +355,8 @@ func TestChoosingTheSecondFolder(t *testing.T) {
 	f.engine.Update("ludock", func(c *fakedocker.Container) {
 		c.Mounts = append(c.Mounts, docker.MountPoint{Type: "bind", Source: f.main, Destination: alias, RW: true})
 	})
+	// A running container's mounts can't change, so this is a new Ludock.
+	f.s.Storage.Own = self.New(f.s.Docker, "ludock")
 	if err := f.s.ValidateCopyFolder(ctx, Settings{Destination: f.main, CopyTo: alias}); !apperr.Is(err, "BACKUP_COPY_OVERLAP") {
 		t.Fatal(err)
 	}
@@ -1123,7 +1126,7 @@ func TestSettingsGiveUpOnStuckFoldersAndDocker(t *testing.T) {
 			})
 			if c.docker {
 				client := docker.New(silentSocket(t))
-				f.s.Docker, f.s.Storage.Docker = client, client
+				f.s.Docker, f.s.Storage.Own = client, self.New(client, "ludock")
 			}
 			started := time.Now()
 			if c.status != "" {

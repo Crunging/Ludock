@@ -20,6 +20,7 @@ import (
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -74,7 +75,7 @@ func setup(t *testing.T) *fixture {
 	obs := identity.Observation{ContainerID: id, Name: "world", DisplayName: "World", GameType: "minecraft"}
 	list, _ := store.Reconcile(ctx, []identity.Observation{obs}, "", 0)
 	authorization := &authz.Service{DB: d, Servers: store}
-	serverService := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: &servers.Observer{Docker: docker.New(engine.Socket)}}
+	serverService := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: &servers.Observer{Docker: docker.New(engine.Socket), Own: self.New(nil, "")}}
 	f := &fixture{s: &Service{DB: d, Authz: authorization, Identity: store, Runner: &ops.Runner{DB: d, Locks: locks.New()}, Locks: locks.New(),
 		Servers: serverService}, serverID: list[0].ID, obs: obs}
 	f.grant(t, authz.ServerView, authz.ServerStart, authz.SchedulesManage)

@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/notify"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -111,7 +112,7 @@ func newChecks(t *testing.T, config string) *checksFixture {
 	store := &identity.Store{DB: d}
 	client := docker.New(engine.Socket)
 	f := &checksFixture{engine: engine, servers: &servers.Service{DB: d, Identity: store, Authz: &authz.Service{DB: d, Servers: store},
-		Observer: &servers.Observer{Docker: client}}}
+		Observer: &servers.Observer{Docker: client, Own: self.New(nil, "")}}}
 	f.checks = f.restart(config)
 	return f
 }

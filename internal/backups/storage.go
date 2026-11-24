@@ -18,6 +18,8 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/textutil"
 )
 
@@ -122,10 +124,9 @@ func (s *Storage) ApprovedRoots() []string {
 
 // Storage checks destinations against approved roots and Ludock's mounts.
 type Storage struct {
-	Docker *docker.Client
-	// Roots are approved destinations, ':'-separated; Self names Ludock's
-	// own container.
-	Roots, Self string
+	// Roots are approved destinations, ':'-separated.
+	Roots string
+	Own   *self.Container
 	// DevCopyRoot stands in for a folder mounted at CopyRoot when developing
 	// against cmd/fakedocker, which can't mount one.
 	DevCopyRoot string
@@ -271,8 +272,8 @@ func (a *Archive) Close() error {
 	return nil
 }
 
-func NewStorage(client *docker.Client, roots []string, self string) *Storage {
-	return &Storage{Docker: client, Roots: strings.Join(roots, ":"), Self: self}
+func NewStorage(roots []string, own *self.Container) *Storage {
+	return &Storage{Roots: strings.Join(roots, ":"), Own: own}
 }
 
 // ValidateSettings checks limits, the destination, and that it is a
@@ -299,24 +300,24 @@ func (s *Storage) validateFolder(ctx context.Context, folder string) (string, er
 	if unix.Access(directory, unix.W_OK|unix.X_OK) != nil {
 		return "", fail("BACKUP_DESTINATION", "Ludock can’t write to the backup folder. Check its mount and directory permissions, then save again.")
 	}
-	if !docker.ContainerIDPattern.MatchString(s.Self) {
+	if !docker.ContainerIDPattern.MatchString(s.Own.Name()) {
 		return "", fail("BACKUP_MOUNT_UNVERIFIED", "Ludock couldn’t find its own container. Set LUDOCK_SELF_CONTAINER to its container name or ID, then try again.")
 	}
-	self, err := s.Docker.Inspect(ctx, s.Self)
+	own, err := s.Own.Read(ctx)
 	if errors.Is(err, docker.ErrReadTimeout) {
 		return "", errDockerStalled
 	}
-	if err != nil {
+	if err != nil || own.Answer != self.Found {
 		return "", fail("BACKUP_MOUNT_UNVERIFIED", "Ludock couldn’t check its backup mount. Set LUDOCK_SELF_CONTAINER to its container name or ID, then try again.")
 	}
-	var mount *docker.MountPoint
-	for index := range self.Mounts {
-		entry := &self.Mounts[index]
+	var mount *identity.Mount
+	for index := range own.Mounts {
+		entry := &own.Mounts[index]
 		if within(directory, entry.Destination) && (mount == nil || len(entry.Destination) > len(mount.Destination)) {
 			mount = entry
 		}
 	}
-	if mount == nil || !mount.RW || (mount.Type != "bind" && mount.Type != "volume") {
+	if mount == nil || !mount.Writable || (mount.Type != "bind" && mount.Type != "volume") {
 		return "", fail("BACKUP_MOUNT_UNVERIFIED", "The backup folder must be a writable folder mounted into Ludock.")
 	}
 	return directory, nil

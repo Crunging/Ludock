@@ -4,13 +4,11 @@ package launch
 
 import (
 	"context"
-	"net/http"
 	"regexp"
 	"strings"
-	"sync"
 
 	"github.com/Crunging/Ludock/internal/apperr"
-	"github.com/Crunging/Ludock/internal/docker"
+	"github.com/Crunging/Ludock/internal/self"
 )
 
 var errImageUnavailable = apperr.New("HELPER_IMAGE_UNAVAILABLE", 503,
@@ -26,51 +24,35 @@ var imageID = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 // Images resolves the helper image: this deployment's exact runtime, so
 // helpers need no registry pull and get the same patches.
 type Images struct {
-	Docker *docker.Client
-	// Configured is LUDOCK_HELPER_IMAGE; Self is LUDOCK_SELF_CONTAINER or
-	// HOSTNAME.
-	Configured, Self string
-
-	mu       sync.Mutex
-	resolved string
+	// Configured is LUDOCK_HELPER_IMAGE.
+	Configured string
+	Own        *self.Container
 }
 
 // NewImages resolves helper images: configured (pinned by digest) wins,
-// else the image of Ludock's own container named self.
-func NewImages(client *docker.Client, configured, self string) *Images {
-	return &Images{Docker: client, Configured: configured, Self: self}
+// else the image of Ludock's own container.
+func NewImages(configured string, own *self.Container) *Images {
+	return &Images{Configured: configured, Own: own}
 }
 
 func (i *Images) Resolve(ctx context.Context) (string, error) {
 	if i.Configured != "" {
 		return ValidateImage(i.Configured)
 	}
-	if i.Self == "" {
-		return "", errNoHelperImage
-	}
-	i.mu.Lock()
-	resolved := i.resolved
-	i.mu.Unlock()
-	if resolved != "" {
-		return resolved, nil
-	}
-	info, err := i.Docker.Inspect(ctx, i.Self)
+	own, err := i.Own.Read(ctx)
 	if err != nil {
-		// A native run or custom hostname need not name a container. Other
-		// daemon failures stay retryable errors.
-		if docker.StatusCode(err) == http.StatusNotFound {
-			return "", errNoHelperImage
+		return "", errImageUnavailable
+	}
+	switch own.Answer {
+	case self.NotFound:
+		return "", errNoHelperImage
+	case self.Found:
+		// Config.Image may be a moving tag; only the content-addressed ID is safe.
+		if imageID.MatchString(own.Image) {
+			return own.Image, nil
 		}
-		return "", errImageUnavailable
 	}
-	// Config.Image may be a moving tag; only the content-addressed ID is safe.
-	if !imageID.MatchString(info.Image) {
-		return "", errImageUnavailable
-	}
-	i.mu.Lock()
-	i.resolved = info.Image
-	i.mu.Unlock()
-	return info.Image, nil
+	return "", errImageUnavailable
 }
 
 // Docker's reference grammar and familiar-name rules

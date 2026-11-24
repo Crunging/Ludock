@@ -14,6 +14,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/textutil"
 )
 
@@ -40,8 +41,8 @@ func Within(value, root string) bool {
 var socketSuffix = regexp.MustCompile(`(?i)\.sock$`)
 
 // SafeWritableDataMount reports a writable bind or volume that is not a
-// system path or socket.
-func SafeWritableDataMount(mount identity.Mount) bool {
+// system path or socket, and doesn't overlap one of Ludock's own mounts.
+func SafeWritableDataMount(mount identity.Mount, own self.Info) bool {
 	if !mount.Writable || (mount.Type != "bind" && mount.Type != "volume") || mount.Unresolved || !safeSubpath(mount.Subpath) {
 		return false
 	}
@@ -57,7 +58,7 @@ func SafeWritableDataMount(mount identity.Mount) bool {
 			return false
 		}
 	}
-	return !sharesOwnMount(mount)
+	return !sharesOwnMount(mount, own)
 }
 
 // safeSubpath: helpers mount a volume's subpath again, so it must stay
@@ -67,34 +68,19 @@ func safeSubpath(subpath string) bool {
 		!slices.Contains(strings.Split(path.Clean(subpath), "/"), ".."))
 }
 
-var (
-	ownMounts  atomic.Pointer[[]identity.Mount]
-	ownUnknown atomic.Bool
-)
-
-// SetOwnMounts records the mounts of Ludock's own container. Its data and
-// backup folders hold password hashes and keys, so no game folder that
-// overlaps them is offered.
-func SetOwnMounts(mounts []identity.Mount) {
-	mounts = slices.Clone(mounts)
-	ownMounts.Store(&mounts)
-	ownUnknown.Store(false)
-}
-
-// WithholdDataMounts offers no game folder at all, for when Ludock's own
-// container exists but its mounts can't be read: any folder could overlap them.
-func WithholdDataMounts() { ownUnknown.Store(true) }
-
-func sharesOwnMount(mount identity.Mount) bool {
-	if ownUnknown.Load() {
+// sharesOwnMount: Ludock's data and backup folders hold password hashes and
+// keys, so no game folder may overlap them. When Ludock is in a container
+// whose mounts it can't read, any folder could.
+func sharesOwnMount(mount identity.Mount, own self.Info) bool {
+	switch own.Answer {
+	case self.NotFound:
+		return false
+	case self.Found:
+	default:
 		return true
 	}
-	own := ownMounts.Load()
-	if own == nil {
-		return false
-	}
 	source := path.Clean(mount.Source)
-	for _, other := range *own {
+	for _, other := range own.Mounts {
 		if mount.Type == "volume" && other.Type == "volume" && mount.Name != "" && mount.Name == other.Name {
 			return true
 		}
@@ -145,7 +131,7 @@ func SensitiveSystemPath(value string) bool {
 // server files. The deepest actual mount
 // owns each path, so a label cannot bypass a read-only or sensitive nested
 // mount by naming its parent.
-func Roots(gameType string, labels map[string]string, mounts []identity.Mount) []Root {
+func Roots(gameType string, labels map[string]string, mounts []identity.Mount, own self.Info) []Root {
 	var candidates []string
 	if configured, ok := labels[games.LabelFiles]; ok {
 		for _, value := range strings.Split(configured, ",") {
@@ -158,7 +144,7 @@ func Roots(gameType string, labels map[string]string, mounts []identity.Mount) [
 		}
 		for _, mount := range mounts {
 			destination := normalizedMountPath(mount.Destination)
-			if !SafeWritableDataMount(mount) {
+			if !SafeWritableDataMount(mount, own) {
 				continue
 			}
 			if !slices.Contains(serverFiles, destination) {
@@ -181,7 +167,7 @@ func Roots(gameType string, labels map[string]string, mounts []identity.Mount) [
 		if normalized == "" || textutil.Length(normalized) > 512 || slices.Contains(paths, normalized) || SensitiveSystemPath(normalized) {
 			continue
 		}
-		if owner, ok := RootMount(normalized, mounts); !ok || !SafeWritableDataMount(owner) {
+		if owner, ok := RootMount(normalized, mounts); !ok || !SafeWritableDataMount(owner, own) {
 			continue
 		}
 		paths = append(paths, normalized)

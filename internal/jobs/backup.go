@@ -131,7 +131,7 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		}
 		backup := &backups.Backup{ID: id, ServerID: server.Logical.ID, Roots: data.Roots, GameType: server.Container.GameType, Size: size, Checksum: checksum,
 			CreatedAt: time.Now().UnixMilli(), State: "complete"}
-		if kind := job.Job.Kind; kind == "restore" || kind == "update" {
+		if kind := job.Job.Kind; kind == ops.KindRestore || kind == ops.KindUpdate {
 			backup.Reason = kind
 		}
 		if err := j.Backups.Record(ctx, *backup, server.Logical.BindingFingerprint, settings.Destination); err != nil {
@@ -203,7 +203,7 @@ func (j *Jobs) assertBackupPossible(ctx context.Context, server *servers.Context
 
 // backsUpFirst reports work that backs up before its own stop.
 func backsUpFirst(job *ops.Context) bool {
-	return job.Job.Kind == "backup" || (job.Job.Kind == "restart" && job.Job.Input["createBackup"] == true)
+	return job.Job.Kind == ops.KindBackup || (job.Job.Kind == ops.KindRestart && job.Job.Input["createBackup"] == true)
 }
 
 func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any, error) {

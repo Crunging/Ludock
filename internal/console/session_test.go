@@ -17,6 +17,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -92,7 +93,7 @@ func sessionSetup(t *testing.T, configure ...func(*fakedocker.GameOptions)) *ses
 	client := docker.New(engine.Socket)
 	store := &identity.Store{DB: d}
 	authorization := &authz.Service{DB: d, Servers: store}
-	service := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: &servers.Observer{Docker: client}}
+	service := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: &servers.Observer{Docker: client, Own: self.New(nil, "")}}
 	views, err := service.List(ctx, admin)
 	if err != nil || len(views) != 1 {
 		t.Fatal(views, err)

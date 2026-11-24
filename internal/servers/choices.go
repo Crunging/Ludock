@@ -17,6 +17,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/self"
 )
 
 // Why Ludock manages a server.
@@ -213,13 +214,13 @@ func applyChoice(info *docker.ContainerInspect, choices map[string]identity.Choi
 
 // Managed reports whether Ludock manages an inspected container, including
 // an administrator's choice.
-func (o *Observer) Managed(ctx context.Context, info *docker.ContainerInspect) bool {
+func (o *Observer) Managed(ctx context.Context, info *docker.ContainerInspect) (bool, error) {
 	choices, err := o.choices(ctx)
 	if err != nil {
-		return false
+		return false, err
 	}
 	applied, _ := applyChoice(o.ownLabels(ctx, info), choices)
-	return games.Evaluate(applied.Config.Image, applied.Config.Labels).Eligible
+	return games.Evaluate(applied.Config.Image, applied.Config.Labels).Eligible, nil
 }
 
 // Unmanaged is a container Ludock can see but doesn't manage, which an
@@ -353,7 +354,8 @@ func (o *Observer) addable(ctx context.Context, id string, choices map[string]id
 	if (reason != "" && reason != "host") || games.Evaluate(c.image, labels).Eligible {
 		return nil, errNotAddable
 	}
-	container, err := toContainer(info)
+	// An unmanaged container offers no folders, so Ludock's own isn't read.
+	container, err := toContainer(info, self.Info{})
 	if err != nil {
 		return nil, errNotAddable
 	}

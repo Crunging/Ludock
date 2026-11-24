@@ -21,6 +21,7 @@ import (
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -141,7 +142,7 @@ func gameService(t *testing.T, engine *fakedocker.Engine) (*Service, string) {
 	d := dbtest.Open(t)
 	client := docker.New(engine.Socket)
 	store := &identity.Store{DB: d}
-	observer := &servers.Observer{Docker: client}
+	observer := &servers.Observer{Docker: client, Own: self.New(nil, "")}
 	service := &servers.Service{DB: d, Identity: store, Authz: &authz.Service{DB: d, Servers: store}, Observer: observer}
 	admin := &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
 	d.CreateUser(ctx, db.UserRecord{User: db.User{ID: admin.ID, Username: admin.Username, Role: admin.Role, CreatedAt: 1}, PasswordHash: "x"})
@@ -475,7 +476,7 @@ func TestStatusQueryStandsInForTheList(t *testing.T) {
 		Labels: map[string]string{"ludock.query.port": fmt.Sprint(query)},
 		Env:    []string{"RCON_PASSWORD=secret", fmt.Sprintf("RCON_PORT=%d", rcon)}})
 	players, server := gameService(t, engine)
-	players.Source.(*GameSource).Runtime.Images = &launch.Images{Docker: players.Source.(*GameSource).Runtime.Docker, Configured: image}
+	players.Source.(*GameSource).Runtime.Images = &launch.Images{Configured: image}
 	identified, err := players.Identity.Get(ctx, server)
 	if err != nil {
 		t.Fatal(err)

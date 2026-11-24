@@ -32,6 +32,7 @@ import (
 	"github.com/Crunging/Ludock/internal/players"
 	"github.com/Crunging/Ludock/internal/resources"
 	"github.com/Crunging/Ludock/internal/schedules"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
 )
@@ -95,11 +96,12 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	table := locks.Default
 	store := &identity.Store{DB: database}
 	authorization := &authz.Service{DB: database, Servers: store}
-	observer := &servers.Observer{Docker: client, Choices: store, Self: cfg.SelfContainer}
+	own := self.New(client, cfg.SelfContainer)
+	observer := &servers.Observer{Docker: client, Choices: store, Own: own}
 	serverService := &servers.Service{DB: database, Identity: store, Authz: authorization, Observer: observer}
 	notifications := &notify.Service{DB: database}
-	images := launch.NewImages(client, cfg.HelperImage, cfg.SelfContainer)
-	storage := backups.NewStorage(client, cfg.BackupRoots, cfg.SelfContainer)
+	images := launch.NewImages(cfg.HelperImage, own)
+	storage := backups.NewStorage(cfg.BackupRoots, own)
 	storage.DevCopyRoot = cfg.DevCopyRoot
 	backupService := &backups.Service{DB: database, Storage: storage, Docker: client, Observer: observer, Locks: table,
 		Helpers: &backups.Helpers{Docker: client, Images: images, Storage: storage}}
@@ -132,7 +134,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 		Locks: table, Queue: notifications.QueueIn, Alerted: notifications.Poke, Console: console.Broadcaster{Runtime: runtime}}
 	a := &App{Config: cfg, DB: database, Docker: client, Locks: table, Identity: store, Authz: authorization,
 		Auth: auth.NewService(database, authorization, setup), ClientIP: clientIP, Advanced: settings, Observer: observer, Servers: serverService,
-		Images: images, Files: &files.Service{DB: database, Docker: client, Images: images, Managed: observer.Managed}, Backups: backupService, Runner: runner, Jobs: jobService,
+		Images: images, Files: &files.Service{DB: database, Docker: client, Images: images, Own: own, Managed: observer.Managed}, Backups: backupService, Runner: runner, Jobs: jobService,
 		Schedules: scheduleService, Monitor: monitoring, Notify: notifications, Console: runtime, Updates: updates, Checks: checks,
 		History:   &history.Service{DB: database, Authz: authorization, Identity: store},
 		Sessions:  &console.Sessions{DB: database, Authz: authorization, Identity: store, Servers: serverService, Locks: table, Runtime: runtime},

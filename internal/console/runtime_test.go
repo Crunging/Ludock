@@ -390,7 +390,7 @@ func TestStalledHelperCreate(t *testing.T) {
 	engine, runtime, id := setup(t)
 	image := "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab"
 	engine.AddImage(image)
-	runtime.Images = &launch.Images{Docker: runtime.Docker, Configured: image}
+	runtime.Images = &launch.Images{Configured: image}
 	runtime.createLimit = 200 * time.Millisecond
 	// Docker creates the helper and never answers.
 	engine.HangCreates = 1
@@ -428,7 +428,7 @@ func TestProbeUsesOneHelper(t *testing.T) {
 	engine, runtime, id := setup(t)
 	image := "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab"
 	engine.AddImage(image)
-	runtime.Images = &launch.Images{Docker: runtime.Docker, Configured: image}
+	runtime.Images = &launch.Images{Configured: image}
 	engine.Attach = func(c *fakedocker.Container, stdin *bufio.Reader, stdout func([]byte)) {
 		helper.RunNetworkConsole(stdin, writerFunc(stdout))
 	}
@@ -495,7 +495,7 @@ func TestProbeSkipsTheListTheQueryVouchesFor(t *testing.T) {
 	engine, runtime, id := setup(t)
 	image := "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab"
 	engine.AddImage(image)
-	runtime.Images = &launch.Images{Docker: runtime.Docker, Configured: image}
+	runtime.Images = &launch.Images{Configured: image}
 	engine.Attach = func(c *fakedocker.Container, stdin *bufio.Reader, stdout func([]byte)) {
 		helper.RunNetworkConsole(stdin, writerFunc(stdout))
 	}

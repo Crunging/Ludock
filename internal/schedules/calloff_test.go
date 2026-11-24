@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -288,7 +289,7 @@ func (f *fixture) withConsole(t *testing.T, labels map[string]string) func(text 
 	engine.AddContainer(fakedocker.GameOptions{Name: "console", Image: "itzg/minecraft-server", Running: true, Labels: all,
 		Env: []string{"RCON_PASSWORD=rcon-secret"}})
 	client := docker.New(engine.Socket)
-	f.s.Servers = &servers.Service{DB: f.s.DB, Identity: f.s.Identity, Authz: f.s.Authz, Observer: &servers.Observer{Docker: client}}
+	f.s.Servers = &servers.Service{DB: f.s.DB, Identity: f.s.Identity, Authz: f.s.Authz, Observer: &servers.Observer{Docker: client, Own: self.New(nil, "")}}
 	f.s.Console = console.Broadcaster{Runtime: &console.Runtime{Docker: client}}
 	if _, err := f.s.Servers.RefreshNow(ctx); err != nil {
 		t.Fatal(err)

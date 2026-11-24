@@ -17,6 +17,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/launch"
 )
 
 // seed adds a few game servers whose data lives under dir.
@@ -41,7 +42,7 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 	// on 127.0.0.1. A game with a stdin console reads its commands.
 	var stdinGames sync.Map
 	engine.Attach = func(c *fakedocker.Container, stdin *bufio.Reader, stdout func([]byte)) {
-		if c.CreateRequest.Labels["ludock.internal"] == "console-helper" {
+		if c.CreateRequest.Labels[launch.InternalLabel] == launch.ConsoleHelper {
 			helper.RunNetworkConsole(stdin, writer(stdout))
 		}
 		if game, ok := stdinGames.Load(c.ID); ok {

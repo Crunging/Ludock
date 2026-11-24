@@ -19,6 +19,7 @@ import (
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/launch"
+	"github.com/Crunging/Ludock/internal/self"
 	"golang.org/x/sys/unix"
 )
 
@@ -56,8 +57,8 @@ func setup(t *testing.T) *fixture {
 	game := engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
 		Mounts: []docker.MountPoint{{Type: "bind", Source: data, Destination: data, RW: true}}})
 	client := docker.New(engine.Socket)
-	service := &Service{Docker: client, Images: &launch.Images{Docker: client, Configured: image}}
-	roots := Roots("minecraft", nil, []identity.Mount{{Type: "bind", Source: data, Destination: data, Writable: true}})
+	service := &Service{Docker: client, Images: &launch.Images{Configured: image}, Own: self.New(nil, "")}
+	roots := Roots("minecraft", nil, []identity.Mount{{Type: "bind", Source: data, Destination: data, Writable: true}}, notInContainer)
 	if len(roots) != 1 {
 		t.Fatal(roots)
 	}
@@ -500,7 +501,7 @@ func TestFileHelperMountsOnlyTheVolumeSubpath(t *testing.T) {
 			"VolumeOptions": map[string]any{"Subpath": "worlds/a"}}}}
 	})
 	inspection, _ := client.Inspect(ctx, game)
-	roots := Roots("minecraft", nil, identity.DockerMounts(inspection))
+	roots := Roots("minecraft", nil, identity.DockerMounts(inspection), notInContainer)
 	if len(roots) != 1 {
 		t.Fatal(roots)
 	}
