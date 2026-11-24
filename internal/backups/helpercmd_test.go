@@ -1,11 +1,8 @@
 package backups
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
-	"regexp"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -18,24 +15,13 @@ import (
 	"github.com/Crunging/Ludock/internal/launch"
 )
 
-const (
-	execStart   = `^POST /v[0-9.]+/exec/[^/]+/start$`
-	execInspect = `^GET /v[0-9.]+/exec/[^/]+/json$`
-	execCreate  = `^POST /v[0-9.]+/containers/[^/]+/exec$`
-)
-
-// commandHelper is a running helper whose commands are named by their first
-// argument: "ok" prints hello, "exit N" exits N, "block" waits for release,
-// and "big" prints more than 4 MiB and then waits for release. Blocking
-// commands are announced on started.
+// commandHelper is a running helper that runs scripted commands.
 type commandHelper struct {
+	*fakedocker.Scripted
 	engine  *fakedocker.Engine
 	client  *docker.Client
 	helpers *Helpers
 	id      string
-	started chan string
-	// next lets one blocked command finish; release, closed at cleanup, all.
-	next, release chan struct{}
 }
 
 func newCommandHelper(t *testing.T) *commandHelper {
@@ -45,56 +31,10 @@ func newCommandHelper(t *testing.T) *commandHelper {
 	}
 	t.Cleanup(func() { engine.Close() })
 	client := docker.New(engine.Socket)
-	h := &commandHelper{engine: engine, client: client, helpers: &Helpers{Docker: client, pollInterval: 1},
-		id: engine.AddContainer(fakedocker.GameOptions{Name: "helper", Running: true}), started: make(chan string, 8),
-		next: make(chan struct{}), release: make(chan struct{})}
-	t.Cleanup(func() { close(h.release) })
-	engine.Exec = func(_ *fakedocker.Container, cmd []string, _ *bufio.Reader, stdout, _ func([]byte)) int {
-		switch cmd[0] {
-		case "ok":
-			stdout([]byte("hello"))
-		case "exit":
-			code, _ := strconv.Atoi(cmd[1])
-			return code
-		case "big":
-			stdout(bytes.Repeat([]byte("x"), 4*1024*1024+1))
-			h.started <- cmd[0]
-			h.wait()
-		case "block":
-			h.started <- cmd[0]
-			h.wait()
-		}
-		return 0
-	}
+	h := &commandHelper{Scripted: engine.Script(launch.MaxOutput + 1), engine: engine, client: client,
+		helpers: &Helpers{Docker: client, pollInterval: 1}, id: engine.AddContainer(fakedocker.GameOptions{Name: "helper", Running: true})}
+	t.Cleanup(func() { close(h.Release) })
 	return h
-}
-
-func (h *commandHelper) wait() {
-	select {
-	case <-h.next:
-	case <-h.release:
-	}
-}
-
-// finishOne lets a blocked command finish, unless cleanup already did.
-func (h *commandHelper) finishOne() {
-	select {
-	case h.next <- struct{}{}:
-	case <-h.release:
-	}
-}
-
-// hangStarts leaves exec starts unanswered and reports each one's arrival.
-func (h *commandHelper) hangStarts() chan struct{} {
-	arrived := make(chan struct{}, 1)
-	h.engine.Hang = func(request string) bool {
-		if regexp.MustCompile(execStart).MatchString(request) {
-			arrived <- struct{}{}
-			return true
-		}
-		return false
-	}
-	return arrived
 }
 
 func (h *commandHelper) exec(ctx context.Context, cmd []string, assertAccess func() error, limit time.Duration) ([]byte, error) {
@@ -104,9 +44,9 @@ func (h *commandHelper) exec(ctx context.Context, cmd []string, assertAccess fun
 // releaseAfter lets blocked commands finish once one has run for wait.
 func (h *commandHelper) releaseAfter(wait time.Duration) {
 	go func() {
-		<-h.started
+		<-h.Started
 		time.Sleep(wait)
-		h.finishOne()
+		h.FinishOne()
 	}()
 }
 
@@ -115,12 +55,6 @@ func (h *commandHelper) releaseAfter(wait time.Duration) {
 // Docker confirms it ended or forgot it, or its time ran out and the helper
 // is stopped: the next step writes to the same data.
 func TestExecWithinCases(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		h := newCommandHelper(t)
-		if out, err := h.exec(ctx, []string{"ok"}, nil, time.Minute); err != nil || string(out) != "hello" {
-			t.Fatal(string(out), err)
-		}
-	})
 	t.Run("non-zero exit", func(t *testing.T) {
 		h := newCommandHelper(t)
 		for _, code := range []int{2, helper.FileNameTaken} {
@@ -156,7 +90,7 @@ func TestExecWithinCases(t *testing.T) {
 	t.Run("caller cancelled while running is ignored", func(t *testing.T) {
 		h := newCommandHelper(t)
 		cancelled, cancel := context.WithCancel(ctx)
-		go func() { <-h.started; cancel(); time.Sleep(300 * time.Millisecond); h.finishOne() }()
+		go func() { <-h.Started; cancel(); time.Sleep(300 * time.Millisecond); h.FinishOne() }()
 		if _, err := h.exec(cancelled, []string{"block"}, nil, time.Minute); err != nil {
 			t.Fatal(err)
 		}
@@ -175,7 +109,7 @@ func TestExecWithinCases(t *testing.T) {
 		launch.StepLimit = 50 * time.Millisecond
 		t.Cleanup(func() { launch.StepLimit = previous })
 		h := newCommandHelper(t)
-		h.engine.AddFault(execCreate, 0, true, 1)
+		h.engine.AddFault(fakedocker.ExecCreate, 0, true, 1)
 		bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 		if _, err := h.exec(bounded, []string{"ok"}, nil, time.Minute); err != launch.ErrDockerTimeout || bounded.Err() != nil {
@@ -204,16 +138,17 @@ func TestExecWithinCases(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	// Unlike a file command's, the start goes through launch.Start.
 	t.Run("start refused", func(t *testing.T) {
 		h := newCommandHelper(t)
-		h.engine.AddFault(execStart, 500, false, 1)
+		h.engine.AddFault(fakedocker.ExecStart, 500, false, 1)
 		if _, err := h.exec(ctx, []string{"ok"}, nil, time.Minute); docker.StatusCode(err) != 500 {
 			t.Fatal(err)
 		}
 	})
 	t.Run("start answer lost waits for Docker", func(t *testing.T) {
 		h := newCommandHelper(t)
-		arrived := h.hangStarts()
+		arrived := h.engine.HangRequests(fakedocker.ExecStart)
 		var back atomic.Int64
 		go func() {
 			<-arrived
@@ -233,7 +168,7 @@ func TestExecWithinCases(t *testing.T) {
 		h := newCommandHelper(t)
 		// The fake forgets the exec as it cuts the stream, so the first
 		// inspection may already find it unknown.
-		go func() { <-h.started; h.engine.Outage(500 * time.Millisecond) }()
+		go func() { <-h.Started; h.engine.Outage(500 * time.Millisecond) }()
 		_, err := h.exec(ctx, []string{"block"}, nil, time.Minute)
 		if !apperr.Is(err, "DATA_OPERATION_FAILED") {
 			t.Fatal(err)
@@ -241,14 +176,14 @@ func TestExecWithinCases(t *testing.T) {
 	})
 	t.Run("inspection fails on Docker's side", func(t *testing.T) {
 		h := newCommandHelper(t)
-		h.engine.AddFault(execInspect, 500, false, 1)
+		h.engine.AddFault(fakedocker.ExecInspect, 500, false, 1)
 		if out, err := h.exec(ctx, []string{"ok"}, nil, time.Minute); err != nil || string(out) != "hello" {
 			t.Fatal(err)
 		}
 	})
 	t.Run("exec unknown when inspected", func(t *testing.T) {
 		h := newCommandHelper(t)
-		h.engine.AddFault(execInspect, 404, false, 1)
+		h.engine.AddFault(fakedocker.ExecInspect, 404, false, 1)
 		if _, err := h.exec(ctx, []string{"ok"}, nil, time.Minute); !apperr.Is(err, "DATA_OPERATION_FAILED") {
 			t.Fatal(err)
 		}

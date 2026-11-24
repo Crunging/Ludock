@@ -15,19 +15,26 @@ func space(percent int64) []DiskSpace {
 }
 
 // A disk alert starts at its threshold and lasts until the disk is
-// Hysteresis points below it, so a disk hovering at the line alerts once.
+// Hysteresis points below it, so a disk hovering at the line alerts once. A
+// disk exactly at the recovery line ends the alert, though 55 of 100
+// computes as 55.00000000000001.
 func TestDiskAlertHysteresis(t *testing.T) {
-	var state DiskState
-	steps := []struct {
+	type step struct {
 		percent  int64
 		alerting bool
 		ended    int
-	}{{89, false, 0}, {90, true, 0}, {89, true, 0}, {86, true, 0}, {90, true, 0}, {85, false, 1}, {89, false, 0}}
-	for index, step := range steps {
-		var ended []Folder
-		state, ended = evaluateDisk(state, space(step.percent), 90, int64(index+1))
-		if state.alerting() != step.alerting || len(ended) != step.ended {
-			t.Fatal(index, step, state, ended)
+	}
+	for threshold, steps := range map[int][]step{
+		90: {{89, false, 0}, {90, true, 0}, {89, true, 0}, {86, true, 0}, {90, true, 0}, {85, false, 1}, {89, false, 0}},
+		60: {{60, true, 0}, {55, false, 1}},
+	} {
+		var state DiskState
+		for index, step := range steps {
+			var ended []Folder
+			state, ended = evaluateDisk(state, space(step.percent), threshold, int64(index+1))
+			if state.alerting() != step.alerting || len(ended) != step.ended {
+				t.Fatal(threshold, index, step, state, ended)
+			}
 		}
 	}
 }
@@ -215,41 +222,35 @@ func addSamples(t *testing.T, s *Service, serverID string, minute int64, kib ...
 	}
 }
 
-// An alert after one minute near the limit says so in the singular.
-func TestMemoryAlertOneMinute(t *testing.T) {
-	s, events, server, _ := setupWith(t, func(policy *Policy) { policy.MemoryMinutes = 1 })
-	const minute = 10 * 60_000
-	addSamples(t, s, server.ID, minute, 950)
-	s.CheckMemory(ctx, map[string]int64{server.ID: 1000}, state("running", ""), minute)
-	if !slices.Equal(events.events, []string{"Minecraft: over 90% of its memory limit for 1 minute."}) {
-		t.Fatal(events.events)
-	}
-}
-
-// Memory alerts once a running server with a limit stays near it, and
-// recovers when it stops. A server without a limit never alerts.
+// Memory alerts once a running server with a limit stays near it for the
+// set minutes, said in the singular for one, and recovers when it stops. A
+// server without a limit never alerts.
 func TestMemoryAlert(t *testing.T) {
-	s, events, server, _ := setupWith(t, func(policy *Policy) { policy.MemoryMinutes = 2 })
-	const minute = 10 * 60_000
-	addSamples(t, s, server.ID, minute, 950, 960)
-	limits := map[string]int64{server.ID: 0}
-	s.CheckMemory(ctx, limits, state("running", ""), minute)
-	if len(events.events) != 0 {
-		t.Fatal("a server without a limit alerted", events.events)
-	}
-	limits[server.ID] = 1000
-	s.CheckMemory(ctx, limits, state("running", ""), minute)
-	s.CheckMemory(ctx, limits, state("running", ""), minute)
-	if !slices.Equal(events.events, []string{"Minecraft: over 90% of its memory limit for 2 minutes."}) {
-		t.Fatal(events.events)
-	}
-	s.CheckMemory(ctx, map[string]int64{}, nil, minute+60_000)
-	if problems, _ := s.ResourceProblems(ctx); len(problems[server.ID]) != 1 {
-		t.Fatal("a Docker outage cleared the alert", problems)
-	}
-	s.CheckMemory(ctx, map[string]int64{}, state("exited", ""), minute+60_000)
-	if len(events.events) != 2 || events.events[1] != "Minecraft: memory use is no longer near its limit." {
-		t.Fatal(events.events)
+	for minutes, alert := range map[int]string{1: "Minecraft: over 90% of its memory limit for 1 minute.",
+		2: "Minecraft: over 90% of its memory limit for 2 minutes."} {
+		s, events, server, _ := setupWith(t, func(policy *Policy) { policy.MemoryMinutes = minutes })
+		const minute = 10 * 60_000
+		addSamples(t, s, server.ID, minute, []int64{950, 960}[:minutes]...)
+		limits := map[string]int64{server.ID: 0}
+		s.CheckMemory(ctx, limits, state("running", ""), minute)
+		if len(events.events) != 0 {
+			t.Fatal("a server without a limit alerted", events.events)
+		}
+		limits[server.ID] = 1000
+		for range 2 {
+			s.CheckMemory(ctx, limits, state("running", ""), minute)
+			if !slices.Equal(events.events, []string{alert}) {
+				t.Fatal(minutes, events.events)
+			}
+		}
+		s.CheckMemory(ctx, map[string]int64{}, nil, minute+60_000)
+		if problems, _ := s.ResourceProblems(ctx); len(problems[server.ID]) != 1 {
+			t.Fatal("a Docker outage cleared the alert", problems)
+		}
+		s.CheckMemory(ctx, map[string]int64{}, state("exited", ""), minute+60_000)
+		if len(events.events) != 2 || events.events[1] != "Minecraft: memory use is no longer near its limit." {
+			t.Fatal(events.events)
+		}
 	}
 }
 
@@ -299,15 +300,6 @@ func TestPolicySavedDuringADiskMeasurement(t *testing.T) {
 	s.CheckDisk(ctx, state("running", ""), 1000, true)
 	if disk, _ := s.Disk(ctx, server.ID); len(events.events) != 0 || disk.CheckedAt != 0 {
 		t.Fatal(events.events, disk)
-	}
-}
-
-// A disk exactly at the recovery line ends the alert, though 55 of 100
-// computes as 55.00000000000001.
-func TestAlertEndsExactlyAtTheLine(t *testing.T) {
-	state, _ := evaluateDisk(DiskState{}, space(60), 60, 1)
-	if state, _ = evaluateDisk(state, space(55), 60, 2); state.alerting() {
-		t.Fatal("55% kept a 60% alert")
 	}
 }
 

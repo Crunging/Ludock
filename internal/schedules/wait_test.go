@@ -308,146 +308,115 @@ func TestWaitingRunsShareReadings(t *testing.T) {
 	}
 }
 
-// A wait set to skip never acts after its limit, even on a zero confirmed
-// only then, which counts as unknown; and a
-// stopped server busy with other work keeps the run's whole wait.
-func TestWaitEdges(t *testing.T) {
-	f := setup(t)
-	players := f.withPlayers(0, true)
-	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
-		t.Fatal(err)
-	}
-	// Found waiting by a service that has asked for no reading yet, as
-	// after a Ludock restart just before the end of the wait.
-	if _, err := f.s.DB.Exec("UPDATE schedules SET last_slot=?,last_run_at=?,last_result=?", "2026-09-09T08:00:America/Los_Angeles", due, WaitingResult); err != nil {
-		t.Fatal(err)
-	}
-	f.s.Run(ctx, due+10*minute-15_000)
-	f.s.Run(ctx, due+10*minute)
-	f.s.Run(ctx, due+10*minute+30_000)
-	if last := f.first(t, admin); f.operations(t) != 0 || !strings.HasPrefix(last.LastResult, "Skipped: Ludock couldn't tell") {
-		t.Fatal(last)
-	}
-	// Nor on a zero that settles after the end.
-	if _, err := f.s.DB.Exec("UPDATE schedules SET last_result=?,last_run_at=?", WaitingResult, due); err != nil {
-		t.Fatal(err)
-	}
-	f.s.Run(ctx, due+10*minute-20_000)
-	f.s.Run(ctx, due+10*minute+10_000)
-	if last := f.first(t, admin); f.operations(t) != 0 || last.WaitingUntil != 0 {
-		t.Fatal(last)
-	}
-
-	f.s.DB.Exec("DELETE FROM schedules")
-	players.now.Stopped = true
-	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(30, WaitSkip)); err != nil {
-		t.Fatal(err)
-	}
-	busy, err := f.s.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: admin.ID, Kind: "backup"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.s.Run(ctx, due)
-	f.s.Run(ctx, due+6*minute)
-	if last := f.first(t, admin); f.operations(t) != 1 || last.WaitingUntil != due+30*minute {
-		t.Fatal(last)
-	}
-	f.s.DB.Exec("UPDATE operations SET status='succeeded' WHERE id=?", busy.ID)
-	f.s.Run(ctx, due+7*minute)
-	if f.operations(t) != 2 {
-		t.Fatal("did not run once the other work finished")
-	}
+// waitTick is one scheduler tick of a waiting run, at at ms after its
+// scheduled time. readAt, when set, first moves the reading to that time,
+// and finishBusy first finishes the other work. The rest is what the tick
+// leaves: the number of operations, and when set, the last result (or its
+// start), the end of the wait after the scheduled time, and the reading
+// requests so far; ended is a run no longer waiting.
+type waitTick struct {
+	at                   int64
+	readAt, waitingUntil *int64
+	finishBusy, ended    bool
+	operations, checks   int
+	result, resultPrefix string
 }
 
-// The reading asked for when a wait begins never lands, so the last one,
-// an empty count from just before the scheduled time, is all Ludock has:
-// it doesn't count, since someone may have joined after it, and the wait
-// ends as unknown rather than restarting.
-func TestWaitIgnoresEarlierEmptyReading(t *testing.T) {
-	f := setup(t)
-	players := f.withPlayers(0, true)
-	players.now.ReadAt = due - 20_000
-	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(1, WaitSkip)); err != nil {
-		t.Fatal(err)
-	}
-	f.s.Run(ctx, due)
-	f.s.Run(ctx, due+45_000)
-	if first := f.first(t, admin); f.operations(t) != 0 || first.LastResult != WaitingResult {
-		t.Fatal("acted on a reading from before the wait", first)
-	}
-	// A reading taken during the wait does count.
-	players.now.ReadAt = due + 50_000
-	f.s.Run(ctx, due+55_000)
-	if f.operations(t) != 1 {
-		t.Fatal("did not act on a reading from during the wait")
-	}
-}
+func ms(value int64) *int64 { return &value }
 
-// A stopped server is busy with other work for a whole wait set to skip:
-// the run is recorded as blocked by that work, not as an unreadable player
-// count, since a stopped server has no players to count.
-func TestWaitStoppedServerBusyToTheEnd(t *testing.T) {
-	f := setup(t)
-	players := f.withPlayers(0, true)
-	players.now.Stopped = true
-	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.s.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: admin.ID, Kind: "backup"}); err != nil {
-		t.Fatal(err)
-	}
-	f.s.Run(ctx, due)
-	f.s.Run(ctx, due+10*minute)
-	f.s.Run(ctx, due+15*minute-15_000)
-	if last := f.first(t, admin); f.operations(t) != 1 || last.LastResult != "Skipped: the server wasn’t ready, or other work on it was running" {
-		t.Fatal(last.LastResult)
-	}
-}
-
-// A running server is confirmed empty during a wait set to skip, but other
-// work holds it until the wait ends, and its readings stop meanwhile. The
-// run is recorded as blocked by that work, not as an unreadable count.
-func TestWaitRunningServerBusyToTheEnd(t *testing.T) {
-	f := setup(t)
-	players := f.withPlayers(0, true)
-	players.now.ReadAt = due + 1_000
-	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.s.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: admin.ID, Kind: "backup"}); err != nil {
-		t.Fatal(err)
-	}
-	f.s.Run(ctx, due)
-	f.s.Run(ctx, due+30_000)
-	if last := f.first(t, admin); f.operations(t) != 1 || last.LastResult != WaitingResult {
-		t.Fatal(last.LastResult)
-	}
-	f.s.Run(ctx, due+10*minute)
-	if last := f.first(t, admin); f.operations(t) != 1 || last.LastResult != "Skipped: the server wasn’t ready, or other work on it was running" {
-		t.Fatal(last.LastResult)
-	}
-}
-
-// The first reading of a wait finds nobody, and someone joins before the
-// next: that reading is older than the check just asked for, so the run
-// waits for the new one instead of kicking whoever joined.
-func TestWaitNeedsReadingSinceLatestCheck(t *testing.T) {
-	f := setup(t)
-	players := f.withPlayers(0, true)
-	players.now.ReadAt = due + 2_000
-	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(10, WaitRun)); err != nil {
-		t.Fatal(err)
-	}
-	f.s.Run(ctx, due)
-	f.s.Run(ctx, due+15_000)
-	f.s.Run(ctx, due+30_000)
-	if f.operations(t) != 0 || players.checks != 2 {
-		t.Fatal("acted on a reading older than the latest check", f.operations(t), players.checks)
-	}
-	players.now.ReadAt = due + 32_000
-	f.s.Run(ctx, due+45_000)
-	if f.operations(t) != 1 {
-		t.Fatal("did not act on the reading the latest check produced")
+// Waits of servers whose players read as empty, tick by tick: when a
+// reading counts, what a wait set to skip records at its end, and how other
+// work on the server holds the run.
+func TestWaitTimelines(t *testing.T) {
+	const busyResult = "Skipped: the server wasn’t ready, or other work on it was running"
+	for _, c := range []struct {
+		name    string
+		minutes int
+		then    string
+		// readAt is when the reading was taken, after the scheduled time;
+		// unset is during any wait.
+		readAt  *int64
+		stopped bool
+		// busy is other work queued on the server first; foundWaiting
+		// starts the run as a service after a Ludock restart finds it,
+		// having asked for no reading yet.
+		busy, foundWaiting bool
+		ticks              []waitTick
+	}{
+		// A wait set to skip never acts after its limit, even on a zero
+		// confirmed only then, which counts as unknown.
+		{name: "zero confirmed at the end", minutes: 10, then: WaitSkip, foundWaiting: true, ticks: []waitTick{
+			{at: 10*minute - 15_000}, {at: 10 * minute},
+			{at: 10*minute + 30_000, resultPrefix: "Skipped: Ludock couldn't tell"}}},
+		{name: "zero settling after the end", minutes: 10, then: WaitSkip, foundWaiting: true, ticks: []waitTick{
+			{at: 10*minute - 20_000}, {at: 10*minute + 10_000, ended: true}}},
+		// The reading asked for when a wait begins never lands, so the last
+		// one, from just before the scheduled time, is all Ludock has: it
+		// doesn't count, since someone may have joined after it, and the
+		// wait goes on. One taken during the wait does count.
+		{name: "empty reading from before the wait", minutes: 1, then: WaitSkip, readAt: ms(-20_000), ticks: []waitTick{
+			{at: 0}, {at: 45_000, result: WaitingResult},
+			{at: 55_000, readAt: ms(50_000), operations: 1}}},
+		// The first reading finds nobody, and someone joins before the next:
+		// that reading is older than the check just asked for, so the run
+		// waits for the new one instead of kicking whoever joined.
+		{name: "reading older than the latest check", minutes: 10, then: WaitRun, readAt: ms(2_000), ticks: []waitTick{
+			{at: 0}, {at: 15_000}, {at: 30_000, checks: 2},
+			{at: 45_000, readAt: ms(32_000), operations: 1}}},
+		// A stopped server busy with other work keeps the run's whole wait,
+		// and the run goes ahead once the work finishes.
+		{name: "stopped server busy for a while", minutes: 30, then: WaitSkip, stopped: true, busy: true, ticks: []waitTick{
+			{at: 0, operations: 1}, {at: 6 * minute, operations: 1, waitingUntil: ms(30 * minute)},
+			{at: 7 * minute, finishBusy: true, operations: 2}}},
+		// Busy for the whole wait, the run is recorded as blocked by that
+		// work, not as an unreadable count: a stopped server has no players
+		// to count, and a running one's readings stop meanwhile.
+		{name: "stopped server busy to the end", minutes: 10, then: WaitSkip, stopped: true, busy: true, ticks: []waitTick{
+			{at: 0, operations: 1}, {at: 10 * minute, operations: 1},
+			{at: 15*minute - 15_000, operations: 1, result: busyResult}}},
+		{name: "running server busy to the end", minutes: 10, then: WaitSkip, readAt: ms(1_000), busy: true, ticks: []waitTick{
+			{at: 0, operations: 1}, {at: 30_000, operations: 1, result: WaitingResult},
+			{at: 10 * minute, operations: 1, result: busyResult}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			players := f.withPlayers(0, true)
+			players.now.Stopped = c.stopped
+			if c.readAt != nil {
+				players.now.ReadAt = due + *c.readAt
+			}
+			if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, waitingRestart(c.minutes, c.then)); err != nil {
+				t.Fatal(err)
+			}
+			if c.foundWaiting {
+				if _, err := f.s.DB.Exec("UPDATE schedules SET last_slot=?,last_run_at=?,last_result=?", "2026-09-09T08:00:America/Los_Angeles", due, WaitingResult); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var busy string
+			if c.busy {
+				operation, err := f.s.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: admin.ID, Kind: "backup"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				busy = operation.ID
+			}
+			for _, tick := range c.ticks {
+				if tick.readAt != nil {
+					players.now.ReadAt = due + *tick.readAt
+				}
+				if tick.finishBusy {
+					f.s.DB.Exec("UPDATE operations SET status='succeeded' WHERE id=?", busy)
+				}
+				f.s.Run(ctx, due+tick.at)
+				last := f.first(t, admin)
+				if f.operations(t) != tick.operations || (tick.result != "" && last.LastResult != tick.result) || !strings.HasPrefix(last.LastResult, tick.resultPrefix) ||
+					(tick.waitingUntil != nil && last.WaitingUntil != due+*tick.waitingUntil) || (tick.ended && last.WaitingUntil != 0) ||
+					(tick.checks != 0 && players.checks != tick.checks) {
+					t.Fatalf("at %d: %d operations, %d checks, %+v", tick.at, f.operations(t), players.checks, last)
+				}
+			}
+		})
 	}
 }
 
