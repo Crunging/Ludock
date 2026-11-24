@@ -11,9 +11,12 @@ import (
 
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker"
+	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/schedtime"
+	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -138,6 +141,51 @@ func TestChecklistRefusesForgedRequests(t *testing.T) {
 	}
 	if dismissed := p.web.checklistDismissed(ctx); !slices.Equal(dismissed, []string{views.ChecklistAddress}) {
 		t.Fatal(dismissed)
+	}
+}
+
+// A nightly backup whose owner was disabled is suspended: its row says so,
+// and the checklist points at it instead of adding a second beside it. A
+// server started with --rm counts among those Ludock can't back up.
+func TestChecklistBackupsSkipSuspendedSchedules(t *testing.T) {
+	t.Parallel()
+	p := newDataPages(t)
+	ctx := context.Background()
+	if err := p.app.DB.SetSetting(ctx, p.app.DB, "backups", map[string]any{"destination": t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	removed := p.engine.AddContainer(fakedocker.GameOptions{Name: "minecraft", Image: "itzg/minecraft-server",
+		Mounts: []docker.MountPoint{{Type: "volume", Name: "minecraft-data", Destination: "/data", RW: true}}})
+	p.engine.Update(removed, func(c *fakedocker.Container) { c.HostConfig = map[string]any{"AutoRemove": true} })
+	if _, err := p.app.Servers.RefreshNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	other := p.user("u-other", "other", db.RoleAdmin)
+	nightly := schedules.Input{Kind: "recurring", Action: "backup", Enabled: true, Time: "04:00", Timezone: "UTC", Days: []int{0, 1, 2, 3, 4, 5, 6}}
+	if _, err := p.app.Schedules.Create(ctx, &other.User, other.TokenHash, p.server, nightly); err != nil {
+		t.Fatal(err)
+	}
+	checklist := func() string {
+		return p.do("GET", "/fragments/checklist", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String()
+	}
+	if body := checklist(); strings.Contains(body, "Back up your servers") {
+		t.Fatal(body)
+	}
+	if err := p.app.DB.UpdateUserAccess(ctx, other.User.ID, db.RoleAdmin, true); err != nil {
+		t.Fatal(err)
+	}
+	if page := p.do("GET", "/servers/"+p.server+"?tab=schedules", p.admin, nil, nil).Body.String(); !strings.Contains(page, "Suspended") {
+		t.Fatal(page)
+	}
+	body := checklist()
+	if !strings.Contains(body, "Backups are suspended for 1 server") || !strings.Contains(body, "Ludock can’t back up 1 other server") ||
+		strings.Contains(body, `hx-post="/checklist/backups"`) {
+		t.Fatal(body)
+	}
+	values := url.Values{"_csrf": {CSRFToken(p.admin.Token)}, "timezone": {"UTC"}, "server": {p.server}}
+	p.do("POST", "/checklist/backups", p.admin, strings.NewReader(values.Encode()), map[string]string{"HX-Request": "true"})
+	if list, err := p.app.Schedules.List(ctx, &p.admin.User, p.server); err != nil || len(list) != 1 {
+		t.Fatal(list, err)
 	}
 }
 

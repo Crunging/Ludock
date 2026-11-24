@@ -40,9 +40,10 @@ type checklistState struct {
 	UnprovenReason string
 	// Unbacked names the servers a nightly backup would cover; of those,
 	// UnbackedWarn can warn players and UnbackedWait can wait for them.
-	// NoData are the IDs of servers it leaves out for having no data folders.
-	Unbacked, UnbackedIDs, NoData []string
-	UnbackedWarn, UnbackedWait    int
+	// NoData are the IDs of servers it can't back up. Suspended are the IDs
+	// of servers whose only backup schedules are suspended.
+	Unbacked, UnbackedIDs, NoData, Suspended []string
+	UnbackedWarn, UnbackedWait               int
 	// Unrecovered names the servers automatic restart could be turned on for.
 	Unrecovered, UnrecoveredIDs []string
 	// LocalHost is the loopback or private host players are shown, or "".
@@ -83,9 +84,9 @@ func checklistItems(state checklistState) []views.ChecklistItem {
 	if !state.AlertsOn {
 		add(views.ChecklistItem{Key: views.ChecklistAlerts, Destination: state.Unproven, Reason: state.UnprovenReason})
 	}
-	if len(state.Unbacked) > 0 {
+	if len(state.Unbacked) > 0 || len(state.Suspended) > 0 {
 		add(views.ChecklistItem{Key: views.ChecklistBackups, Names: state.Unbacked, IDs: state.UnbackedIDs,
-			Warn: state.UnbackedWarn, Wait: state.UnbackedWait, NoData: state.NoData})
+			Warn: state.UnbackedWarn, Wait: state.UnbackedWait, NoData: state.NoData, Suspended: state.Suspended})
 	}
 	if len(state.Unrecovered) > 0 {
 		add(views.ChecklistItem{Key: views.ChecklistRecovery, Names: state.Unrecovered, IDs: state.UnrecoveredIDs})
@@ -178,10 +179,13 @@ type backupTarget struct {
 	// Warn and Wait: a schedule can warn this server's players and wait
 	// for them to leave.
 	Warn, Wait bool
+	// Suspended: its backup schedules are all suspended, so another would
+	// only run beside them once they are put right.
+	Suspended bool
 }
 
 // backupTargets lists the servers that can be backed up and have no
-// recurring backup, and the times existing recurring backups use.
+// recurring backup that can run, and the times existing recurring backups use.
 func (s *Server) backupTargets(ctx context.Context, user *db.SessionUser, all []servers.View) ([]backupTarget, []string, error) {
 	if settings, _, err := s.App.Backups.SavedSettings(ctx); err != nil || settings == nil {
 		return nil, nil, err
@@ -193,17 +197,21 @@ func (s *Server) backupTargets(ctx context.Context, user *db.SessionUser, all []
 		if err != nil {
 			return nil, nil, err
 		}
-		covered := false
+		covered, suspended := false, false
 		for _, schedule := range list {
 			if backsUp(schedule) {
-				covered = true
 				taken = append(taken, schedule.Time)
+				if schedule.Enabled && schedule.NextRunUnavailableReason != "" {
+					suspended = true
+				} else {
+					covered = true
+				}
 			}
 		}
 		if !covered && view.BindingStatus == "active" && len(view.FileRoots) > 0 && !view.Refuses(ops.KindBackup) && !view.NestedMount &&
 			!s.App.Backups.HostMounted(view.ID, view.BindingRevision) && view.Can(authz.BackupsCreate) {
 			targets = append(targets, backupTarget{ID: view.ID, Name: view.DisplayName, Warn: canWarn(&view),
-				Wait: s.App.Players.Source.Lists(view.Container)})
+				Wait: s.App.Players.Source.Lists(view.Container), Suspended: suspended})
 		}
 	}
 	return targets, taken, nil
@@ -250,6 +258,10 @@ func (s *Server) checklistView(r *http.Request, request *Request) views.Checklis
 	if all, err := s.App.Servers.List(ctx, user); err == nil {
 		if targets, _, err := s.backupTargets(ctx, user, all); err == nil {
 			for _, target := range targets {
+				if target.Suspended {
+					state.Suspended = append(state.Suspended, target.ID)
+					continue
+				}
 				state.Unbacked = append(state.Unbacked, target.Name)
 				state.UnbackedIDs = append(state.UnbackedIDs, target.ID)
 				if target.Warn {
@@ -260,7 +272,7 @@ func (s *Server) checklistView(r *http.Request, request *Request) views.Checklis
 				}
 			}
 			for _, view := range all {
-				if view.BindingStatus == "active" && view.NoDataFolders && view.Can(authz.BackupsCreate) {
+				if view.BindingStatus == "active" && (view.NoDataFolders || view.Refuses(ops.KindBackup)) && view.Can(authz.BackupsCreate) {
 					state.NoData = append(state.NoData, view.ID)
 				}
 			}
@@ -330,7 +342,9 @@ func (s *Server) scheduleNightlyBackups(w http.ResponseWriter, r *http.Request, 
 	}
 	// Only the servers the confirmation named, which are still eligible.
 	confirmed := r.PostForm["server"]
-	targets = slices.DeleteFunc(targets, func(target backupTarget) bool { return !slices.Contains(confirmed, target.ID) })
+	targets = slices.DeleteFunc(targets, func(target backupTarget) bool {
+		return target.Suspended || !slices.Contains(confirmed, target.ID)
+	})
 	var scheduled []string
 	var failure error
 	for index, at := range backupTimes(taken, len(targets)) {

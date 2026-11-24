@@ -95,6 +95,9 @@ func (s *Server) overview(r *http.Request, request *Request, d *views.ServerDeta
 				if item.Enabled && item.NextRunAt != 0 && (d.NextSchedule == nil || item.NextRunAt < d.NextSchedule.NextRunAt) {
 					d.NextSchedule = item
 				}
+				if item.NextRunUnavailableReason != "" {
+					d.Suspended++
+				}
 				if item.WaitingUntil != 0 && d.WaitingSchedule == nil {
 					d.WaitingSchedule = item
 					d.WaitingCancel = s.App.Schedules.CanCancelWait(ctx, request.User(), item)

@@ -102,6 +102,7 @@ type ScheduleForm struct {
 	// TakesOver: the owner's account is gone, so an administrator's save
 	// makes the schedule theirs.
 	TakesOver bool
+	Suspended bool
 }
 
 var weekdays = []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
@@ -185,6 +186,8 @@ func scheduleState(item schedules.Schedule) string {
 		return "Paused"
 	case item.CompletedAt != 0:
 		return "Done"
+	case item.NextRunUnavailableReason != "":
+		return "Suspended"
 	}
 	return "Enabled"
 }
@@ -316,7 +319,12 @@ templ ScheduleList(v SchedulesView) {
 								<small class="table-detail">Warns players { minutesText(item.Announcements.LeadMinutes) } before</small>
 							}
 						</td>
-						<td>{ scheduleState(item) }</td>
+						<td>
+							if item.NextRunUnavailableReason != "" {
+								@Pip("attention")
+							}
+							{ scheduleState(item) }
+						</td>
 						<td class="schedule-next-run">
 							switch  {
 								case item.WaitingUntil != 0:
@@ -492,6 +500,9 @@ templ ScheduleEditor(f ScheduleForm) {
 					paused
 				}
 				when saved.
+				if input.Enabled && f.Suspended && !f.TakesOver {
+					It is suspended and won’t run until what’s shown in its row is put right.
+				}
 				if f.TakesOver {
 					Its owner’s account was deleted, so saving makes it yours.
 				} else {
@@ -500,6 +511,9 @@ templ ScheduleEditor(f ScheduleForm) {
 			</p>
 			if f.TakesOver {
 				<input type="hidden" name="takesOver" value="true"/>
+			}
+			if f.Suspended {
+				<input type="hidden" name="suspended" value="true"/>
 			}
 		}
 		if f.Missing {
