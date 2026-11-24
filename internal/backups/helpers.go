@@ -97,6 +97,29 @@ func PlanRoots(context *servers.Context, own self.Info, readOnly bool) (*Plan, e
 // or share mounted on or inside.
 var ErrHostMount = fail("NESTED_HOST_MOUNT", "One of the server’s data folders has another disk or network share mounted on or inside it on the host, which Ludock can’t back up or restore as one folder. List folders without one inside in the ludock.files label, or back that folder up separately, then try again.")
 
+// StageInside refuses a restore that would move folder, which holds an
+// earlier restore's stage. An empty folder is one the helper found as it
+// worked and can't name.
+func StageInside(folder string) *apperr.Error {
+	where := "A folder in the server’s data"
+	if folder != "" {
+		where = "The folder " + folder
+	}
+	return fail("RESTORE_FOLDER_INSIDE", where+" holds a hidden .ludock-restore-… folder, where an earlier restore keeps a server’s previous data, so this restore was stopped before moving it. "+
+		"Undo or finish that restore from Needs attention; if no restore needs the folder, copy out what you need from it and delete it on the host, then try again.")
+}
+
+// StageFolder is a restore's stage folder found below the top of a
+// server's data folder.
+type StageFolder struct {
+	Root Root
+	// Path leads from the root to the stage folder.
+	Path string
+}
+
+// Holder is the folder that holds the stage, as the server sees it.
+func (s StageFolder) Holder() string { return path.Join(s.Root.Path, path.Dir(s.Path)) }
+
 // helperBase is the helper's mount that holds a root.
 func helperBase(root Root) string { return "/mounts/" + root.ID }
 
@@ -120,19 +143,36 @@ func HelperRoot(context *servers.Context, root Root) (string, error) {
 
 // AssertOwnMounts refuses, through a running helper, roots that hold or are
 // reached through a mount the host added and Docker doesn't show, or, with
-// item, such a mount on the item's path or inside it.
-func (h *Helpers) AssertOwnMounts(ctx context.Context, context *servers.Context, data *DataHelper, item string, assertAccess func() error) error {
+// item, such a mount on the item's path or inside it. It returns the restore
+// stage folders it found there, which backups leave out.
+func (h *Helpers) AssertOwnMounts(ctx context.Context, context *servers.Context, data *DataHelper, item string, assertAccess func() error) ([]StageFolder, error) {
+	var stages []StageFolder
 	for _, root := range data.Roots {
-		path, err := HelperRoot(context, root)
+		helperPath, err := HelperRoot(context, root)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		request := helper.FileRequest{Operation: "mounts", Root: path, Path: item, Base: helperBase(root), Blocked: []string{}}
-		if _, err := h.Exec(ctx, data.Container, helper.Command("file", request), assertAccess); err != nil {
-			return err
+		request := helper.FileRequest{Operation: "mounts", Root: helperPath, Path: item, Base: helperBase(root), Blocked: []string{}}
+		// The check walks the whole folder, which can be large.
+		out, err := h.ExecWithin(ctx, data.Container, helper.Command("file", request), assertAccess, 30*time.Minute)
+		if err != nil {
+			return nil, err
+		}
+		var result struct{ Stages []string }
+		if json.Unmarshal(out, &result) != nil {
+			return nil, errFailed
+		}
+		for _, found := range result.Stages {
+			holder, name := path.Split(found)
+			id, isStage := strings.CutPrefix(name, helper.StagePrefix)
+			if holder == "" || path.Clean(holder) != strings.TrimSuffix(holder, "/") || strings.HasPrefix(holder, "/") ||
+				slices.Contains(strings.Split(holder, "/"), "..") || !isStage || !helper.ValidID(id) {
+				return nil, errFailed
+			}
+			stages = append(stages, StageFolder{Root: root, Path: found})
 		}
 	}
-	return nil
+	return stages, nil
 }
 
 type DataHelper struct {
@@ -242,7 +282,7 @@ func (h *Helpers) ExecWithin(ctx context.Context, id string, command []string, a
 
 var helperErrors = &launch.ExecErrors{Timeout: errTimeout, Failed: errFailed, Unsafe: errFailed,
 	OutputLimit: fail("HELPER_OUTPUT", "Ludock’s helper sent back more than expected, so the work was stopped."),
-	Exits:       map[int]*apperr.Error{helper.FileMounted: ErrHostMount}}
+	Exits:       map[int]*apperr.Error{helper.FileMounted: ErrHostMount, helper.RestoreHoldsStage: StageInside("")}}
 
 // IsRunning reports whether a reused restore helper is still running.
 func (h *Helpers) IsRunning(ctx context.Context, id string) (bool, error) {

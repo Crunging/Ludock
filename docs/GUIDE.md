@@ -388,7 +388,8 @@ such as Valheim's `/opt/valheim`. It shows container paths, never host paths.
 - A folder mounted separately inside another, such as a mods folder, can't
   be deleted, renamed, or moved with what holds it; change what's inside it.
   Neither can a folder holding a restore's hidden `.ludock-restore-*` folder,
-  which can be the only copy of the server's previous data.
+  which can be the only copy of the server's previous data, and a restore of
+  that folder or the whole server is refused until it is dealt with.
 
 Stop a game before replacing a world or configuration it has open. Many
 images write some settings from their environment variables each time they

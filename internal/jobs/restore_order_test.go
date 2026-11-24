@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
@@ -548,5 +549,95 @@ func TestRestoreStoppedBeforeMoveIn(t *testing.T) {
 	}
 	if slices.ContainsFunc(trace.lines(), func(line string) bool { return strings.HasPrefix(line, "moveNew ") }) {
 		t.Fatal("moved the backup's data into a server started elsewhere")
+	}
+}
+
+// An earlier restore's stage folder below the top of the data, as when
+// another server's wider folder holds it, can be its server's only copy of
+// the previous data. A whole or single-folder restore of what holds it is
+// refused before the server stops, naming the folder; a stage that appears
+// after that check is refused in the helper before anything moves, and the
+// restore is undone. A backup still runs and says it left the folder out.
+func TestRestoreKeepsOtherStages(t *testing.T) {
+	f := setup(t)
+	backupID, rootID := f.itemBackup(t)
+	stage := filepath.Join(f.data, "world", helper.StageName("2f9619ff-8b86-4011-b42d-00c04fc964ff"))
+	seed := func() {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(stage, "old"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(stage, "old", "level.dat"), []byte("previous"), 0o644)
+	}
+	kept := func(how string) {
+		t.Helper()
+		if got := read(t, filepath.Join(stage, "old", "level.dat")); got != "previous" {
+			t.Fatalf("%s: the other stage holds %q", how, got)
+		}
+		if got := read(t, filepath.Join(f.data, "world", "level.dat")); got != "newer" {
+			t.Fatalf("%s: the live copy is %q", how, got)
+		}
+	}
+	whole := map[string]any{"backupId": backupID, "confirmation": "mc", WarnInput: true}
+	item := map[string]any{"backupId": backupID, "root": rootID, "item": "world", "createBackup": true, WarnInput: true}
+	seed()
+	// Stages at the top, and below a folder Ludock reserves there, are left
+	// where they are and hide nothing.
+	tops := []string{".ludock-cache/" + helper.StageName("3f9619ff-8b86-4011-b42d-00c04fc964ff")}
+	for _, id := range []string{"4f9619ff-8b86-4011-b42d-00c04fc964ff", "5f9619ff-8b86-4011-b42d-00c04fc964ff", "6f9619ff-8b86-4011-b42d-00c04fc964ff"} {
+		tops = append(tops, helper.StageName(id))
+	}
+	for _, top := range tops {
+		os.MkdirAll(filepath.Join(f.data, top, "old"), 0o700)
+	}
+	for name, input := range map[string]map[string]any{"whole": whole, "item": item} {
+		before := len(f.engine.Requests)
+		job := f.run(t, "restore", input)
+		stopped := slices.ContainsFunc(f.engine.Requests[before:], func(request string) bool { return strings.Contains(request, f.game+"/stop") })
+		if job.Status != ops.Failed || job.Error != backups.StageInside(f.data+"/world").Message || job.Recovery.WarnUntil != 0 || stopped || !f.running() {
+			t.Errorf("%s: %s %q, warned %v, stopped %v", name, job.Status, job.Error, job.Recovery.WarnUntil != 0, stopped)
+		}
+		kept(name)
+	}
+	if job := f.run(t, "backup", nil); job.Status != ops.Succeeded || job.Result["leftOut"] != f.data+"/world" {
+		t.Errorf("backup: %s %v", job.Status, job.Result)
+	}
+	// A warned backup checks again after the warning; a stage gone by then
+	// isn't reported.
+	plain, checks := f.engine.Exec, 0
+	f.jobs.WarningLead = 100 * time.Millisecond
+	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+		code := plain(c, cmd, stdin, stdout, stderr)
+		if len(cmd) > 3 && cmd[2] == "file" && strings.Contains(cmd[3], `"operation":"mounts"`) {
+			if checks++; checks == 1 {
+				os.RemoveAll(stage)
+			}
+		}
+		return code
+	}
+	if job := f.run(t, "backup", map[string]any{WarnInput: true}); job.Status != ops.Succeeded || checks != 2 || job.Result["leftOut"] != nil {
+		t.Errorf("warned backup: %s %v, %d checks", job.Status, job.Result, checks)
+	}
+	f.engine.Exec = plain
+	os.RemoveAll(stage)
+	for _, top := range tops {
+		os.RemoveAll(filepath.Join(f.data, strings.Split(top, "/")[0]))
+	}
+	run := f.engine.Exec
+	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+		if len(cmd) > 3 && cmd[2] == "restore" && strings.Contains(cmd[3], `"operation":"`+helper.RestoreMoveOld+`"`) {
+			seed()
+		}
+		return run(c, cmd, stdin, stdout, stderr)
+	}
+	delete(item, "createBackup")
+	for name, input := range map[string]map[string]any{"whole": whole, "item": item} {
+		delete(input, WarnInput)
+		job := f.run(t, "restore", input)
+		if job.Status != ops.Failed || job.Error != backups.StageInside("").Message || !f.running() || f.staged() {
+			t.Errorf("appeared, %s: %s %q, running %v", name, job.Status, job.Error, f.running())
+		}
+		kept("appeared, " + name)
+		os.RemoveAll(stage)
 	}
 }

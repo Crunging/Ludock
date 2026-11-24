@@ -54,6 +54,11 @@ const RestoreFailure = "Restore data changed, is unsafe, or cannot be accessed. 
 // covers both helpers.
 const RestoreMounted = FileMounted
 
+// RestoreHoldsStage is the restore helper's exit code for data that holds
+// another restore's stage folder below its top, which a restore never moves
+// or removes. It matches FileHoldsRestore.
+const RestoreHoldsStage = FileHoldsRestore
+
 // StagePrefix starts the name of a restore's stage folder, which sits in the
 // root it restores; no restored path may start with it.
 const StagePrefix = ".ludock-restore-"
@@ -177,6 +182,11 @@ func (h *restoreHelper) removeEntry(parent fd, name string, depth int) error {
 	h.removed++
 	if depth > 64 || h.removed > 1000000 {
 		return errUnsafe
+	}
+	// Only another restore's stage has this name here: this one's is never
+	// passed in, and its old copy can't hold one.
+	if validStage(name) {
+		return errHoldsRestore
 	}
 	before, err := lstatAt(parent, name)
 	if err != nil {
@@ -406,7 +416,7 @@ func (h *restoreHelper) moveOld(root, stage fd) error {
 	if err := ownMount(h.request.Base, h.request.Root); err != nil {
 		return err
 	}
-	if err := h.ownTree(root); err != nil {
+	if err := h.ownTree(root, true); err != nil {
 		return err
 	}
 	if err := h.recordRoot(root, stage); err != nil {
@@ -442,6 +452,9 @@ func (h *restoreHelper) rollbackClean(root, stage fd) error {
 	if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
 		return err
 	}
+	if err := h.ownTree(root, false); err != nil {
+		return err
+	}
 	children, err := names(root)
 	if err != nil {
 		return err
@@ -461,6 +474,9 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 	// Like rollbackClean, but what is live is kept: a server started
 	// elsewhere may have written there.
 	if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
+		return err
+	}
+	if err := h.ownTree(root, false); err != nil {
 		return err
 	}
 	aside, err := h.pinAside(root)
@@ -564,8 +580,15 @@ var mountOf = mountID
 
 // removable refuses a folder that cleanup could not empty after it moved
 // into the restore folder: one with another mount or a special file anywhere
-// inside it.
+// inside it, or another restore's stage.
 func (h *restoreHelper) removable(parent fd, name string, depth int) error {
+	return h.safeToMove(parent, name, depth, true)
+}
+
+// safeToMove refuses a folder holding another restore's stage at any depth,
+// which may be the only copy of that server's previous data, and with whole,
+// one that removable refuses.
+func (h *restoreHelper) safeToMove(parent fd, name string, depth int, whole bool) error {
 	h.removed++
 	if depth > 64 || h.removed > 1000000 {
 		return errUnsafe
@@ -577,12 +600,15 @@ func (h *restoreHelper) removable(parent fd, name string, depth int) error {
 	defer h.t.close(directory)
 	if same, err := sameMount(parent, directory); err != nil {
 		return err
-	} else if !same {
+	} else if !same && whole {
 		return errMounted
 	}
 	children, err := names(directory)
 	if err != nil {
 		return err
+	}
+	if slices.ContainsFunc(children, validStage) {
+		return errHoldsRestore
 	}
 	for _, child := range children {
 		info, err := lstatAt(directory, child)
@@ -590,26 +616,27 @@ func (h *restoreHelper) removable(parent fd, name string, depth int) error {
 			return err
 		}
 		if isDir(info) {
-			if err := h.removable(directory, child, depth+1); err != nil {
+			if err := h.safeToMove(directory, child, depth+1, whole); err != nil {
 				return err
 			}
-		} else if !isRegular(info) && !isSymlink(info) {
+		} else if whole && !isRegular(info) && !isSymlink(info) {
 			return errUnsafe
 		}
 	}
 	return nil
 }
 
-// ownTree refuses, before anything moves, live data that cleanup could not
-// remove once moved: an entry on another mount, or a folder holding one or a
-// special file.
-func (h *restoreHelper) ownTree(root fd) error {
+// ownTree refuses, before anything moves, live data holding another
+// restore's stage below the top and, with whole, live data that cleanup
+// could not remove once moved: an entry on another mount, or a folder holding
+// one or a special file.
+func (h *restoreHelper) ownTree(root fd, whole bool) error {
 	children, err := names(root)
 	if err != nil {
 		return err
 	}
 	for _, name := range children {
-		if Reserved(name) {
+		if Reserved(name) || name == h.request.Aside {
 			continue
 		}
 		info, err := lstatAt(root, name)
@@ -617,9 +644,12 @@ func (h *restoreHelper) ownTree(root fd) error {
 			return err
 		}
 		if isDir(info) {
-			if err := h.removable(root, name, 0); err != nil {
+			if err := h.safeToMove(root, name, 0, whole); err != nil {
 				return err
 			}
+			continue
+		}
+		if !whole {
 			continue
 		}
 		entry, err := h.t.openAt(root, name, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
@@ -833,6 +863,11 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		} else if !isNotExist(err) {
 			return err
 		}
+		if info != nil && isDir(info) {
+			if err := h.safeToMove(parent, name, 0, false); err != nil {
+				return err
+			}
+		}
 		return move(parent, name, stage, "returned", info)
 	case RestoreSetAside:
 		if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
@@ -845,6 +880,11 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		info, err := movable(parent, name, rootInfo.Dev)
 		if err != nil || info == nil {
 			return err
+		}
+		if isDir(info) {
+			if err := h.safeToMove(parent, name, 0, false); err != nil {
+				return err
+			}
 		}
 		aside, err := h.pinAside(root)
 		if err != nil {
@@ -879,8 +919,11 @@ func RunRestore(argument string, stdout, stderr io.Writer) int {
 	}
 	if err != nil {
 		io.WriteString(stderr, RestoreFailure)
-		if errors.Is(err, errMounted) {
+		switch {
+		case errors.Is(err, errMounted):
 			return RestoreMounted
+		case errors.Is(err, errHoldsRestore):
+			return RestoreHoldsStage
 		}
 		return 1
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/ops"
@@ -166,14 +167,27 @@ func TestNextBackupAfterStaleRestoreJournal(t *testing.T) {
 	}
 }
 
-// Finishing a restore that stopped partway fails before any live data moves:
+// Finishing a restore that stopped partway fails before any live data moves,
+// because a step fails or the data holds another restore's stage folder:
 // the backup fails, but the server it stopped is running again and the undo
 // is left for the next operation.
 func TestFailedUndoReturnsServerToRunning(t *testing.T) {
 	f := setup(t)
 	restore, _ := f.stoppedRestore(t)
-	f.failStep, f.failTimes = helper.RestoreCleanup, 1
+	region := filepath.Join(f.data, "world", "region")
+	other := filepath.Join(region, helper.StageName("2f9619ff-8b86-4011-b42d-00c04fc964ff"))
+	os.MkdirAll(filepath.Join(other, "old"), 0o700)
 	backup := f.run(t, "backup", nil)
+	if backup.Status != ops.Failed || backup.Error != backups.StageInside(region).Message || !f.running() ||
+		f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" {
+		t.Fatalf("%+v, running %v, journal %s", backup, f.running(), f.savedJournal(restore.ID))
+	}
+	if _, err := os.Stat(filepath.Join(other, "old")); err != nil {
+		t.Fatal("moved the other stage")
+	}
+	os.RemoveAll(region)
+	f.failStep, f.failTimes = helper.RestoreCleanup, 1
+	backup = f.run(t, "backup", nil)
 	if backup.Status != ops.Failed || !f.running() || f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" {
 		t.Fatalf("%+v, running %v, journal %s", backup, f.running(), f.savedJournal(restore.ID))
 	}

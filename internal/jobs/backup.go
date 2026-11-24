@@ -198,7 +198,21 @@ func (j *Jobs) assertBackupPossible(ctx context.Context, server *servers.Context
 	if err := j.Backups.AssertReady(ctx, server); err != nil {
 		return err
 	}
-	return j.Backups.AssertOwnMounts(ctx, server, job.Job.ID)
+	stages, err := j.Backups.AssertOwnMounts(ctx, server, job.Job.ID)
+	if err != nil {
+		return err
+	}
+	// Backups leave restore stages out, so the previous data an unfinished
+	// restore keeps in one is in no backup; Activity says so. A later check,
+	// such as after a warning, replaces an earlier one's finding.
+	holder := ""
+	if len(stages) > 0 {
+		holder = stages[0].Holder()
+	}
+	if holder == job.Job.Recovery.LeftOut {
+		return nil
+	}
+	return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.LeftOut = holder }, nil)
 }
 
 // backsUpFirst reports work that backs up before its own stop.

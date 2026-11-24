@@ -8,12 +8,13 @@ import (
 )
 
 // AssertOwnMounts refuses, before the server stops, data folders a backup
-// can't take because the host has another mount on or inside one. It starts
-// a read-only helper labelled with the operation.
-func (s *Service) AssertOwnMounts(ctx context.Context, server *servers.Context, operationID string) error {
+// can't take because the host has another mount on or inside one, and
+// returns the restore stage folders the backup will leave out. It starts a
+// read-only helper labelled with the operation.
+func (s *Service) AssertOwnMounts(ctx context.Context, server *servers.Context, operationID string) ([]StageFolder, error) {
 	data, err := s.Helpers.NewDataHelper(ctx, server, true, operationID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer data.Cleanup()
 	return s.CheckOwnMounts(ctx, server, data, "", nil)
@@ -21,10 +22,10 @@ func (s *Service) AssertOwnMounts(ctx context.Context, server *servers.Context, 
 
 // CheckOwnMounts is AssertOwnMounts through a helper already running. The
 // outcome is remembered for the server's readiness, which starts no helper.
-func (s *Service) CheckOwnMounts(ctx context.Context, server *servers.Context, data *DataHelper, item string, assertAccess func() error) error {
-	err := s.Helpers.AssertOwnMounts(ctx, server, data, item, assertAccess)
+func (s *Service) CheckOwnMounts(ctx context.Context, server *servers.Context, data *DataHelper, item string, assertAccess func() error) ([]StageFolder, error) {
+	stages, err := s.Helpers.AssertOwnMounts(ctx, server, data, item, assertAccess)
 	s.NoteHostMount(server, err)
-	return err
+	return stages, err
 }
 
 // NoteHostMount remembers whether work on the server last found a mount the

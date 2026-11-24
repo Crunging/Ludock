@@ -50,6 +50,9 @@ func withSave(job *ops.Context, result map[string]any) map[string]any {
 	if undone := job.Job.Recovery.Undone; undone != "" {
 		result["undone"] = undone
 	}
+	if leftOut := job.Job.Recovery.LeftOut; leftOut != "" {
+		result["leftOut"] = leftOut
+	}
 	return result
 }
 
