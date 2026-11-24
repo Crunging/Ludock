@@ -310,10 +310,10 @@ func (d *DB) ListUserSessions(ctx context.Context, userID, currentTokenHash stri
 // DeleteUserSessionByID revokes one of the account's sessions and writes
 // audit in the same transaction, while the requesting session tokenHash is
 // still valid. Nothing is written when no session matched.
-func (d *DB) DeleteUserSessionByID(ctx context.Context, userID, tokenHash, sessionID string, now int64, audit AuditEntry) (bool, error) {
+func (d *DB) DeleteUserSessionByID(ctx context.Context, userID, tokenHash, sessionID string, now func() int64, audit AuditEntry) (bool, error) {
 	var removed bool
 	err := d.Tx(ctx, func(tx *sql.Tx) error {
-		if err := AssertSession(ctx, tx, userID, tokenHash, now); err != nil {
+		if err := AssertSession(ctx, tx, userID, tokenHash, now()); err != nil {
 			return err
 		}
 		result, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ? AND session_id = ?", userID, sessionID)

@@ -126,27 +126,39 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 		if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observation, server.Logical.BindingRevision); err != nil {
 			return err
 		}
-		// A server already stopped elsewhere keeps its outage, which was
-		// alerted once. The pause comes before the stop is recorded, so a
-		// job refused here records no stop to undo.
-		if info.State.Running {
-			if err := j.Monitor.Suppress(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.dataAuthorityIn(ctx, tx, server, job) }); err != nil {
+		// The stop is recorded, and outage tracking paused, in the
+		// transaction that confirms the job may still stop the server, so a
+		// refusal leaves neither to undo. A server already stopped elsewhere
+		// keeps its outage, which was alerted once. Called again after a stop
+		// that never reached Docker: the new inspection replaces the stop
+		// state, but not the initial state.
+		var saved func()
+		record := func(tx *sql.Tx) error {
+			if err := j.dataAuthorityIn(ctx, tx, server, job); err != nil {
 				return err
 			}
-		}
-		// Called again after a stop that never reached Docker: the new
-		// inspection replaces the stop state, but not the initial state.
-		if err := job.Progress("stopping", func(r *ops.Recovery) {
-			recordStop(r, info)
-			if r.InitialRunning == nil {
-				initial := r.StopStarted
-				r.InitialRunning = &initial
-			}
-			r.ContainerID, r.Fingerprint, r.LockKeys = server.Container.ID, server.Logical.BindingFingerprint, server.LockKeys
-			r.DataUnsafe = false
-		}, nil); err != nil {
+			var err error
+			saved, err = job.ProgressIn(tx, "stopping", func(r *ops.Recovery) {
+				recordStop(r, info)
+				if r.InitialRunning == nil {
+					initial := r.StopStarted
+					r.InitialRunning = &initial
+				}
+				r.ContainerID, r.Fingerprint, r.LockKeys = server.Container.ID, server.Logical.BindingFingerprint, server.LockKeys
+				r.DataUnsafe = false
+			}, nil)
 			return err
 		}
+		var err error
+		if info.State.Running {
+			err = j.Monitor.Suppress(ctx, server.Logical.ID, record)
+		} else {
+			err = j.DB.Tx(ctx, record)
+		}
+		if err != nil {
+			return err
+		}
+		saved()
 		dispatching = true
 		return nil
 	}, unsent)

@@ -180,6 +180,21 @@ func (c *Context) Active(ctx context.Context) error {
 // (when not nil), and an optional public result. The in-memory job changes only
 // once the write succeeds, so it matches what a restart would see.
 func (c *Context) Progress(phase string, change func(*Recovery), result map[string]any) error {
+	saved, err := c.progress(c.runner.DB, phase, change, result)
+	if err == nil {
+		saved()
+	}
+	return err
+}
+
+// ProgressIn is Progress through tx. saved updates the job once tx commits.
+func (c *Context) ProgressIn(tx *sql.Tx, phase string, change func(*Recovery), result map[string]any) (saved func(), err error) {
+	return c.progress(tx, phase, change, result)
+}
+
+func (c *Context) progress(q interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, phase string, change func(*Recovery), result map[string]any) (func(), error) {
 	merged := c.Job.Recovery
 	merged.LockKeys = slices.Clone(merged.LockKeys)
 	if change != nil {
@@ -190,13 +205,13 @@ func (c *Context) Progress(phase string, change func(*Recovery), result map[stri
 	}
 	recoveryJSON, err := json.Marshal(merged)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var resultJSON any
 	if result != nil {
 		encoded, err := json.Marshal(result)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		resultJSON = string(encoded)
 	}
@@ -208,18 +223,17 @@ func (c *Context) Progress(phase string, change func(*Recovery), result map[stri
 	if c.ended != "" {
 		status, phase, updated = c.ended, c.Job.Phase, c.Job.UpdatedAt
 	}
-	saved, err := c.runner.DB.Exec("UPDATE operations SET phase=?, recovery_json=?, result_json=?, updated_at=? WHERE id=? AND status=?",
+	saved, err := q.ExecContext(context.Background(), "UPDATE operations SET phase=?, recovery_json=?, result_json=?, updated_at=? WHERE id=? AND status=?",
 		phase, string(recoveryJSON), resultJSON, updated, c.Job.ID, status)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if changed, err := saved.RowsAffected(); err != nil {
-		return err
+		return nil, err
 	} else if changed == 0 {
-		return ErrCancelled
+		return nil, ErrCancelled
 	}
-	c.Job.Recovery, c.Job.Result, c.Job.Phase = merged, result, phase
-	return nil
+	return func() { c.Job.Recovery, c.Job.Result, c.Job.Phase = merged, result, phase }, nil
 }
 
 // ErrResume, returned by Recover, queues an interrupted job again: it had not
