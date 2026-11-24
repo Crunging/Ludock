@@ -32,7 +32,7 @@ func recorded(t *testing.T) (*Service, Backup, string) {
 		t.Fatal(err)
 	}
 	destination := t.TempDir()
-	s := &Service{DB: d, Storage: &Storage{Roots: destination, Own: self.New(nil, "")}, Locks: locks.New()}
+	s := &Service{DB: d, Storage: &Storage{Roots: []string{destination}, Own: self.New(nil, "")}, Locks: locks.New()}
 	backup := Backup{ID: "6f9619ff-8b86-4011-b42d-00c04fc964ff", ServerID: list[0].ID, CreatedAt: 1, Size: int64(len("archive"))}
 	archive := filepath.Join(destination, backup.ID+".tar")
 	if err := os.WriteFile(archive, []byte("archive"), 0o600); err != nil {
@@ -113,7 +113,7 @@ func TestRefusedDeletionWritesNothing(t *testing.T) {
 
 func TestABackupWaitsForStorageSetupUnderWay(t *testing.T) {
 	d := dbtest.Open(t)
-	s := &Service{DB: d, Storage: &Storage{Roots: t.TempDir(), Own: self.New(nil, "")}, Locks: locks.New()}
+	s := &Service{DB: d, Storage: &Storage{Roots: []string{t.TempDir()}, Own: self.New(nil, "")}, Locks: locks.New()}
 	// Background setup is saving the default settings when a backup that
 	// is due at startup looks for them.
 	entered, saved := make(chan struct{}), make(chan struct{})
@@ -125,7 +125,7 @@ func TestABackupWaitsForStorageSetupUnderWay(t *testing.T) {
 		close(entered)
 		time.Sleep(100 * time.Millisecond)
 		if _, err := d.Exec(`INSERT INTO settings(key,value_json) VALUES('backups',?)`,
-			`{"destination":"`+s.Storage.Roots+`","maxBytes":0,"reserveBytes":0}`); err != nil {
+			`{"destination":"`+s.Storage.Roots[0]+`","maxBytes":0,"reserveBytes":0}`); err != nil {
 			t.Error(err)
 		}
 		close(saved)
@@ -251,7 +251,7 @@ func TestAssertNoOtherWriters(t *testing.T) {
 // it is closed. Deleting a kept backup is refused.
 func TestPruneSparesKeptAndOpenArchives(t *testing.T) {
 	s, first, _ := recorded(t)
-	destination := s.Storage.Roots
+	destination := s.Storage.Roots[0]
 	var fingerprint string
 	s.DB.QueryRow("SELECT binding_fingerprint FROM backups WHERE id=?", first.ID).Scan(&fingerprint)
 	ids := []string{first.ID}
@@ -318,7 +318,7 @@ func TestPruneSparesKeptAndOpenArchives(t *testing.T) {
 // reached, its archive doesn't count toward the limit, so nothing goes.
 func TestPruneMakesRoomForTheNextBackup(t *testing.T) {
 	s, first, _ := recorded(t)
-	destination := s.Storage.Roots
+	destination := s.Storage.Roots[0]
 	var fingerprint string
 	s.DB.QueryRow("SELECT binding_fingerprint FROM backups WHERE id=?", first.ID).Scan(&fingerprint)
 	s.DB.Exec("UPDATE backups SET size=100, destination='/earlier' WHERE id=?", first.ID)

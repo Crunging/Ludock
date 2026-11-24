@@ -19,6 +19,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/mountinfo"
 	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/textutil"
 )
@@ -62,44 +63,21 @@ func checkID(id string) error {
 	return nil
 }
 
-// RootList splits a colon-delimited root setting such as
-// LUDOCK_BACKUP_ROOTS, dropping blanks and duplicates.
-func RootList(value string) []string {
-	var roots []string
-	for _, root := range strings.Split(value, ":") {
-		if root = strings.TrimSpace(root); root != "" && !slices.Contains(roots, root) {
-			roots = append(roots, root)
-		}
-	}
-	return roots
-}
-
 // CopyRoot is approved as a second folder, beside the configured roots,
 // whenever a folder is mounted there, so a second copy needs only a volume.
 const CopyRoot = "/backups-copy"
 
-// mountInfo lists the mounts of Ludock's own container; tests replace it.
-var mountInfo = "/proc/self/mountinfo"
-
 // mountedAt reports whether something is mounted exactly at path.
 func mountedAt(path string) bool {
-	data, err := os.ReadFile(mountInfo)
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if fields := strings.Fields(line); len(fields) > 4 && fields[4] == path {
-			return true
-		}
-	}
-	return false
+	mounts, err := mountinfo.Read()
+	return err == nil && slices.ContainsFunc(mounts, func(mount mountinfo.Mount) bool { return mount.Point == path })
 }
 
 // FoundCopy is the copy folder Ludock found: CopyRoot when something is
 // mounted there, or DevCopyRoot. With no configured roots backups are off,
 // so there is none.
 func (s *Storage) FoundCopy() string {
-	if len(RootList(s.Roots)) == 0 {
+	if len(s.Roots) == 0 {
 		return ""
 	}
 	if s.DevCopyRoot != "" {
@@ -113,7 +91,7 @@ func (s *Storage) FoundCopy() string {
 
 // ApprovedRoots are the configured roots, then the found copy folder.
 func (s *Storage) ApprovedRoots() []string {
-	roots := RootList(s.Roots)
+	roots := slices.Clone(s.Roots)
 	if found := s.FoundCopy(); found != "" && !slices.Contains(roots, found) {
 		roots = append(roots, found)
 	}
@@ -122,8 +100,8 @@ func (s *Storage) ApprovedRoots() []string {
 
 // Storage checks destinations against approved roots and Ludock's mounts.
 type Storage struct {
-	// Roots are approved destinations, ':'-separated.
-	Roots string
+	// Roots are approved destinations.
+	Roots []string
 	Own   *self.Container
 	// DevCopyRoot stands in for a folder mounted at CopyRoot when developing
 	// against cmd/fakedocker, which can't mount one.
@@ -271,7 +249,7 @@ func (a *Archive) Close() error {
 }
 
 func NewStorage(roots []string, own *self.Container) *Storage {
-	return &Storage{Roots: strings.Join(roots, ":"), Own: own}
+	return &Storage{Roots: roots, Own: own}
 }
 
 // ValidateSettings checks limits, the destination, and that it is a

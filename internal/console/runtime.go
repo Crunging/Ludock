@@ -255,12 +255,7 @@ func (r *Runtime) environment(ctx context.Context, containerID string) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	env := map[string]string{}
-	for _, entry := range info.Config.Env {
-		key, value, _ := strings.Cut(entry, "=")
-		env[key] = value
-	}
-	return env, nil
+	return info.Config.Environment(), nil
 }
 
 func (r *Runtime) networkTarget(ctx context.Context, target Target, adapter *games.Adapter, env map[string]string) (string, int, string, error) {

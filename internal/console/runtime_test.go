@@ -36,6 +36,17 @@ func setup(t *testing.T) (*fakedocker.Engine, *Runtime, string) {
 	return engine, &Runtime{Docker: docker.New(engine.Socket), pollInterval: time.Millisecond}, id
 }
 
+// eventually reports whether ready holds within a deadline long enough for a
+// loaded machine.
+func eventually(ready func() bool) bool {
+	for deadline := time.Now().Add(10 * time.Second); !ready(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			return false
+		}
+	}
+	return true
+}
+
 // wrapped returns the user command behind the bounded exec wrapper.
 func wrapped(cmd []string) []string {
 	if len(cmd) > 7 && cmd[0] == "/bin/sh" && cmd[3] == "ludock-console" {
@@ -121,10 +132,7 @@ func TestOutputLimitAndRevocationCancel(t *testing.T) {
 	if !errors.Is(err, errCancelled) {
 		t.Fatal(err)
 	}
-	time.Sleep(50 * time.Millisecond)
-	mu.Lock()
-	defer mu.Unlock()
-	if cancels == 0 {
+	if !eventually(func() bool { mu.Lock(); defer mu.Unlock(); return cancels > 0 }) {
 		t.Fatal("no in-container cancellation requested")
 	}
 }
@@ -141,12 +149,14 @@ func TestStdinConsole(t *testing.T) {
 	if err := runtime.GameCommand(ctx, Target{ContainerID: id, State: "running"}, adapter, "save", out.output(), nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(20 * time.Millisecond)
-	engine.Update(id, func(c *fakedocker.Container) {
-		if string(c.Stdin) != "save\n" {
-			t.Errorf("stdin %q", c.Stdin)
-		}
+	var stdin string
+	eventually(func() bool {
+		engine.Update(id, func(c *fakedocker.Container) { stdin = string(c.Stdin) })
+		return len(stdin) >= len("save\n")
 	})
+	if stdin != "save\n" {
+		t.Errorf("stdin %q", stdin)
+	}
 	if out.system.String() != "Command sent to the server process" {
 		t.Fatal(out.system.String())
 	}

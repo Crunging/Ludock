@@ -12,11 +12,13 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/datasize"
+	"github.com/Crunging/Ludock/internal/mountinfo"
 )
 
 type Config struct {
@@ -93,35 +95,23 @@ func pathList(name, raw string) ([]string, error) {
 			// The value is a host path; name the variable only.
 			return nil, fmt.Errorf("%s must list absolute paths separated by ':'", name)
 		}
-		if cleaned := path.Clean(part); !contains(paths, cleaned) {
+		if cleaned := path.Clean(part); !slices.Contains(paths, cleaned) {
 			paths = append(paths, cleaned)
 		}
 	}
 	return paths, nil
 }
 
-func contains(values []string, value string) bool {
-	for _, item := range values {
-		if item == value {
-			return true
-		}
-	}
-	return false
-}
-
-var mountinfoPath = "/proc/self/mountinfo"
-
 // hostnameMount finds the file Docker and Podman mount at /etc/hostname, which
 // sits in a folder named for the container's full ID.
 var hostnameMount = regexp.MustCompile(`/([0-9a-f]{64})(?:/userdata)?/hostname$`)
 
-// containerID reads the container's own ID from /proc/self/mountinfo, which
-// stays right when a custom hostname or host networking changes HOSTNAME.
-func containerID(mountinfo string) string {
-	for _, line := range strings.Split(mountinfo, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) > 4 && fields[4] == "/etc/hostname" {
-			if match := hostnameMount.FindStringSubmatch(fields[3]); match != nil {
+// containerID reads the container's own ID from its mounts, which stays
+// right when a custom hostname or host networking changes HOSTNAME.
+func containerID(mounts []mountinfo.Mount) string {
+	for _, mount := range mounts {
+		if mount.Point == "/etc/hostname" {
+			if match := hostnameMount.FindStringSubmatch(mount.Root); match != nil {
 				return match[1]
 			}
 		}
@@ -147,8 +137,8 @@ func Load() (Config, error) {
 	}
 	if c.SelfContainer == "" {
 		c.SelfContainer = value("HOSTNAME", "")
-		if mountinfo, err := os.ReadFile(mountinfoPath); err == nil {
-			if id := containerID(string(mountinfo)); id != "" {
+		if mounts, err := mountinfo.Read(); err == nil {
+			if id := containerID(mounts); id != "" {
 				c.SelfContainer = id
 			}
 		}
@@ -159,7 +149,7 @@ func Load() (Config, error) {
 	} else if number, err := strconv.Atoi(port); err != nil || number < 0 || number > 65535 || strings.ContainsAny(host, " /") {
 		problems = append(problems, errors.New("LUDOCK_LISTEN must be host:port, for example :3000"))
 	}
-	if c.LogLevel != "" && !contains(levels, c.LogLevel) {
+	if c.LogLevel != "" && !slices.Contains(levels, c.LogLevel) {
 		problems = append(problems, errors.New("LUDOCK_LOG_LEVEL must be error, warn, info, or debug"))
 	}
 	if !strings.HasPrefix(c.DockerSocket, "/") {

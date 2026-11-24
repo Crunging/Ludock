@@ -24,6 +24,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/mountinfo"
 	"github.com/Crunging/Ludock/internal/self"
 )
 
@@ -63,7 +64,7 @@ func newCopyFixture(t *testing.T) *copyFixture {
 		{Type: "bind", Source: f.main, Destination: f.main, RW: true}, {Type: "bind", Source: f.copies, Destination: f.copies, RW: true},
 		{Type: "bind", Source: f.other, Destination: f.other, RW: true}}})
 	client := docker.New(engine.Socket)
-	f.s = &Service{DB: d, Docker: client, Storage: &Storage{Roots: f.main + ":" + f.copies + ":" + f.other, Own: self.New(client, "ludock")}, Locks: locks.New()}
+	f.s = &Service{DB: d, Docker: client, Storage: &Storage{Roots: []string{f.main, f.copies, f.other}, Own: self.New(client, "ludock")}, Locks: locks.New()}
 	f.s.CopyFailed = func(_ context.Context, _ *sql.Tx, _, _, problem string) error {
 		f.failures = append(f.failures, problem)
 		return nil
@@ -355,7 +356,7 @@ func TestChoosingTheSecondFolder(t *testing.T) {
 	// second copy.
 	alias := filepath.Join(filepath.Dir(f.main), "alias")
 	os.Mkdir(alias, 0o755)
-	f.s.Storage.Roots += ":" + alias
+	f.s.Storage.Roots = append(f.s.Storage.Roots, alias)
 	f.engine.Update("ludock", func(c *fakedocker.Container) {
 		c.Mounts = append(c.Mounts, docker.MountPoint{Type: "bind", Source: f.main, Destination: alias, RW: true})
 	})
@@ -369,16 +370,15 @@ func TestChoosingTheSecondFolder(t *testing.T) {
 // A folder mounted at /backups-copy is approved beside the configured roots,
 // but not when backups are off or when the folder is only a directory.
 func TestCopyRootApprovedWhenMounted(t *testing.T) {
-	info := filepath.Join(t.TempDir(), "mountinfo")
-	previous := mountInfo
-	mountInfo = info
-	t.Cleanup(func() { mountInfo = previous })
-	storage := &Storage{Roots: "/backups"}
-	os.WriteFile(info, []byte("36 35 98:0 /mnt1 /backups rw - ext4 /dev/root rw\n"), 0o600)
+	table := "36 35 98:0 /mnt1 /backups rw - ext4 /dev/root rw\n"
+	previous := mountinfo.Table
+	mountinfo.Table = func() ([]byte, error) { return []byte(table), nil }
+	t.Cleanup(func() { mountinfo.Table = previous })
+	storage := &Storage{Roots: []string{"/backups"}}
 	if roots := storage.ApprovedRoots(); len(roots) != 1 {
 		t.Fatal(roots)
 	}
-	os.WriteFile(info, []byte("36 35 98:0 /mnt1 /backups rw - ext4 /dev/root rw\n37 35 98:1 /nas /backups-copy rw - nfs nas:/x rw\n"), 0o600)
+	table += "37 35 98:1 /nas /backups-copy rw - nfs nas:/x rw\n"
 	if roots := storage.ApprovedRoots(); len(roots) != 2 || roots[1] != CopyRoot {
 		t.Fatal(roots)
 	}

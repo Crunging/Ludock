@@ -1,6 +1,9 @@
 package docker
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Engine API fields Ludock uses. Field names follow the daemon.
 
@@ -47,6 +50,16 @@ type ContainerConfig struct {
 	StdinOnce   bool              `json:"StdinOnce"`
 	Tty         bool              `json:"Tty"`
 	StopTimeout *int              `json:"StopTimeout,omitempty"`
+}
+
+// Environment maps each variable's name to its value.
+func (c ContainerConfig) Environment() map[string]string {
+	env := map[string]string{}
+	for _, entry := range c.Env {
+		key, value, _ := strings.Cut(entry, "=")
+		env[key] = value
+	}
+	return env
 }
 
 type MountPoint struct {

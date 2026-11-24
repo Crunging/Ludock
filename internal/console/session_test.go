@@ -116,17 +116,13 @@ func TestLogsAreRedactedAndStopOnRevocation(t *testing.T) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() { f.sessions.Logs(streamCtx, channel, f.validate(f.friend), f.serverID, ""); close(done) }()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && !strings.Contains(channel.text(), "ok") {
-		time.Sleep(5 * time.Millisecond)
-	}
+	eventually(func() bool { return strings.Contains(channel.text(), "ok") })
 	text := channel.text()
 	if !strings.Contains(text, "joined") || strings.Contains(text, "hunter2-secret") || !strings.Contains(text, "[redacted]") {
 		t.Fatal(text)
 	}
 	f.authz.Share(ctx, f.admin, f.adminSession, f.friend.ID, f.serverID, nil)
-	time.Sleep(100 * time.Millisecond)
-	if channel.Open() {
+	if !eventually(func() bool { return !channel.Open() }) {
 		t.Fatal("stream stayed open after revocation")
 	}
 	cancel()
@@ -147,10 +143,7 @@ func TestLogAccessChecksAreBounded(t *testing.T) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() { f.sessions.Logs(streamCtx, channel, validate, f.serverID, ""); close(done) }()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && !strings.Contains(channel.text(), "line 1999") {
-		time.Sleep(5 * time.Millisecond)
-	}
+	eventually(func() bool { return strings.Contains(channel.text(), "line 1999") })
 	cancel()
 	<-done
 	if !strings.Contains(channel.text(), "line 1999") || checks.Load() > 200 {

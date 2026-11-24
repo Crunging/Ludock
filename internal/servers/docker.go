@@ -563,11 +563,7 @@ func toContainer(info *docker.ContainerInspect, own self.Info) (*Container, erro
 		gamePort = integration.GamePort
 	}
 	container.ConnectPort = connectPort(bindings, gamePort)
-	env := map[string]string{}
-	for _, entry := range info.Config.Env {
-		key, value, _ := strings.Cut(entry, "=")
-		env[key] = value
-	}
+	env := info.Config.Environment()
 	if adapter := games.ResolveAdapter(gameType, container.Labels); adapter != nil {
 		// A game that announces another way can warn players only while that
 		// way is on.
