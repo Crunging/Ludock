@@ -572,7 +572,8 @@ func (s *Storage) removeFile(directory, name string, assertAccess func() error) 
 }
 
 // present reports whether a published archive is a regular file in
-// directory, or errFolderAway when directory can't be opened.
+// directory, or errFolderAway when directory can't be opened or the file
+// can't be checked.
 func (s *Storage) present(directory, id string) (bool, error) {
 	if directory == "" || checkID(id) != nil {
 		return false, nil
@@ -583,7 +584,13 @@ func (s *Storage) present(directory, id string) (bool, error) {
 	}
 	defer dir.close()
 	var stat unix.Stat_t
-	return unix.Fstatat(dir.fd, id+".tar", &stat, unix.AT_SYMLINK_NOFOLLOW) == nil && stat.Mode&unix.S_IFMT == unix.S_IFREG, nil
+	if err := unix.Fstatat(dir.fd, id+".tar", &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return false, nil
+		}
+		return false, errFolderAway
+	}
+	return stat.Mode&unix.S_IFMT == unix.S_IFREG, nil
 }
 
 // reachable is errFolderAway when directory can't be opened.

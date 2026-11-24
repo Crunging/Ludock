@@ -525,7 +525,7 @@ const copyLimit = 50
 // A pass looks at each due copy once, in order, so busy servers' copies
 // don't hold back the rest, and the next pass starts again from the first.
 func (s *Service) CopyDue(ctx context.Context) error {
-	var after copyCursor
+	after := copyCursor{due: time.Now().UnixMilli()}
 	for {
 		if err := s.finishCopyRemovals(ctx); err != nil {
 			return err
@@ -539,6 +539,8 @@ func (s *Service) CopyDue(ctx context.Context) error {
 
 // copyCursor is the last due copy a pass looked at.
 type copyCursor struct {
+	// due is when the pass started: copies retried during it wait for the next.
+	due             int64
 	nextAt, created int64
 	id              string
 }
@@ -548,7 +550,7 @@ type copyCursor struct {
 func (s *Service) copyBatch(ctx context.Context, after *copyCursor) (bool, error) {
 	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+`,copy_next_at FROM backups
     WHERE state='complete' AND copy_state IN ('pending','failed') AND copy_next_at<=? AND (copy_next_at,created_at,id)>(?,?,?)
-    ORDER BY copy_next_at,created_at,id LIMIT ?`, time.Now().UnixMilli(), after.nextAt, after.created, after.id, copyLimit)
+    ORDER BY copy_next_at,created_at,id LIMIT ?`, after.due, after.nextAt, after.created, after.id, copyLimit)
 	if err != nil {
 		return false, err
 	}
@@ -561,7 +563,7 @@ func (s *Service) copyBatch(ctx context.Context, after *copyCursor) (bool, error
 			return false, err
 		}
 		due = append(due, backup)
-		*after = copyCursor{nextAt, backup.CreatedAt, backup.ID}
+		after.nextAt, after.created, after.id = nextAt, backup.CreatedAt, backup.ID
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -812,13 +814,14 @@ func (s *Service) look(folder, id string, stalled error) (bool, error) {
 // isn't responding), and Missing, and fails when a folder it must look into
 // isn't.
 func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
-	backup.FromCopy, backup.Missing = false, false
+	backup.FromCopy, backup.Missing, backup.found = false, false, false
 	found, err := s.look(backup.destination, backup.ID, errFolderStalled)
 	backup.FolderAway = err != nil
 	if errors.Is(err, errFolderStalled) {
 		return "", err
 	}
 	if found {
+		backup.found = true
 		return backup.destination, nil
 	}
 	looked := err == nil
@@ -835,7 +838,7 @@ func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 			return "", err
 		}
 		if found {
-			backup.FromCopy = true
+			backup.FromCopy, backup.found = true, true
 			return folder, nil
 		}
 		looked = looked && err == nil
@@ -849,7 +852,7 @@ func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 // look for, is not.
 func (s *Service) readable(backup *Backup) bool {
 	_, err := s.ArchiveFolder(backup)
-	return err == nil && (backup.FromCopy || !backup.FolderAway && !backup.Missing)
+	return err == nil && backup.found
 }
 
 // Locate sets FromCopy and FolderAway on backups and Copying on complete

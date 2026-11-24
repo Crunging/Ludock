@@ -313,7 +313,8 @@ func TestPruneSparesKeptAndOpenArchives(t *testing.T) {
 
 // Space pressure removes the oldest backups only until the next one fits,
 // measuring again after each removal, and skips archives left in an earlier
-// backup folder, which free nothing there.
+// backup folder, which free nothing there. While that folder can't be
+// reached, its archive doesn't count toward the limit, so nothing goes.
 func TestPruneMakesRoomForTheNextBackup(t *testing.T) {
 	s, first, _ := recorded(t)
 	destination := s.Storage.Roots
@@ -333,16 +334,25 @@ func TestPruneMakesRoomForTheNextBackup(t *testing.T) {
 	}
 	// Six daily backups of 100 bytes leave 50 under the limit; the next
 	// needs 110.
-	if err := s.Prune(ctx, first.ServerID, Settings{Destination: destination, MaxBytes: 650}, ids[5]); err != nil {
-		t.Fatal(err)
-	}
-	var left []string
-	for _, id := range ids {
-		if exists, _ := s.Exists(ctx, id, true); exists {
-			left = append(left, id)
+	prune := func(want ...string) {
+		t.Helper()
+		if err := s.Prune(ctx, first.ServerID, Settings{Destination: destination, MaxBytes: 650}, ids[5]); err != nil {
+			t.Fatal(err)
+		}
+		var left []string
+		for _, id := range ids {
+			if exists, _ := s.Exists(ctx, id, true); exists {
+				left = append(left, id)
+			}
+		}
+		if !slices.Equal(left, want) {
+			t.Fatal(left)
 		}
 	}
-	if !slices.Equal(left, []string{ids[0], ids[2], ids[3], ids[4], ids[5]}) {
-		t.Fatal(left)
-	}
+	prune(ids...)
+	earlier := filepath.Join(destination, "earlier")
+	os.Mkdir(earlier, 0o755)
+	os.Rename(filepath.Join(destination, first.ID+".tar"), filepath.Join(earlier, first.ID+".tar"))
+	s.DB.Exec("UPDATE backups SET destination=? WHERE id=?", earlier, first.ID)
+	prune(ids[0], ids[2], ids[3], ids[4], ids[5])
 }

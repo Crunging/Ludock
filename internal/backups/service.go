@@ -51,6 +51,8 @@ type Backup struct {
 	// Missing is set by ArchiveFolder when its archive is in none of the
 	// folders it could be in, and every one of them could be looked into.
 	Missing bool
+	// found is set by ArchiveFolder when it located the archive.
+	found bool
 
 	// FromCopy is set by ArchiveFolder when the archive is read from the
 	// second copy, and Copying by Locate while the copy is being made.
@@ -963,14 +965,14 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 	}
 	// Only backups that can be read count toward what the rule keeps: rows
 	// whose archives are gone, or can't be looked for now, would otherwise
-	// take the places of ones that can be restored. They aren't removed.
+	// take the places of ones that can be restored. They aren't removed, and
+	// their sizes don't make the total limit remove others.
 	readable := map[string]bool{}
-	var missing int64
+	var unconfirmed int64
 	for index := range list {
-		if backup := &list[index]; backup.State == "complete" && backup.KeptAt == 0 {
-			readable[backup.ID] = s.readable(backup)
-			if backup.Missing {
-				missing += backup.Size
+		if backup := &list[index]; backup.State == "complete" {
+			if readable[backup.ID] = s.readable(backup); !readable[backup.ID] {
+				unconfirmed += backup.Size
 			}
 		}
 	}
@@ -985,7 +987,7 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 	// Space is measured again after each removal, and only archives in the
 	// current folder free room on its disk.
 	for _, backup := range spare {
-		if room, need := s.room(ctx, list, settings, missing); room >= need {
+		if room, need := s.room(ctx, list, settings, unconfirmed); room >= need {
 			break
 		}
 		if backup.destination != settings.Destination {
@@ -1018,11 +1020,11 @@ func (s *Service) removeIdle(ctx context.Context, backup Backup) error {
 }
 
 // room is the space left for the server's next backup and the space it
-// should need: its newest backup's size plus a margin. missing is the size
-// of the server's backups whose archives are gone, which the total limit
-// doesn't count. When either is unknown, need is zero, so space alone
+// should need: its newest backup's size plus a margin. unconfirmed is the
+// size of the server's backups whose archives weren't found, which the total
+// limit doesn't count. When either is unknown, need is zero, so space alone
 // removes nothing.
-func (s *Service) room(ctx context.Context, list []Backup, settings Settings, missing int64) (room, need int64) {
+func (s *Service) room(ctx context.Context, list []Backup, settings Settings, unconfirmed int64) (room, need int64) {
 	index := slices.IndexFunc(list, func(backup Backup) bool { return backup.State == "complete" })
 	if index < 0 {
 		return 0, 0
@@ -1037,7 +1039,7 @@ func (s *Service) room(ctx context.Context, list []Backup, settings Settings, mi
 		if err != nil {
 			return 0, 0
 		}
-		room = min(room, settings.MaxBytes-used+missing)
+		room = min(room, settings.MaxBytes-used+unconfirmed)
 	}
 	size := list[index].Size
 	return room, size + size*spaceMargin/100

@@ -819,10 +819,12 @@ func TestCopyDueSkipsBusyServers(t *testing.T) {
 }
 
 // Two of a day's backups lost their archives, as a hand-cleaned folder
-// would leave them; one still has its second copy. Retention keeps the
-// newest three that can be restored, so the earlier ones stay, and the
-// total limit doesn't count the lost archive. The lost one stays listed,
-// marked missing.
+// would leave them; one still has its second copy, and a kept backup lost
+// its archive too. Retention keeps the newest three that can be restored,
+// so the earlier ones stay, and the total limit doesn't count the lost
+// archives. The lost ones stay listed, marked missing. With the second
+// folder unreachable, the backup read from it can't be confirmed and takes
+// no place in the rule either.
 func TestRetentionCountsReadableBackups(t *testing.T) {
 	f := newCopyFixture(t)
 	at := func(day, hour int) int64 { return time.Date(2026, 1, day, hour, 0, 0, 0, time.Local).UnixMilli() }
@@ -831,24 +833,31 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 	if err := f.s.CopyDue(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{filepath.Join(f.main, b.ID+".tar"), filepath.Join(f.copies, b.ID+".tar"), filepath.Join(f.main, c.ID+".tar")} {
+	kept := f.add(t, "world data", at(8, 12))
+	f.s.DB.Exec("UPDATE backups SET kept_at=1 WHERE id=?", kept.ID)
+	for _, path := range []string{filepath.Join(f.main, b.ID+".tar"), filepath.Join(f.copies, b.ID+".tar"), filepath.Join(f.main, c.ID+".tar"),
+		filepath.Join(f.main, kept.ID+".tar")} {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
 	}
 	newest := f.add(t, "world data", at(10, 13))
-	// Five rows of 10 bytes, four archives: room for the next is 20 bytes,
-	// or 10 counting the lost one.
+	// Six rows of 10 bytes, four archives: the next needs 11 bytes, and room
+	// is 15 bytes, or less counting a lost one.
 	settings := f.settings
-	settings.MaxBytes = 60
-	if err := f.s.Prune(ctx, f.serverID, settings, newest.ID); err != nil {
-		t.Fatal(err)
-	}
-	for _, backup := range []Backup{earlier, a, b, c, newest} {
-		if found, _ := f.s.Exists(ctx, backup.ID, true); !found {
-			t.Fatal("retention removed a backup that can be restored, or a lost one", backup.ID)
+	settings.MaxBytes = 55
+	prune := func() {
+		t.Helper()
+		if err := f.s.Prune(ctx, f.serverID, settings, newest.ID); err != nil {
+			t.Fatal(err)
+		}
+		for _, backup := range []Backup{earlier, a, b, c, kept, newest} {
+			if found, _ := f.s.Exists(ctx, backup.ID, true); !found {
+				t.Fatal("retention removed a backup that can be restored, or a lost one", backup.ID)
+			}
 		}
 	}
+	prune()
 	listed, err := f.s.List(ctx, f.serverID)
 	if err != nil {
 		t.Fatal(err)
@@ -857,10 +866,14 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, backup := range listed {
-		if lost := backup.ID == b.ID; backup.Missing != lost || backup.FromCopy != (backup.ID == c.ID) {
+		if lost := backup.ID == b.ID || backup.ID == kept.ID; backup.Missing != lost || backup.FromCopy != (backup.ID == c.ID) {
 			t.Fatalf("%+v", backup)
 		}
 	}
+	if err := os.Rename(f.copies, f.copies+"-away"); err != nil {
+		t.Fatal(err)
+	}
+	prune()
 }
 
 // A backup folder that stops responding is given up on within a few seconds,
