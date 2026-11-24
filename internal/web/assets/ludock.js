@@ -516,18 +516,27 @@
 
   // data-autosubmit submits its form on change (a GET form keeps working
   // without scripts through its submit button).
-  // A field its form disables while saving loses focus; it gets it back after.
-  var refocus = null;
+  // A field its form disables while saving loses focus; it gets it back once
+  // htmx has swapped the form or re-enabled the field.
   document.addEventListener("change", function (event) {
     var field = event.target;
     if (!field.matches || !field.matches("[data-autosubmit]") || !field.form) return;
-    refocus = field.id || null;
+    field.form.ludockRefocus = field.id;
     field.form.requestSubmit();
   });
-  document.addEventListener("htmx:finally:request", function () {
-    var field = refocus && document.getElementById(refocus);
-    refocus = null;
-    if (field && (!document.activeElement || document.activeElement === document.body)) field.focus();
+  document.addEventListener("htmx:before:request", function (event) {
+    var ctx = event.detail.ctx, form = ctx.sourceElement;
+    if (!form || !form.ludockRefocus) return;
+    ctx.refocus = form.ludockRefocus;
+    delete form.ludockRefocus;
+  });
+  document.addEventListener("htmx:finally:request", function (event) {
+    var id = event.detail.ctx.refocus;
+    if (!id) return;
+    setTimeout(function () {
+      var field = document.getElementById(id);
+      if (field && (!document.activeElement || document.activeElement === document.body)) field.focus();
+    });
   });
 
   // Dialogs swapped in with data-open-on-load open as modals and leave the
