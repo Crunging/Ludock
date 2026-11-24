@@ -202,7 +202,9 @@
       status.textContent = "Uploading " + (chosen.length - files.length + offset + index + 1) + " of " + chosen.length + ": " + current;
     }
     try {
-      for (var batch of batches(files)) {
+      var queue = batches(files);
+      for (var position = 0; position < queue.length; position++) {
+        var batch = queue[position];
         if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
         report(0);
         var response = await send(batch, report);
@@ -210,8 +212,20 @@
           window.location.assign("/login");
           return;
         }
-        if (response.status >= 500) {
-          // A proxy's error can come after the server wrote some of the batch.
+        // Ludock answers a refused file in its results, so a bare 413 is a
+        // proxy's body limit: its files go again one at a time.
+        if (response.status === 413) {
+          if (batch.length > 1) {
+            queue.splice(position + 1, 0, ...batch.map(function (file) { return [file]; }));
+          } else {
+            lines.push("Could not upload “" + batch[0].name + "”: " + errorText(response.status, response.body));
+            offset += 1;
+          }
+          continue;
+        }
+        // A proxy's error or timeout can come after the server wrote some of
+        // the batch.
+        if (response.status >= 500 || response.status === 408) {
           stop = "The results for " + (batch.length === 1 ? "“" + batch[0].name + "”" : batch.length + " files from “" + batch[0].name + "”") +
             " could not be confirmed: " + errorText(response.status, response.body) + " Review the folder before uploading again.";
           offset += batch.length;
