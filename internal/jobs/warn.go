@@ -133,10 +133,7 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 			// Cancelled while the warning went out: the canceller didn't know
 			// it was sent, so the players hear it's off from here.
 			if errors.Is(err, ops.ErrCancelled) {
-				j.broadcast(ctx, server, schedules.CalledOffMessage(job.Job.Kind), nil, func() error {
-					_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, server.Observation, job.Job.BindingRevision)
-					return err
-				}, locked)
+				j.sayCalledOff(ctx, job.Job, job.Job.BindingRevision, locked)
 			}
 			if err != nil {
 				return err

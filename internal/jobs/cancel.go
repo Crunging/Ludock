@@ -7,6 +7,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/console"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedules"
@@ -96,9 +97,9 @@ func (j *Jobs) Cancel(ctx context.Context, user *db.SessionUser, tokenHash, serv
 	// A warning sent and saved before the cancel is answered here; one still
 	// going out is answered by the operation itself.
 	if before.Recovery.WarnSent {
-		j.sayCalledOff(context.WithoutCancel(ctx), before, before.BindingRevision)
+		j.sayCalledOff(context.WithoutCancel(ctx), before, before.BindingRevision, false)
 	} else if heard := j.countedDown(ctx, before); heard != 0 {
-		j.sayCalledOff(context.WithoutCancel(ctx), before, heard)
+		j.sayCalledOff(context.WithoutCancel(ctx), before, heard, false)
 	}
 	return nil
 }
@@ -144,7 +145,7 @@ func (r registrar) Register(kind string, handler ops.Handler) {
 		if err != nil {
 			if _, public := apperr.As(err); public && scheduled {
 				if heard := r.jobs.countedDown(ctx, job.Job); heard != 0 {
-					r.jobs.sayCalledOff(ctx, job.Job, heard)
+					r.jobs.sayCalledOff(ctx, job.Job, heard, false)
 				}
 			}
 			return nil, err
@@ -170,21 +171,16 @@ func (r registrar) refusal(ctx context.Context, job *ops.Context) error {
 }
 
 // sayCalledOff tells players a warned operation is off, best effort, on
-// binding, the revision they were warned on. Like the warning, it runs on
-// Ludock's own authority: the operation's owner may be the one who lost
-// access.
-func (j *Jobs) sayCalledOff(ctx context.Context, job *ops.Job, binding int64) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	server, err := j.Servers.ResolveChecked(ctx, job.ServerID, binding, func(context.Context) error { return nil })
-	if err != nil || server.Container.State != "running" {
+// binding, the revision they were warned on; held says the caller holds the
+// server's locks.
+func (j *Jobs) sayCalledOff(ctx context.Context, job *ops.Job, binding int64, held bool) {
+	if j.Console == nil {
 		return
 	}
-	assertAccess := func() error {
-		_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, server.Observation, binding)
-		return err
-	}
-	if err := j.broadcast(ctx, server, schedules.CalledOffMessage(job.Kind), nil, assertAccess, false); err != nil {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	err := schedules.TellCalledOff(ctx, j.Servers, j.Locks, console.Broadcaster{Runtime: j.Console}, job.ServerID, job.Kind, binding, held)
+	if err != nil {
 		log.Debug("Could not tell players a warned operation was cancelled")
 	}
 }

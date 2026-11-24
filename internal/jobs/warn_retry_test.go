@@ -175,3 +175,27 @@ func TestResumedWarningIsSentAgain(t *testing.T) {
 		runner.Stop()
 	}
 }
+
+// A server whose sharing is paused, awaiting review of a change to its game
+// or data folders, hears only an administrator's own actions: their warned
+// restart warns players, but its call-off, sent on Ludock's authority, isn't.
+func TestCallOffSkipsAServerAwaitingReview(t *testing.T) {
+	f := setup(t)
+	f.jobs.Poll = 20 * time.Millisecond
+	f.jobs.WarningLead = time.Minute
+	f.withPlayers(1)
+	serverID, received, _ := f.flakyConsole(t, 0)
+	if _, err := f.jobs.DB.Exec("UPDATE logical_servers SET sharing_paused=1 WHERE id=?", serverID); err != nil {
+		t.Fatal(err)
+	}
+	job := f.warnedRestart(t, serverID)
+	waitFor(t, f.runner, job.ID, func(current *ops.Job) bool { return current.Recovery.WarnSent })
+	if err := f.jobs.Cancel(ctx, f.admin, f.adminSession, serverID, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	finished(t, f.runner, job.ID)
+	got := strings.Join(received(), "\n")
+	if !strings.Contains(got, "Server restart in 1 minute.") || strings.Contains(got, "cancelled") {
+		t.Fatal(got)
+	}
+}
