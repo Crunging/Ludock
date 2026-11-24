@@ -71,6 +71,7 @@ What each game gets beyond start, stop, files, and backups:
 | Project Zomboid | Names | | ✓ | |
 | Conan Exiles | Character names | | ✓ | ✓ |
 | Rust | | | ✓ | ✓ |
+| V Rising | | | ✓ | ✓ |
 | 7 Days to Die | Names | Kick | ✓ | |
 | Valheim, Enshrouded | Count | | | ✓ |
 | Terraria | Names | Kick, ban | ✓ | |
@@ -78,8 +79,7 @@ What each game gets beyond start, stop, files, and backups:
 | Minecraft: Bedrock Edition | Names | Kick | ✓ | ✓ |
 | Satisfactory, Don't Starve Together, Core Keeper | | | | ✓ |
 
-V Rising gets its console only. Names need the console's password; a count
-comes from the status check. "Restart updates the game" holds unless the
+Names need the console's password; a count comes from the status check. "Restart updates the game" holds unless the
 image's own settings pin a version or skip updates.
 
 Project Zomboid and Conan Exiles get no kick or ban buttons: Zomboid's names
@@ -96,8 +96,8 @@ images' default.
 These games were run on their real images, under Compose, with Ludock beside
 them. Players joined Minecraft Java and Terraria, with scripted clients that
 need no account; on the others, who's online was read on an empty server, and
-the replies with players come from the game's own text. The others follow
-their images' documentation and haven't been run yet.
+the replies with players come from the game's own text. The rest follow
+their images' documentation.
 
 - **Minecraft** (`itzg/minecraft-server`, vanilla 1.21.11): with zero, one,
   and two players online, Ludock opened RCON, which the game logs, only when
@@ -149,9 +149,59 @@ their images' documentation and haven't been run yet.
   a new world, not the 3.5 GB server download around them; a backup and its
   restore each took about 15 s. `ludock.files: "/palworld"` takes the whole
   folder again.
+- **Core Keeper** (`escaping/core-keeper-dedicated`): no console or status
+  check, and no address, since the game connects through Steam's relay
+  unless `SERVER_PORT` is set. The game saves its world when Docker stops it,
+  within a few seconds. Files and backups take the world in
+  `/home/steam/core-keeper-data`, about 0.1 MB on a new world, not the
+  570 MB server download in `/home/steam/core-keeper-dedicated`. A backup
+  and its restore brought back the same world.
+- **V Rising** (`trueosiris/vrising`, 1.1): its console needs RCON on, with
+  `HOST_SETTINGS_Rcon__Enabled=true` and `HOST_SETTINGS_Rcon__Password`, the
+  variable Ludock reads the password from. `announce` warns players: the game
+  took Ludock's restart warning. RCON has no save command or player list, so
+  who's online isn't shown. Docker's stop ends the game without saving, so a
+  stop or backup keeps its last autosave, every 2 minutes by default
+  (`AutoSaveInterval` in `ServerHostSettings.json`); the game's own
+  `shutdown` saves but waits at least a minute. Files and backups take
+  `/mnt/vrising/persistentdata`, about 20 MB, not the 1.9 GB server in
+  `/mnt/vrising/server`. A backup and its restore brought back the same
+  saves, and the game loaded the latest.
+- **Enshrouded** (`sknnr/enshrouded-dedicated-server` and
+  `mornedhels/enshrouded-server`): no console. The status check and the count
+  answer on 15637. The game saves its world when Docker stops it, within a
+  few seconds. With sknnr's image, files and backups take the `savegame`
+  volume; mornedhels' keeps the 8 GB server download in `/opt/enshrouded`
+  with the world inside it, and files and backups take only its default
+  `/opt/enshrouded/server/savegame`; with another `SERVER_SAVE_DIR`, name it
+  in `ludock.files`. On both, a backup and its restore
+  brought back the same world.
+- **7 Days to Die** (`vinanrra/7dtd-server`, 3.4): the image leaves
+  `TelnetPassword` empty in `sdtdserver.xml`, so the game takes Telnet
+  without a password, only from inside its container, where Ludock connects;
+  a password set there is read from that file. Who's online comes from
+  `listplayers`, read on an empty server; `saveworld` saves before a stop,
+  and `say` warns players: the game posted Ludock's message in global chat.
+  The image stops the game through LinuxGSM, which saves and shuts it down
+  in about 10 seconds. Files and backups take the saves in
+  `/home/sdtdserver/.local/share/7DaysToDie`, about 17 MB on Navezgane, and
+  LinuxGSM's config. They leave out the 17 GB server in
+  `/home/sdtdserver/serverfiles` (where `sdtdserver.xml` also lives),
+  LinuxGSM's own backups, and its logs, whose `steam` link stopped every
+  backup; `ludock.files` takes them back. A backup and its restore brought
+  back the same saves. With the README's `START_MODE=1` a restart doesn't
+  update the game.
 - **Project Zomboid** (`renegademaster/zomboid-dedicated-server`) couldn't be
-  checked: the image doesn't start the current game, Build 42, which refuses
-  the empty arguments it passes.
+  checked: the image, last updated in 2024, passes empty arguments that the
+  current game, Build 42, refuses, and so does Build 41.78 on the image's
+  `GAME_VERSION=legacy41`. Files and backups leave out the server download
+  in `/home/steam/ZomboidDedicatedServer`, as the image's README mounts it.
+
+Not run, because this test machine (8 GB of memory, a 25 GB download limit)
+couldn't hold them: Counter-Strike 2 (60 GB of disk), Conan Exiles (8 GB of
+memory at least), Rust (12 GB), Satisfactory (8 to 16 GB), and both ARKs (6
+to 13 GB). Don't Starve Together needs a server token from Klei, so it
+wasn't run either.
 
 ## Labels
 

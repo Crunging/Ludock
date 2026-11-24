@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -25,6 +26,11 @@ func a2sInfoPacket(players, capacity, bots byte) []byte {
 	return binary.LittleEndian.AppendUint16(packet, 2456)
 }
 
+// enshroudedInfo is a reply captured from an empty
+// sknnr/enshrouded-dedicated-server with four slots, after its challenge.
+var enshroudedInfo, _ = hex.DecodeString("ffffffff49114c75646f636b207265616c207269670000456e7368726f7564656400456e7368726f7564656400" +
+	"0000000400646c0100302e302e31352e3000b1153d17380ab1a7cd4001313b313238373336393b313b303b313b303b303b303b3000a45d120000000000")
+
 func minecraftStatus(json string) []byte {
 	payload := append([]byte{0x00}, appendVarInt(nil, int32(len(json)))...)
 	return append(payload, json...)
@@ -43,6 +49,7 @@ func TestParseA2S(t *testing.T) {
 		challenge bool
 	}{
 		{"valheim", valid, true, 3, 10, false},
+		{"enshrouded", enshroudedInfo, true, 0, 4, false},
 		{"bots are not players", a2sInfoPacket(5, 10, 2), true, 3, 10, false},
 		{"more bots than players", a2sInfoPacket(1, 10, 4), true, 0, 10, false},
 		{"empty server", a2sInfoPacket(0, 0, 0), true, 0, 0, false},

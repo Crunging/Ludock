@@ -2,6 +2,7 @@ package files
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/identity"
@@ -73,21 +74,28 @@ func TestRootIDsFollowPaths(t *testing.T) {
 
 // lloesche/valheim-server's README mounts the server it downloads at
 // /opt/valheim beside the worlds in /config: 4 GB that every backup copied.
-// Files and backups take only /config unless a label names the download.
+// escaping/core-keeper-dedicated's does the same with a 570 MB download
+// beside a world of 100 KB. Files and backups take only the game's data
+// unless a label names the download.
 func TestRootsLeaveOutServerFiles(t *testing.T) {
-	mounts := []identity.Mount{
-		{Type: "bind", Source: "/srv/valheim/config", Destination: "/config", Writable: true},
-		{Type: "volume", Source: "server", Destination: "/opt/valheim/", Writable: true},
-	}
-	if got := Roots("valheim", map[string]string{}, mounts); !reflect.DeepEqual(got, []Root{{RootID("/config"), "Valheim config", "/config"}}) {
-		t.Fatal(got)
-	}
-	if got := Roots("custom", map[string]string{}, mounts); len(got) != 2 {
-		t.Fatal(got)
-	}
-	labels := map[string]string{"ludock.files": "/config,/opt/valheim"}
-	if got := Roots("valheim", labels, mounts); len(got) != 2 || got[1].Path != "/opt/valheim" {
-		t.Fatal(got)
+	for _, game := range []struct{ gameType, data, download, label string }{
+		{"valheim", "/config", "/opt/valheim/", "Valheim config"},
+		{"core-keeper", "/home/steam/core-keeper-data", "/home/steam/core-keeper-dedicated", "core-keeper-data"},
+	} {
+		mounts := []identity.Mount{
+			{Type: "bind", Source: "/srv/game/data", Destination: game.data, Writable: true},
+			{Type: "volume", Source: "server", Destination: game.download, Writable: true},
+		}
+		if got := Roots(game.gameType, map[string]string{}, mounts); !reflect.DeepEqual(got, []Root{{RootID(game.data), game.label, game.data}}) {
+			t.Fatal(game.gameType, got)
+		}
+		if got := Roots("custom", map[string]string{}, mounts); len(got) != 2 {
+			t.Fatal(got)
+		}
+		labels := map[string]string{"ludock.files": game.data + "," + game.download}
+		if got := Roots(game.gameType, labels, mounts); len(got) != 2 || got[1].Path != strings.TrimSuffix(game.download, "/") {
+			t.Fatal(game.gameType, got)
+		}
 	}
 }
 

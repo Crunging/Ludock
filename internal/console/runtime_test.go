@@ -279,6 +279,69 @@ func TestMinecraftConsolePassword(t *testing.T) {
 	}
 }
 
+// vinanrra/7dtd-server keeps 7 Days to Die's Telnet password in
+// sdtdserver.xml, empty by default, which means no password; a value set
+// there is the password, and a variable a label names still wins.
+func TestSevenDaysConsolePassword(t *testing.T) {
+	engine, runtime, id := setup(t)
+	adapter := games.ResolveAdapter("7-days-to-die", nil)
+	target := Target{ContainerID: id, Labels: map[string]string{}}
+	config := func(value string) string {
+		return `<?xml version="1.0"?>` + "\n<ServerSettings>\n\t<property name=\"TelnetEnabled\"\tvalue=\"true\"/>\t\t<!-- Enable/Disable the telnet -->\n" +
+			"\t<property name=\"TelnetPassword\"\t\tvalue=\"" + value + "\"/>\t\t<!-- Password to gain entry to telnet interface. -->\n</ServerSettings>\n"
+	}
+	for value, want := range map[string]string{"": "", "s&amp;cret": "s&cret"} {
+		engine.Update(id, func(c *fakedocker.Container) {
+			c.Files = map[string]string{"/home/sdtdserver/serverfiles/sdtdserver.xml": config(value)}
+		})
+		if _, port, password, err := resolveTarget(t, runtime, target, adapter); err != nil || port != 8081 || password != want {
+			t.Fatalf("%q: %d %q %v", value, port, password, err)
+		}
+	}
+	// Nothing in the reply is taken for the empty password.
+	engine.Update(id, func(c *fakedocker.Container) {
+		c.Files = map[string]string{"/home/sdtdserver/serverfiles/sdtdserver.xml": config("")}
+	})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		conn.Write([]byte("*** Connected with 7DTD server.\r\n"))
+		bufio.NewReader(conn).ReadString('\n')
+		conn.Write([]byte("Total of 0 in the game\r\n"))
+		io.Copy(io.Discard, conn)
+	}()
+	out := &collected{}
+	direct := Target{ContainerID: id, State: "running", Labels: map[string]string{"ludock.console.host": "127.0.0.1",
+		"ludock.console.port": fmt.Sprint(listener.Addr().(*net.TCPAddr).Port)}}
+	if err := runtime.GameCommand(ctx, direct, adapter, "listplayers", out.output(), nil); err != nil || out.stdout.String() != "Total of 0 in the game" {
+		t.Fatalf("%q %v", out.stdout.String(), err)
+	}
+	engine.Update(id, func(c *fakedocker.Container) { c.Config.Env = []string{"OWN_PASSWORD=given"} })
+	named := Target{ContainerID: id, Labels: map[string]string{"ludock.console.password-env": "OWN_PASSWORD"}}
+	if _, _, password, err := resolveTarget(t, runtime, named, adapter); err != nil || password != "given" {
+		t.Fatal(password, err)
+	}
+	for name, content := range map[string]string{"no property": "<ServerSettings/>", "not XML": "TelnetPassword=x", "missing": ""} {
+		engine.Update(id, func(c *fakedocker.Container) {
+			c.Files = map[string]string{"/home/sdtdserver/serverfiles/sdtdserver.xml": content}
+			if content == "" {
+				c.Files = nil
+			}
+		})
+		if _, _, _, err := resolveTarget(t, runtime, target, adapter); err == nil || !strings.Contains(err.Error(), "could not read the console password") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 func TestNetworkConsoleHelperProtocol(t *testing.T) {
 	// The helper asks for authorization before each write; a refusal stops it.
 	stdinReader, stdinWriter := io.Pipe()

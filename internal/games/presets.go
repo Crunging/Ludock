@@ -32,8 +32,8 @@ type ConsolePreset struct {
 	DefaultPort           int
 	PasswordEnvCandidates []string
 	// PasswordFile is a file in the container whose first line is the
-	// console password.
-	PasswordFile string
+	// console password, or that holds it in PasswordProperty.
+	PasswordFile, PasswordProperty string
 	// Players lists who is online through this preset's adapter, and
 	// Moderation acts on them.
 	Players    *PlayerQuery
@@ -62,7 +62,8 @@ type Integration struct {
 	// default port.
 	Query *StatusQuery
 	// ServerFiles are folders where the images keep the game's own download,
-	// left out of files and backups unless ludock.files names them.
+	// logs, or backups, left out of files and backups unless ludock.files
+	// names them.
 	ServerFiles []string
 	// SavesOnStop: the game saves its world when Docker stops it, so a stop
 	// without a save command loses nothing.
@@ -122,7 +123,7 @@ var Integrations = []Integration{
 	{GameType: "project-zomboid", Name: "Project Zomboid", GamePort: &Port{16261, "udp"},
 		Repositories: []string{"renegademaster/zomboid-dedicated-server", "renegade-master/zomboid-dedicated-server",
 			"renegade_master/zomboid-dedicated-server"},
-		Aliases: []string{"projectzomboid"},
+		Aliases: []string{"projectzomboid"}, ServerFiles: []string{"/home/steam/ZomboidDedicatedServer"},
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Project Zomboid RCON", BroadcastTemplate: `servermsg "{message}"`,
 			DefaultPort: 27015, Placeholder: "players, save, servermsg Hello",
 			Commands: []QuickCommand{{"List players", "players"}, {"Save world", "save"}, {"Message players", "servermsg "}},
@@ -134,14 +135,23 @@ var Integrations = []Integration{
 			Players: &PlayerQuery{Command: "ListPlayers", Parse: ParseConanPlayers, Characters: true}},
 		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 27015, PortEnv: []string{"QUERY_PORT"}}},
 	{GameType: "v-rising", Name: "V Rising", GamePort: &Port{9876, "udp"}, Repositories: []string{"trueosiris/vrising"},
+		UpdatesOnStart: true, ServerFiles: []string{"/mnt/vrising/server"},
+		// The image writes HOST_SETTINGS_ variables into ServerHostSettings.json.
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "V Rising RCON", DefaultPort: 25575,
+			BroadcastTemplate: "announce {message}", PasswordEnvCandidates: []string{"HOST_SETTINGS_Rcon__Password"},
 			Commands: []QuickCommand{{"Message players", "announce "}}}},
 	{GameType: "rust", Name: "Rust", GamePort: &Port{28015, "udp"}, Repositories: []string{"didstopia/rust-server"},
 		UpdatesOnStart: true, Console: &ConsolePreset{Adapter: RustWebRCON, BroadcastTemplate: `say "{message}"`,
 			PasswordEnvCandidates: []string{"RUST_RCON_PASSWORD", "RCON_PASSWORD"}}},
 	{GameType: "7-days-to-die", StopTimeoutSeconds: 180, Name: "7 Days to Die", GamePort: &Port{26900, "tcp"},
 		Repositories: []string{"vinanrra/7dtd-server"}, Aliases: []string{"7dtd"},
+		// LinuxGSM's download in serverfiles also holds the game's config;
+		// its log folder holds a link, which stops every backup.
+		ServerFiles: []string{"/home/sdtdserver/serverfiles", "/home/sdtdserver/lgsm/backup", "/home/sdtdserver/log"},
+		// The image leaves TelnetPassword empty, so the game takes Telnet
+		// without one, inside its container only.
 		Console: &ConsolePreset{Adapter: TelnetConsole, Name: "7 Days to Die Telnet", BroadcastTemplate: `say "{message}"`,
+			PasswordFile: "/home/sdtdserver/serverfiles/sdtdserver.xml", PasswordProperty: "TelnetPassword",
 			DefaultPort: 8081, Placeholder: "listplayers, saveworld, say Hello",
 			Commands: []QuickCommand{{"List players", "listplayers"}, {"Save world", "saveworld"}, {"Message players", "say "}},
 			Players:  &PlayerQuery{Command: "listplayers", Parse: Parse7DaysPlayers}, Moderation: sevenDaysModeration}},
@@ -171,6 +181,9 @@ var Integrations = []Integration{
 		Repositories: []string{"robtme/satisfactory-server", "wolveix/satisfactory-server"}, UpdatesOnStart: true},
 	{GameType: "enshrouded", Name: "Enshrouded", GamePort: &Port{15637, "udp"},
 		Repositories: []string{"sknnr/enshrouded-dedicated-server", "mornedhels/enshrouded-server"}, UpdatesOnStart: true,
+		// mornedhels/enshrouded-server downloads the server into /opt/enshrouded
+		// and keeps the world inside it.
+		SavesOnStop: true, ServerFiles: []string{"/opt/enshrouded"}, Saves: []string{"/opt/enshrouded/server/savegame"},
 		// Enshrouded takes players and answers queries on one port.
 		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 15637, PortEnv: []string{"SERVER_QUERYPORT", "PORT"}}},
 	{GameType: "dont-starve-together", StopTimeoutSeconds: 360, Name: "Don't Starve Together", GamePort: &Port{10999, "udp"},
@@ -178,7 +191,8 @@ var Integrations = []Integration{
 	// Core Keeper connects through Steam's relay by default and takes direct
 	// connections only on a port the image leaves unset.
 	{GameType: "core-keeper", Name: "Core Keeper", Repositories: []string{"escaping/core-keeper-dedicated"},
-		UpdatesOnStart: true, Aliases: []string{"corekeeper"}},
+		UpdatesOnStart: true, SavesOnStop: true, Aliases: []string{"corekeeper"},
+		ServerFiles: []string{"/home/steam/core-keeper-dedicated"}},
 	{GameType: "vintage-story", Name: "Vintage Story", HealthCheck: true, GamePort: &Port{42420, "tcp"},
 		Repositories: []string{"zsuatem/vintagestory", "devidian/vintagestory"}, Aliases: []string{"vintagestory"},
 		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Vintage Story console", BroadcastTemplate: "/announce {message}",

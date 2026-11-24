@@ -5,8 +5,10 @@ package console
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"regexp"
 	"strconv"
@@ -236,7 +238,10 @@ func (r *Runtime) query(ctx context.Context, target Target, adapter *games.Adapt
 	}
 	// A password read from a file is not among the server's redacted
 	// environment values.
-	return strings.ReplaceAll(response, password, "[redacted]"), nil
+	if password != "" {
+		response = strings.ReplaceAll(response, password, "[redacted]")
+	}
+	return response, nil
 }
 
 var (
@@ -297,6 +302,9 @@ func (r *Runtime) password(ctx context.Context, target Target, adapter *games.Ad
 			name = candidate
 		}
 	}
+	if name == "" && adapter.PasswordProperty != "" {
+		return r.passwordProperty(ctx, target.ContainerID, adapter.PasswordFile, adapter.PasswordProperty)
+	}
 	if name == "" && adapter.PasswordFile != "" {
 		return r.passwordFile(ctx, target.ContainerID, adapter.PasswordFile, adapter.PasswordKey)
 	}
@@ -330,6 +338,40 @@ func (r *Runtime) passwordFile(ctx context.Context, containerID, file, key strin
 		}
 	}
 	return "", unavailable
+}
+
+// passwordProperty reads the value of an XML config's
+// <property name="..." value="..."/>, which may be empty.
+func (r *Runtime) passwordProperty(ctx context.Context, containerID, file, property string) (string, error) {
+	unavailable := errors.New("Ludock could not read the console password from " + file +
+		". Check that the game's console is on, or set " + games.LabelConsolePasswordEnv)
+	data, err := r.Docker.ReadFile(ctx, containerID, file, 256<<10)
+	if err != nil {
+		return "", unavailable
+	}
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return "", unavailable
+		}
+		element, ok := token.(xml.StartElement)
+		if !ok || element.Name.Local != "property" {
+			continue
+		}
+		var name, value string
+		for _, attribute := range element.Attr {
+			switch attribute.Name.Local {
+			case "name":
+				name = attribute.Value
+			case "value":
+				value = attribute.Value
+			}
+		}
+		if name == property {
+			return value, nil
+		}
+	}
 }
 
 type exitInfo = docker.ExecInspect

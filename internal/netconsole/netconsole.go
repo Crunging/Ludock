@@ -430,6 +430,10 @@ func PalworldAnnounce(ctx context.Context, host string, port int, password, mess
 
 var (
 	passwordPrompt = regexp.MustCompile(`(?i)password\s*[:>]?`)
+	endsSession    = regexp.MustCompile(`(?i)'exit' to end (the )?session`)
+	// 7 Days to Die's prompt is a line of its own, unlike banner text such
+	// as a game's name.
+	promptLine = regexp.MustCompile(`(?im)^\s*(please\s+)?enter\s+(the\s+)?password\s*:\s*$`)
 	// authFailed is a console's own rejection reply, which starts its line;
 	// streamed chat or log lines that mention one do not.
 	authFailed = regexp.MustCompile(`(?im)^\s*(password\s+(is\s+)?incorrect|incorrect\s+password|invalid\s+password|authentication\s+failed|login\s+failed)`)
@@ -491,7 +495,9 @@ func CleanTelnet(output, command string) string {
 	return strings.TrimSpace(echo.ReplaceAllString(output, ""))
 }
 
-// Telnet runs a command on a password-protected Telnet console.
+// Telnet runs a command on a Telnet console. Without a password it expects
+// no prompt and sends the command once the banner starts, as 7 Days to Die
+// takes it on a console that listens only inside its container.
 func Telnet(ctx context.Context, host string, port int, password, command string, control Control) (string, error) {
 	if err := control.check(); err != nil {
 		return "", err
@@ -509,7 +515,7 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 	results := reader(conn, maxTCPReceived, errTelnetTooLarge, ctx.Done())
 	var decoder telnetDecoder
 	var raw []byte
-	passwordSent, commandSent := false, false
+	passwordSent, commandSent, commandArmed := password == "", false, false
 	quiet := time.NewTimer(time.Hour)
 	quiet.Stop()
 	commandTimer := time.NewTimer(time.Hour)
@@ -541,7 +547,23 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 	for {
 		select {
 		case <-quiet.C:
-			return finish()
+			response, err := finish()
+			// Hanging up under the streamed log makes 7 Days to Die log a
+			// failed write; after exit, which its banner offers, it hangs up
+			// itself.
+			if err == nil && endsSession.MatchString(decodeText(raw[:commandAt])) && s.write([]byte("exit\n")) == nil {
+				closed := time.NewTimer(time.Second)
+				defer closed.Stop()
+				for open := true; open; {
+					select {
+					case result, ok := <-results:
+						open = ok && result.err == nil
+					case <-closed.C:
+						open = false
+					}
+				}
+			}
+			return response, err
 		case <-commandTimer.C:
 			commandAt = len(raw)
 			if err := s.write([]byte(command + "\n")); err != nil {
@@ -575,6 +597,20 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 			}
 			raw = append(raw, text...)
 			output := decodeText(raw)
+			if password == "" && !commandSent {
+				if promptLine.MatchString(output) {
+					return "", errors.New("Telnet console asks for a password")
+				}
+				// The command waits for the banner's end, so the exit it
+				// offers is known, or for a banner that never offers one.
+				if endsSession.MatchString(output) {
+					commandTimer.Reset(telnetCommandGap)
+				} else if !commandArmed {
+					commandTimer.Reset(telnetQuiet)
+				}
+				commandArmed = true
+				continue
+			}
 			if !passwordSent && passwordPrompt.MatchString(output) {
 				passwordSent, passwordAt = true, len(raw)
 				if err := s.write([]byte(password + "\n")); err != nil {

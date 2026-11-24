@@ -149,8 +149,8 @@ node real/rig.mjs down
 
 [`e2e/real/games.mjs`](../e2e/real/games.mjs) defines each game: its image,
 environment, ports, data folder, memory limit, and the log line or health check
-that says it's ready. It has Minecraft Java and Bedrock, Terraria, Factorio,
-Valheim, and Vintage Story; add one there. One game runs at a time. `up`
+that says it's ready. It has every game in "Checked on real servers" in the
+[reference](REFERENCE.md); add one there. One game runs at a time. `up`
 finishes setup with the journeys' administrator and prints how to sign in.
 `MINECRAFT_EULA=TRUE` accepts the
 [Minecraft EULA](https://aka.ms/MinecraftEULA) for the test servers; Valheim

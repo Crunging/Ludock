@@ -92,4 +92,85 @@ export const games = {
       volumes: ["palworld:/palworld"],
     },
   },
+  "core-keeper": {
+    // As the image's README mounts them: the world, and the server download.
+    data: "/home/steam/core-keeper-data",
+    ready: /Started session with info/,
+    service: {
+      image: "escaping/core-keeper-dedicated:latest",
+      environment: { WORLD_NAME: "Ludock real rig" },
+      mem_limit: "5g",
+      // Steam's relay by default, with no port to publish.
+      ports: [],
+      volumes: ["server:/home/steam/core-keeper-dedicated"],
+      stop_grace_period: "2m",
+    },
+  },
+  "v-rising": {
+    data: "/mnt/vrising/persistentdata",
+    ready: /Server Setup Complete|Startup Completed/,
+    timeout: 1_800_000,
+    service: {
+      image: "trueosiris/vrising:latest",
+      // The image writes HOST_SETTINGS_ variables into ServerHostSettings.json.
+      environment: { SERVERNAME: "Ludock real rig", WINEDEBUG: "fixme-all",
+        HOST_SETTINGS_Rcon__Enabled: "true", HOST_SETTINGS_Rcon__Password: "rig-rcon-password" },
+      mem_limit: "5g",
+      ports: ["9876:9876/udp", "9877:9877/udp"],
+      volumes: ["server:/mnt/vrising/server"],
+    },
+  },
+  enshrouded: {
+    ready: /Server is up and listening/,
+    timeout: 1_800_000,
+    service: {
+      image: "sknnr/enshrouded-dedicated-server:latest",
+      environment: { SERVER_NAME: "Ludock real rig", SERVER_PASSWORD: "rig-password", SERVER_SLOTS: "4" },
+      mem_limit: "5g",
+      ports: ["15637:15637/udp"],
+      // As the README mounts it: the image runs as uid 10000.
+      volumes: ["savegame:/home/steam/enshrouded/savegame"],
+    },
+  },
+  "enshrouded-mornedhels": {
+    ready: /Server is up and listening|HostOnline/,
+    timeout: 1_800_000,
+    service: {
+      image: "mornedhels/enshrouded-server:latest",
+      environment: { SERVER_NAME: "Ludock real rig", SERVER_SLOT_COUNT: "4" },
+      mem_limit: "5g",
+      ports: ["15637:15637/udp"],
+      stop_grace_period: "90s",
+      // As the README mounts it: the server download, with the saves inside.
+      volumes: ["game:/opt/enshrouded"],
+    },
+  },
+  "7-days-to-die": {
+    data: "/home/sdtdserver/.local/share/7DaysToDie",
+    ready: /GameServer\.LogOn successful|StartGame done/,
+    timeout: 2_700_000,
+    service: {
+      image: "vinanrra/7dtd-server:latest",
+      environment: { START_MODE: "1", VERSION: "stable", PUID: "1000", PGID: "1000", TimeZone: "UTC" },
+      mem_limit: "5g",
+      ports: ["26900:26900/tcp", "26900-26902:26900-26902/udp"],
+      // The README's other folders: LinuxGSM's config, the server, its logs and backups.
+      volumes: ["config:/home/sdtdserver/lgsm/config-lgsm/sdtdserver", "server:/home/sdtdserver/serverfiles/",
+        "log:/home/sdtdserver/log/", "backups:/home/sdtdserver/lgsm/backup/"],
+      ulimits: { nofile: { soft: 10240, hard: 10240 } },
+      stop_grace_period: "3m",
+    },
+  },
+  "project-zomboid": {
+    data: "/home/steam/Zomboid",
+    ready: /SERVER STARTED/,
+    timeout: 1_800_000,
+    service: {
+      image: "renegademaster/zomboid-dedicated-server:latest",
+      environment: { ADMIN_PASSWORD: "rigadminpassword", RCON_PASSWORD: "rigrconpassword", SERVER_NAME: "LudockRig", MAX_RAM: "3072m" },
+      mem_limit: "5g",
+      ports: ["16261:16261/udp", "16262:16262/udp"],
+      volumes: ["server:/home/steam/ZomboidDedicatedServer"],
+    },
+  },
 };
