@@ -45,7 +45,7 @@ async function expectResult(page, row, text, timeout = 45_000) {
 // ends at the end of the scheduled minute, so it lasts at most a minute.
 async function addWaitingRestart(page, server, minutes, then) {
   await openServer(page, server);
-  await page.getByRole("tab", { name: "Schedules" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
   await form.getByLabel("Back up first").uncheck();
   await dueNow(form);
@@ -87,16 +87,16 @@ test("a scheduled restart waits for players to leave, and a waiting run can be c
     await expectWaiting(page, row);
     await expect(row.locator(".schedule-next-run")).toContainText("then skipping");
     await expect(row.locator(".schedule-result")).toContainText("Waiting for players to leave");
-    await page.getByRole("tab", { name: "Activity" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
     await expect(page.locator(".activity-waiting")).toContainText("A scheduled restart is waiting for players to leave, until");
-    await page.getByRole("tab", { name: "Overview" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
     await expect(page.locator(".overview-facts").first()).toContainText("Restart waiting for players to leave, until");
   } finally {
     await gameCommand(console, "fake-leave Mara", ownServer.name);
     await gameCommand(console, "fake-leave Iris", otherServer.name);
   }
   // The restart goes ahead once the server is empty.
-  await page.getByRole("tab", { name: "Schedules" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
   await expect(page).toHaveURL(/tab=schedules/);
   const row = page.locator("#schedule-list tbody tr", { hasText: "Waits up to 30 min" }).first();
   await expectResult(page, row, "Succeeded", 75_000);
@@ -109,7 +109,7 @@ test("a scheduled restart waits for players to leave, and a waiting run can be c
 test("a scheduled restart warns the players a minute ahead, then runs on its minute", async ({ page, ownServer }) => {
   test.setTimeout(200_000);
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Schedules" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
   await form.getByLabel("Back up first").uncheck();
   await moreOptions(form);

@@ -43,7 +43,7 @@ func statusCheckText(f games.Features) string {
 templ settingsTabs(current string) {
 	<nav class="section-tabs" aria-label="Settings pages">
 		for _, tab := range []DetailTab{{ID: "/settings", Label: "General"}, {ID: "/settings/system", Label: "System"}} {
-			<a href={ templ.SafeURL(tab.ID) } role="tab" aria-selected={ strconv.FormatBool(tab.ID == current) } aria-current={ map[bool]string{true: "page"}[tab.ID == current] }>{ tab.Label }</a>
+			<a href={ templ.SafeURL(tab.ID) } aria-current={ map[bool]string{true: "page"}[tab.ID == current] }>{ tab.Label }</a>
 		}
 	</nav>
 }

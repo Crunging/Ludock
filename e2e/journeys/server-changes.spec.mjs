@@ -66,7 +66,7 @@ test("a new game pauses shared access until an administrator confirms it", async
   await signIn(friend, "friend", "friend password one");
   await friend.getByRole("link", { name: "enshrouded", exact: true }).click();
   const serverURL = friend.url();
-  await friend.getByRole("tab", { name: "Schedules" }).click();
+  await friend.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
   await friend.locator("#schedule-form").getByRole("button", { name: "Add schedule" }).click();
   await expect(friend.locator("#schedule-list tbody tr")).toHaveCount(1);
   try {
@@ -85,8 +85,8 @@ test("a new game pauses shared access until an administrator confirms it", async
     await expect(notice.getByRole("heading", { name: "This server changed in Docker" })).toBeVisible();
     await expect(notice).toContainText("Its game or data folders changed.");
     await expect(adminPage.locator(".detail-actions").getByRole("button", { name: "Start" })).toBeEnabled();
-    await expect(adminPage.getByRole("tab")).toContainText(["Overview", "Activity", "Schedules"]);
-    await adminPage.getByRole("tab", { name: "Schedules" }).click();
+    await expect(adminPage.locator(".section-tabs").getByRole("link")).toContainText(["Overview", "Activity", "Schedules"]);
+    await adminPage.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
     await expect(adminPage.locator("#schedule-list")).toContainText("The server’s game or data folders changed.");
 
     // The friend loses the server until then.
@@ -95,14 +95,14 @@ test("a new game pauses shared access until an administrator confirms it", async
     await friend.goto("/");
     await expect(friend.getByText("No servers shared with you yet")).toBeVisible();
 
-    await adminPage.getByRole("tab", { name: "Overview" }).click();
+    await adminPage.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
     await notice.getByRole("button", { name: "Confirm and restore access" }).click();
     await expect(adminPage.locator(".notice-panel")).toHaveCount(0);
 
     // The friend's server and schedule come back as they were.
     await friend.goto(serverURL);
     await expect(friend.getByRole("heading", { level: 1, name: "enshrouded" })).toBeVisible();
-    await friend.getByRole("tab", { name: "Schedules" }).click();
+    await friend.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
     const schedule = friend.locator("#schedule-list tbody tr");
     await expect(schedule).toHaveCount(1);
     await expect(schedule).not.toContainText("changed");

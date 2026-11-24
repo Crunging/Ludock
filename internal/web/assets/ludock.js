@@ -451,6 +451,14 @@
   // Refresh notices clear once anything answers; a notice for a change the user
   // sent stays until the next change answers or it is dismissed. When the
   // connection returns, live views catch up.
+  // Firefox fails the requests and event stream a navigation cuts off as if
+  // Ludock were unreachable. A navigation that becomes a download stays on
+  // the page, so the flag lapses.
+  var leaving = false;
+  window.addEventListener("beforeunload", function () {
+    leaving = true;
+    setTimeout(function () { leaving = false; }, 10000);
+  });
   var unreachable = null;
   function notice(kind, message) {
     var region = document.querySelector("[data-connection-notice]");
@@ -502,15 +510,33 @@
   document.addEventListener("htmx:after:request", function (event) { answered(event.detail.ctx); });
   document.addEventListener("htmx:error", function (event) {
     var ctx = event.detail.ctx;
-    if (ctx && !ctx.response && !stream(ctx.sourceElement)) failed(ctx);
+    if (ctx && !ctx.response && !stream(ctx.sourceElement) && !leaving) failed(ctx);
   });
   window.addEventListener("online", catchUp);
 
   // data-autosubmit submits its form on change (a GET form keeps working
   // without scripts through its submit button).
+  // A field its form disables while saving loses focus; it gets it back once
+  // htmx has swapped the form or re-enabled the field.
   document.addEventListener("change", function (event) {
     var field = event.target;
-    if (field.matches && field.matches("[data-autosubmit]") && field.form) field.form.requestSubmit();
+    if (!field.matches || !field.matches("[data-autosubmit]") || !field.form) return;
+    field.form.ludockRefocus = field.id;
+    field.form.requestSubmit();
+  });
+  document.addEventListener("htmx:before:request", function (event) {
+    var ctx = event.detail.ctx, form = ctx.sourceElement;
+    if (!form || !form.ludockRefocus) return;
+    ctx.refocus = form.ludockRefocus;
+    delete form.ludockRefocus;
+  });
+  document.addEventListener("htmx:finally:request", function (event) {
+    var id = event.detail.ctx.refocus;
+    if (!id) return;
+    setTimeout(function () {
+      var field = document.getElementById(id);
+      if (field && (!document.activeElement || document.activeElement === document.body)) field.focus();
+    });
   });
 
   // Dialogs swapped in with data-open-on-load open as modals and leave the
@@ -520,19 +546,50 @@
       : (root || document).querySelectorAll("dialog[data-open-on-load]");
     Array.prototype.forEach.call(dialogs, function (dialog) {
       if (dialog.open || !dialog.isConnected || !dialog.showModal) return;
-      dialog.addEventListener("close", function () { dialog.remove(); }, { once: true });
+      // Focus goes back where the dialog was opened from, or to the menu
+      // button when that was an action in a menu that has closed since.
+      var opener = document.activeElement;
+      dialog.addEventListener("close", function () {
+        dialog.remove();
+        var focused = document.activeElement;
+        if (focused && focused !== document.body && focused.getClientRects().length) return;
+        var menu = opener && opener.closest && opener.closest("[data-action-menu]");
+        var target = opener && opener.isConnected && opener.getClientRects().length ? opener : menu && menu.isConnected && menu.querySelector(":scope > button");
+        if (target) target.focus();
+      }, { once: true });
       dialog.showModal();
     });
   }
 
   // Copy buttons: data-copy="text". The button's own markup, such as an
   // icon, comes back after the confirmation, even after repeated clicks.
+  // Browsers offer the clipboard API only to HTTPS and localhost, not to
+  // Ludock opened at a LAN address over plain HTTP, so copying falls back to
+  // the older copy command there.
+  function copyText(text, button) {
+    var fallback = function () {
+      var area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      var copied = false;
+      try { copied = document.execCommand("copy"); } catch (error) {}
+      area.remove();
+      button.focus();
+      return copied ? Promise.resolve() : Promise.reject(new Error("copy failed"));
+    };
+    if (!navigator.clipboard || !window.isSecureContext) return fallback();
+    return navigator.clipboard.writeText(text).catch(fallback);
+  }
   var copyIdle = new WeakMap();
   document.addEventListener("click", function (event) {
     var button = event.target.closest && event.target.closest("[data-copy]");
-    if (!button || !navigator.clipboard) return;
+    if (!button) return;
     event.preventDefault();
-    navigator.clipboard.writeText(button.getAttribute("data-copy")).then(function () {
+    copyText(button.getAttribute("data-copy"), button).then(function () {
       if (!copyIdle.has(button)) copyIdle.set(button, { html: button.innerHTML });
       var idle = copyIdle.get(button);
       clearTimeout(idle.timer);
@@ -541,7 +598,7 @@
         button.innerHTML = idle.html;
         copyIdle.delete(button);
       }, 1500);
-    });
+    }, function () {});
   });
 
   // Local, relative times for <time data-relative>.
@@ -584,7 +641,7 @@
   // such as Safari, leave alone. It stops once the person scrolls or types.
   (function () {
     var target = null;
-    try { target = document.getElementById(decodeURIComponent(location.hash.slice(1))); } catch (error) {}
+    try { if (location.hash.length > 1) target = document.getElementById(decodeURIComponent(location.hash.slice(1))); } catch (error) {}
     if (!target) return;
     var follow = true;
     function stop() { follow = false; }
@@ -747,7 +804,7 @@
   });
   document.addEventListener("htmx:sse:error", function (event) {
     if (event.detail.status === 401) window.location.assign("/login");
-    else liveStatus(false);
+    else if (!leaving) liveStatus(false);
   });
   document.addEventListener("htmx:sse:before:message", function (event) {
     if (event.detail.message.event === "expired") window.location.assign("/login");
@@ -755,7 +812,7 @@
   document.addEventListener("htmx:finally:request", function (event) {
     var elt = event.detail.ctx.sourceElement;
     if (!stream(elt) || (elt._htmx && elt._htmx.sse)) return;
-    liveStatus(false);
+    if (!leaving) liveStatus(false);
     streamed = true;
     setTimeout(function () { htmx.trigger(elt, "live-retry"); }, 5000);
   });

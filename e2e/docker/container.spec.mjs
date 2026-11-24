@@ -52,7 +52,7 @@ test("file helpers from Ludock's image read and change server data", async ({ pa
 test("a backup restores the server's data and running state", async ({ page }) => {
   const properties = join(stack(), "data", "server.properties");
   await openServer(page, "Test Game");
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page.locator("#create-backup")).toBeEnabled();
   await page.getByRole("button", { name: "Create backup" }).click();
   await page.getByRole("dialog", { name: "Back up Test Game?" }).getByRole("button", { name: "Create backup" }).click();

@@ -150,7 +150,7 @@ templ detailBody(d ServerDetail) {
 	<div id="detail-status" aria-live="polite"></div>
 	<nav class="section-tabs" aria-label="Server management">
 		for _, tab := range d.Tabs {
-			<a href={ detailURL(server.ID, "tab="+tab.ID) } { inPage()... } id={ "tab-" + tab.ID } role="tab" aria-selected={ strconv.FormatBool(tab.ID == d.Tab) } aria-current={ map[bool]string{true: "page"}[tab.ID == d.Tab] }>{ tab.Label }</a>
+			<a href={ detailURL(server.ID, "tab="+tab.ID) } { inPage()... } id={ "tab-" + tab.ID } aria-current={ map[bool]string{true: "page"}[tab.ID == d.Tab] }>{ tab.Label }</a>
 		}
 	</nav>
 	<section class="section-tab-panel" aria-label={ tabLabel(d) }>

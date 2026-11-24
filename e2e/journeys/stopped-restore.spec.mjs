@@ -12,7 +12,7 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
   const marker = join(server.data, "stopped-restore.txt");
   writeFileSync(marker, "from the backup");
   await openServer(page, server.name);
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await page.getByRole("button", { name: "Create backup" }).click();
   await page.getByRole("dialog", { name: `Back up ${server.name}?` }).getByRole("button", { name: "Create backup" }).click();
   await expectOperationSucceeded(page);
@@ -49,7 +49,7 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
 
   await openServer(page, server.name);
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
-  await page.getByRole("tab", { name: "Activity" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
   await page.locator("#activity-list").getByRole("link", { name: /Undo restore/ }).first().click();
   await expect(page.locator("main")).toContainText("Succeeded");
   await expect(page.locator("main")).toContainText(

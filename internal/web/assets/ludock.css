@@ -86,7 +86,7 @@
   --go: #17994a;
   --go-text: #0e6e33;
   --halt: #d8382c;
-  --halt-text: #b3261c;
+  --halt-text: #a52019;
   --caution: #e5ae00;
   --caution-mark: #9e7200;
   --caution-text: #6b5000;
@@ -280,7 +280,7 @@ button { cursor: pointer; }
 .secondary-btn--accent { background: color-mix(in srgb, var(--link) 16%, transparent); color: var(--link); }
 .secondary-btn--accent:hover { background: color-mix(in srgb, var(--link) 26%, transparent); color: var(--link); }
 .secondary-btn--danger { background: color-mix(in srgb, var(--halt) 13%, transparent); color: var(--halt-text); }
-.secondary-btn--danger:hover { background: color-mix(in srgb, var(--halt) 24%, transparent); color: var(--halt-text); }
+.secondary-btn--danger:hover { background: color-mix(in srgb, var(--halt) 18%, transparent); color: var(--halt-text); }
 .chevron { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 button:disabled { cursor: not-allowed; opacity: 0.5; }
 /* Disabled buttons become an unlit outline: a half-transparent orange or red
@@ -662,7 +662,7 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .file-preview { width: min(880px, calc(100% - 32px)); }
 .file-preview__header h2 { margin-bottom: 4px; font-family: var(--mono); font-size: 18px; font-weight: 700; }
 .file-preview__meta { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--ink-3); font-size: 14px; }
-.file-preview__meta code { color: var(--ink-2); }
+.file-preview__meta code { min-width: 0; color: var(--ink-2); overflow-wrap: anywhere; }
 .file-preview__body { margin-top: 16px; }
 .file-preview__body pre {
   max-height: 60vh; overflow: auto; padding: 14px; border-radius: var(--radius);
@@ -713,7 +713,7 @@ td > .cancel-form { display: block; margin-top: 6px; }
   color: var(--ink-2); text-decoration: none; font-weight: 700; font-size: 15px;
 }
 .section-tabs a:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
-.section-tabs a[aria-selected=true] { color: var(--ink); background: var(--block); }
+.section-tabs a[aria-current=page] { color: var(--ink); background: var(--block); }
 .section-tabs a:focus-visible { outline-offset: -2px; }
 /* A tab whose view is loading shows the busy marker. */
 .section-tabs a.htmx-request::after {
@@ -793,12 +793,12 @@ td > .cancel-form { display: block; margin-top: 6px; }
 .range-switch a:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .range-switch a[aria-current=true] { color: var(--ink); background: var(--block); }
 .resource-history__empty { max-width: var(--measure); }
-.resource-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--gap); transition: opacity 0.15s; }
+.resource-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: var(--gap); transition: opacity 0.15s; }
 .resource-history.htmx-request .resource-charts { opacity: 0.6; }
 .resource-chart { margin: 0; padding: 16px 18px 12px; min-width: 0; border-radius: var(--radius-lg); background: var(--block); }
 .resource-chart__head { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 16px; flex-wrap: wrap; margin-bottom: 14px; }
 .resource-chart__head h3 { font-family: var(--display); font-size: 18px; font-weight: 600; }
-.resource-chart__summary { display: flex; gap: 14px; color: var(--ink-3); font-size: 13px; }
+.resource-chart__summary { display: flex; flex-wrap: wrap; gap: 0 14px; color: var(--ink-3); font-size: 13px; }
 .resource-chart__summary strong { color: var(--ink); font-size: 15px; font-weight: 700; margin-left: 2px; }
 /* The value axis sits in a gutter so labels never cross the line. */
 .resource-chart__plot { position: relative; height: 132px; margin: 22px 0 0 52px; touch-action: pan-y; }
@@ -899,6 +899,7 @@ td > .cancel-form { display: block; margin-top: 6px; }
 .console-header__back { width: 36px; min-height: 36px; padding: 0; flex: none; font-size: 18px; }
 .console-header__back:hover, .console-retry:hover, .console-pause:hover { color: var(--dock-fg); background: color-mix(in srgb, var(--dock-fg) 20%, transparent); }
 .console-header__name { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-family: var(--display); font-size: 19px; font-weight: 600; }
+.console-header__name h1 { font: inherit; overflow-wrap: anywhere; }
 .console-header__name .server-state { font-family: var(--font); font-size: 14px; }
 .console-header__status { color: var(--dock-muted); font-size: 13px; }
 .console-mode-tabs { display: flex; gap: var(--gap); margin-left: auto; }
@@ -1076,7 +1077,7 @@ td > .cancel-form { display: block; margin-top: 6px; }
 .password-reset__manual summary { cursor: pointer; color: var(--ink-2); font-size: 14px; }
 .password-reset__manual { position: relative; }
 .password-reset__manual form {
-  position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; display: flex; gap: 6px; width: max-content; max-width: min(320px, 80vw);
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 5; display: flex; gap: 6px; width: max-content; max-width: min(320px, 80vw);
   padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--block); box-shadow: 0 6px 18px rgb(0 0 0 / 0.18);
 }
 .password-reset__manual input { min-width: 0; }
@@ -1144,6 +1145,7 @@ td > .cancel-form { display: block; margin-top: 6px; }
 .backup-storage__values dd { font-family: var(--display); font-size: 21px; font-weight: 600; }
 .backup-storage__issues { color: var(--halt-text); font-size: 14px; }
 .admin-root-options { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.admin-root-options .secondary-btn { max-width: 100%; white-space: normal; text-align: left; }
 .backup-storage__folder { grid-column: 1 / -1; }
 .backup-storage__folder dd { font-family: var(--font); font-size: 15px; }
 .backup-storage code, .admin-root-options code, .admin-setup-help code { overflow-wrap: anywhere; }
@@ -1200,14 +1202,18 @@ td > .cancel-form { display: block; margin-top: 6px; }
   .user-row { grid-template-columns: 1fr auto; }
   .user-row__reach { grid-column: 1 / -1; }
   .password-reset { grid-column: 1 / -1; }
+  /* Here the field opens under the row's start, not its end. */
+  .password-reset__manual form { left: 0; right: auto; }
 }
-@media (min-width: 761px) and (max-width: 1120px) {
-  /* Row actions move under the details so the columns keep their width. */
-  .server-list { grid-template-columns: 46px minmax(150px, 1.3fr) minmax(110px, 0.8fr) minmax(200px, 1.2fr); }
-  .server-list--backups { grid-template-columns: 46px minmax(150px, 1.3fr) minmax(110px, 0.8fr) minmax(200px, 1.2fr) minmax(90px, 0.7fr); }
-  .server-list--players { grid-template-columns: 46px minmax(150px, 1.3fr) minmax(110px, 0.8fr) minmax(84px, 0.6fr) minmax(200px, 1.2fr); }
+@media (min-width: 761px) and (max-width: 1200px) {
+  /* Row actions move under the details so the columns keep their width; the
+     narrowest list, at 761px, still fits every column. */
+  .server-list, .server-list__header, .server-row, .server-list__empty { column-gap: 14px; }
+  .server-list { grid-template-columns: 46px minmax(140px, 1.3fr) minmax(100px, 0.8fr) minmax(180px, 1.2fr); }
+  .server-list--backups { grid-template-columns: 46px minmax(140px, 1.3fr) minmax(100px, 0.8fr) minmax(180px, 1.2fr) minmax(84px, 0.7fr); }
+  .server-list--players { grid-template-columns: 46px minmax(140px, 1.3fr) minmax(100px, 0.8fr) minmax(72px, 0.6fr) minmax(180px, 1.2fr); }
   .server-list--players.server-list--backups {
-    grid-template-columns: 46px minmax(150px, 1.3fr) minmax(110px, 0.8fr) minmax(84px, 0.6fr) minmax(200px, 1.2fr) minmax(90px, 0.7fr);
+    grid-template-columns: 46px minmax(140px, 1.3fr) minmax(100px, 0.8fr) minmax(72px, 0.6fr) minmax(180px, 1.2fr) minmax(84px, 0.7fr);
   }
   .server-list__header > :last-child { display: none; }
   .server-list__header > :nth-last-child(2), .server-row__facts > :last-child { padding-right: 16px; }
@@ -1281,9 +1287,24 @@ td > .cancel-form { display: block; margin-top: 6px; }
   .backup-row__actions .action-menu__content { left: 0; right: auto; }
   .data-table tr { margin-bottom: var(--gap); padding: 6px 0; border-radius: var(--radius-lg); background: var(--block); }
   .data-table td, .data-table td:first-child, .data-table td:last-child { padding: 6px 14px; border-radius: 0; background: none; }
+  /* A floating password field would run off the screen's edge. */
+  .password-reset__manual[open] { flex-basis: 100%; }
+  .password-reset__manual form { position: static; width: auto; max-width: none; margin-top: 8px; box-shadow: none; }
 }
 @media (pointer: coarse) {
   .primary-btn, .secondary-btn, .console-retry, .console-pause { min-height: 44px; }
+  /* Fingers need about 44px; small controls grow, or reach past their edges. */
+  .harbor__menu-button, .harbor__signout button, .console-header__back, .console-mode-tabs a, .console-quick button,
+  .section-tabs a, .action-menu__trigger--compact, .action-menu__action, .range-switch a, .data-table .secondary-btn,
+  .schedule-day-presets .secondary-btn, .player-list__action { min-height: 44px; }
+  .console-header__back, .action-menu__trigger--compact { min-width: 44px; }
+  .action-menu__action { display: flex; align-items: center; }
+  .copy-address__button, .checklist__dismiss, .back-link, .player-menu__trigger, summary { position: relative; }
+  .copy-address__button::after, .checklist__dismiss::after, .back-link::after, .player-menu__trigger::after, summary::after {
+    content: ""; position: absolute; inset: 50% 50%; min-width: 44px; min-height: 44px; width: 100%; height: 100%; translate: -50% -50%;
+  }
+  .file-row__name > a, .file-row__name > button { padding-block: 11px; margin-block: -11px; }
+  input.file-row__select { width: 24px; height: 24px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

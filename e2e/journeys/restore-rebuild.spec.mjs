@@ -10,7 +10,7 @@ const marker = (folder) => join(folder, "restore-rebuild.txt");
 
 async function backUpValheim(page) {
   await openServer(page, "valheim");
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await page.getByRole("button", { name: "Create backup" }).click();
   await page.getByRole("dialog", { name: "Back up valheim?" }).getByRole("button", { name: "Create backup" }).click();
   await expectOperationSucceeded(page);

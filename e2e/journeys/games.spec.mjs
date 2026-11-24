@@ -41,7 +41,7 @@ test("taking Valheim down says who is on, though the game can't be warned", asyn
     await expect(page.getByRole("dialog", { name: "Restart valheim?" })).toContainText(online);
     await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
 
-    await page.getByRole("tab", { name: "Backups" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
     await page.locator("#create-backup:not([disabled])").click();
     const backup = page.getByRole("dialog", { name: "Back up valheim?" });
     // The Backups tab doesn't follow the player count, so it gives no number.
@@ -62,7 +62,7 @@ test("Terraria quits with its own exit command, so it stops saved and a backup s
     await expect(serverRow(page, terraria).locator(".server-row__game")).toHaveText("Terraria");
     await expect(serverRow(page, terraria).locator(".server-row__address")).toContainText(":7777");
     await openServer(page, terraria);
-    await page.getByRole("tab", { name: "Backups" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
     await page.locator("#create-backup:not([disabled])").click();
     await page.getByRole("dialog").getByRole("button", { name: "Create backup" }).click();
     await expectOperationSucceeded(page);

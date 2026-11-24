@@ -22,7 +22,6 @@ test("turning verbose logging on and off from Settings", async ({ page }) => {
   const advanced = await openAdvanced(page);
   const form = advanced.locator("#logging-form");
   await form.getByLabel("Log extra detail").check();
-  await form.getByRole("button", { name: "Save logging" }).click();
   await expect(form.locator(".alert--success")).toHaveText("Verbose logging is on for the next 24 hours.");
   await expect(form).toContainText("docker compose logs ludock");
   // Requests are now logged in detail, without restarting Ludock.
@@ -33,7 +32,6 @@ test("turning verbose logging on and off from Settings", async ({ page }) => {
 
   const again = await openAdvanced(page);
   await again.locator("#logging-form").getByLabel("Log extra detail").uncheck();
-  await again.locator("#logging-form").getByRole("button", { name: "Save logging" }).click();
   await expect(again.locator("#logging-form .alert--success")).toHaveText("Verbose logging is off.");
   // Lines from requests before the switch may still be on their way.
   await page.waitForTimeout(500);

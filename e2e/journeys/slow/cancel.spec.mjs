@@ -71,7 +71,7 @@ test("a backup and a restore warn the players online first", async ({ page, ownS
   await openServer(page, server);
   await expect(page.locator(".overview-players").getByRole("list", { name: "Online players" }).locator(".player-name"))
     .toHaveText(["Ada"], { timeout: 30_000 });
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page.locator("#create-backup")).toBeEnabled();
   await page.getByRole("button", { name: "Create backup" }).click();
   const backup = page.getByRole("dialog", { name: `Back up ${server}?` });
@@ -96,7 +96,7 @@ test("a backup and a restore warn the players online first", async ({ page, ownS
   await openServer(page, server);
   await expect(page.locator(".overview-players").getByRole("list", { name: "Online players" }).locator(".player-name"))
     .toHaveText(["Ada"], { timeout: 30_000 });
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await page.locator("#backup-list tbody tr").first().getByRole("link", { name: "Restore…" }).click();
   const restore = page.locator("form.danger-panel");
   await expect(restore.getByLabel("Warn players and wait 1 minute")).toBeChecked();

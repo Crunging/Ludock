@@ -274,7 +274,7 @@ export async function createUser(page, username, password, role = "member") {
 export async function shareServer(page, server, username, access) {
   await page.goto("/");
   await page.getByRole("link", { name: server, exact: true }).click();
-  await page.getByRole("tab", { name: "Sharing" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Sharing" }).click();
   const sharing = page.locator("#sharing");
   await expect(sharing).toBeVisible();
   const existing = sharing.locator(".share-row", { has: page.getByText(username, { exact: true }) });

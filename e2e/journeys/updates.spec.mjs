@@ -24,7 +24,7 @@ function registry(image, query) {
 
 /** Presses Check now until the result says text; Ludock asks the registry at most every 10 seconds. */
 async function checkNow(page, text) {
-  await page.getByRole("tab", { name: "Update" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Update" }).click();
   const check = page.locator("#image-check");
   await expect(async () => {
     await check.getByRole("button", { name: "Check now" }).click();
@@ -50,7 +50,7 @@ async function update(page, server) {
 // setup: Ludock recreates the container through Docker alone.
 test("updating a server's image, then finding it current", async ({ page, ownServer }) => {
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Update" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Update" }).click();
   const form = page.locator("#update-panel form");
   await expect(form.locator(".metadata-list")).toContainText(ownServer.image);
   await form.getByText("What gets replaced").click();
@@ -67,7 +67,7 @@ test("updating a server's image, then finding it current", async ({ page, ownSer
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeEnabled();
 
   // The replacement is the same server, now running the pulled image.
-  await page.getByRole("tab", { name: "Update" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Update" }).click();
   await startUpdate(page, ownServer.name);
   await expect(page.locator("#selected-operation")).toContainText("Already up to date", { timeout: 45_000 });
   await page.getByRole("link", { name: "Update anyway" }).click();
@@ -170,7 +170,7 @@ test("pulling a newer image outside Ludock keeps the server", async ({ page, own
   await expect(serverRow(page, ownServer.name)).toContainText("Running");
   await expect(page.getByText("Server missing in Docker")).toHaveCount(0);
   await openServer(page, ownServer.name);
-  await page.getByRole("tab", { name: "Update" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Update" }).click();
   await update(page, ownServer.name);
 });
 
@@ -197,7 +197,6 @@ test("turning image update checks off", async ({ page, ownServer }) => {
     await page.locator("#advanced-settings > summary").click();
     const form = page.locator("#image-update-settings-form");
     await form.getByLabel("Check for newer server images").setChecked(on);
-    await form.getByRole("button", { name: "Save image update settings" }).click();
     await expect(form.locator(".alert--success")).toHaveText(`Image update checks turned ${on ? "on" : "off"}.`);
   };
   try {
@@ -206,7 +205,7 @@ test("turning image update checks off", async ({ page, ownServer }) => {
     await expect(serverRow(page, ownServer.name)).toBeVisible();
     await expect(page.getByRole("link", { name: "Update available" })).toHaveCount(0);
     await openServer(page, ownServer.name);
-    await page.getByRole("tab", { name: "Update" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Update" }).click();
     await expect(page.locator("#image-check")).toContainText("Checks for newer images are off.");
     await expect(page.locator("#image-check").getByRole("button", { name: "Check now" })).toHaveCount(0);
   } finally {
@@ -259,12 +258,10 @@ test("finding a newer Ludock", async ({ page }) => {
     // The server checks' setting turns this one off and on too.
     const form = page.locator("#image-update-settings-form");
     await form.getByLabel("Check for newer server images").uncheck();
-    await form.getByRole("button", { name: "Save image update settings" }).click();
     await expect(form.locator(".alert--success")).toHaveText("Image update checks turned off.");
     await expect(check).toBeEmpty();
     await expect(notice).toBeEmpty();
     await form.getByLabel("Check for newer server images").check();
-    await form.getByRole("button", { name: "Save image update settings" }).click();
     await expect(form.locator(".alert--success")).toHaveText("Image update checks turned on.");
     await expect(check).toContainText("A newer Ludock is available.");
   } finally {

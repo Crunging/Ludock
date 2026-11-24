@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/app"
+	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/logging"
@@ -81,6 +82,10 @@ func (s *Server) Handler() http.Handler {
 	s.mux.HandleFunc("POST /logout", s.authed(s.logout))
 	if s.App != nil {
 		s.routes()
+		// A mistyped or stale address gets a page with the navigation, not bare text.
+		s.mux.HandleFunc("GET /", s.authed(func(w http.ResponseWriter, r *http.Request, request *Request) {
+			s.fail(w, r, request, apperr.New("NOT_FOUND", http.StatusNotFound, "Page not found"))
+		}))
 	}
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Not found", http.StatusNotFound)

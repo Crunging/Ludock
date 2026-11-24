@@ -143,20 +143,20 @@ test("switching a server's tabs keeps the page loaded", async ({ page }) => {
   await openServer(page, "Survival");
   // A full page load would drop this marker.
   await page.evaluate(() => { window.stayedOnPage = true; });
-  const activity = page.getByRole("tab", { name: "Activity" });
+  const activity = page.locator(".section-tabs").getByRole("link", { name: "Activity" });
   await activity.click();
   await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
   await expect(page).toHaveURL(/\?tab=activity$/);
-  await expect(activity).toHaveAttribute("aria-selected", "true");
+  await expect(activity).toHaveAttribute("aria-current", "page");
   await expect(activity).toBeFocused();
 
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page.locator("#create-backup")).toBeEnabled();
   expect(await page.evaluate(() => window.stayedOnPage)).toBe(true);
 
   // A modified click opens the tab in a new browser tab and leaves this one.
   const [opened] = await Promise.all([page.context().waitForEvent("page"),
-    page.getByRole("tab", { name: "Schedules" }).click({ modifiers: ["ControlOrMeta"] })]);
+    page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click({ modifiers: ["ControlOrMeta"] })]);
   await expect(opened).toHaveURL(/\?tab=schedules$/);
   await opened.close();
   await expect(page).toHaveURL(/\?tab=backups$/);
@@ -181,8 +181,8 @@ test("switching a server's tabs keeps the page loaded", async ({ page }) => {
     await gate;
     await route.continue();
   });
-  await page.getByRole("tab", { name: "Schedules" }).click();
-  await page.getByRole("tab", { name: "Activity" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
   await sentBoth;
   const schedules = page.waitForResponse(/\?tab=schedules$/);
   gates.schedules();
@@ -191,7 +191,7 @@ test("switching a server's tabs keeps the page loaded", async ({ page }) => {
   gates.activity();
   await activityAnswer;
   await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".section-tabs").getByRole("link", { name: "Activity" })).toHaveAttribute("aria-current", "page");
   await expect(page).toHaveURL(/\?tab=activity$/);
   await page.unroute(/\?tab=(schedules|activity)$/);
 });
@@ -209,15 +209,15 @@ test("a later tab wins over following earlier work", async ({ page }) => {
   await page.locator(".detail-actions").getByRole("button", { name: "Restart" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Restart server" }).click();
   await follow;
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page).toHaveURL(/\?tab=backups$/);
-  await expect(page.getByRole("tab", { name: "Backups" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".section-tabs").getByRole("link", { name: "Backups" })).toHaveAttribute("aria-current", "page");
   const followed = page.waitForResponse(/\?tab=activity&operation=/);
   release();
   await followed;
   await page.waitForTimeout(300);
   await expect(page).toHaveURL(/\?tab=backups$/);
-  await expect(page.getByRole("tab", { name: "Backups" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".section-tabs").getByRole("link", { name: "Backups" })).toHaveAttribute("aria-current", "page");
   await page.unroute(/\?tab=activity&operation=/);
   // Let the restart finish before the next journey.
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Restart" })).toBeEnabled({ timeout: 45_000 });
@@ -225,7 +225,7 @@ test("a later tab wins over following earlier work", async ({ page }) => {
 
 test("a tab opened while an action is sending stays open", async ({ page }) => {
   await openServer(page, "Survival");
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page.locator("#create-backup")).toBeEnabled();
   // Hold the backup request until the user has moved to Activity.
   let release;
@@ -239,14 +239,14 @@ test("a tab opened while an action is sending stays open", async ({ page }) => {
   await page.getByRole("button", { name: "Create backup" }).click();
   await page.getByRole("dialog", { name: "Back up Survival?" }).getByRole("button", { name: "Create backup" }).click();
   await sent;
-  await page.getByRole("tab", { name: "Activity" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
   await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
   const answered = page.waitForResponse((response) => response.request().method() === "POST" && /\/backups$/.test(response.url()));
   release();
   await answered;
   await page.waitForTimeout(500);
   await expect(page).toHaveURL(/\?tab=activity$/);
-  await expect(page.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".section-tabs").getByRole("link", { name: "Activity" })).toHaveAttribute("aria-current", "page");
   await page.unroute(/\/backups$/);
   // The backup still runs; let it finish before the next journey.
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Restart" })).toBeEnabled({ timeout: 45_000 });
@@ -254,7 +254,7 @@ test("a tab opened while an action is sending stays open", async ({ page }) => {
 
 test("a filter answering after another tab opened leaves that tab alone", async ({ page }) => {
   await openServer(page, "Survival");
-  await page.getByRole("tab", { name: "Activity" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
   await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
   // htmx wires up a new view once it settles, a moment after showing it.
   await expect(page.locator("#detail-body")).not.toHaveClass(/htmx-added/);
@@ -267,7 +267,7 @@ test("a filter answering after another tab opened leaves that tab alone", async 
   const filtered = page.waitForRequest(/\/activity\?.*status=failed/);
   await page.getByLabel("Result").selectOption("failed");
   await filtered;
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page.locator("#backups-tab")).toBeVisible();
   const answered = page.waitForResponse(/\/activity\?.*status=failed/);
   release();
@@ -286,10 +286,10 @@ test("clicking a tab again while its page loads still opens it", async ({ page }
     await new Promise((resolve) => gates.push({ tab, resolve }));
     await route.continue();
   });
-  const activity = page.getByRole("tab", { name: "Activity" });
+  const activity = page.locator(".section-tabs").getByRole("link", { name: "Activity" });
   await activity.click();
   await expect.poll(() => gates.length).toBe(1);
-  await page.getByRole("tab", { name: "Backups" }).click();
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect.poll(() => gates.length).toBe(2);
   await activity.click();
   // The third click has a request of its own; Backups answers first.
@@ -300,7 +300,7 @@ test("clicking a tab again while its page loads still opens it", async ({ page }
   await backups;
   for (const gate of activities()) gate.resolve();
   await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".section-tabs").getByRole("link", { name: "Activity" })).toHaveAttribute("aria-current", "page");
   await expect(page).toHaveURL(/\?tab=activity$/);
   await page.unroute(/\?tab=(activity|backups)$/);
 });
@@ -313,8 +313,8 @@ test("quick repeated clicks end on the last tab clicked", async ({ page }) => {
     await new Promise((resolve) => gates.push(resolve));
     await route.continue();
   });
-  const activity = page.getByRole("tab", { name: "Activity" });
-  const backups = page.getByRole("tab", { name: "Backups" });
+  const activity = page.locator(".section-tabs").getByRole("link", { name: "Activity" });
+  const backups = page.locator(".section-tabs").getByRole("link", { name: "Backups" });
   for (const [index, tab] of [activity, backups, activity, backups].entries()) {
     await tab.click();
     await expect.poll(() => gates.length).toBe(index + 1);
@@ -329,7 +329,7 @@ test("quick repeated clicks end on the last tab clicked", async ({ page }) => {
   gates[0]();
   gates[1]();
   await expect(page.locator("#backups-tab")).toBeVisible();
-  await expect(backups).toHaveAttribute("aria-selected", "true");
+  await expect(backups).toHaveAttribute("aria-current", "page");
   await expect(page).toHaveURL(/\?tab=backups$/);
   await page.unroute(/\?tab=(activity|backups)$/);
 });
@@ -344,10 +344,10 @@ test("tabs clicked faster than they open end on the last one", async ({ page }) 
         await new Promise((done) => setTimeout(done, gap));
       }
     }, gap);
-    await expect(page.getByRole("tab", { name: "Backups" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".section-tabs").getByRole("link", { name: "Backups" })).toHaveAttribute("aria-current", "page");
     await expect(page.locator("#backups-tab")).toBeVisible();
     await expect(page).toHaveURL(/\?tab=backups$/);
-    await page.getByRole("tab", { name: "Overview" }).click();
+    await page.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
     await expect(page.locator("#overview-live")).toBeVisible();
   }
 });
@@ -365,8 +365,8 @@ test("a tab clicked the moment the last one appears stays in the page", async ({
       setTimeout(() => document.getElementById("tab-schedules").click(), 0);
     });
   });
-  await page.getByRole("tab", { name: "Activity" }).click();
-  await expect(page.getByRole("tab", { name: "Schedules" })).toHaveAttribute("aria-selected", "true");
+  await page.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
+  await expect(page.locator(".section-tabs").getByRole("link", { name: "Schedules" })).toHaveAttribute("aria-current", "page");
   await expect(page).toHaveURL(/\?tab=schedules$/);
   expect(await page.evaluate(() => window.samePage)).toBe(true);
 });
