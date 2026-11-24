@@ -403,7 +403,7 @@ func TestWritesRecheckAccessInside(t *testing.T) {
 		{name: "delete backup", revoke: "DELETE FROM sessions WHERE token_hash=?2", status: http.StatusUnauthorized,
 			setup: func(t *testing.T, p *pages) (*auth.Principal, string) {
 				folder := t.TempDir()
-				p.app.Backups.Storage.Roots = folder
+				p.app.Backups.Storage.Roots = []string{folder}
 				if err := os.WriteFile(filepath.Join(folder, backupID+".tar"), []byte("archive"), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -412,7 +412,7 @@ func TestWritesRecheckAccessInside(t *testing.T) {
 				return p.admin, "/servers/" + p.server + "/backups/" + backupID + "/delete"
 			},
 			written: func(t *testing.T, p *pages) bool {
-				_, err := os.Stat(filepath.Join(p.app.Backups.Storage.Roots, backupID+".tar"))
+				_, err := os.Stat(filepath.Join(p.app.Backups.Storage.Roots[0], backupID+".tar"))
 				found, _ := p.app.Backups.Exists(ctx, backupID, true)
 				return err != nil || !found
 			}},
