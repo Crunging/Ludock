@@ -852,7 +852,7 @@ templ destinationFields(n NotificationDestinationView) {
 			</div>
 			<p class="muted" id={ destinationID(n.Destination, "to-help") }>Separate up to 10 recipients with commas. Leave the username empty when the server needs no sign-in. Many providers need an app password.</p>
 		case notify.Webhook:
-			@secretField(n, "url", "Webhook URL", "https://example.com/hooks/ludock", "Ludock sends a POST with a JSON body: source (\"ludock\"), id, kind (\"event\" or \"test\"), message, and createdAt. The id stays the same when a delivery is retried.", 1024)
+			@secretField(n, "url", "Webhook URL", "https://example.com/hooks/ludock", "Ludock sends a POST with a JSON body: source (\"ludock\"), id, kind (\"event\" or \"test\"), alert (the alert type, on events), message, and createdAt. The id stays the same when a delivery is retried.", 1024)
 			@secretField(n, "token", "Authorization header (optional)", "Bearer …", "Sent as the request’s Authorization header.", 1024)
 			@clearTokenField(n, "Remove the saved Authorization header")
 	}

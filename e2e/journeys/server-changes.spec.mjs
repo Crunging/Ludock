@@ -124,6 +124,7 @@ test("a new game pauses shared access until an administrator confirms it", async
     await expect(orphan).toContainText("Set up by a deleted account");
     await expect(orphan).toContainText("Its owner’s account was deleted.");
     await orphan.getByRole("link", { name: "Edit" }).click();
+    await expect(adminPage.locator("#schedule-form")).toContainText("saving makes it yours");
     await adminPage.locator("#schedule-form").getByRole("button", { name: "Save changes" }).click();
     await expect(orphan).not.toContainText("deleted");
     await expect(orphan).not.toContainText("Set up by");

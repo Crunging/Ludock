@@ -387,15 +387,15 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 								hx-confirm="Remove this backup from Ludock?"
 								data-confirm-detail="Ludock can’t reach the folder this backup was saved in, so its archive may still be there. Ludock stops listing it and deletes its second copy."
 								data-confirm-action="Remove backup"
-							} else if backup.Missing {
-								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
-								hx-confirm="Delete this backup?"
-								data-confirm-detail="Its archive is already missing or damaged in the backup folder. Deleting removes this entry from Ludock, along with whatever is left of the archive."
-								data-confirm-action="Delete backup"
 							} else {
+								// templ has no else-if among attributes.
 								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
 								hx-confirm="Delete this backup?"
-								data-confirm-detail="The archive is deleted permanently."
+								if backup.Missing {
+									data-confirm-detail="Its archive is already missing or damaged in the backup folder. Deleting removes this entry from Ludock, along with whatever is left of the archive."
+								} else {
+									data-confirm-detail="The archive is deleted permanently."
+								}
 								data-confirm-action="Delete backup"
 							}
 							data-confirm-danger
