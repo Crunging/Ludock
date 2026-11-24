@@ -92,7 +92,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			}
 			// One stopped outside Ludock after the check above stays stopped,
 			// as its owner left it.
-			if initial := job.Job.Recovery.InitialRunning; initial == nil || !*initial {
+			if !wasRunning(job) {
 				return withSave(job, map[string]any{"action": "restart", "backupId": backup.ID, "guidance": stoppedElsewhere}), nil
 			}
 			selected, err := j.resolve(ctx, job, authz.ServerRestart, true)
@@ -154,7 +154,7 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[
 		return nil, err
 	}
 	result := map[string]any{"action": "restart"}
-	running := *job.Job.Recovery.InitialRunning
+	running := wasRunning(job)
 	switch {
 	case completed && !running:
 		result["guidance"] = stoppedElsewhere
