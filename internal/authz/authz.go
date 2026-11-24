@@ -286,12 +286,12 @@ func (s *Service) EffectiveAll(ctx context.Context, actor *db.SessionUser, serve
 // Administrators keep full use of a server whose sharing is paused.
 func roleCapabilities(user *db.SessionUser, server *identity.Server, assigned []Capability) []Capability {
 	if user.Role == db.RoleAdmin {
-		// Administrators can inspect status and history of a server without a
-		// container. This never authorizes Docker reads or mutation.
+		// Without a container, administrators keep the server's status,
+		// history, and backup archives. None of these reads Docker or mutates it.
 		if server.Status == identity.StatusActive {
 			return slices.Clone(All)
 		}
-		return []Capability{ServerView}
+		return []Capability{ServerView, BackupsRead, BackupsDelete}
 	}
 	if server.Status != identity.StatusActive || server.SharingPaused || !slices.Contains(assigned, ServerView) {
 		return nil

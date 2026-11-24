@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -172,6 +174,9 @@ func TestRestoreRefusesOtherGamesAndServers(t *testing.T) {
 	}
 }
 
+// Only administrators read or delete a server's archives, also once its
+// container is gone; then a member's grant gives nothing, and nothing that
+// needs the server is offered or accepted.
 func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
@@ -190,6 +195,58 @@ func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 	}
 	if response := p.do("GET", backup+"/download", p.admin, nil, nil); response.Code != http.StatusConflict {
 		t.Fatal(response.Code)
+	}
+	folder := t.TempDir()
+	p.app.Backups.Storage.Roots = folder
+	const id = "22222222-2222-4222-8222-222222222222"
+	if err := os.WriteFile(filepath.Join(folder, id+".tar"), []byte("archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.backup(t, id, p.server, "")
+	p.app.DB.Exec("UPDATE backups SET destination=?, size=7 WHERE id=?", folder, id)
+	p.engine.RemoveContainer(p.docker)
+	if _, err := p.app.Servers.RefreshNow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	backup = "/servers/" + p.server + "/backups/" + id
+	page := p.do("GET", "/servers/"+p.server+"?tab=backups", p.admin, nil, nil).Body.String()
+	for _, want := range []string{backup + "/download", "browse=" + id, backup + "/delete"} {
+		if !strings.Contains(page, want) {
+			t.Fatal(want, page)
+		}
+	}
+	for _, offered := range []string{"can’t be shown", "restore=" + id, "keep=" + id, "backup-readiness"} {
+		if strings.Contains(page, offered) {
+			t.Fatal(offered, page)
+		}
+	}
+	if response := p.do("GET", backup+"/download", p.admin, nil, nil); response.Code != http.StatusOK || response.Body.String() != "archive" {
+		t.Fatal(response.Code)
+	}
+	if response := p.do("GET", "/servers/"+p.server+"?tab=backups", operator, nil, nil); response.Code != http.StatusNotFound {
+		t.Fatal(response.Code)
+	}
+	if response := p.do("GET", backup+"/download", operator, nil, nil); response.Code == http.StatusOK {
+		t.Fatal(response.Code)
+	}
+	if response := p.action(backup+"/delete", operator, nil); response.StatusCode == http.StatusOK {
+		t.Fatal(response.StatusCode)
+	}
+	restore := url.Values{"backupId": {id}, "confirmation": {"valheim"}}
+	if response := p.action("/servers/"+p.server+"/restores", p.admin, restore); response.StatusCode != http.StatusForbidden {
+		t.Fatal("restore", response.StatusCode)
+	}
+	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusForbidden {
+		t.Fatal("backup", response.StatusCode)
+	}
+	if kind, _ := p.queued(t); kind != "" {
+		t.Fatal("queued", kind)
+	}
+	if response := p.action(backup+"/delete", p.admin, nil); response.StatusCode != http.StatusOK {
+		t.Fatal(response.StatusCode, readBody(t, response))
+	}
+	if _, err := os.Stat(filepath.Join(folder, id+".tar")); !os.IsNotExist(err) {
+		t.Fatal("archive left", err)
 	}
 }
 
