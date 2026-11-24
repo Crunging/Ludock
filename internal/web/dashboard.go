@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/events"
@@ -109,6 +110,12 @@ func (s *Server) downServers(ctx context.Context, list []servers.View) map[strin
 	return down
 }
 
+// canBeBackedUp: the server has data folders Ludock can reach, and stopping
+// it for a backup doesn't delete it.
+func canBeBackedUp(view *servers.View) bool {
+	return !view.NoDataFolders && !view.Refuses(ops.KindBackup)
+}
+
 func (s *Server) serverRow(r *http.Request, request *Request, view servers.View, showBackup, stale bool) views.ServerRow {
 	action := views.LifecycleAction(view.State)
 	active := view.BindingStatus == "active"
@@ -116,7 +123,7 @@ func (s *Server) serverRow(r *http.Request, request *Request, view servers.View,
 		Disabled: stale || view.ActiveOperation != nil || !active,
 		CanStart: action == "start" && can(&view, authz.ServerStart), CanStop: action == "stop" && !view.Refuses(ops.KindStop) && can(&view, authz.ServerStop),
 		CanRestart: view.State == "running" && !view.Refuses(ops.KindRestart) && can(&view, authz.ServerRestart),
-		CanBackup:  !view.Refuses(ops.KindBackup) && can(&view, authz.BackupsCreate),
+		CanBackup:  canBeBackedUp(&view) && can(&view, authz.BackupsCreate),
 		CanFiles:   can(&view, authz.FilesRead) && len(view.FileRoots) > 0, BackupSummary: backupSummary(request.User(), &view)}
 	// A saved state is not live, so it has no players.
 	consoleLists := view.Console != nil && view.Console.ListsPlayers
@@ -270,6 +277,9 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 		if err == nil && createBackup {
 			if _, err = s.App.Authz.Assert(r.Context(), user, resolved.Logical.ID, authz.BackupsCreate); err == nil {
 				err = jobs.AssertRunningForBackupRestart(resolved.Container.State)
+			}
+			if err == nil && len(resolved.Container.FileRoots) == 0 {
+				err = backups.ErrNoRoots
 			}
 		}
 		if err != nil {

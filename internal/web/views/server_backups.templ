@@ -353,7 +353,9 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 							<a class="action-menu__action" href={ detailURL(b.ServerID, "tab=backups&browse="+backup.ID) } { inPage()... }>Browse files</a>
 							<a class="action-menu__action" href={ templ.SafeURL("/servers/" + b.ServerID + "/backups/" + backup.ID + "/download") } download>Download</a>
 						}
-						if complete {
+						// Keeping protects an archive from being removed; one that is
+						// missing is never removed.
+						if complete && (kept || !backup.Missing) {
 							if kept {
 								<button
 									class="action-menu__action"
@@ -382,7 +384,7 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 							} else if backup.Missing {
 								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
 								hx-confirm="Delete this backup?"
-								data-confirm-detail="Its archive is already missing or damaged in the backup folder. What is left of it, or the archive if it comes back, is deleted permanently."
+								data-confirm-detail="Its archive is already missing or damaged in the backup folder. Deleting removes this entry from Ludock, along with whatever is left of the archive."
 								data-confirm-action="Delete backup"
 							} else {
 								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
@@ -753,6 +755,8 @@ templ restoreItem(b BackupBrowser, item backups.ArchiveEntry) {
 type UpdateView struct {
 	ServerID, ServerName string
 	CanBackup            bool
+	// NoData: the server has no data folders, so no backup can come first.
+	NoData bool
 	Blocked, Active      bool
 	Recreate             bool
 	Capability           *update.Capability
@@ -903,7 +907,11 @@ templ UpdateForm(u UpdateView) {
 			<input type="checkbox" name="createBackup" value="true" id="update-backup" checked?={ u.CanBackup } disabled?={ !u.CanBackup }/>
 			Back up first
 		</label>
-		<p class="muted check-help">The server stays stopped during the backup. If it was stopped before, it stays stopped after.</p>
+		if u.NoData {
+			<p class="muted check-help">This server has no data folders Ludock can reach, so there is nothing to back up first.</p>
+		} else {
+			<p class="muted check-help">The server stays stopped during the backup. If it was stopped before, it stays stopped after.</p>
+		}
 		if u.Warn {
 			{{ option := WarnOption }}
 			<label class="check-label">
@@ -913,7 +921,11 @@ templ UpdateForm(u UpdateView) {
 			<p class="muted check-help">{ option.Help }</p>
 		}
 		<label data-hidden-by="update-backup" hidden?={ u.CanBackup }>
-			<span>Type <strong>{ u.ServerName }</strong> to skip the backup</span>
+			if u.NoData {
+				<span>Type <strong>{ u.ServerName }</strong> to update without a backup</span>
+			} else {
+				<span>Type <strong>{ u.ServerName }</strong> to skip the backup</span>
+			}
 			<input name="skipBackupConfirmation" autocomplete="off"/>
 		</label>
 		<details class="disclosure" open?={ u.Recreate }>

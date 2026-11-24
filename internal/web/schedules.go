@@ -8,6 +8,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/schedtime"
 	"github.com/Crunging/Ludock/internal/schedules"
@@ -21,7 +22,7 @@ var scheduleActionCapabilities = map[string]authz.Capability{"start": authz.Serv
 func scheduleActions(view *servers.View) []string {
 	var actions []string
 	for _, action := range schedules.Actions {
-		if (action == "command" && view.Console == nil) || view.Refuses(action) {
+		if (action == "command" && view.Console == nil) || view.Refuses(action) || (action == "backup" && !canBeBackedUp(view)) {
 			continue
 		}
 		if can(view, scheduleActionCapabilities[action]) {
@@ -31,13 +32,26 @@ func scheduleActions(view *servers.View) []string {
 	return actions
 }
 
-// canRunSchedule: saving or resuming needs schedule access and every
-// capability the schedule uses. The service checks again.
+// canRunSchedule: saving or resuming needs schedule access, every capability
+// the schedule uses, and a server its action can run on. The service checks
+// again.
 func canRunSchedule(view *servers.View, input schedules.Input) bool {
-	if !can(view, authz.SchedulesManage) {
+	if !can(view, authz.SchedulesManage) || scheduleRefusal(view, input) != nil {
 		return false
 	}
 	return !slices.ContainsFunc(input.Capabilities(), func(capability authz.Capability) bool { return !can(view, capability) })
+}
+
+// scheduleRefusal is why a schedule can't run on this server at all: Docker
+// deletes the server when it stops, or it has no data folders to back up.
+func scheduleRefusal(view *servers.View, input schedules.Input) error {
+	if err := view.Refusal(input.Action); err != nil {
+		return err
+	}
+	if (input.Action == "backup" || input.CreateBackup) && view.NoDataFolders {
+		return backups.ErrNoRoots
+	}
+	return nil
 }
 
 // scheduleForm opens on a daily restart, backing up first when this person
@@ -52,7 +66,7 @@ func (s *Server) scheduleForm(r *http.Request, d *views.ServerDetail) views.Sche
 	} else if len(actions) > 0 {
 		input.Action = actions[0]
 	}
-	canBackup := can(view, authz.BackupsCreate)
+	canBackup := canBeBackedUp(view) && can(view, authz.BackupsCreate)
 	if input.Action == "restart" && canBackup {
 		input.CreateBackup = s.backupReady(r, view)
 	}
@@ -255,7 +269,7 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 		err = apperr.New("INVALID_REQUEST", 400, "This server's game console doesn't accept commands")
 	}
 	if err == nil {
-		err = d.Row.Server.Refusal(input.Action)
+		err = scheduleRefusal(&d.Row.Server, input)
 	}
 	if err == nil {
 		if scheduleID == "" {
@@ -303,6 +317,14 @@ func (s *Server) toggleSchedule(w http.ResponseWriter, r *http.Request, request 
 		return
 	}
 	enabled := r.PostFormValue("enabled") == "true"
+	// Resuming is refused like saving, for a list shown before the server
+	// changed or a forged request.
+	if enabled {
+		if err := s.resumeRefusal(r, request); err != nil {
+			s.fail(w, r, request, err)
+			return
+		}
+	}
 	_, err = s.App.Schedules.SetEnabled(r.Context(), request.User(), request.Principal.TokenHash, r.PathValue("id"), r.PathValue("schedule"), revision, enabled)
 	// A stale list reloads either way.
 	w.Header().Set("HX-Trigger", "schedules-changed")
@@ -315,6 +337,23 @@ func (s *Server) toggleSchedule(w http.ResponseWriter, r *http.Request, request 
 		message = "Schedule resumed."
 	}
 	s.scheduleOutcome(w, r, request, message)
+}
+
+func (s *Server) resumeRefusal(r *http.Request, request *Request) error {
+	d, err := s.detail(r, request, r.PathValue("id"), "schedules", false)
+	if err != nil {
+		return err
+	}
+	list, err := s.App.Schedules.List(r.Context(), request.User(), r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	for _, item := range list {
+		if item.ID == r.PathValue("schedule") {
+			return scheduleRefusal(&d.Row.Server, item.Input)
+		}
+	}
+	return nil
 }
 
 // scheduleOutcome sends a change's notice with the refreshed list, so no row

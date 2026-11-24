@@ -37,6 +37,9 @@ type Plan struct {
 	Checked []identity.Mount
 }
 
+// ErrNoRoots refuses a backup of a server with no data folder to copy.
+var ErrNoRoots = fail("NO_BACKUP_ROOTS", "Ludock found no data folder it can back up for this server. Its game data must be in a writable volume or folder mounted into its container.")
+
 // PlanRoots maps each data root to a private alias. Roots that contain a
 // nested mount or overlap on the Docker host are refused: they would collide
 // during restore staging.
@@ -46,7 +49,7 @@ func PlanRoots(context *servers.Context, own self.Info, readOnly bool) (*Plan, e
 		plan.Roots = append(plan.Roots, Root{ID: root.ID, Path: root.Path})
 	}
 	if len(plan.Roots) == 0 {
-		return nil, fail("NO_BACKUP_ROOTS", "Ludock found no data folder it can back up for this server. Its game data must be in a writable volume or folder mounted into its container.")
+		return nil, ErrNoRoots
 	}
 	var physicalRoots []string
 	for _, root := range plan.Roots {

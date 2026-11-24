@@ -12,6 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/schedules"
 )
 
 func (p *pages) action(target string, principal *auth.Principal, values url.Values) *http.Response {
@@ -221,6 +222,46 @@ func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 	values.Set("createBackup", "false")
 	if response := p.action("/servers/"+p.server+"/updates", p.admin, values); response.StatusCode != http.StatusConflict {
 		t.Fatal(response.StatusCode)
+	}
+	// A server with no data folders has nothing to back up first: a form
+	// opened earlier, or a forged request, is refused before any image is
+	// pulled, and so is a restart, a schedule that would back it up, and
+	// resuming one saved while it had folders.
+	paused, err := p.app.Schedules.Create(context.Background(), &p.admin.User, p.admin.TokenHash, p.server, schedules.Input{Kind: "recurring",
+		Action: "backup", Time: "08:00", Timezone: "UTC", Days: []int{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.engine.Update(p.docker, func(c *fakedocker.Container) {
+		c.HostConfig, c.Mounts = nil, nil
+		c.State.Running, c.State.Status = true, "running"
+	})
+	if _, err := p.app.Servers.RefreshNow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if response := p.action("/servers/"+p.server+"/updates", p.admin, url.Values{"createBackup": {"true"}}); response.StatusCode != http.StatusConflict {
+		t.Fatal(response.StatusCode)
+	}
+	p.engine.Update(p.docker, func(*fakedocker.Container) {
+		if requests := strings.Join(p.engine.Requests, "\n"); strings.Contains(requests, "/images/create") {
+			t.Error("pulled an image for an update that couldn't back up first")
+		}
+	})
+	for _, form := range []url.Values{{"action": {"backup"}}, {"action": {"restart"}, "createBackup": {"true"}}} {
+		form.Set("kind", "recurring")
+		form.Set("time", "09:00")
+		form.Set("timezone", "UTC")
+		form.Set("days", "1")
+		if response := p.action("/servers/"+p.server+"/schedules", p.admin, form); response.StatusCode != http.StatusConflict {
+			t.Fatal(form, response.StatusCode)
+		}
+	}
+	resume := url.Values{"enabled": {"true"}, "revision": {strconv.FormatInt(paused.Revision, 10)}}
+	if response := p.action("/servers/"+p.server+"/schedules/"+paused.ID+"/toggle", p.admin, resume); response.StatusCode != http.StatusConflict {
+		t.Fatal("resuming:", response.StatusCode)
+	}
+	if response := p.action("/servers/"+p.server+"/restart", p.admin, url.Values{"createBackup": {"true"}}); response.StatusCode != http.StatusConflict {
+		t.Fatal("restart with a backup first:", response.StatusCode)
 	}
 }
 
