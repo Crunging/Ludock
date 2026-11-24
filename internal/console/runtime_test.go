@@ -252,8 +252,9 @@ func TestMinecraftConsolePassword(t *testing.T) {
 				c.Files = nil
 			}
 		})
+		// Shown as it is, not as a command the game didn't take.
 		_, _, _, err := resolveTarget(t, runtime, target, adapter)
-		if err == nil || !strings.Contains(err.Error(), "could not read the console password") {
+		if _, public := apperr.As(err); !public || !strings.Contains(err.Error(), "could not read the console password") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

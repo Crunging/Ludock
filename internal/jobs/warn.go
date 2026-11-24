@@ -197,8 +197,8 @@ func (j *Jobs) sendWarning(ctx context.Context, job *ops.Context, server *server
 			return false, err
 		}
 		// A refusal, such as a game without a way to message players, won't
-		// pass by waiting.
-		if _, public := apperr.As(err); public || !time.Now().Before(deadline) {
+		// pass by waiting; a password file the game hasn't written yet may.
+		if public, ok := apperr.As(err); (ok && public.Code != console.PasswordUnreadable) || !time.Now().Before(deadline) {
 			return false, nil
 		}
 		select {

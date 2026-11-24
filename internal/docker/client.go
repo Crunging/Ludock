@@ -378,17 +378,27 @@ func (c *Client) ReadFile(ctx context.Context, id, file string, limit int64) ([]
 		return nil, err
 	}
 	defer response.Body.Close()
+	// A stalled or cut response is Docker's failure, not the file's.
+	failed := func(err error) error {
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			return ErrReadTimeout
+		case errors.Is(err, io.ErrUnexpectedEOF) || !errors.Is(err, io.EOF) && !errors.Is(err, tar.ErrHeader):
+			return ErrIncompleteStream
+		}
+		return errors.New("docker returned an invalid archive")
+	}
 	archive := tar.NewReader(response.Body)
 	header, err := archive.Next()
 	if err != nil {
-		return nil, errors.New("docker returned an invalid archive")
+		return nil, failed(err)
 	}
 	if header.Typeflag != tar.TypeReg || header.Size > limit {
 		return nil, ErrNotRegularFile
 	}
 	data := make([]byte, header.Size)
 	if _, err := io.ReadFull(archive, data); err != nil {
-		return nil, errors.New("docker returned an invalid archive")
+		return nil, failed(err)
 	}
 	return data, nil
 }

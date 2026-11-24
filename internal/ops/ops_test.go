@@ -567,9 +567,13 @@ func TestCancelledWorkIsNotLoggedAsFailure(t *testing.T) {
 }
 
 // Work that fails because Docker stopped answering, or answered with its own
-// error, says which.
+// error, says which, and the log warns of it with its cause rather than
+// reporting a Ludock error.
 func TestDockerFailureSaysSo(t *testing.T) {
 	r, servers := setup(t, 1)
+	var stdout, stderr bytes.Buffer
+	logging.SetOutput(&stdout, &stderr)
+	defer logging.SetOutput(os.Stdout, os.Stderr)
 	failures := map[string]error{"backup": docker.ErrRequestFailed, "restore": &docker.APIError{Status: 500}}
 	for kind, failure := range failures {
 		r.Register(kind, Handler{Run: func(context.Context, *Context) (map[string]any, error) { return nil, failure }})
@@ -583,5 +587,10 @@ func TestDockerFailureSaysSo(t *testing.T) {
 		if failed := waitStatus(t, r, job.ID, Failed); !strings.HasPrefix(failed.Error, want) {
 			t.Fatal(kind, failed.Error)
 		}
+	}
+	r.Stop()
+	if logged := stdout.String() + stderr.String(); strings.Contains(logged, "failed unexpectedly") ||
+		strings.Count(logged, "WARN [operations] Operation stopped by a Docker error") != 2 || !strings.Contains(logged, `"dockerStatus":500`) {
+		t.Fatal(logged)
 	}
 }

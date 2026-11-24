@@ -33,7 +33,8 @@ func normalizedMountPath(value string) string {
 
 // Within reports whether value is root or inside it.
 func Within(value, root string) bool {
-	return value == root || strings.HasPrefix(value, root+"/")
+	// Discovery calls this for every mount and system path; no concatenation.
+	return strings.HasPrefix(value, root) && (len(value) == len(root) || value[len(root)] == '/')
 }
 
 var socketSuffix = regexp.MustCompile(`(?i)\.sock$`)

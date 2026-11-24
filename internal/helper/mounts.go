@@ -61,6 +61,8 @@ func RunMountProof(argument, timeoutMs string, stdout io.Writer) int {
 	stdout.Write(append(encoded, '\n'))
 	if ms, err := strconv.Atoi(timeoutMs); err == nil && ms > 0 {
 		time.Sleep(time.Duration(ms) * time.Millisecond)
+		// Nothing else closes them when this runs in-process, as in the fake daemon.
+		t.closeAll()
 		return 0
 	}
 	for {

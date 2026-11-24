@@ -251,7 +251,7 @@ func (a *App) Tick(ctx context.Context) {
 		current, err := a.Servers.RefreshNow(ctx)
 		now := time.Now().UnixMilli()
 		if err != nil {
-			log.Warn("Discovery and schedules are temporarily unavailable")
+			log.Warn("Discovery and schedules are temporarily unavailable", logging.Cause(err, docker.StatusCode(err))...)
 		} else {
 			a.Schedules.Run(ctx, now)
 			a.Schedules.Announce(ctx, now)
