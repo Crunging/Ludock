@@ -346,7 +346,7 @@ container:
   container anyway, such as to pick up a game update that installs on startup.
 
 Not supported: images pinned by digest or ID, containers Docker removes when
-they stop (`--rm`), Swarm services, and servers whose network, process, or IPC
+they stop (`--rm`, which Ludock never stops at all), Swarm services, and servers whose network, process, or IPC
 namespace another container joins. Update those with the tool that made them.
 
 **Newer image checks:** about every six hours Ludock asks each image tag's

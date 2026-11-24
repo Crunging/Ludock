@@ -495,3 +495,39 @@ func TestUploadNeedsFreeSpace(t *testing.T) {
 		t.Fatal("a large disk keeps 1 GiB", got)
 	}
 }
+
+// A server given one subfolder of a volume (volume-subpath) gets a file
+// helper that Docker mounts the same subfolder into, pinned by the mount
+// proof, never the whole volume, which would show its siblings.
+func TestFileHelperMountsOnlyTheVolumeSubpath(t *testing.T) {
+	f := setup(t)
+	host := t.TempDir()
+	os.MkdirAll(filepath.Join(host, "var", "lib", "docker", "volumes", "shared", "_data", "worlds", "a"), 0o755)
+	helper.HostRoot = host
+	client := docker.New(f.engine.Socket)
+	client.CreateVolume(ctx, "shared")
+	game := f.engine.AddContainer(fakedocker.GameOptions{Name: "sub", Image: "itzg/minecraft-server", Running: true,
+		Mounts: []docker.MountPoint{{Type: "volume", Name: "shared", Source: "/var/lib/docker/volumes/shared/_data", Destination: "/data", RW: true}}})
+	f.engine.Update(game, func(c *fakedocker.Container) {
+		c.HostConfig = map[string]any{"Mounts": []map[string]any{{"Type": "volume", "Source": "shared", "Target": "/data",
+			"VolumeOptions": map[string]any{"Subpath": "worlds/a"}}}}
+	})
+	inspection, _ := client.Inspect(ctx, game)
+	roots := Roots("minecraft", nil, identity.DockerMounts(inspection))
+	if len(roots) != 1 {
+		t.Fatal(roots)
+	}
+	// The helper's own mount isn't on this host, so its identity check fails
+	// after Docker was asked for it.
+	f.service.Acquire(ctx, Target{ContainerID: game, Name: "sub", GameType: "minecraft", Roots: roots}, roots[0], true, nil)
+	var created []docker.MountSettings
+	for _, body := range f.engine.Creates {
+		if body.Labels["ludock.internal"] == "file-helper" {
+			created = body.HostConfig.Mounts
+		}
+	}
+	if len(created) != 1 || created[0].Source != "shared" || created[0].VolumeOptions == nil || created[0].VolumeOptions.Subpath != "worlds/a" {
+		t.Fatalf("%+v", created)
+	}
+	f.helpersLeft(t)
+}

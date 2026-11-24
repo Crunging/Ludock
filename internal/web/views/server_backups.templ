@@ -24,6 +24,9 @@ type BackupsView struct {
 	Active  bool
 	// NoData: the server has no data folder Ludock can back up.
 	NoData       bool
+	// DeletedOnStop: Docker deletes the server when it stops, so it can't be
+	// backed up or restored; the page header says why.
+	DeletedOnStop bool
 	LatestBackup *servers.BackupSummary
 	Backups      []backups.Backup
 	HistoryError string
@@ -102,7 +105,7 @@ templ backupsTabBody(b BackupsView) {
 	</div>
 	if b.NoData {
 		@noDataFolders(b.Admin)
-	} else {
+	} else if !b.DeletedOnStop {
 		<p class="section-lede">The server stops while a backup copies, then goes back to how it was.</p>
 	}
 	if failed := b.LastFailed; failed != nil {

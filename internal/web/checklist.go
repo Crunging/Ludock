@@ -179,8 +179,8 @@ type backupTarget struct {
 	Warn, Wait bool
 }
 
-// backupTargets lists the servers that can be backed up and have no
-// recurring backup, and the times existing recurring backups use.
+// backupTargets lists the servers that can be backed up, which a --rm one
+// can't, and have no recurring backup, and the times existing recurring backups use.
 func (s *Server) backupTargets(ctx context.Context, user *db.SessionUser, all []servers.View) ([]backupTarget, []string, error) {
 	if settings, _, err := s.App.Backups.SavedSettings(ctx); err != nil || settings == nil {
 		return nil, nil, err
@@ -199,7 +199,7 @@ func (s *Server) backupTargets(ctx context.Context, user *db.SessionUser, all []
 				taken = append(taken, schedule.Time)
 			}
 		}
-		if !covered && view.BindingStatus == "active" && len(view.FileRoots) > 0 && view.Can(authz.BackupsCreate) {
+		if !covered && view.BindingStatus == "active" && len(view.FileRoots) > 0 && !view.AutoRemove && view.Can(authz.BackupsCreate) {
 			targets = append(targets, backupTarget{ID: view.ID, Name: view.DisplayName, Warn: canWarn(&view),
 				Wait: s.App.Players.Source.Lists(view.Container)})
 		}

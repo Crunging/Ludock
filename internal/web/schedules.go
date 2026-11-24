@@ -21,7 +21,7 @@ var scheduleActionCapabilities = map[string]authz.Capability{"start": authz.Serv
 func scheduleActions(view *servers.View) []string {
 	var actions []string
 	for _, action := range schedules.Actions {
-		if action == "command" && view.Console == nil {
+		if (action == "command" && view.Console == nil) || (view.AutoRemove && servers.StopsServer(action)) {
 			continue
 		}
 		if can(view, scheduleActionCapabilities[action]) {

@@ -88,6 +88,24 @@ type Container struct {
 	// ControlsHost: its owner's label added a container that can control
 	// the host.
 	ControlsHost bool
+	// AutoRemove: Docker deletes it as soon as it stops (--rm).
+	AutoRemove bool
+}
+
+// ErrAutoRemove refuses anything that would stop a --rm server: Docker
+// would delete it, with any unnamed volume holding its world.
+var ErrAutoRemove = apperr.New("SERVER_DELETED_ON_STOP", 409, AutoRemoveMessage)
+
+const AutoRemoveMessage = "Docker is set to delete this server as soon as it stops (it was started with --rm), so Ludock won’t stop it. Recreate it without --rm to stop, restart, back up or update it here."
+
+// StopsServer reports whether work of this kind stops the server. Ludock's
+// restart is a stop and a start.
+func StopsServer(kind string) bool {
+	switch kind {
+	case "stop", "restart", "backup", "restore", "undo_restore", "update":
+		return true
+	}
+	return false
 }
 
 type Observed struct {
@@ -404,7 +422,7 @@ func (o *Observer) learnOwnMounts(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	files.SetOwnMounts(identity.DockerMounts(info.Mounts))
+	files.SetOwnMounts(identity.DockerMounts(info))
 	o.ownKnown = true
 	return nil
 }
@@ -503,6 +521,7 @@ func toContainer(info *docker.ContainerInspect) (*Container, error) {
 		ID: id, ShortID: id[:min(12, len(id))], Name: name, DisplayName: name, Image: info.Config.Image,
 		State: info.State.Status, Status: info.State.Status, Health: containerHealth(info),
 		GameType: gameType, GameName: games.DisplayName(gameType), Labels: games.ApprovedLabels(labels),
+		AutoRemove: info.Host.AutoRemove,
 	}
 	if display := labels[games.LabelName]; display != "" {
 		container.DisplayName = display
@@ -560,7 +579,7 @@ func toContainer(info *docker.ContainerInspect) (*Container, error) {
 			}
 		}
 	}
-	container.FileRoots = files.Roots(gameType, container.Labels, identity.DockerMounts(info.Mounts))
+	container.FileRoots = files.Roots(gameType, container.Labels, identity.DockerMounts(info))
 	return container, nil
 }
 
@@ -569,7 +588,7 @@ func toContainer(info *docker.ContainerInspect) (*Container, error) {
 func toObservation(info *docker.ContainerInspect, container *Container) identity.Observation {
 	labels := info.Config.Labels
 	observation := identity.Observation{ContainerID: container.ID, Name: container.Name, DisplayName: container.DisplayName,
-		GameType: container.GameType, Mounts: identity.DockerMounts(info.Mounts)}
+		GameType: container.GameType, Mounts: identity.DockerMounts(info)}
 	if project, service, number, ok := games.ComposeLabels(labels); ok {
 		observation.Compose = &identity.ComposeIdentity{Project: project, Service: service, ContainerNumber: number}
 	}
@@ -586,7 +605,7 @@ func toObservation(info *docker.ContainerInspect, container *Container) identity
 				source = mount.Name
 			}
 			observation.DataFolders = append(observation.DataFolders, identity.DataFolder{Path: root.Path, Type: mount.Type,
-				Source: source, Destination: mount.Destination, ReadOnly: !mount.Writable})
+				Source: source, Destination: mount.Destination, ReadOnly: !mount.Writable, Subpath: mount.Subpath})
 		}
 	}
 	credentials := map[string]bool{}
@@ -856,6 +875,9 @@ func (o *Observer) changeState(ctx context.Context, id string, action Action,
 	observed, info, err := o.Inspect(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if action == Stop && info.Host.AutoRemove {
+		return nil, ErrAutoRemove
 	}
 	if assertAccess != nil {
 		if err := assertAccess(observed.Observation, info); err != nil {

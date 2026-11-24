@@ -190,5 +190,5 @@ func restoreItemInput(backup *backups.Backup, root, item string) (map[string]any
 
 // restoreOffered is whether the backups tab offers restores for a server.
 func restoreOffered(view *servers.View, discoveryUnavailable bool) bool {
-	return can(view, authz.BackupsRestore) && view.BindingStatus == "active" && !discoveryUnavailable && view.ActiveOperation == nil
+	return can(view, authz.BackupsRestore) && !view.AutoRemove && view.BindingStatus == "active" && !discoveryUnavailable && view.ActiveOperation == nil
 }

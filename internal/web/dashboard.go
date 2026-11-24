@@ -114,8 +114,8 @@ func (s *Server) serverRow(r *http.Request, request *Request, view servers.View,
 	active := view.BindingStatus == "active"
 	row := views.ServerRow{Server: view, Address: views.ConnectAddress(view.Connection, r.Host), ShowBackup: showBackup,
 		Disabled: stale || view.ActiveOperation != nil || !active,
-		CanStart: action == "start" && can(&view, authz.ServerStart), CanStop: action == "stop" && can(&view, authz.ServerStop),
-		CanRestart: view.State == "running" && can(&view, authz.ServerRestart), CanBackup: can(&view, authz.BackupsCreate),
+		CanStart: action == "start" && can(&view, authz.ServerStart), CanStop: action == "stop" && !view.AutoRemove && can(&view, authz.ServerStop),
+		CanRestart: view.State == "running" && !view.AutoRemove && can(&view, authz.ServerRestart), CanBackup: !view.AutoRemove && can(&view, authz.BackupsCreate),
 		CanFiles: can(&view, authz.FilesRead) && len(view.FileRoots) > 0, BackupSummary: backupSummary(request.User(), &view)}
 	// A saved state is not live, so it has no players.
 	consoleLists := view.Console != nil && view.Console.ListsPlayers
@@ -270,6 +270,9 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 		current, err := s.App.Auth.Recheck(r.Context(), request.Principal)
 		if err == nil {
 			_, err = s.App.Authz.Assert(r.Context(), &current.User, resolved.Logical.ID, capability)
+		}
+		if err == nil && resolved.Container.AutoRemove && servers.StopsServer(kind) {
+			err = servers.ErrAutoRemove
 		}
 		if err == nil && createBackup {
 			if _, err = s.App.Authz.Assert(r.Context(), &current.User, resolved.Logical.ID, authz.BackupsCreate); err == nil {

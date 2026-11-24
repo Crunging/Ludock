@@ -42,7 +42,7 @@ var socketSuffix = regexp.MustCompile(`(?i)\.sock$`)
 // SafeWritableDataMount reports a writable bind or volume that is not a
 // system path or socket.
 func SafeWritableDataMount(mount identity.Mount) bool {
-	if !mount.Writable || (mount.Type != "bind" && mount.Type != "volume") {
+	if !mount.Writable || (mount.Type != "bind" && mount.Type != "volume") || mount.Unresolved || !safeSubpath(mount.Subpath) {
 		return false
 	}
 	destination := normalizedMountPath(mount.Destination)
@@ -58,6 +58,13 @@ func SafeWritableDataMount(mount identity.Mount) bool {
 		}
 	}
 	return !sharesOwnMount(mount)
+}
+
+// safeSubpath: helpers mount a volume's subpath again, so it must stay
+// inside the volume as Docker resolves it.
+func safeSubpath(subpath string) bool {
+	return subpath == "" || (!path.IsAbs(subpath) && !strings.Contains(subpath, "\x00") && path.Clean(subpath) != "." &&
+		!slices.Contains(strings.Split(path.Clean(subpath), "/"), ".."))
 }
 
 var (

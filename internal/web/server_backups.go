@@ -31,7 +31,10 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		CanRestore: can(view, authz.BackupsRestore), CanDelete: can(view, authz.BackupsDelete),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
 		LatestBackup: view.LatestBackup, NoData: view.NoDataFolders, BindingRevision: view.BindingRevision,
-		Warn: warnOffer(view.Container), Running: view.Container.State == "running"}
+		Warn: warnOffer(view.Container), Running: view.Container.State == "running", DeletedOnStop: view.AutoRemove}
+	if view.AutoRemove {
+		b.CanCreate, b.CanRestore = false, false
+	}
 	// The tab follows any running work, so readiness and paused controls come
 	// back when it ends.
 	b.Operation = views.ActivityView{ServerID: view.ID, Admin: d.Admin, Tab: "backups", SelectedID: r.URL.Query().Get("operation"),
@@ -187,6 +190,9 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, request *Reques
 
 func (s *Server) queue(r *http.Request, request *Request, resolved *servers.Context, user *db.SessionUser,
 	kind string, input map[string]any) (*ops.Job, error) {
+	if resolved.Container.AutoRemove && servers.StopsServer(kind) {
+		return nil, servers.ErrAutoRemove
+	}
 	options := ops.EnqueueOptions{ServerID: resolved.Logical.ID, ActorID: user.ID, Kind: kind,
 		BindingRevision: resolved.Logical.BindingRevision, Input: input, IdempotencyKey: requestKey(r)}
 	var job *ops.Job
@@ -425,6 +431,8 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 			snapshot, err := s.App.Servers.Summary(r.Context(), request.User(), id)
 			return err != nil || snapshot.Server.ActiveOperation != nil
 		})
+		// Restarting a --rm server would delete it.
+		result.UpdatesOnStart = result.UpdatesOnStart && !resolved.Container.AutoRemove
 		if err = s.recheckCapability(r, request, id, capability, true); err == nil {
 			u.Capability = &result
 			u.ChecksOff = !s.App.Checks.Enabled(r.Context())

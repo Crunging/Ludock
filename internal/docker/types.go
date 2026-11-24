@@ -85,6 +85,14 @@ type ContainerInspect struct {
 		Privileged bool  `json:"Privileged"`
 		// PortBindings are the configured mappings, kept while stopped.
 		PortBindings map[string][]PortBinding `json:"PortBindings"`
+		// AutoRemove is --rm: Docker deletes the container, and its unnamed
+		// volumes, as soon as it stops.
+		AutoRemove bool `json:"AutoRemove"`
+		// Mounts are the --mount settings, the only place Docker reports a
+		// volume's subpath; Binds are the -v ones.
+		Mounts      []MountSettings `json:"Mounts"`
+		Binds       []string        `json:"Binds"`
+		VolumesFrom []string        `json:"VolumesFrom"`
 	} `json:"HostConfig"`
 }
 
@@ -200,12 +208,18 @@ type BindOptions struct {
 	ReadOnlyForceRecursive bool   `json:"ReadOnlyForceRecursive,omitempty"`
 }
 
+type VolumeOptions struct {
+	NoCopy  bool   `json:"NoCopy,omitempty"`
+	Subpath string `json:"Subpath,omitempty"`
+}
+
 type MountSettings struct {
-	Type        string       `json:"Type"`
-	Source      string       `json:"Source"`
-	Target      string       `json:"Target"`
-	ReadOnly    bool         `json:"ReadOnly,omitempty"`
-	BindOptions *BindOptions `json:"BindOptions,omitempty"`
+	Type          string         `json:"Type"`
+	Source        string         `json:"Source"`
+	Target        string         `json:"Target"`
+	ReadOnly      bool           `json:"ReadOnly,omitempty"`
+	BindOptions   *BindOptions   `json:"BindOptions,omitempty"`
+	VolumeOptions *VolumeOptions `json:"VolumeOptions,omitempty"`
 }
 
 type HostConfig struct {

@@ -463,6 +463,23 @@ func TestIdentityFollowsDataFolders(t *testing.T) {
 	}) == base {
 		t.Fatal("other data folders kept the identity")
 	}
+	// Only --mount settings show a volume's subpath; changing it changes
+	// the folder. A volume from --volumes-from may carry one nothing shows,
+	// so it is not offered at all.
+	subpath := func(folder string) func(*fakedocker.Container) {
+		return func(c *fakedocker.Container) {
+			c.Config.Labels["ludock.files"] = "/data"
+			c.HostConfig = map[string]any{"Mounts": []map[string]any{{"Type": "volume", "Source": "mc", "Target": "/data",
+				"VolumeOptions": map[string]any{"Subpath": folder}}}}
+		}
+	}
+	if digest(subpath("worlds/a")) == base || digest(subpath("worlds/a")) == digest(subpath("worlds/b")) {
+		t.Fatal("a volume subpath kept the identity")
+	}
+	engine.Update(id, func(c *fakedocker.Container) { c.HostConfig = map[string]any{"VolumesFrom": []string{"data"}} })
+	if roots := inspectTest(t, s, id).Container.FileRoots; len(roots) != 0 {
+		t.Fatal(roots)
+	}
 }
 
 // A game folder that holds Ludock's own backup folder, or a volume Ludock

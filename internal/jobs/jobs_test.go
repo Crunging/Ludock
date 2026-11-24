@@ -695,3 +695,37 @@ func TestBackupWhenDockerGoesAway(t *testing.T) {
 		}
 	}
 }
+
+// A server started with --rm has an unnamed volume, which Docker deletes
+// with it when it stops. Every kind of work that would stop
+// it is refused with one message before it acts, and so is a stop reaching
+// the shared stop path directly: the server and its volume stay.
+func TestDeletedOnStopServerIsNeverStopped(t *testing.T) {
+	f := setup(t)
+	volume := strings.Repeat("a", 64)
+	if _, err := f.jobs.Docker.CreateVolume(ctx, volume); err != nil {
+		t.Fatal(err)
+	}
+	f.engine.Update(f.game, func(c *fakedocker.Container) {
+		c.HostConfig = map[string]any{"AutoRemove": true}
+		c.Mounts = append(c.Mounts, docker.MountPoint{Type: "volume", Name: volume, Source: "/var/lib/docker/volumes/" + volume + "/_data",
+			Destination: "/mods"})
+	})
+	if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"stop", "restart", "backup", "restore", UndoRestore, "update"} {
+		job := f.run(t, kind, nil)
+		if job.Status != ops.Failed || job.Error != servers.AutoRemoveMessage || f.engine.Container(f.game) == nil || !f.running() {
+			t.Fatalf("%s: %s, container kept: %v", kind, job.Error, f.engine.Container(f.game) != nil)
+		}
+	}
+	if err := f.jobs.Servers.Observer.ChangeState(ctx, f.game, servers.Stop, nil); !apperr.Is(err, "SERVER_DELETED_ON_STOP") {
+		t.Fatal(err)
+	}
+	volumes, _ := f.jobs.Docker.ListVolumes(ctx)
+	if f.engine.Container(f.game) == nil || !slices.ContainsFunc(volumes, func(v docker.VolumeInspect) bool { return v.Name == volume }) ||
+		slices.ContainsFunc(f.engine.Requests, func(request string) bool { return strings.Contains(request, "/stop") }) {
+		t.Fatal(f.engine.Requests)
+	}
+}

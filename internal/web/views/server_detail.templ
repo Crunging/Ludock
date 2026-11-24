@@ -240,6 +240,9 @@ templ DetailLive(d ServerDetail) {
 			if guidance := StateGuidance(server.State); guidance != "" {
 				<p class="section-note" role="status">{ guidance }</p>
 			}
+			if server.AutoRemove {
+				<p class="section-note" id="deleted-on-stop">{ servers.AutoRemoveMessage }</p>
+			}
 		} else {
 			<div class="alert alert--error" role="alert">{ BindingNote(string(server.BindingStatus)) } Controls come back once Docker has exactly one container for it.</div>
 		}

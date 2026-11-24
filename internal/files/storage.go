@@ -232,7 +232,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		!s.managed(ctx, inspection) {
 		return nil, Error("FILE_TARGET_CHANGED", 409)
 	}
-	mounts := identity.DockerMounts(inspection.Mounts)
+	mounts := identity.DockerMounts(inspection)
 	fresh := Roots(target.GameType, inspection.Config.Labels, mounts)
 	if !slices.ContainsFunc(fresh, func(candidate Root) bool { return candidate.Path == root.Path }) {
 		return nil, Error("FILE_ROOT_CHANGED", 409)
@@ -278,8 +278,13 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		if mount.Type == "bind" {
 			projection.BindOptions = &docker.BindOptions{Propagation: "rprivate", NonRecursive: true}
 		}
+		// NoCopy: Docker never fills an empty folder from the helper's image.
+		if mount.Type == "volume" {
+			projection.VolumeOptions = &docker.VolumeOptions{NoCopy: true, Subpath: mount.Subpath}
+		}
 		projections = append(projections, projection)
-		proofMounts = append(proofMounts, identity.Mount{Type: mount.Type, Source: mount.Source, Destination: mount.Destination, Name: mount.Name})
+		proofMounts = append(proofMounts, identity.Mount{Type: mount.Type, Source: mount.Source, Destination: mount.Destination, Name: mount.Name,
+			Subpath: mount.Subpath})
 	}
 	image, err := s.Images.Resolve(ctx)
 	if err != nil {
@@ -343,7 +348,7 @@ func (s *Service) reusable(ctx context.Context, target Target, root Root, access
 		!s.managed(ctx, inspection) || signature(inspection) != access.signature || inspection.State.StartedAt != access.startedAt {
 		return false
 	}
-	fresh := Roots(target.GameType, inspection.Config.Labels, identity.DockerMounts(inspection.Mounts))
+	fresh := Roots(target.GameType, inspection.Config.Labels, identity.DockerMounts(inspection))
 	if !slices.ContainsFunc(fresh, func(candidate Root) bool { return candidate.Path == root.Path }) {
 		return false
 	}

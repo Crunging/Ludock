@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -188,7 +189,7 @@ func (e *Engine) Outage(duration time.Duration) error {
 	// created with AutoRemove are gone when it is back.
 	for id, c := range e.containers {
 		if autoRemove, _ := c.HostConfig["AutoRemove"].(bool); autoRemove {
-			e.removeLocked(id)
+			e.autoRemoveLocked(id)
 		}
 	}
 	e.mu.Unlock()
@@ -395,9 +396,28 @@ func (e *Engine) exitLocked(c *Container, code int) func(*Container) {
 	e.emitLocked("die", c.ID)
 	// Docker removes an AutoRemove container once it stops.
 	if autoRemove, _ := c.HostConfig["AutoRemove"].(bool); autoRemove {
-		e.removeLocked(c.ID)
+		e.autoRemoveLocked(c.ID)
 	}
 	return e.OnStop
+}
+
+var anonymousVolume = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// autoRemoveLocked removes a --rm container as Docker does once it stops:
+// its unnamed volumes go with it.
+func (e *Engine) autoRemoveLocked(id string) {
+	if c := e.containers[id]; c != nil {
+		for _, mount := range c.Mounts {
+			name := mount.Name
+			if name == "" {
+				name = path.Base(path.Dir(mount.Source))
+			}
+			if mount.Type == "volume" && anonymousVolume.MatchString(name) {
+				delete(e.volumes, name)
+			}
+		}
+	}
+	e.removeLocked(id)
 }
 
 func (e *Engine) removeLocked(id string) {
