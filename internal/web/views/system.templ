@@ -9,6 +9,7 @@ import (
 )
 
 type SystemView struct {
+	Version         string
 	DockerConnected bool
 	DockerProblem   string
 	Diagnostics     []servers.Diagnostic
@@ -63,12 +64,16 @@ templ SystemPage(page Page, d SystemView) {
 			<div class="page__header page__header--actions">
 				<div>
 					<h1 class="page__title">Settings</h1>
-					<p class="page__subtitle">Ludock’s connection to Docker, problems with container labels, and the games it recognizes.</p>
+					<p class="page__subtitle">Ludock’s version and connection to Docker, problems with container labels, and the games it recognizes.</p>
 				</div>
 				<a class="secondary-btn" href="/settings/system">Refresh</a>
 			</div>
 			@settingsTabs("/settings/system")
 			<dl class="metadata-list">
+				if d.Version != "" {
+					<dt>Version</dt>
+					<dd>{ d.Version }</dd>
+				}
 				<dt>Docker</dt>
 				<dd>
 					if d.DockerConnected {

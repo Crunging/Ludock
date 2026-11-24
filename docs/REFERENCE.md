@@ -503,8 +503,8 @@ docker compose logs --follow --tail 200 ludock
 ```
 
 For a bug report, turn on **Verbose logging** in **Settings → Advanced**; it
-turns itself off after 24 hours. **Settings → System** shows whether Ludock
-reaches Docker and which container labels it couldn't use.
+turns itself off after 24 hours. **Settings → System** shows Ludock's version,
+whether it reaches Docker, and which container labels it couldn't use.
 
 ### Ludock's own data
 

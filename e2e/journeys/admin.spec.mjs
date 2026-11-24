@@ -77,6 +77,8 @@ test("checking the Docker connection under Settings", async ({ page }) => {
   await expect(page).toHaveURL(/\/settings\/system$/);
   await expect(menu.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "location");
   await expect(page.locator(".metadata-list")).toContainText("DockerConnected");
+  // A build without a release version says so.
+  await expect(page.locator(".metadata-list")).toContainText("Versiondev");
   await expect(page.getByRole("cell", { name: "Minecraft", exact: true })).toBeVisible();
 });
 
