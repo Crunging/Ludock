@@ -576,7 +576,7 @@ Advanced**; a value set here wins, and the panel shows it as fixed.
 | `LUDOCK_LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug`, kept until removed |
 | `LUDOCK_TRUSTED_PROXIES` | None | Reverse proxies, as addresses or ranges separated by commas |
 | `LUDOCK_BACKUP_ROOTS` | `/backups`, plus `/backups-copy` when mounted | Approved backup folders, separated by `:`; empty turns backups off |
-| `LUDOCK_SELF_CONTAINER` | Detected | Ludock's own container name or ID, if Ludock says it can't find it |
+| `LUDOCK_SELF_CONTAINER` | Detected | Ludock's own container name or ID, if Ludock says it can't find it. Ludock needs it to find its image and to keep its own folders out of **Files** |
 | `LUDOCK_SETUP_CODE` | Printed at start | Your own setup code, 32 to 128 characters; remove it after setup |
 | `LUDOCK_DOCKER_CONFIG` | None | A folder with a Docker `config.json` for [private registries](#private-registries) |
 | `LUDOCK_SENSITIVE_PATHS` | None | More container or host paths to block in file access, separated by `:` |
