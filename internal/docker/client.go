@@ -177,8 +177,8 @@ func (c *Client) refuse(err error) error {
 }
 
 // Incompatible is the refusal of the engine's API versions from the last
-// negotiation, without asking Docker again. An engine upgrade replaces the socket, which restarts
-// Ludock.
+// negotiation, without asking Docker again. An engine upgrade replaces the
+// socket, which restarts Ludock.
 func (c *Client) Incompatible() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
