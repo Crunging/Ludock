@@ -236,6 +236,15 @@ func MovedDetail(result map[string]any) string {
 	return ""
 }
 
+// LeftOutDetail notes a backup that left out a folder holding a restore's
+// stage, and with it the previous data that restore kept.
+func LeftOutDetail(result map[string]any) string {
+	if folder, _ := result["leftOut"].(string); folder != "" {
+		return "The backup leaves out the hidden .ludock-restore-… folder in " + folder + ", so the previous data an unfinished restore keeps there isn’t in it."
+	}
+	return ""
+}
+
 // DockerWaitDetail notes work that waited for Docker to come back.
 func DockerWaitDetail(result map[string]any) string {
 	if result["waitedForDocker"] == true {

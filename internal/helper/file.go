@@ -428,6 +428,62 @@ func (h *fileHelper) oneMount(parent fd, name string, depth int, count *int) err
 	return nil
 }
 
+// stages lists, by path from the root, up to three restore stage folders
+// below the root's top at or below relative, which a backup leaves out and
+// a restore must not move. Other names Ludock reserves are skipped, as
+// backups skip them: none can hold a stage, and those at the top stay put. A path that is missing or not a folder
+// holds none; past the walk's limits, which no backup reaches, it refuses.
+func (h *fileHelper) stages(root fd, relative string) ([]string, error) {
+	directory := root
+	if relative != "" {
+		var err error
+		if directory, err = h.pinDirectory(root, relative); err != nil {
+			if isNotExist(err) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) {
+				return []string{}, nil
+			}
+			return nil, err
+		}
+	}
+	found, count := []string{}, 0
+	var walk func(directory fd, relative string, depth int) error
+	walk = func(directory fd, relative string, depth int) error {
+		entries, err := entriesOf(directory)
+		if err != nil {
+			return err
+		}
+		// The root's children are at depth 1 here and 0 in a restore's walk.
+		if count += len(entries); depth > 65 || count > 1000000 {
+			return errors.New("the folder has too many entries to check")
+		}
+		for _, entry := range entries {
+			if len(found) == 3 {
+				return nil
+			}
+			if !entry.IsDir() {
+				continue
+			}
+			name := path.Join(relative, entry.Name())
+			if relative != "" && validStage(entry.Name()) {
+				found = append(found, name)
+			}
+			if Reserved(entry.Name()) {
+				continue
+			}
+			child, err := h.t.openAt(directory, entry.Name(), directoryFlags, 0)
+			if err != nil {
+				return err
+			}
+			err = walk(child, name, depth+1)
+			h.t.close(child)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return found, walk(directory, relative, 0)
+}
+
 func (h *fileHelper) abortUpload(err error) {
 	h.mu.Lock()
 	h.aborted = true
@@ -666,7 +722,11 @@ func (h *fileHelper) run() error {
 		if err := ownMount(h.request.Base, h.absolute(relative)); err != nil {
 			return err
 		}
-		return h.json(map[string]bool{"safe": true})
+		stages, err := h.stages(root, relative)
+		if err != nil {
+			return err
+		}
+		return h.json(map[string]any{"safe": true, "stages": stages})
 	case "backup":
 		if err := h.check(relative, true); err != nil {
 			return err

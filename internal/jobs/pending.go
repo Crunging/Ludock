@@ -156,6 +156,21 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 					return errJournal
 				}
 			}
+			// Undoing moves live data that may hold another restore's stage,
+			// so that is refused before anything moves and the server can
+			// start again.
+			for _, entry := range state.Roots {
+				if entry.Phase != "old_moved" && entry.Phase != "replaced" {
+					continue
+				}
+				stages, err := j.Backups.Helpers.AssertOwnMounts(ctx, server, &backups.DataHelper{Container: data.Container, Roots: []backups.Root{entry.Root}}, entry.Item, nil)
+				if err != nil {
+					return err
+				}
+				if len(stages) > 0 {
+					return backups.StageInside(stages[0].Holder())
+				}
+			}
 		}
 		// A server started since the restore stopped it may have written into
 		// a folder the restore had emptied or filled, so that is kept.

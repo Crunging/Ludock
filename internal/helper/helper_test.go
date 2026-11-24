@@ -562,6 +562,30 @@ func TestRestoreRefusesUnremovableData(t *testing.T) {
 	}
 	unmoved("found")
 	mountOf = mountID
+	// Another restore's stage below the top is never moved or removed with
+	// what holds it, whether this restore replaces it or is being undone.
+	other := filepath.Join(root, "world/region", ".ludock-restore-1f9619ff-8b86-4011-b42d-00c04fc964ff")
+	os.MkdirAll(filepath.Join(other, "old"), 0o700)
+	os.MkdirAll(filepath.Join(root, stage, "new"), 0o700)
+	for _, request := range []RestoreRequest{
+		{Operation: RestoreCheck, Item: "world"},
+		{Operation: RestoreMoveOld, Item: "world"},
+		{Operation: RestoreMoveOld},
+		{Operation: RestoreRollbackClean, Item: "world"},
+		{Operation: RestoreRollbackClean},
+		{Operation: RestoreSetAside, Item: "world", Aside: SetAsideName("0f9619ff-8b86-4011-b42d-00c04fc964ff")},
+		{Operation: RestoreSetAside, Aside: SetAsideName("0f9619ff-8b86-4011-b42d-00c04fc964ff")},
+	} {
+		request.Root, request.Stage, request.Base = root, stage, base
+		argument, _ := json.Marshal(request)
+		if code := RunRestore(string(argument), io.Discard, io.Discard); code != RestoreHoldsStage {
+			t.Errorf("%s %q: %d", request.Operation, request.Item, code)
+		}
+		if _, err := os.Stat(filepath.Join(other, "old")); err != nil {
+			t.Fatal(request.Operation, request.Item, "moved the other stage")
+		}
+	}
+	os.RemoveAll(other)
 	table := func(point string) {
 		escaped := strings.ReplaceAll(point, " ", `\040`)
 		MountTable = func() ([]byte, error) {

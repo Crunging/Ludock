@@ -714,6 +714,14 @@ share storage. Backups leave them out and restores leave them in place, so one
 left over, or made by hand, never blocks either. To remove one Ludock no
 longer needs, delete it on the host.
 
+A restore's folder below the top of a data folder is the exception: a
+restore of whatever holds it, the whole server or one folder, would move it,
+so the restore is refused before the server stops and names the folder. Undo
+or finish that restore from **Needs attention**, or, if no restore needs it,
+copy out what you need and delete it on the host. A backup still runs, but
+the previous data kept in that folder isn't in it, and its **Activity** entry
+says which folder it left out.
+
 `ludock-set-aside-<id>`, without the leading dot, holds what a server wrote
 while a stopped restore waited to be undone. It is ordinary data: Files shows
 it, backups include it, and you can delete it once you've kept what you need.
@@ -795,7 +803,8 @@ first finishes the undo the same way before its own work, and so does Ludock's
 next start if the server is stopped then. If the `.ludock-restore-<id>` folder
 is gone, there is nothing to put back: the data is left as it is and the
 entry says so. A state Ludock can't finish safely, such as data folders that
-changed since, makes that work refuse instead, and a running server it stopped
+changed since or another restore's `.ludock-restore-<id>` folder inside the
+data, makes that work refuse instead, and a running server it stopped
 for the undo starts again (for a restart with a backup first, once its backup
 is taken) unless the undo had begun moving data.
 

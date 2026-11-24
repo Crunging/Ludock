@@ -145,18 +145,33 @@ func (j *Jobs) assertStagingRoom(ctx context.Context, server *servers.Context, j
 	}
 	defer data.Cleanup()
 	// A safety backup takes every root whole; one item's restore moves only
-	// what is on the item's path.
+	// what is on the item's path. Another restore's stage below the top would
+	// move with what holds it; the helper refuses it too, but only once the
+	// server is stopped.
+	var stages []backups.StageFolder
 	if item == "" || job.Job.Input["createBackup"] == true {
-		err = j.Backups.CheckOwnMounts(ctx, server, data, "", assertAccess)
-	} else {
+		stages, err = j.Backups.CheckOwnMounts(ctx, server, data, "", assertAccess)
+	}
+	if err == nil && item != "" && job.Job.Input["createBackup"] == true {
+		// The safety backup leaves out a stage beside the item.
+		holder := ""
+		if len(stages) > 0 {
+			holder = stages[0].Holder()
+		}
+		err = job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.LeftOut = holder }, nil)
+	}
+	if err == nil && item != "" {
 		// A mount on the item's path is one in the data, but none there says
 		// nothing about the rest.
-		if err = j.Backups.Helpers.AssertOwnMounts(ctx, server, &backups.DataHelper{Container: data.Container, Roots: roots}, item, assertAccess); err != nil {
+		if stages, err = j.Backups.Helpers.AssertOwnMounts(ctx, server, &backups.DataHelper{Container: data.Container, Roots: roots}, item, assertAccess); err != nil {
 			j.Backups.NoteHostMount(server, err)
 		}
 	}
 	if err != nil {
 		return err
+	}
+	if len(stages) > 0 {
+		return backups.StageInside(stages[0].Holder())
 	}
 	if err := j.stagingRoom(ctx, data, server, job, roots, staged, reserve, assertAccess); err != nil {
 		return err
