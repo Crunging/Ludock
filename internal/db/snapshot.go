@@ -145,7 +145,7 @@ func settleOperations(ctx context.Context, path string) error {
 		"Ludock’s data was saved before this restore finished, so this copy doesn’t know how it ended, and Ludock won’t change the server’s data for it. "+
 			"If one of the server’s data folders still has a folder named .ludock-restore-",
 		", it holds what the restore was moving: the server’s previous data in its old folder and the backup’s in new. "+
-			"Put back what you need, then delete that folder; the server can’t be backed up while it is there.")
+			"New backups leave that folder out, so they don’t keep that previous data: copy out or put back what you need, then delete the folder on the host.")
 	return err
 }
 

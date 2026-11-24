@@ -158,6 +158,10 @@ func (s *Server) backupPreflight(w http.ResponseWriter, r *http.Request, request
 	if err == nil {
 		view.ServerName, view.Warn = resolved.Container.DisplayName, warnOffer(resolved.Container)
 		view.Running = resolved.Container.State == "running"
+		// Asked again, a mount found earlier is looked for at the next backup.
+		if r.URL.Query().Has("again") {
+			s.App.Backups.ForgetHostMount(resolved.Logical.ID)
+		}
 		preflight := s.App.Backups.Preflight(r.Context(), resolved)
 		if _, err = s.App.Authz.Assert(r.Context(), user, id, authz.BackupsCreate); err == nil {
 			view.Preflight = &preflight

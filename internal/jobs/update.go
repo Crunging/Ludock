@@ -52,7 +52,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 		if err := AssertRunningForBackupRestart(current.Container.State); err != nil {
 			return nil, err
 		}
-		if err := j.Backups.AssertReady(ctx, current); err != nil {
+		if err := j.assertBackupPossible(ctx, current, job); err != nil {
 			return nil, err
 		}
 		if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
@@ -139,9 +139,10 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[
 	if !completed {
 		defer j.notifyInterrupted(ctx, job, notify.FailedWork, "backup-failed:"+job.Job.ID, backupInterrupted)
 	}
-	// Cut before the stop, such as while the world saved: nothing changed.
+	// Cut before the stop, such as while the world saved: nothing changed,
+	// but a check before the stop may have left its helper.
 	if job.Job.Recovery.InitialRunning == nil {
-		return nil, nil
+		return nil, j.removeOperationHelpers(ctx, job)
 	}
 	if err := j.recoverBackup(ctx, job, true); err != nil {
 		return nil, err
@@ -197,7 +198,7 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 	// initial state and binding were recorded before stopping.
 	initial := job.Job.Recovery.InitialRunning
 	if initial == nil {
-		return map[string]any{"guidance": "Ludock restarted before the update changed anything, so the update didn’t happen."}, nil
+		return map[string]any{"guidance": "Ludock restarted before the update changed anything, so the update didn’t happen."}, j.removeOperationHelpers(ctx, job)
 	}
 	if swap != nil && swap.reached(swapStarting) {
 		err := j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
@@ -436,6 +437,11 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	}
 	if !request.CreateBackup && request.SkipBackupConfirmation != server.Container.DisplayName {
 		return nil, apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping the backup")
+	}
+	if request.CreateBackup {
+		if err := j.assertBackupPossible(ctx, server, job); err != nil {
+			return nil, err
+		}
 	}
 	// Warned only now, once the update is sure to replace the server.
 	if err := j.warnFirst(ctx, job, capability, true); err != nil {

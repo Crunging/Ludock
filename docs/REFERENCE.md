@@ -745,9 +745,11 @@ Every name that starts with `.ludock-`, in any letter case, is Ludock's:
 | `.ludock-upload-<id>.tmp` | An upload or edit in progress, beside the file | When the upload ends |
 
 Files doesn't show these names, and no one can create, rename, move, upload,
-unpack, download, or delete one there; a folder holding one can still be
-deleted as a whole, except that a restore's folder is only ever at the top of
-a data folder. Backups leave them out, and a restore leaves those at the top of a data folder
+unpack, download, or delete one there. A folder holding an unpack's or
+upload's folder can still be deleted as a whole, but not one holding a
+restore's: it can be below the top of what Files shows, when two servers show
+different folders of shared storage or `ludock.files` was widened, and
+Files names it instead. Backups leave them out, and a restore leaves those at the top of a data folder
 where they are, so one left over, or made by hand, never blocks a backup or a
 restore. To
 remove one Ludock no longer needs, delete it on the host. The previous data of

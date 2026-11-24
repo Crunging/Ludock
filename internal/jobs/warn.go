@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/console"
 	"github.com/Crunging/Ludock/internal/games"
+	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedtime"
 	"github.com/Crunging/Ludock/internal/schedules"
@@ -88,6 +90,19 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 	// doesn't keep as the phase: nobody heard one yet, so it is sent now.
 	r := job.Job.Recovery
 	sending := until != 0 && !r.WarnSent && !r.WarnFailed && CanWarn(server.Container)
+	// A backup that can't be taken is refused before anyone is warned, and
+	// checked again before the stop. Work that holds its locks while it warns
+	// checks before calling this.
+	if until == 0 && !locked && backsUpFirst(job) {
+		if _, err := job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), func() (map[string]any, error) {
+			if err := assertAccess(); err != nil {
+				return nil, err
+			}
+			return nil, j.assertBackupPossible(ctx, server, job)
+		}); err != nil {
+			return err
+		}
+	}
 	if until == 0 || sending {
 		if until == 0 {
 			if err := job.Progress(phaseCounting, nil, nil); err != nil {

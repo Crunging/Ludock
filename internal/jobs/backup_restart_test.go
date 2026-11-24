@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/ops"
 )
@@ -55,8 +56,9 @@ func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 }
 
 // Ludock is killed while a restart that backs up first waits for the world
-// to save, before anything stopped. Recovery leaves the server running and
-// alerts once that there's no new backup.
+// to save, before anything stopped, after its check of the data left a
+// helper. Recovery leaves the server running, removes the helper, and alerts
+// once that there's no new backup.
 func TestBackupRestartInterruptedBeforeStop(t *testing.T) {
 	f := setup(t)
 	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
@@ -69,11 +71,16 @@ func TestBackupRestartInterruptedBeforeStop(t *testing.T) {
 	if _, err := f.jobs.DB.Exec("UPDATE operations SET status='running',phase='waiting_for_save' WHERE id=?", job.ID); err != nil {
 		t.Fatal(err)
 	}
+	left := f.engine.AddContainer(fakedocker.GameOptions{Name: "left", Image: image, Running: true,
+		Labels: map[string]string{"ludock.internal": "backup-helper", "ludock.operation": job.ID}})
 	if err := f.runner.Start(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	recovered, _ := f.runner.Get(ctx, job.ID)
 	if want := []string{"mc: " + backupInterrupted}; recovered.Status != ops.Interrupted || !f.running() || !slices.Equal(f.alerts, want) {
 		t.Fatalf("%+v, alerts %v", recovered, f.alerts)
+	}
+	if f.engine.Container(left) != nil {
+		t.Fatal("the check's helper was left")
 	}
 }

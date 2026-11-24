@@ -392,6 +392,8 @@ such as Valheim's `/opt/valheim`. It shows container paths, never host paths.
 - **Select** picks several entries to download as one tar, move, or delete.
 - A folder mounted separately inside another, such as a mods folder, can't
   be deleted, renamed, or moved with what holds it; change what's inside it.
+  Neither can a folder holding a restore's hidden `.ludock-restore-*` folder,
+  which can be the only copy of the server's previous data.
 
 Stop a game before replacing a world or configuration it has open. Many
 images write some settings from their environment variables each time they
@@ -413,10 +415,12 @@ Size and time limits are in the [reference](REFERENCE.md#limits).
 
 - **Downtime:** a backup stops the server for the whole copy, then returns it
   to its previous state. Live backups aren't supported.
-- **Readiness:** the **Backups** tab checks the destination, free space, and
-  whether another container writes the same data, without stopping anything,
-  and says what's wrong only when something is. Every backup checks again
-  before it starts.
+- **Readiness:** the **Backups** tab checks the destination, free space, the
+  data folders, and whether another container writes the same data, without
+  stopping anything, and says what's wrong only when something is. Every
+  backup, restart or update with a backup first, and restore checks again
+  before it warns players or stops the server, so one that can't work leaves
+  the server running.
 - **Space:** Ludock keeps 5 GiB free on the backup disk by default. A backup
   that runs out of room fails and says why. After each successful backup, if
   the next one might not fit, Ludock removes the server's oldest backups, never
@@ -429,8 +433,11 @@ Size and time limits are in the [reference](REFERENCE.md#limits).
   copy.
 - **Contents:** each data folder must be inside a writable directory mount,
   with no other mount nested inside it and no overlap with another data
-  folder; single-file mounts, links, and special files are refused. Use
-  `ludock.files` to pick folders that qualify.
+  folder; single-file mounts, links, and special files are refused. That
+  includes a disk or network share the host mounted inside the folder Docker
+  mounts, which Docker doesn't show: the backup finds it before stopping the
+  server and refuses, and the **Backups** tab then says so until you choose
+  **Check again**. Use `ludock.files` to pick folders that qualify.
   Permissions, owners, and modification times are kept, and restoring a whole
   backup also gives each data folder its own owner and permissions back;
   ACLs, extended attributes, and sparse files aren't kept.

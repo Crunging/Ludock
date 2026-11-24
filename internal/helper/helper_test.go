@@ -151,7 +151,7 @@ func TestDownloadsAndBackupsAreReadableTar(t *testing.T) {
 	os.Remove(filepath.Join(root, "escape"))
 	long := strings.Repeat("ü", 80)
 	os.WriteFile(filepath.Join(root, "world", long), []byte("unicode"), 0o644)
-	for _, request := range []FileRequest{{Operation: "download", Root: root, Path: "world"}, {Operation: "backup", Root: root}} {
+	for _, request := range []FileRequest{{Operation: "download", Root: root, Path: "world"}, {Operation: "backup", Root: root, Base: root}} {
 		out, code := runFile(t, request, nil)
 		if code != 0 {
 			t.Fatal(request.Operation)
@@ -218,7 +218,7 @@ func keys(m map[string]string) []string {
 
 func restore(t *testing.T, root, stage, operation string) (string, int) {
 	t.Helper()
-	argument, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: operation})
+	argument, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: operation, Base: root})
 	var stdout, stderr bytes.Buffer
 	code := RunRestore(string(argument), &stdout, &stderr)
 	if code != 0 && stderr.String() != RestoreFailure {
@@ -506,19 +506,30 @@ func TestRestoreItemRollbackOwnership(t *testing.T) {
 	}
 }
 
-// The folder picked for a one-item restore holds something cleanup could
-// never remove, first a named pipe and then another filesystem mounted
-// inside it, such as a disk the host mounted under the data: the restore is
-// refused before the server stops and never moves the folder aside.
-func TestRestoreItemRefusesUnremovableFolder(t *testing.T) {
-	root := t.TempDir()
+// The data a restore replaces, one item or a whole folder, holds something
+// cleanup could never remove, first a named pipe and then another filesystem
+// mounted inside it, such as a disk the host mounted under the data: the
+// restore is refused before the server stops and never moves anything
+// aside. The mount is found by the helper's mount table before the stop, and
+// by mount IDs as the stopped data is moved; tests can't mount, so both are
+// faked, the table from a captured line with an escaped space.
+func TestRestoreRefusesUnremovableData(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "game data")
 	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
 	for _, dir := range []string{"world/region", "world/mods/cache", stage + "/old"} {
 		os.MkdirAll(filepath.Join(root, dir), 0o755)
 	}
-	step := func(operation string) int {
-		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: operation, Item: "world"})
+	stepIn := func(operation, item string) int {
+		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: operation, Item: item, Base: base})
 		return RunRestore(string(request), io.Discard, io.Discard)
+	}
+	step := func(operation string) int { return stepIn(operation, "world") }
+	unmoved := func(how string) {
+		t.Helper()
+		if _, err := os.Stat(filepath.Join(root, "world/mods/cache")); err != nil {
+			t.Fatal(how, "moved the folder", err)
+		}
 	}
 	if step("check") != 0 {
 		t.Fatal("refused a folder on one mount")
@@ -546,12 +557,38 @@ func TestRestoreItemRefusesUnremovableFolder(t *testing.T) {
 		return 1, nil
 	}
 	t.Cleanup(func() { mountOf = mountID })
-	if step("check") == 0 || step("moveOld") == 0 {
+	if step("check") == 0 || step("moveOld") != RestoreMounted || stepIn("moveOld", "") != RestoreMounted {
 		t.Fatal("accepted a folder with a mount inside it")
 	}
-	if _, err := os.Stat(filepath.Join(root, "world/mods/cache")); err != nil {
-		t.Fatal("the folder was moved", err)
+	unmoved("found")
+	mountOf = mountID
+	table := func(point string) {
+		escaped := strings.ReplaceAll(point, " ", `\040`)
+		MountTable = func() ([]byte, error) {
+			return []byte("22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n" +
+				"36 22 98:0 /mnt1 " + escaped + " rw,noatime master:1 - ext3 /dev/root rw,errors=continue\n"), nil
+		}
 	}
+	t.Cleanup(func() { MountTable = func() ([]byte, error) { return os.ReadFile("/proc/self/mountinfo") } })
+	for point, refused := range map[string]bool{
+		filepath.Join(root, "world/mods/cache"): true,
+		// On the path down to the data folder, as when ludock.files picks a
+		// folder the host mounted.
+		root: true,
+		// The helper's own mount, and a sibling the item doesn't reach.
+		base:                          false,
+		filepath.Join(root, "config"): false,
+	} {
+		table(point)
+		if got := step("check") == RestoreMounted; got != refused {
+			t.Errorf("table %s: item check refused %v", point, got)
+		}
+	}
+	table(filepath.Join(root, "world/mods/cache"))
+	if step("moveOld") != RestoreMounted || stepIn("moveOld", "") != RestoreMounted {
+		t.Fatal("moved data holding a mount from the table")
+	}
+	unmoved("table")
 }
 
 // Input that ends partway through a record or a file's bytes, as a cut
@@ -620,6 +657,29 @@ func TestReservedNamesStayOutOfFiles(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(root, stage, "old", "level.dat")); string(data) != "previous" {
 		t.Fatal("the stage folder changed")
 	}
+	// A stage below the top, where a wider ludock.files or another server's
+	// folder shows it, is never deleted, renamed, or moved with what holds
+	// it; an unpack's leftover folder is taken along.
+	os.MkdirAll(filepath.Join(root, "world", "region", stage, "old"), 0o700)
+	os.WriteFile(filepath.Join(root, "world", "region", stage, "old", "level.dat"), []byte("previous"), 0o644)
+	for _, request := range []FileRequest{
+		{Operation: "delete", Root: root, Path: "world"},
+		{Operation: "delete-paths", Root: root, Paths: []string{"server.properties", "world"}},
+		{Operation: "rename", Root: root, Path: "world", Destination: "renamed"},
+		{Operation: "move", Root: root, Paths: []string{"world"}, Destination: "private"},
+	} {
+		if _, code := runFile(t, request, nil); code != FileHoldsRestore {
+			t.Errorf("%s %v: %d", request.Operation, request.Paths, code)
+		}
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "world", "region", stage, "old", "level.dat")); string(data) != "previous" {
+		t.Fatal("a stage below the top changed")
+	}
+	os.MkdirAll(filepath.Join(root, "private", ".ludock-unpack-y"), 0o700)
+	if _, code := runFile(t, FileRequest{Operation: "delete", Root: root, Path: "private"}, nil); code != 0 {
+		t.Fatal("refused a folder holding an unpack's leftovers", code)
+	}
+	os.MkdirAll(filepath.Join(root, "private"), 0o755)
 	if _, err := os.Stat(filepath.Join(root, "server.properties")); err != nil {
 		t.Fatal("a refused selection changed something")
 	}
@@ -632,7 +692,7 @@ func TestReservedNamesStayOutOfFiles(t *testing.T) {
 	for _, request := range []FileRequest{
 		{Operation: "download", Root: root, Path: "world"},
 		{Operation: "download-paths", Root: root, Paths: []string{"world"}},
-		{Operation: "backup", Root: root},
+		{Operation: "backup", Root: root, Base: root},
 	} {
 		out, code := runFile(t, request, nil)
 		if code != 0 {
@@ -653,8 +713,9 @@ func TestReservedNamesStayOutOfFiles(t *testing.T) {
 // A folder or file mounted separately inside a data folder, whether the
 // backend declared it or only the file system shows it, is never entered or
 // moved: deleting, renaming, or moving it or a folder holding it is refused
-// before anything changes. Tests can't mount, so the file system's answer is
-// faked by inode.
+// before anything changes, and a backup of the data refuses to read it.
+// Tests can't mount, so the file system's answer is faked by inode, and the
+// helper's mount table by a line.
 func TestChangesNeverCrossAMount(t *testing.T) {
 	root, _ := dataRoot(t)
 	os.Remove(filepath.Join(root, "escape"))
@@ -702,6 +763,7 @@ func TestChangesNeverCrossAMount(t *testing.T) {
 		return 1, nil
 	}
 	t.Cleanup(func() { mountOf = mountID })
+	requests["back up"] = FileRequest{Operation: "backup", Root: root, Base: root}
 	for name, request := range requests {
 		if _, code := runFile(t, request, nil); code != FileMounted {
 			t.Errorf("found: %s: %d", name, code)
@@ -709,14 +771,31 @@ func TestChangesNeverCrossAMount(t *testing.T) {
 	}
 	intact("found")
 	mounted.Ino = mountedFile.Ino
-	for _, name := range []string{"delete the folder", "delete a selection"} {
+	for _, name := range []string{"delete the folder", "delete a selection", "back up"} {
 		if _, code := runFile(t, requests[name], nil); code != FileMounted {
 			t.Errorf("file: %s: %d", name, code)
 		}
 	}
 	intact("file")
 	mountOf = mountID
+	MountTable = func() ([]byte, error) {
+		return []byte("40 22 0:45 / " + mods + " rw - nfs4 server:/share rw\n"), nil
+	}
+	t.Cleanup(func() { MountTable = func() ([]byte, error) { return os.ReadFile("/proc/self/mountinfo") } })
+	for _, request := range []FileRequest{requests["back up"], {Operation: "mounts", Root: root, Base: root},
+		{Operation: "mounts", Root: root, Path: "world", Base: root}} {
+		if _, code := runFile(t, request, nil); code != FileMounted {
+			t.Errorf("table: %s %s: %d", request.Operation, request.Path, code)
+		}
+	}
+	if _, code := runFile(t, FileRequest{Operation: "mounts", Root: root, Path: "private", Base: root}, nil); code != 0 {
+		t.Error("refused a path the mount isn't on")
+	}
+	MountTable = func() ([]byte, error) { return nil, nil }
 	if _, code := runFile(t, requests["delete the folder"], nil); code != 0 {
 		t.Fatal("refused a folder on one mount", code)
+	}
+	if _, code := runFile(t, requests["back up"], nil); code != 0 {
+		t.Fatal("refused a backup on one mount", code)
 	}
 }

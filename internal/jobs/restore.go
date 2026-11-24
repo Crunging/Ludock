@@ -118,7 +118,7 @@ func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, 
 	if operation == "cleanup" || operation == "rollbackClean" || operation == "setAside" {
 		limit = removalLimit
 	}
-	request := helper.RestoreRequest{Root: root, Stage: stageName(job), Operation: operation, Item: item}
+	request := helper.RestoreRequest{Root: root, Stage: stageName(job), Operation: operation, Item: item, Base: backups.HelperBaseOf(root)}
 	if operation == "setAside" {
 		request.Aside = helper.SetAsideName(job.Job.ID)
 	}
@@ -134,8 +134,8 @@ func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, 
 var errRestoreCapacity = fail("RESTORE_CAPACITY", "The server’s disk doesn’t have room to unpack the backup next to the current data and still keep its minimum free space. Free up space on that disk, then try again.")
 
 // assertStagingRoom refuses, before the server stops, a restore that cannot
-// fit: roots on one filesystem must fit together above the reserve. Staging
-// checks again as it runs.
+// fit, since roots on one filesystem must fit together above the reserve, or
+// that would cross a mount the host added. Staging checks again as it runs.
 func (j *Jobs) assertStagingRoom(ctx context.Context, server *servers.Context, job *ops.Context, roots []backups.Root, item string,
 	staged map[string]int64, reserve int64, assertAccess func() error) error {
 	data, err := j.Backups.Helpers.NewDataHelper(ctx, server, true, job.Job.ID)
@@ -143,6 +143,20 @@ func (j *Jobs) assertStagingRoom(ctx context.Context, server *servers.Context, j
 		return err
 	}
 	defer data.Cleanup()
+	// A safety backup takes every root whole; one item's restore moves only
+	// what is on the item's path.
+	if item == "" || job.Job.Input["createBackup"] == true {
+		err = j.Backups.CheckOwnMounts(ctx, server, data, "", assertAccess)
+	} else {
+		// A mount on the item's path is one in the data, but none there says
+		// nothing about the rest.
+		if err = j.Backups.Helpers.AssertOwnMounts(ctx, server, &backups.DataHelper{Container: data.Container, Roots: roots}, item, assertAccess); err != nil {
+			j.Backups.NoteHostMount(server, err)
+		}
+	}
+	if err != nil {
+		return err
+	}
 	if err := j.stagingRoom(ctx, data, server, job, roots, staged, reserve, assertAccess); err != nil {
 		return err
 	}
@@ -512,6 +526,13 @@ func (r *restoreRun) validate() error {
 		return err
 	}
 	r.folder, r.staged = folder, staged
+	if r.whole || r.job.Job.Input["createBackup"] == true {
+		if err := r.j.Backups.AssertReady(r.ctx, r.server); err != nil {
+			return err
+		}
+	} else if err := r.j.Backups.AssertNoOtherWriters(r.ctx, r.server, ""); err != nil {
+		return err
+	}
 	return r.j.assertStagingRoom(r.ctx, r.server, r.job, r.roots, r.item, r.staged, r.reserve, r.assertAccess)
 }
 

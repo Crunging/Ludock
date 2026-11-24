@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,6 +91,9 @@ type Container struct {
 	ControlsHost bool
 	// AutoRemove: Docker deletes it as soon as it stops (--rm).
 	AutoRemove bool
+	// NestedMount: Docker mounts something inside one of its data folders,
+	// so it can't be backed up.
+	NestedMount bool
 }
 
 // ErrAutoRemove refuses anything that would stop a --rm server: Docker
@@ -579,7 +583,9 @@ func toContainer(info *docker.ContainerInspect) (*Container, error) {
 			}
 		}
 	}
-	container.FileRoots = files.Roots(gameType, container.Labels, identity.DockerMounts(info))
+	mounts := identity.DockerMounts(info)
+	container.FileRoots = files.Roots(gameType, container.Labels, mounts)
+	container.NestedMount = slices.ContainsFunc(container.FileRoots, func(root files.Root) bool { return files.HoldsMount(root.Path, mounts) })
 	return container, nil
 }
 

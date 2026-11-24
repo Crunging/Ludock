@@ -51,7 +51,7 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 	var physicalRoots []string
 	for _, root := range plan.Roots {
 		mounts := context.Observation.Mounts
-		if slices.ContainsFunc(mounts, func(mount identity.Mount) bool { return strings.HasPrefix(mount.Destination, root.Path+"/") }) {
+		if files.HoldsMount(root.Path, mounts) {
 			return nil, fail("NESTED_BACKUP_MOUNT", "One of the server’s data folders has another mount inside it, which Ludock can’t back up as one folder. List folders without one inside in the ludock.files label, then try again.")
 		}
 		source := writableOwnerMount(mounts, root.Path)
@@ -68,7 +68,7 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 			return nil, fail("OVERLAPPING_BACKUP_ROOTS", "Two of the server’s data folders are the same folder on the host, or one is inside the other. List each folder once in the ludock.files label, then try again.")
 		}
 		physicalRoots = append(physicalRoots, physical)
-		alias := "/mounts/" + root.ID
+		alias := helperBase(root)
 		plan.Aliases = append(plan.Aliases, alias+root.Path[len(source.Destination):])
 		mountSource := source.Source
 		if source.Type == "volume" && source.Name != "" {
@@ -92,13 +92,46 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 	return plan, nil
 }
 
+// ErrHostMount is a data folder that the host, not Docker, has another disk
+// or share mounted on or inside.
+var ErrHostMount = fail("NESTED_HOST_MOUNT", "One of the server’s data folders has another disk or network share mounted on or inside it on the host, which Ludock can’t back up or restore as one folder. List folders without one inside in the ludock.files label, or back that folder up separately, then try again.")
+
+// helperBase is the helper's mount that holds a root.
+func helperBase(root Root) string { return "/mounts/" + root.ID }
+
+// HelperBaseOf is the helper's mount that holds a HelperRoot path.
+func HelperBaseOf(helperPath string) string {
+	parts := strings.SplitN(helperPath, "/", 4)
+	if len(parts) < 3 || parts[0] != "" || parts[1] != "mounts" {
+		return ""
+	}
+	return "/mounts/" + parts[2]
+}
+
 // HelperRoot is a root's path inside the data helper.
 func HelperRoot(context *servers.Context, root Root) (string, error) {
 	mount := writableOwnerMount(context.Observation.Mounts, root.Path)
 	if mount == nil {
 		return "", fail("BACKUP_ROOT_CHANGED", "One of the server’s data folders changed. Reload the page and try again.")
 	}
-	return "/mounts/" + root.ID + root.Path[len(mount.Destination):], nil
+	return helperBase(root) + root.Path[len(mount.Destination):], nil
+}
+
+// AssertOwnMounts refuses, through a running helper, roots that hold or are
+// reached through a mount the host added and Docker doesn't show, or, with
+// item, such a mount on the item's path or inside it.
+func (h *Helpers) AssertOwnMounts(ctx context.Context, context *servers.Context, data *DataHelper, item string, assertAccess func() error) error {
+	for _, root := range data.Roots {
+		path, err := HelperRoot(context, root)
+		if err != nil {
+			return err
+		}
+		request := helper.FileRequest{Operation: "mounts", Root: path, Path: item, Base: helperBase(root), Blocked: []string{}}
+		if _, err := h.Exec(ctx, data.Container, helper.Command("file", request), assertAccess); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type DataHelper struct {
@@ -202,7 +235,8 @@ func (h *Helpers) ExecWithin(ctx context.Context, id string, command []string, a
 }
 
 var helperErrors = &launch.ExecErrors{Timeout: errTimeout, Failed: errFailed, Unsafe: errFailed,
-	OutputLimit: fail("HELPER_OUTPUT", "Ludock’s helper sent back more than expected, so the work was stopped.")}
+	OutputLimit: fail("HELPER_OUTPUT", "Ludock’s helper sent back more than expected, so the work was stopped."),
+	Exits:       map[int]*apperr.Error{helper.FileMounted: ErrHostMount}}
 
 // IsRunning reports whether a reused restore helper is still running.
 func (h *Helpers) IsRunning(ctx context.Context, id string) (bool, error) {
@@ -214,8 +248,8 @@ func (h *Helpers) IsRunning(ctx context.Context, id string) (bool, error) {
 }
 
 // archive streams one root as tar from the helper.
-func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess func() error) (io.ReadCloser, func() error, error) {
-	request := helper.FileRequest{Operation: "backup", Root: root, Blocked: []string{}}
+func (h *Helpers) archive(ctx context.Context, id, base, root string, assertAccess func() error) (io.ReadCloser, func() error, error) {
+	request := helper.FileRequest{Operation: "backup", Root: root, Base: base, Blocked: []string{}}
 	var execID string
 	err := launch.Step(ctx, "creating a helper command", func(ctx context.Context) (err error) {
 		execID, err = h.Docker.CreateExec(ctx, id, docker.ExecCreate{Cmd: helper.Command("file", request), AttachStdout: true, AttachStderr: true})
@@ -263,6 +297,10 @@ func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess fun
 		}
 		// The helper reports its own failures; an exec that ended without
 		// one never ran it, as when Docker fails to start the command.
+		// Docker never ends a command with the helper's own refusal.
+		if err == nil && !result.Running && result.ExitCode != nil && *result.ExitCode == helper.FileMounted {
+			return ErrHostMount
+		}
 		if err == nil && !result.Running && result.ExitCode != nil && *result.ExitCode != 0 && !stderr.contains(helper.FileFailure) {
 			return docker.ErrRequestFailed
 		}
@@ -374,7 +412,7 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 		if err != nil {
 			return 0, "", err
 		}
-		input, complete, err := h.archive(ctx, data.Container, helperPath, assertAccess)
+		input, complete, err := h.archive(ctx, data.Container, helperBase(root), helperPath, assertAccess)
 		if err != nil {
 			return 0, "", err
 		}
@@ -435,7 +473,8 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 		}, nil)
 		// A stream cut off at the time limit or by Docker going away fails as
 		// a broken archive; the limit or Docker is the reason.
-		if completeErr := complete(); err == nil || errors.Is(completeErr, errBackupTimeout) || docker.Unavailable(completeErr) {
+		if completeErr := complete(); err == nil || errors.Is(completeErr, errBackupTimeout) || errors.Is(completeErr, ErrHostMount) ||
+			docker.Unavailable(completeErr) {
 			err = completeErr
 		}
 		input.Close()

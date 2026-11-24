@@ -592,7 +592,8 @@ func TestBackupOfReplacedServer(t *testing.T) {
 	validate := f.engine.OnStart
 	f.engine.OnStart = func(c *fakedocker.Container) {
 		validate(c)
-		if c.CreateRequest.Labels["ludock.internal"] == "backup-helper" {
+		// The helper that copies, not the one checking before the stop.
+		if c.CreateRequest.Labels["ludock.internal"] == "backup-helper" && !f.running() {
 			f.engine.RemoveContainer(f.game)
 		}
 	}
@@ -743,5 +744,82 @@ func TestDeletedOnStopServerIsNeverStopped(t *testing.T) {
 	if f.engine.Container(f.game) == nil || !slices.ContainsFunc(volumes, func(v docker.VolumeInspect) bool { return v.Name == volume }) ||
 		slices.ContainsFunc(f.engine.Requests, func(request string) bool { return strings.Contains(request, "/stop") }) {
 		t.Fatal(f.engine.Requests)
+	}
+}
+
+// A server's data folder has another mount inside it, first one Docker
+// declares and then one only the host has (a second disk under the bind
+// source). A backup, a restart or update that backs up first, and a restore
+// are each refused before players are warned or the server stops, so a
+// nightly restart with a backup never takes it offline. The host's mount is
+// found by the helper's mount table, faked here since tests can't mount;
+// the Backups tab then reports it until someone checks again.
+func TestImpossibleBackupNeverStopsServer(t *testing.T) {
+	f := setup(t)
+	backupID := f.run(t, "backup", nil).Result["backupId"]
+	mods := filepath.Join(f.data, "world", "mods")
+	os.MkdirAll(mods, 0o755)
+	warned := map[string]any{WarnInput: true}
+	kinds := []struct {
+		kind  string
+		input map[string]any
+	}{
+		{"backup", warned},
+		{"restart", map[string]any{"createBackup": true, WarnInput: true}},
+		{"update", map[string]any{"request": map[string]any{"createBackup": true}, WarnInput: true}},
+		{"restore", map[string]any{"backupId": backupID, "confirmation": "mc", MovedInput: true, WarnInput: true}},
+	}
+	refused := func(how, message string) {
+		t.Helper()
+		for _, c := range kinds {
+			before := len(f.engine.Requests)
+			job := f.run(t, c.kind, c.input)
+			stopped := slices.ContainsFunc(f.engine.Requests[before:], func(request string) bool { return strings.Contains(request, f.game+"/stop") })
+			if job.Status != ops.Failed || job.Error != message || job.Recovery.WarnUntil != 0 || stopped || !f.running() {
+				t.Errorf("%s: %s: %s %q, warned %v, stopped %v", how, c.kind, job.Status, job.Error, job.Recovery.WarnUntil != 0, stopped)
+			}
+		}
+	}
+	// Docker can't change a container's mounts; a label changed with them
+	// stands in for the new container a real change makes.
+	redefine := func(change func(c *fakedocker.Container)) {
+		f.engine.Update(f.game, func(c *fakedocker.Container) { change(c); c.Config.Labels["revision"] += "+" })
+		if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	redefine(func(c *fakedocker.Container) {
+		c.Mounts = append(c.Mounts, docker.MountPoint{Type: "bind", Source: mods, Destination: mods, RW: true})
+	})
+	refused("declared", "One of the server’s data folders has another mount inside it, which Ludock can’t back up as one folder. List folders without one inside in the ludock.files label, then try again.")
+	redefine(func(c *fakedocker.Container) { c.Mounts = c.Mounts[:1] })
+	helper.MountTable = func() ([]byte, error) { return []byte("40 22 0:45 / " + mods + " rw - nfs4 server:/share rw\n"), nil }
+	t.Cleanup(func() { helper.MountTable = func() ([]byte, error) { return os.ReadFile("/proc/self/mountinfo") } })
+	refused("host", backups.ErrHostMount.Message)
+	server, err := f.jobs.Servers.ResolveAuthorized(ctx, f.admin, f.serverID, authz.BackupsCreate, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func() bool {
+		return slices.ContainsFunc(f.jobs.Backups.Preflight(ctx, server).Issues, func(issue backups.Issue) bool { return issue.Code == "NESTED_HOST_MOUNT" })
+	}
+	if !has() || !f.jobs.Backups.HostMounted(f.serverID, server.Logical.BindingRevision) {
+		t.Fatal("readiness doesn't report the host's mount")
+	}
+	f.jobs.Backups.ForgetHostMount(f.serverID)
+	if has() {
+		t.Fatal("still reported after checking again")
+	}
+	// A mount first met while copying leaves a restart that backs up first
+	// stopped, and is reported too.
+	helper.MountTable = func() ([]byte, error) {
+		if f.running() {
+			return nil, nil
+		}
+		return []byte("40 22 0:45 / " + mods + " rw - nfs4 server:/share rw\n"), nil
+	}
+	job := f.run(t, "restart", map[string]any{"createBackup": true})
+	if job.Status != ops.Failed || job.Error != backups.ErrHostMount.Message || f.running() || !has() {
+		t.Fatalf("copying: %s %q, running %v", job.Status, job.Error, f.running())
 	}
 }

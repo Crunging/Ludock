@@ -219,7 +219,7 @@ templ BackupReadiness(r ReadinessView) {
 					@Pip("attention")
 					This server can’t be backed up right now
 				</h3>
-				<button class="text-link" type="button" hx-get={ "/fragments/servers/" + r.ServerID + "/backups/preflight" } hx-target="#backup-readiness" hx-swap="outerHTML" data-busy-label="Checking…">Check again</button>
+				<button class="text-link" type="button" hx-get={ "/fragments/servers/" + r.ServerID + "/backups/preflight?again=1" } hx-target="#backup-readiness" hx-swap="outerHTML" data-busy-label="Checking…">Check again</button>
 			</div>
 			if r.Error != "" {
 				<p role="alert">{ r.Error }</p>

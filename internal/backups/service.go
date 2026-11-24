@@ -92,6 +92,10 @@ type Service struct {
 
 	// deletionCursor is where the next FinishDeletions batch starts, so rows
 	// that keep failing cannot hold back the ones after them.
+	// mountedData holds, by server ID, the binding revision of servers
+	// whose data a helper last found holding a mount the host added.
+	mountedData sync.Map
+
 	deletionMu     sync.Mutex
 	deletionCursor struct {
 		created int64
@@ -741,6 +745,9 @@ func (s *Service) Preflight(ctx context.Context, server *servers.Context) Prefli
 	}
 	_, err := PlanRoots(server, true)
 	check(err, Issue{"BACKUP_ROOT_UNAVAILABLE", "The server’s data folders couldn’t be checked. Review the folders mounted into it."})
+	if issue := s.hostMountIssue(server); issue != nil && err == nil {
+		issues = append(issues, *issue)
+	}
 	if settings != nil {
 		check(s.AssertSeparateDestination(ctx, server.Observation, *settings), Issue{"BACKUP_MOUNT_UNVERIFIED",
 			"Ludock couldn’t confirm that the backup folder is separate from game data. Check the backup mount."})
@@ -758,6 +765,9 @@ func (s *Service) Preflight(ctx context.Context, server *servers.Context) Prefli
 // AssertReady runs the checks that need no stop, so a backup that cannot
 // succeed never takes the server offline.
 func (s *Service) AssertReady(ctx context.Context, server *servers.Context) error {
+	if _, err := PlanRoots(server, true); err != nil {
+		return err
+	}
 	settings, err := s.ForBackup(ctx)
 	if err != nil {
 		return err
