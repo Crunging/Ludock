@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/db"
@@ -124,6 +125,84 @@ func TestMonitorSuppression(t *testing.T) {
 	s.Check(ctx, state("exited", ""), 500_000)
 	if len(events.events) != 1 {
 		t.Fatal(events.events)
+	}
+}
+
+// Ludock acting on a server pauses its outage tracking. An outage already
+// alerted still ends with one recovery alert and never alerts again, unless a
+// stop or an automatic restart, which announces its own outcome, ends it.
+func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
+	const down, silent, back = "Minecraft: the server is down.", "Minecraft: running, but the game stopped answering.", "Minecraft: the server is back up."
+	start := func(s *Service, id string) { s.Suppress(ctx, id); s.SetIntentionalStop(ctx, id, false) }
+	restart := func(s *Service, id string) {
+		s.Suppress(ctx, id)
+		s.SetIntentionalStop(ctx, id, false)
+		s.SetIntentionalStop(ctx, id, false)
+		s.Suppress(ctx, id)
+	}
+	for _, c := range []struct {
+		name            string
+		silent, alerted bool
+		act             func(*Service, string)
+		// after is the container and game once the pause has ended, checked
+		// twice; answersBack: a game that then answers ends it.
+		after       string
+		game        GameAnswer
+		want        []string
+		stillDown   bool
+		answersBack bool
+	}{
+		{name: "started", alerted: true, act: start, after: "running", want: []string{down, back}},
+		{name: "restarted", silent: true, alerted: true, act: restart, after: "running", game: GameWaiting, want: []string{silent},
+			stillDown: true, answersBack: true},
+		{name: "left stopped by other work", alerted: true, act: func(s *Service, id string) { s.Suppress(ctx, id); s.Suppress(ctx, id) },
+			after: "exited", want: []string{down}, stillDown: true},
+		{name: "stopped", silent: true, alerted: true, after: "exited", want: []string{silent}, act: func(s *Service, id string) {
+			s.Suppress(ctx, id)
+			s.SetIntentionalStop(ctx, id, true)
+			s.Suppress(ctx, id)
+		}},
+		{name: "started within grace", act: start, after: "running"},
+		{name: "restarted automatically", silent: true, alerted: true, after: "running", game: GameAnswering, want: []string{silent},
+			act: func(s *Service, id string) {
+				s.Suppress(ctx, id)
+				s.SetIntentionalStop(ctx, id, false)
+				s.SetIntentionalStop(ctx, id, false)
+				s.SuppressRecovered(ctx, id)
+			}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, events, server := setup(t)
+			game := GameAnswering
+			s.Game = func(string, servers.Container) GameAnswer { return game }
+			now := db.Now()
+			before := state("exited", "")
+			if c.silent {
+				s.Check(ctx, state("running", ""), now-300_000)
+				game, before = GameNotAnswering, state("running", "")
+			}
+			s.Check(ctx, before, now-200_000)
+			if c.alerted {
+				s.Check(ctx, before, now-100_000)
+			}
+			c.act(s, server.ID)
+			game = c.game
+			for _, at := range []int64{now + 100_000, now + 200_000} {
+				s.Check(ctx, state(c.after, ""), at)
+			}
+			if found, _ := problem(s, server.ID, now+200_000); (found != nil) != c.stillDown {
+				t.Fatal("outage shown:", found)
+			}
+			if c.answersBack {
+				game = GameAnswering
+				s.Check(ctx, state(c.after, ""), now+210_000)
+				s.Check(ctx, state(c.after, ""), now+220_000)
+				c.want = append(c.want, back)
+			}
+			if !slices.Equal(events.events, c.want) {
+				t.Fatal(events.events)
+			}
+		})
 	}
 }
 
