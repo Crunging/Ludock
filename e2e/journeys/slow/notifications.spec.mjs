@@ -78,8 +78,9 @@ async function openDeliveries(page) {
 
 /** Sends a test and waits for its result beside the button. */
 async function sendTest(card, label) {
+  const where = { Email: "Delivered. The test message should be in your inbox now.", Webhook: "Delivered. The webhook accepted the test message." };
   await card.getByRole("button", { name: "Send test notification" }).click();
-  await expect(card.locator(".notification-test-result")).toHaveText(`Delivered. The test message should be in ${label} now.`, { timeout: 30_000 });
+  await expect(card.locator(".notification-test-result")).toHaveText(where[label] ?? `Delivered. The test message should be in ${label} now.`, { timeout: 30_000 });
 }
 
 async function turnOff(page, name, label) {
