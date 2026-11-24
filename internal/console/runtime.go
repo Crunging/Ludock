@@ -130,6 +130,10 @@ var (
 	errNotRunning = apperr.New("SERVER_NOT_RUNNING", 409, "The game server must be running to accept console commands")
 )
 
+// PasswordUnreadable is the code of a console password file Ludock can't
+// read, which a game that writes it as it starts may yet write.
+const PasswordUnreadable = "CONSOLE_PASSWORD_UNREADABLE"
+
 // notConfigured explains a console setting the owner must fix. Its message
 // is shown in the console, so it never includes a label or environment value.
 func notConfigured(message string) error {
@@ -308,9 +312,12 @@ func (r *Runtime) password(ctx context.Context, target Target, adapter *games.Ad
 // passwordFile reads the password from a small file in the container: the
 // rest of the line that starts with key, or the first line without one.
 func (r *Runtime) passwordFile(ctx context.Context, containerID, file, key string) (string, error) {
-	unavailable := errors.New("Ludock could not read the console password from " + file +
-		". Check that the game's console is on, or set " + games.LabelConsolePasswordEnv)
+	unavailable := apperr.New(PasswordUnreadable, 409, "Ludock could not read the console password from "+file+
+		". Check that the game's console is on, or set "+games.LabelConsolePasswordEnv)
 	data, err := r.Docker.ReadFile(ctx, containerID, file, 4096)
+	if docker.Unavailable(err) {
+		return "", err
+	}
 	if err != nil {
 		return "", unavailable
 	}
