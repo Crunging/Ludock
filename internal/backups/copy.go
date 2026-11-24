@@ -87,11 +87,9 @@ func (s *Storage) CopyFile(ctx context.Context, source io.Reader, directory, nam
 	return err
 }
 
-// nameClaim lets a copy keep off a name another writer of the folder holds.
+// nameClaim lets a copy keep off a name another file of the folder holds.
 type nameClaim struct {
-	// ours recognizes a file at the name that this copy may replace.
-	ours func(io.Reader) bool
-	// next is the name to try when another's file holds name.
+	// next is the name to try when a different file holds name.
 	next func(name string) string
 	// partial is the copy's partial file, recorded before it is written: a
 	// same-second writer's partial shares its prefix, so none is removed.
@@ -99,8 +97,8 @@ type nameClaim struct {
 }
 
 // copyFile is CopyFile, returning the name the copy was published as: with
-// claim, a different file at name that isn't ours is kept, and the copy
-// takes claim's next name.
+// claim, a different file at name is kept, and the copy takes claim's next
+// name.
 func (s *Storage) copyFile(ctx context.Context, source io.Reader, directory, name string, size int64, checksum string,
 	reserve int64, progress func(), modified time.Time, claim *nameClaim) (string, error) {
 	if !fileName.MatchString(name) || strings.HasSuffix(name, ".partial") {
@@ -189,8 +187,8 @@ func (s *Storage) copyFile(ctx context.Context, source io.Reader, directory, nam
 
 // publish gives a verified partial file its final name and returns it. A
 // valid file already there is kept, so an attempt that wakes after a newer
-// one never replaces its file; an invalid one is replaced, unless claim says
-// it is another's, which moves the copy on to claim's next name.
+// one never replaces its file; an invalid one is replaced, unless there is a
+// claim, which moves the copy on to claim's next name.
 func publish(ctx context.Context, dir pinned, partial, name string, size int64, checksum string, claim *nameClaim) (string, error) {
 	for attempt := 0; ; attempt++ {
 		err := unix.Renameat2(dir.fd, partial, dir.fd, name, unix.RENAME_NOREPLACE)
@@ -218,7 +216,7 @@ func publish(ctx context.Context, dir pinned, partial, name string, size int64, 
 			if ctx.Err() != nil {
 				return "", errCopyStalled
 			}
-			if claim != nil && !claim.holds(dir, name) {
+			if claim != nil {
 				if attempt == 60 {
 					return "", errCopyFailed
 				}
@@ -238,20 +236,6 @@ func publish(ctx context.Context, dir pinned, partial, name string, size int64, 
 		}
 		return name, nil
 	}
-}
-
-// holds reports whether the file at name is one claim may replace.
-func (c *nameClaim) holds(dir pinned, name string) bool {
-	fd, err := unix.Openat(dir.fd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return false
-	}
-	file := os.NewFile(uintptr(fd), name)
-	defer file.Close()
-	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
-		return false
-	}
-	return c.ours(file)
 }
 
 // removePartials removes the partial files of name's earlier attempts.

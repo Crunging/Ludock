@@ -89,7 +89,7 @@ type dataOwner struct {
 	leftover string
 	// begin records the partial file about to be written.
 	begin func(partial string) error
-	// ours recognizes this installation's saves.
+	// ours recognizes this installation's saves, the only ones it prunes.
 	ours func(io.Reader) bool
 }
 
@@ -262,7 +262,9 @@ func (s *Service) CopyData(ctx context.Context) error {
 		return err
 	}
 	now := dataNow()
-	if track.Folder == settings.CopyTo && track.Name == saved.Name || now.UnixMilli() < track.NextAt {
+	// A save from another backup folder can share the name with different
+	// bytes.
+	if track.Folder == settings.CopyTo && track.Name == saved.Name && track.Checksum == saved.Checksum || now.UnixMilli() < track.NextAt {
 		return nil
 	}
 	owner := s.owner(ctx, dataCopyKey, track, dataTrack{Name: saved.Name, Folder: settings.CopyTo})
@@ -374,8 +376,8 @@ func (s *Service) dataStatus(ctx context.Context, settings Settings) (savedAt in
 // publishData removes the partial files of owner's leftover, writes a save
 // into directory through copyFile, then removes the older saves of owner's
 // there that dataKeeps doesn't keep, and returns the save's name. A name
-// that holds another installation's save, as in a folder two share, is
-// left to it and the save takes the next second. A record of the save is
+// that holds a save with other bytes, another installation's or an earlier
+// one of this one's, is left to it and the save takes the next second. A record of the save is
 // kept while it is written: copyFile removes its partial file unless Ludock
 // stops partway.
 func (s *Storage) publishData(ctx context.Context, source io.Reader, directory, name string, size int64, checksum string,
@@ -388,7 +390,7 @@ func (s *Storage) publishData(ctx context.Context, source io.Reader, directory, 
 		return "", err
 	}
 	name, err := s.copyFile(ctx, source, directory, name, size, checksum, reserve, progress, time.Time{},
-		&nameClaim{ours: owner.ours, next: nextDataName, partial: partial})
+		&nameClaim{next: nextDataName, partial: partial})
 	if err != nil {
 		return "", err
 	}
