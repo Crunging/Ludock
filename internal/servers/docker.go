@@ -920,7 +920,7 @@ func (o *Observer) changeState(ctx context.Context, id string, action Action,
 	if err != nil {
 		return nil, err
 	}
-	if action == Stop && info.Host.AutoRemove {
+	if action != Start && info.Host.AutoRemove {
 		return nil, ErrAutoRemove
 	}
 	if assertAccess != nil {

@@ -72,7 +72,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 			if backup.State != "complete" {
 				continue
 			}
-			if backup.ID == restore && b.Fits[backup.ID].Refusal == "" && !backup.Missing {
+			if backup.ID == restore && restoreOffered(view, d.DiscoveryUnavailable) && b.Fits[backup.ID].Refusal == "" && !backup.Missing {
 				b.Restore = backup
 			}
 			if backup.ID == keep && backup.KeptAt == 0 {
@@ -158,6 +158,13 @@ func (s *Server) resolveFresh(r *http.Request, request *Request, id string, capa
 func (s *Server) backupPreflight(w http.ResponseWriter, r *http.Request, request *Request) {
 	id := r.PathValue("id")
 	resolved, user, err := s.resolveFresh(r, request, id, authz.BackupsCreate)
+	if err == nil {
+		err = resolved.Container.Refusal(ops.KindBackup)
+	}
+	if apperr.Is(err, "SERVER_DELETED_ON_STOP") {
+		s.fail(w, r, request, err)
+		return
+	}
 	view := views.ReadinessView{ServerID: id, Admin: request.User().Role == db.RoleAdmin}
 	if err == nil {
 		view.ServerName, view.Warn = resolved.Container.DisplayName, warnOffer(resolved.Container)
@@ -429,7 +436,8 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 	view := &d.Row.Server
 	u := views.UpdateView{ServerID: id, ServerName: view.DisplayName, CanBackup: can(view, authz.BackupsCreate),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
-		Recreate: r.URL.Query().Get("recreate") == "1", Warn: warnOffer(view.Container), Running: view.Container.State == "running"}
+		Recreate: r.URL.Query().Get("recreate") == "1", Warn: warnOffer(view.Container), Running: view.Container.State == "running",
+		DeletedOnStop: view.Refuses(ops.KindUpdate)}
 	resolved, _, err := s.resolveFresh(r, request, id, capability)
 	if err == nil {
 		result := s.App.Updates.Capability(r.Context(), resolved, func() bool {

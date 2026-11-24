@@ -374,7 +374,8 @@ templ OverviewLive(d ServerDetail) {
 					}
 				</dd>
 			</div>
-			if d.Row.BackupSummary {
+			// The header says why a server that refuses backups has none.
+			if d.Row.BackupSummary && (server.LatestBackup != nil || !server.Refuses(ops.KindBackup)) {
 				<div>
 					<dt>Last backup</dt>
 					<dd>

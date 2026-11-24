@@ -76,8 +76,15 @@ func TestRestoreChecksConfirmationAndBackup(t *testing.T) {
 	if kind, input := p.queued(t); kind != "restore" || !strings.Contains(input, `"backupId":"11111111-1111-4111-8111-111111111111"`) {
 		t.Fatal(kind, input)
 	}
-	page := p.do("GET", "/servers/"+p.server+"?tab=backups&restore=11111111-1111-4111-8111-111111111111", p.admin, nil, nil).Body.String()
-	if !strings.Contains(page, "Restore game data") || !strings.Contains(page, "/backups/11111111-1111-4111-8111-111111111111/download") {
+	// The form isn't offered while the restore is queued, and is once it ends.
+	open := func() string {
+		return p.do("GET", "/servers/"+p.server+"?tab=backups&restore=11111111-1111-4111-8111-111111111111", p.admin, nil, nil).Body.String()
+	}
+	if page := open(); strings.Contains(page, "Restore game data") {
+		t.Fatal(page)
+	}
+	p.app.DB.Exec("UPDATE operations SET status='succeeded'")
+	if page := open(); !strings.Contains(page, "Restore game data") || !strings.Contains(page, "/backups/11111111-1111-4111-8111-111111111111/download") {
 		t.Fatal(page)
 	}
 }
@@ -208,12 +215,8 @@ func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 		t.Fatal(response.Code)
 	}
 	// Docker deletes a --rm container when it stops, so it can't be replaced:
-	// the form is not offered and a forged request is refused.
+	// a forged request is refused.
 	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.HostConfig = map[string]any{"AutoRemove": true} })
-	panel := p.do("GET", "/fragments/servers/"+p.server+"/update", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String()
-	if !strings.Contains(panel, "started with --rm") || !strings.Contains(panel, "Check again") || strings.Contains(panel, "/updates") {
-		t.Fatal(panel)
-	}
 	values.Set("skipBackupConfirmation", "valheim")
 	values.Set("createBackup", "false")
 	if response := p.action("/servers/"+p.server+"/updates", p.admin, values); response.StatusCode != http.StatusConflict {

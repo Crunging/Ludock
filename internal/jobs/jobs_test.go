@@ -692,8 +692,9 @@ func TestBackupWhenDockerGoesAway(t *testing.T) {
 
 // A server started with --rm has an unnamed volume, which Docker deletes
 // with it when it stops. Every kind of work that would stop
-// it is refused with one message before it acts, and so is a stop reaching
-// the shared stop path directly: the server and its volume stay.
+// it is refused with one message before it acts, and so is a stop or a
+// restart reaching the shared path to Docker directly: the server and its
+// volume stay.
 func TestDeletedOnStopServerIsNeverStopped(t *testing.T) {
 	f := setup(t)
 	volume := strings.Repeat("a", 64)
@@ -714,12 +715,16 @@ func TestDeletedOnStopServerIsNeverStopped(t *testing.T) {
 			t.Fatalf("%s: %s, container kept: %v", kind, job.Error, f.engine.Container(f.game) != nil)
 		}
 	}
-	if err := f.jobs.Servers.Observer.ChangeState(ctx, f.game, servers.Stop, nil); !apperr.Is(err, "SERVER_DELETED_ON_STOP") {
-		t.Fatal(err)
+	for _, action := range []servers.Action{servers.Stop, servers.Restart} {
+		if err := f.jobs.Servers.Observer.ChangeState(ctx, f.game, action, nil); !apperr.Is(err, "SERVER_DELETED_ON_STOP") {
+			t.Fatal(action, err)
+		}
 	}
 	volumes, _ := f.jobs.Docker.ListVolumes(ctx)
 	if f.engine.Container(f.game) == nil || !slices.ContainsFunc(volumes, func(v docker.VolumeInspect) bool { return v.Name == volume }) ||
-		slices.ContainsFunc(f.engine.Requests, func(request string) bool { return strings.Contains(request, "/stop") }) {
+		slices.ContainsFunc(f.engine.Requests, func(request string) bool {
+			return strings.Contains(request, "/stop") || strings.Contains(request, "/restart")
+		}) {
 		t.Fatal(f.engine.Requests)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/Crunging/Ludock/internal/attention"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -489,7 +490,7 @@ templ ServerCard(row ServerRow) {
 						<span class="muted">—</span>
 					} else if server.LatestBackup != nil {
 						@Time(server.LatestBackup.CreatedAt, "sentence", "")
-					} else if server.NoDataFolders {
+					} else if server.NoDataFolders || server.Refuses(ops.KindBackup) {
 						<span class="muted">—<span class="sr-only">Can’t be backed up</span></span>
 					} else {
 						<span class="server-row__never">Never</span>

@@ -218,9 +218,11 @@ func TestSavingMonitoringKeepsRecoveryNotOffered(t *testing.T) {
 }
 
 // A running server started with --rm, which Docker deletes when it stops,
-// is offered nothing that stops it: the page says why once, the checklist
-// skips it, schedules offer only what can run, a forged request is refused,
-// and a stopping schedule already saved says why it was skipped.
+// is offered nothing that stops it: the page says why once, even on the
+// Update tab, with no "never backed up" warning, the checklist skips it,
+// schedules offer only what can run, forged requests, a stopping schedule
+// or the backup check are refused, and a stopping schedule already saved
+// says why it was skipped.
 func TestDeletedOnStopServerOffersNoStop(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
@@ -237,8 +239,26 @@ func TestDeletedOnStopServerOffersNoStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	detail := p.do("GET", "/servers/"+p.server, p.admin, nil, nil).Body.String()
-	if strings.Count(detail, "started with --rm") != 1 || strings.Contains(detail, `/stop"`) || strings.Contains(detail, `/restart"`) {
+	if strings.Count(detail, "started with --rm") != 1 || strings.Contains(detail, `/stop"`) || strings.Contains(detail, `/restart"`) ||
+		strings.Contains(detail, "Last backup") {
 		t.Fatal(detail)
+	}
+	if body := p.do("GET", "/fragments/servers", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String(); strings.Contains(body, "server-row__never") {
+		t.Fatal(body)
+	}
+	panel := p.do("GET", "/fragments/servers/"+p.server+"/update", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String()
+	if !strings.Contains(panel, "can’t update this server") || strings.Contains(panel, "started with --rm") || strings.Contains(panel, "/updates") {
+		t.Fatal(panel)
+	}
+	if response := p.do("GET", "/fragments/servers/"+p.server+"/backups/preflight", p.admin, nil, map[string]string{"HX-Request": "true"}); response.Code != http.StatusConflict ||
+		strings.Contains(response.Body.String(), "create-backup") {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	for _, action := range []string{"stop", "restart", "backup"} {
+		form := url.Values{"kind": {"recurring"}, "action": {action}, "time": {"09:00"}, "timezone": {"UTC"}, "days": {"1"}}
+		if response := p.action("/servers/"+p.server+"/schedules", p.admin, form); response.StatusCode != http.StatusConflict {
+			t.Fatal(action, response.StatusCode)
+		}
 	}
 	if body := p.do("GET", "/servers/"+p.server+"?tab=backups", p.admin, nil, nil).Body.String(); strings.Contains(body, `id="create-backup"`) {
 		t.Fatal(body)
@@ -263,5 +283,17 @@ func TestDeletedOnStopServerOffersNoStop(t *testing.T) {
 	list, err := p.app.Schedules.List(ctx, &p.admin.User, p.server)
 	if err != nil || len(list) != 1 || !strings.Contains(list[0].LastResult, "started with --rm") {
 		t.Fatal(list, err)
+	}
+	// Pinned by digest as well, the Update tab still says only the header's
+	// reason, with nothing to check again.
+	p.engine.Update(p.docker, func(c *fakedocker.Container) {
+		c.Config.Image = "lloesche/valheim-server@sha256:" + strings.Repeat("5", 64)
+	})
+	if _, err := p.app.Servers.RefreshNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	panel = p.do("GET", "/fragments/servers/"+p.server+"/update", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String()
+	if !strings.Contains(panel, "can’t update this server") || strings.Contains(panel, "Check again") {
+		t.Fatal(panel)
 	}
 }
