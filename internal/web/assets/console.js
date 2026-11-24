@@ -165,7 +165,9 @@
       retries += 1;
       showStatus("Disconnected", "attention");
       showError("Connection lost. Reconnecting…");
-      reconnectTimer = setTimeout(connect, 2000);
+      // Backing off to 15 seconds keeps trying for about two minutes, past a
+      // restart of Ludock or of Docker under it.
+      reconnectTimer = setTimeout(connect, Math.min(1000 * Math.pow(2, retries), 15000));
     } else {
       showStatus("Disconnected", "attention");
       showError("Connection lost. Automatic retries have stopped.");

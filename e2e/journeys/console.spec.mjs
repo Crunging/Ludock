@@ -97,3 +97,33 @@ test("a command sent after the server stopped says why it can't run", async ({ p
   await survival.getByRole("button", { name: "Start" }).click();
   await expect(survival).toContainText("Running", { timeout: 30_000 });
 });
+
+// Ludock, or Docker under it, can take a minute to restart: the console keeps
+// reconnecting by itself that long.
+test("the console reconnects by itself after Ludock was away for a minute", async ({ page }) => {
+  await page.clock.install();
+  await page.clock.resume();
+  let away = false;
+  const sockets = [];
+  await page.routeWebSocket(/\/console\//, (ws) => {
+    if (away) return ws.close();
+    sockets.push(ws);
+    ws.connectToServer();
+  });
+  await page.goto("/");
+  await serverRow(page, "Survival").getByRole("link", { name: "Console" }).click();
+  const status = page.locator("[data-console-status]");
+  await expect(status).toHaveText("Connected");
+
+  away = true;
+  sockets.forEach((ws) => ws.close());
+  // A second at a time, so each refused attempt ends before the next is due.
+  for (let second = 0; second < 60; second++) {
+    await page.clock.fastForward(1000);
+    await page.waitForTimeout(20);
+  }
+  await expect(page.getByText("Connection lost. Reconnecting…")).toBeVisible();
+  away = false;
+  await page.clock.fastForward("00:15");
+  await expect(status).toHaveText("Connected");
+});
