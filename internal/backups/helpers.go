@@ -415,7 +415,7 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 		}
 		size += int64(len(chunk))
 		if size > availableBytes {
-			return CapacityError(codeLimit, 0)
+			return CapacityError(codeOver, 0)
 		}
 		if size > diskBudget {
 			return CapacityError(codeDisk, 0)

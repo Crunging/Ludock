@@ -581,21 +581,27 @@ func Remaining(settings Settings, used, kept int64) (int64, error) {
 	return 0, CapacityError(codeLimit, kept)
 }
 
-// The problems behind a backup that can't fit, as error codes.
+// The problems behind a backup that can't fit, as error codes: the disk is
+// at its reserve, backups have reached the total limit, or this backup
+// doesn't fit under it.
 const (
 	codeDisk  = "BACKUP_CAPACITY"
 	codeLimit = "BACKUP_LIMIT"
+	codeOver  = "BACKUP_OVER_LIMIT"
 )
 
 // CapacityError reports a backup that can't fit, saying how much kept
 // backups hold when they are part of the reason.
 func CapacityError(code string, kept int64) error {
 	problem := "The backup disk is down to its minimum free space."
-	if code == codeLimit {
-		problem = "Backups have reached their total size limit."
-	}
 	advice := " Delete backups you no longer need, or free space on the backup disk."
-	if code == codeLimit {
+	switch code {
+	case codeLimit:
+		problem = "Backups have reached their total size limit."
+	case codeOver:
+		problem = "The backup doesn’t fit under the total size limit."
+	}
+	if code != codeDisk {
 		advice = " Delete backups you no longer need, or raise the limit in Settings."
 	}
 	if kept > 0 {
@@ -606,7 +612,7 @@ func CapacityError(code string, kept int64) error {
 
 // ExplainCapacity rewords a lack of room to say how much kept backups hold.
 func ExplainCapacity(err error, kept int64) error {
-	for _, code := range []string{codeDisk, codeLimit} {
+	for _, code := range []string{codeDisk, codeLimit, codeOver} {
 		if apperr.Is(err, code) {
 			return CapacityError(code, kept)
 		}
@@ -649,7 +655,9 @@ type StorageStatus struct {
 	DataProblem string
 }
 
-func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
+// inspect checks storage; for a server, room its backups' retention may free
+// before a backup counts as room.
+func (s *Service) inspect(ctx context.Context, serverID string) (StorageStatus, *Settings) {
 	settings, found, _ := s.SavedSettings(ctx)
 	used, kept, err := s.ArchiveBytes(ctx)
 	status := StorageStatus{Configured: found, ArchiveBytes: used, KeptBytes: kept, AvailableBytes: -1, CopyAvailableBytes: -1}
@@ -686,11 +694,21 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 			status.CopyIssue = errCopyMissing.Message
 		}
 	}
+	freed := int64(-1)
+	removable := func() int64 {
+		if freed < 0 {
+			freed = 0
+			if serverID != "" {
+				freed = s.removable(ctx, serverID, *settings)
+			}
+		}
+		return freed
+	}
 	_, err = Remaining(*settings, status.ArchiveBytes, kept)
 	if err != nil {
 		// Only then are archives looked for: lost ones don't hold up a backup.
 		if found, foundKept, failed := s.FoundBytes(ctx); failed == nil {
-			_, err = Remaining(*settings, found, foundKept)
+			_, err = Remaining(*settings, found-removable(), foundKept)
 		}
 	}
 	if err != nil {
@@ -717,7 +735,7 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 			"Free space on the backup disk couldn’t be checked. Check that the backup folder can be reached and written."}))
 	} else {
 		status.AvailableBytes = available
-		if available <= settings.ReserveBytes {
+		if available <= settings.ReserveBytes && available+removable() <= settings.ReserveBytes {
 			status.Issues = append(status.Issues, readinessIssue(CapacityError(codeDisk, kept), Issue{}))
 		}
 	}
@@ -725,7 +743,7 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 }
 
 func (s *Service) Status(ctx context.Context) StorageStatus {
-	status, _ := s.inspect(ctx)
+	status, _ := s.inspect(ctx, "")
 	return status
 }
 
@@ -738,7 +756,7 @@ type Preflight struct {
 }
 
 func (s *Service) Preflight(ctx context.Context, server *servers.Context) Preflight {
-	status, settings := s.inspect(ctx)
+	status, settings := s.inspect(ctx, server.Logical.ID)
 	issues := slices.Clone(status.Issues)
 	check := func(err error, fallback Issue) {
 		if err != nil {
@@ -788,23 +806,56 @@ func (s *Service) AssertReady(ctx context.Context, server *servers.Context) erro
 		return err
 	}
 	smallest := smallestArchive(plan.Roots)
-	if err := s.Storage.AssertSpace(settings.Destination, settings.ReserveBytes, smallest); err != nil {
+	// MakeRoom applies retention before the stop, so what it may remove
+	// counts as room here.
+	err = s.assertRoom(ctx, settings, smallest, 0)
+	if capacity(err) {
+		err = s.assertRoom(ctx, settings, smallest, s.removable(ctx, server.Logical.ID, settings))
+	}
+	if err != nil {
 		return err
 	}
-	// Retention makes room only after a backup is written, so backups that
-	// leave less than the smallest archive under the total limit refuse the
-	// next one once the server stops. A total that can't be read is left to
-	// that check.
+	return s.AssertNoOtherWriters(ctx, server, "")
+}
+
+// MakeRoom applies retention to a server's backups right before a backup
+// stops it, as Prune does after one, then refuses a backup that can't fit
+// even empty data folders. A removal that fails leaves the backup to try.
+// The caller holds the server and storage locks.
+func (s *Service) MakeRoom(ctx context.Context, server *servers.Context, protected ...string) error {
+	plan, err := s.planRoots(ctx, server)
+	if err != nil {
+		return err
+	}
+	settings, err := s.ForBackup(ctx)
+	if err != nil {
+		return err
+	}
+	_ = s.Prune(ctx, server.Logical.ID, settings, protected...)
+	return s.assertRoom(ctx, settings, smallestArchive(plan.Roots), 0)
+}
+
+// assertRoom refuses a backup whose smallest archive wouldn't fit once freed
+// bytes of backups in the current folder are removed. A total that can't be
+// read is left to the backup's own check.
+func (s *Service) assertRoom(ctx context.Context, settings Settings, smallest, freed int64) error {
+	if err := s.Storage.AssertSpace(settings.Destination, settings.ReserveBytes, smallest-freed); err != nil {
+		return err
+	}
 	if settings.MaxBytes > 0 {
 		if used, kept, err := s.FoundBytes(ctx); err == nil {
-			if remaining, err := Remaining(settings, used, kept); err != nil {
+			if remaining, err := Remaining(settings, used-freed, kept); err != nil {
 				return err
 			} else if remaining < smallest {
-				return CapacityError(codeLimit, kept)
+				return CapacityError(codeOver, kept)
 			}
 		}
 	}
-	return s.AssertNoOtherWriters(ctx, server, "")
+	return nil
+}
+
+func capacity(err error) bool {
+	return apperr.Is(err, codeDisk) || apperr.Is(err, codeLimit) || apperr.Is(err, codeOver)
 }
 
 func overlaps(left, right string) bool {
@@ -1065,22 +1116,7 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 			}
 		}
 	}
-	// Only backups that can be read count toward what the rule keeps: rows
-	// whose archives are gone, or can't be looked for now, would otherwise
-	// take the places of ones that can be restored. They aren't removed, and
-	// their sizes, any server's, don't make the total limit remove others.
-	readable := map[string]bool{}
-	var unconfirmed int64
-	for index := range list {
-		if backup := &list[index]; backup.State == "complete" {
-			if readable[backup.ID] = s.readable(backup); !readable[backup.ID] {
-				unconfirmed += backup.Size
-			}
-		}
-	}
-	expired, spare := planRetention(list, time.Local, func(id string) bool {
-		return slices.Contains(protected, id) || s.Storage.Reading(id)
-	}, func(id string) bool { return readable[id] })
+	expired, spare, unconfirmed := s.retention(list, protected)
 	for _, backup := range expired {
 		if err := s.removeIdle(ctx, backup); failed(backup, err) {
 			return err
@@ -1113,6 +1149,44 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 		}
 	}
 	return nil
+}
+
+// retention plans the removal of a server's listed backups, and sums the
+// sizes of those that can't be read. Only backups that can be read count
+// toward what the rule keeps: rows whose archives are gone, or can't be
+// looked for now, would otherwise take the places of ones that can be
+// restored. They aren't removed, and their sizes, any server's, don't make
+// the total limit remove others.
+func (s *Service) retention(list []Backup, protected []string) (expired, spare []Backup, unconfirmed int64) {
+	readable := map[string]bool{}
+	for index := range list {
+		if backup := &list[index]; backup.State == "complete" {
+			if readable[backup.ID] = s.readable(backup); !readable[backup.ID] {
+				unconfirmed += backup.Size
+			}
+		}
+	}
+	expired, spare = planRetention(list, time.Local, func(id string) bool {
+		return slices.Contains(protected, id) || s.Storage.Reading(id)
+	}, func(id string) bool { return readable[id] })
+	return expired, spare, unconfirmed
+}
+
+// removable is the size of a server's backups in the current folder that
+// Prune may remove, at most, to make room for its next backup.
+func (s *Service) removable(ctx context.Context, serverID string, settings Settings) int64 {
+	list, err := s.List(ctx, serverID)
+	if err != nil {
+		return 0
+	}
+	expired, spare, _ := s.retention(list, nil)
+	var total int64
+	for _, backup := range append(expired, spare...) {
+		if backup.destination == settings.Destination {
+			total += backup.Size
+		}
+	}
+	return total
 }
 
 // removeIdle removes a backup for retention unless it is being read or was

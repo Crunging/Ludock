@@ -80,7 +80,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			}); err != nil {
 				return nil, err
 			}
-			if err := j.stopForData(ctx, current, job); err != nil {
+			if err := j.stopForBackup(ctx, current, job); err != nil {
 				return nil, err
 			}
 			backup, err := j.createStoppedBackup(ctx, current, job)
@@ -518,7 +518,11 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	}
 	// A forced stop only blocks a backup; replacing the container is what
 	// the stop was for.
-	if err := j.stopForData(ctx, server, job); err != nil && (request.CreateBackup || !apperr.Is(err, "UNCLEAN_SHUTDOWN")) {
+	stop := j.stopForData
+	if request.CreateBackup {
+		stop = j.stopForBackup
+	}
+	if err := stop(ctx, server, job); err != nil && (request.CreateBackup || !apperr.Is(err, "UNCLEAN_SHUTDOWN")) {
 		return nil, err
 	}
 	// The server returns to how it was when it was stopped, not when the

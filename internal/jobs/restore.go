@@ -556,10 +556,15 @@ func (r *restoreRun) validate() error {
 // copy is kept in the stage until the swap commits; a whole restore, or one
 // asked to, also keeps a safety backup.
 func (r *restoreRun) stop() error {
-	if err := r.j.stopForData(r.ctx, r.server, r.job); err != nil {
+	backup := r.whole || r.job.Job.Input["createBackup"] == true
+	stop := r.j.stopForData
+	if backup {
+		stop = r.j.stopForBackup
+	}
+	if err := stop(r.ctx, r.server, r.job); err != nil {
 		return err
 	}
-	if r.whole || r.job.Job.Input["createBackup"] == true {
+	if backup {
 		var err error
 		r.safety, err = r.j.createStoppedBackup(r.ctx, r.server, r.job)
 		return err
