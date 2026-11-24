@@ -523,7 +523,7 @@ func TestFileHelperMountsOnlyTheVolumeSubpath(t *testing.T) {
 // it can't say how the command ended because it stopped answering, or it
 // goes away partway through the stream. The
 // download reports Docker, not the path; a file that is really missing
-// still blames the path.
+// still blames the path, and an exit Docker records late blames nothing.
 func TestDownloadBlamesDockerForItsFailures(t *testing.T) {
 	f := setup(t)
 	f.engine.FailExecStart = func(cmd []string) bool {
@@ -562,5 +562,14 @@ func TestDownloadBlamesDockerForItsFailures(t *testing.T) {
 	if _, err := f.service.Preview(ctx, f.target, f.root, "missing.txt", nil); !apperr.Is(err, "UNSAFE_OR_CHANGED_FILE_PATH") {
 		t.Fatal("a missing file:", err)
 	}
+	// Docker closing the stream a moment before it records the exit fails
+	// nothing.
+	f.engine.ExitDelay = 300 * time.Millisecond
+	if _, err := f.service.Preview(ctx, f.target, f.root, "server.properties", nil); err != nil {
+		t.Fatal("an exit Docker recorded late:", err)
+	}
+	f.engine.ExitDelay = 0
+	// The preview that worked keeps its helper for the next read.
+	f.service.Close()
 	f.helpersLeft(t)
 }

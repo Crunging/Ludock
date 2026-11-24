@@ -105,7 +105,8 @@ func (b *FirstBytes) String() string {
 // without running the helper, which reports each failure of its own on
 // stderr; otherwise its exit code, or -1 when Docker can't say.
 func FileExit(ctx context.Context, client *docker.Client, execID string, stderr *FirstBytes) (int, error) {
-	result, err := client.InspectExec(docker.Promptly(context.WithoutCancel(ctx)), execID)
+	// Docker can close the stream a moment before it records the exit.
+	result, err := awaitExit(docker.Promptly(context.WithoutCancel(ctx)), context.Background(), client, execID)
 	if docker.Unavailable(err) {
 		return 0, err
 	}
