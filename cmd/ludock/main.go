@@ -19,6 +19,7 @@ import (
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/config"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/web"
@@ -117,6 +118,9 @@ func serve() int {
 	services.Start(ctx)
 	served := make(chan error, 1)
 	go func() { served <- httpServer.Serve(listener) }()
+	// Exiting with an error lets the container's restart policy start Ludock
+	// again, which mounts the socket Docker made.
+	code := 0
 	select {
 	case err := <-served:
 		if !errors.Is(err, http.ErrServerClosed) {
@@ -124,6 +128,9 @@ func serve() int {
 			return 1
 		}
 	case <-ctx.Done():
+	case <-socketReplaced(ctx, cfg.DockerSocket):
+		log.Error("Docker replaced its socket, which this container can't reach again; restarting to reach the new one")
+		code = 1
 	}
 	// Running work gets a few seconds to finish, well inside the ten Docker
 	// waits before killing the container. Work still running then is left as
@@ -144,14 +151,36 @@ func serve() int {
 		// Exiting without closing the database leaves that work exactly as
 		// a kill would, the case recovery is built for.
 		log.Warn("Stopped before running work finished; it resumes or is checked on the next start")
-		os.Exit(0)
+		os.Exit(code)
 	}
 	if failed {
 		log.Error("Failed to shut down cleanly")
 		return 1
 	}
 	log.Info("Shutdown complete")
-	return 0
+	return code
+}
+
+// socketReplaced closes once Docker's socket in this container turns out to
+// be a deleted file.
+func socketReplaced(ctx context.Context, socket string) <-chan struct{} {
+	replaced := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if docker.SocketReplaced(socket) {
+					close(replaced)
+					return
+				}
+			}
+		}
+	}()
+	return replaced
 }
 
 // shutdownGrace is how long a stopping Ludock waits for running work.

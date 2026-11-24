@@ -116,7 +116,8 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
 			return withSave(job, map[string]any{"action": "restart", "backupId": job.Job.Recovery.BackupID}), nil
 		}()
-		if err != nil {
+		// Work cut by shutdown is recovered, and reported, on the next start.
+		if err != nil && ctx.Err() == nil {
 			// A recorded stop may have reached Docker even if its result was
 			// lost; reconcile it before reporting the server left stopped.
 			if job.Job.Recovery.InitialRunning != nil && !j.backupCompleted(ctx, job) {
@@ -134,10 +135,14 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 // for one is started again even if the backup didn't complete, and the
 // backup is not taken again.
 func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	completed := j.backupCompleted(ctx, job)
+	if !completed {
+		defer j.notifyInterrupted(ctx, job, notify.FailedWork, "backup-failed:"+job.Job.ID, backupInterrupted)
+	}
+	// Cut before the stop, such as while the world saved: nothing changed.
 	if job.Job.Recovery.InitialRunning == nil {
 		return nil, nil
 	}
-	completed := j.backupCompleted(ctx, job)
 	if err := j.recoverBackup(ctx, job, true); err != nil {
 		return nil, err
 	}
@@ -338,7 +343,9 @@ func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (map[string]any,
 					log.Warn("Could not save that an update needs recovery; the failed operation still reports it")
 				}
 			}
-			j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": update failed. Its Activity says why; check the server before starting it.")
+			if ctx.Err() == nil {
+				j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": update failed. Its Activity says why; check the server before starting it.")
+			}
 		}
 		return result, err
 	})

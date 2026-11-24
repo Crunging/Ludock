@@ -12,6 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
@@ -30,6 +31,9 @@ type Channel interface {
 const (
 	ClosePolicy   = 1008
 	CloseInternal = 1011
+	// CloseTryLater ends a session Docker can't confirm right now; the browser
+	// reconnects, unlike after ClosePolicy.
+	CloseTryLater = 1013
 )
 
 type Sessions struct {
@@ -80,11 +84,19 @@ func (s *Sessions) Authorize(ctx context.Context, channel Channel, validate func
 		channel.Close(ClosePolicy, "Server access unavailable")
 		return nil
 	}
+	retry := func() *Access {
+		channel.Send("error", "Ludock can’t reach Docker right now.")
+		channel.Close(CloseTryLater, "Docker unavailable")
+		return nil
+	}
 	user := validate(ctx)
 	if user == nil || !identity.ValidID(serverID) {
 		return fail()
 	}
 	serverContext, err := s.Servers.ResolveAuthorized(ctx, user, serverID, capability, -1)
+	if docker.Unavailable(err) {
+		return retry()
+	}
 	if err != nil {
 		return fail()
 	}
@@ -190,6 +202,10 @@ func (a *Access) revalidate(ctx context.Context, discover bool) (*servers.Contex
 		resolve = a.sessions.Servers.ResolveAuthorized
 	}
 	refreshed, err := resolve(ctx, a.User(), a.ServerID, a.capability, a.revision)
+	if docker.Unavailable(err) && a.permitted(a.capability) {
+		a.channel.Close(CloseTryLater, "Docker unavailable")
+		return nil, errCancelled
+	}
 	if err != nil || !a.permitted(a.capability) {
 		a.channel.Close(ClosePolicy, "Server access changed")
 		return nil, errCancelled

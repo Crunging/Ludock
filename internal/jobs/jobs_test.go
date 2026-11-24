@@ -28,6 +28,7 @@ import (
 	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
@@ -53,6 +54,8 @@ type fixture struct {
 	failStep     string
 	// failTimes, when positive, is how many more times failStep fails.
 	failTimes int
+	// alerts are the messages sent, in order.
+	alerts []string
 }
 
 func setup(t *testing.T) *fixture {
@@ -134,6 +137,11 @@ func setup(t *testing.T) *fixture {
 		Monitor: &monitor.Service{DB: d, Locks: table, Store: store}, Console: &console.Runtime{Docker: client},
 		Backups: backupService, Updates: &update.Service{Docker: client}, SaveSettle: time.Millisecond, ReplacementSettle: 100 * time.Millisecond,
 		Poll: 20 * time.Millisecond}
+	f.jobs.Notify = func(_ notify.Alert, _, message string) {
+		f.mu.Lock()
+		f.alerts = append(f.alerts, message)
+		f.mu.Unlock()
+	}
 	f.jobs.Register(f.runner)
 	f.adminSession = dbtest.Session(t, d, f.admin.ID)
 	views, err := service.List(ctx, f.admin)
@@ -614,12 +622,50 @@ func TestBackupHelperCreateFails(t *testing.T) {
 	}
 }
 
-// Docker fails just as a backup's archive is read, or comes back from a
-// restart without the archive's exec. A failing Docker fails the backup,
-// which blames Docker, not the server's files; a lost exec is copied again.
+// A server Docker had to kill when it was stopped outside Ludock, and whose
+// outage was already alerted, is backed up as it is, and its outage stays
+// alerted, so the backup doesn't bring a second alert.
+func TestBackupOfServerKilledElsewhere(t *testing.T) {
+	f := setup(t)
+	f.engine.Update(f.game, func(c *fakedocker.Container) {
+		c.State.Running, c.State.Status, c.State.ExitCode = false, "exited", 137
+	})
+	if err := f.jobs.Monitor.SetIntentionalStop(ctx, f.serverID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.jobs.DB.Exec("UPDATE availability SET outage_started_at=5,notified=1 WHERE server_id=?", f.serverID); err != nil {
+		t.Fatal(err)
+	}
+	job := f.run(t, "backup", nil)
+	var started, notified int64
+	f.jobs.DB.QueryRow("SELECT outage_started_at,notified FROM availability WHERE server_id=?", f.serverID).Scan(&started, &notified)
+	if job.Status != ops.Succeeded || f.running() || started != 5 || notified != 1 {
+		t.Fatalf("%+v, outage %d, notified %d", job, started, notified)
+	}
+}
+
+// Docker fails just as a backup's archive is read, comes back from a
+// restart without the archive's exec, or fails to start the archive's
+// command, as a daemon stalled at that moment does. A failing Docker fails
+// the backup, which blames Docker, not the server's files; a lost or
+// unstarted exec is copied again.
 func TestBackupWhenDockerGoesAway(t *testing.T) {
-	for _, status := range []int{500, 404} {
+	for _, status := range []int{500, 404, 0} {
 		f := setup(t)
+		if status == 0 {
+			var once sync.Once
+			f.engine.FailExecStart = func(cmd []string) bool {
+				failed := false
+				if strings.Contains(strings.Join(cmd, " "), `"operation":"backup"`) {
+					once.Do(func() { failed = true })
+				}
+				return failed
+			}
+			if job := f.run(t, "backup", nil); job.Status != ops.Succeeded || !f.running() {
+				t.Fatalf("unstarted: %+v", job)
+			}
+			continue
+		}
 		f.jobs.Docker.OutageLimit = 300 * time.Millisecond
 		exec := f.engine.Exec
 		var once sync.Once

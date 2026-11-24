@@ -698,7 +698,9 @@ func (r *restoreRun) failed(err error) (map[string]any, error) {
 		result["guidance"] = guidance
 		job.Progress(job.Job.Phase, nil, result)
 	}
-	r.j.notify(notify.Results, "restore-result:"+job.Job.ID, r.server.Container.DisplayName+": "+r.what+" failed. Its Activity says why.")
+	if r.ctx.Err() == nil {
+		r.j.notify(notify.Results, "restore-result:"+job.Job.ID, r.server.Container.DisplayName+": "+r.what+" failed. Its Activity says why.")
+	}
 	return nil, publicFirst(err)
 }
 
@@ -795,13 +797,18 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string
 	// What recovery leaves the data as, for Activity: a committed restore is
 	// finished, one that began replacing is undone.
 	outcome := restoreNothing
+	finished := false
 	if state, _ := restoreState(job); state != nil {
 		switch state.Status {
 		case "committed", "cleaned":
-			outcome = "The restore had finished: what it restored is in place."
+			outcome, finished = "The restore had finished: what it restored is in place.", true
 		case "replacing", "rolling_back", "rolled_back":
 			outcome = restoreUndone
 		}
+	}
+	if !finished {
+		defer j.notifyInterrupted(ctx, job, notify.Results, "restore-result:"+job.Job.ID,
+			"Ludock restarted during a restore. Its Activity says what the data was left as.")
 	}
 	touched := false
 	if state, _ := restoreState(job); state != nil {

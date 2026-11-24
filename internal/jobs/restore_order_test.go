@@ -501,6 +501,14 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 			if got := trace.lines(); !slices.Equal(got, c.trace) {
 				t.Errorf("trace:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(c.trace, "\n"))
 			}
+			// Only a restore that didn't finish alerts, once.
+			var alerts []string
+			if guidance != finished {
+				alerts = []string{"mc: Ludock restarted during a restore. Its Activity says what the data was left as."}
+			}
+			if !slices.Equal(f.alerts, alerts) {
+				t.Error("alerts:", f.alerts)
+			}
 		})
 	}
 }

@@ -521,9 +521,11 @@ Each destination's **Alert types**:
   each recovery.
 - **Failed backups and schedules:** a backup, scheduled action, second copy,
   or save of Ludock's own data fails, or a server is left stopped after a
-  failed backup.
-- **Restores and updates:** a restore or update fails. One that succeeds shows
-  its result in the panel, where it was started.
+  failed backup. A backup cut short by Ludock restarting or crashing alerts
+  once it is back.
+- **Restores and updates:** a restore or update fails, or a restore is cut
+  short by Ludock restarting. One that succeeds shows its result in the panel,
+  where it was started.
 - **Newer images available:** a newer image is published for a server, once per
   version. Off by default.
 

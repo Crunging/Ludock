@@ -720,6 +720,13 @@ depends on the step:
 - **Fails:** a scheduled console command, which is sent on time or not at
   all, and work Docker answered with an error of its own.
 
+A Docker that keeps containers running while it restarts (`live-restore`)
+and makes its own socket, not systemd's, replaces the socket file Ludock's
+container mounted, which then never answers. Ludock notices within seconds
+and exits with an error, so the `restart: unless-stopped` in its
+`compose.yaml` starts it again on the new socket; open consoles reconnect by
+themselves for about two minutes.
+
 Docker coming back with the server started on its own still counts as a
 change outside Ludock. After 90 seconds, or when Ludock can't tell what Docker
 did, the work stops and says Ludock couldn't reach Docker.

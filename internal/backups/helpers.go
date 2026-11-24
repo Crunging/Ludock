@@ -242,7 +242,9 @@ func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess fun
 	}
 	var expired atomic.Bool
 	timer := time.AfterFunc(h.backupLimit(), func() { expired.Store(true); conn.Close() })
-	reader := docker.Stdout(conn)
+	stderr := &limitedBuffer{limit: 4096}
+	reader, writer := io.Pipe()
+	go func() { writer.CloseWithError(docker.Demux(conn, writer, stderr)) }()
 	closer := &closeFunc{Reader: reader, close: func() error { timer.Stop(); conn.Close(); return reader.Close() }}
 	complete := func() error {
 		if expired.Load() {
@@ -258,12 +260,38 @@ func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess fun
 		if docker.IsNotFound(err) {
 			return docker.ErrRequestFailed
 		}
+		// The helper reports its own failures; an exec that ended without
+		// one never ran it, as when Docker fails to start the command.
+		if err == nil && !result.Running && result.ExitCode != nil && *result.ExitCode != 0 && !stderr.contains(helper.FileFailure) {
+			return docker.ErrRequestFailed
+		}
 		if err != nil || result.Running || result.ExitCode == nil || *result.ExitCode != 0 {
 			return fail("UNSAFE_ARCHIVE", "Ludock couldn’t read everything in the server’s data folders, so the backup was stopped. A backup takes only ordinary files and folders that Ludock can read, not links (symbolic or hard) or device files.")
 		}
 		return nil
 	}
 	return closer, complete, nil
+}
+
+// limitedBuffer keeps the first limit bytes written to it, for reading while
+// a stream may still write.
+type limitedBuffer struct {
+	mu    sync.Mutex
+	data  []byte
+	limit int
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.data = append(b.data, p[:min(len(p), max(0, b.limit-len(b.data)))]...)
+	return len(p), nil
+}
+
+func (b *limitedBuffer) contains(text string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Contains(string(b.data), text)
 }
 
 type closeFunc struct {
