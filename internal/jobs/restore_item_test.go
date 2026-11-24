@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/ops"
 )
@@ -53,7 +54,7 @@ func TestRestoreItem(t *testing.T) {
 	backupID, rootID := f.itemBackup(t)
 	input := map[string]any{"backupId": backupID, "root": rootID, "item": "world/level.dat"}
 	f.mu.Lock()
-	f.failStep = "moveNew"
+	f.failStep = helper.RestoreMoveNew
 	f.mu.Unlock()
 	if failed := f.run(t, "restore", input); failed.Status != ops.Failed || read(t, filepath.Join(f.data, "world", "level.dat")) != "newer" ||
 		f.staged() || !f.running() {

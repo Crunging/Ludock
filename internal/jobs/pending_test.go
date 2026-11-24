@@ -22,7 +22,7 @@ func (f *fixture) stoppedRestore(t *testing.T) (*ops.Job, *restoreTrace) {
 	for _, root := range []string{"world", "config"} {
 		os.WriteFile(filepath.Join(f.data, root, "large.dat"), []byte("changed"), 0o644)
 	}
-	trace := f.traceRestore(startedAfter("moveOld", "world")(t, f))
+	trace := f.traceRestore(startedAfter(helper.RestoreMoveOld, "world")(t, f))
 	restore := f.run(t, "restore", input)
 	if restore.Status != ops.Failed || f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" || !f.running() {
 		t.Fatalf("%+v, journal %s", restore, f.savedJournal(restore.ID))
@@ -147,7 +147,7 @@ func TestNextBackupAfterStaleRestoreJournal(t *testing.T) {
 	f := setup(t)
 	input := map[string]any{"backupId": twoRootBackup(t, f), "confirmation": "mc"}
 	var restoreID, saved string
-	f.traceRestore(once("moveNew", "world", func(_ *fakedocker.Container, code int) int {
+	f.traceRestore(once(helper.RestoreMoveNew, "world", func(_ *fakedocker.Container, code int) int {
 		f.jobs.DB.QueryRow("SELECT id,recovery_json FROM operations WHERE kind='restore'").Scan(&restoreID, &saved)
 		return code
 	}))
@@ -172,7 +172,7 @@ func TestNextBackupAfterStaleRestoreJournal(t *testing.T) {
 func TestFailedUndoReturnsServerToRunning(t *testing.T) {
 	f := setup(t)
 	restore, _ := f.stoppedRestore(t)
-	f.failStep, f.failTimes = "cleanup", 1
+	f.failStep, f.failTimes = helper.RestoreCleanup, 1
 	backup := f.run(t, "backup", nil)
 	if backup.Status != ops.Failed || !f.running() || f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" {
 		t.Fatalf("%+v, running %v, journal %s", backup, f.running(), f.savedJournal(restore.ID))

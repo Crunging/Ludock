@@ -202,65 +202,65 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 		{name: "succeeds", status: ops.Succeeded, journal: "cleaned", restored: true, trace: slices.Concat(swapped, committed)},
 		{name: "item succeeds", item: true, status: ops.Succeeded, journal: "cleaned", restored: true,
 			trace: slices.Concat(itemSwapped, []string{"cleanup game: committed replaced"})},
-		{name: "item swap fails", item: true, after: failedAt("moveNew", "game"), status: ops.Failed, journal: "rolled_back",
+		{name: "item swap fails", item: true, after: failedAt(helper.RestoreMoveNew, "game"), status: ops.Failed, journal: "rolled_back",
 			trace: slices.Concat(itemSwapped, []string{"rollbackClean game: rolling_back old_moved unsafe",
 				"rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe"})},
 		// Without a helper nothing was staged, so there is nothing to roll back.
 		{name: "item helper not created", item: true, status: ops.Failed, journal: "rolled_back",
 			after: func(t *testing.T, f *fixture) afterHook {
-				return once("check", "game", func(_ *fakedocker.Container, code int) int {
+				return once(helper.RestoreCheck, "game", func(_ *fakedocker.Container, code int) int {
 					f.engine.AddFault("POST .*/containers/create$", 500, false, 1)
 					return code
 				})
 			}, trace: []string{"space game: none", "check game: none"}},
-		{name: "stage fails", after: failedAt("stage", "config"), status: ops.Failed, journal: "rolled_back", trace: slices.Concat(checked, unstaged)},
+		{name: "stage fails", after: failedAt(helper.RestoreStage, "config"), status: ops.Failed, journal: "rolled_back", trace: slices.Concat(checked, unstaged)},
 		{name: "extract fails", after: failedAt("extract", "world"), status: ops.Failed, journal: "rolled_back", trace: slices.Concat(extracted, unstaged)},
 		// An interrupted move out leaves current data in place, which the
 		// rollback must not remove.
-		{name: "move out fails", after: failedAt("moveOld", "world"), status: ops.Failed, journal: "rolled_back",
+		{name: "move out fails", after: failedAt(helper.RestoreMoveOld, "world"), status: ops.Failed, journal: "rolled_back",
 			trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe",
 				"cleanup config: rolling_back moving_old,staging unsafe", "rollbackOld world: rolling_back rolling_back,staging unsafe",
 				"cleanup world: rolling_back rolled_back,staging unsafe"})},
-		{name: "first move in fails", after: failedAt("moveNew", "world"), status: ops.Failed, journal: "rolled_back",
+		{name: "first move in fails", after: failedAt(helper.RestoreMoveNew, "world"), status: ops.Failed, journal: "rolled_back",
 			trace: slices.Concat(worldSwapped, worldRolledBack)},
-		{name: "last move in fails", after: failedAt("moveNew", "config"), status: ops.Failed, journal: "rolled_back",
+		{name: "last move in fails", after: failedAt(helper.RestoreMoveNew, "config"), status: ops.Failed, journal: "rolled_back",
 			trace: slices.Concat(swapped, rolledBack("old_moved"))},
 		// A failed command that took its helper with it rolls back through a
 		// new one.
 		{name: "helper exits", status: ops.Failed, journal: "rolled_back", trace: slices.Concat(worldSwapped, worldRolledBack),
 			after: func(t *testing.T, f *fixture) afterHook {
-				return once("moveNew", "world", func(c *fakedocker.Container, _ int) int { f.engine.Exit(c.ID, 1); return 1 })
+				return once(helper.RestoreMoveNew, "world", func(c *fakedocker.Container, _ int) int { f.engine.Exit(c.ID, 1); return 1 })
 			}},
-		{name: "cleanup fails once", after: failedAt("cleanup", "world"), status: ops.Succeeded, journal: "cleaned", restored: true,
+		{name: "cleanup fails once", after: failedAt(helper.RestoreCleanup, "world"), status: ops.Succeeded, journal: "cleaned", restored: true,
 			trace: slices.Concat(swapped, []string{"cleanup world: committed replaced,replaced"}, committed)},
 		// A server started elsewhere never reads a stage folder, so the
 		// rollback still removes those; it leaves roots with live data moved
 		// for later.
-		{name: "started after staging", after: startedAfter("stage", "config"), status: ops.Failed, journal: "rolled_back",
+		{name: "started after staging", after: startedAfter(helper.RestoreStage, "config"), status: ops.Failed, journal: "rolled_back",
 			elsewhere: true, guidance: restoreNothing, trace: slices.Concat(checked, unstaged)},
 		{name: "started after unpacking", after: startedAfter("extract", "config"), status: ops.Failed, journal: "rolled_back",
 			elsewhere: true, guidance: restoreNothing, trace: slices.Concat(extracted, unstaged)},
 		// The stopped server is checked again between moving a root's data
 		// out and the backup's in.
-		{name: "started after a move out", after: startedAfter("moveOld", "world"), status: ops.Failed, journal: "rolling_back old_moved,staging unsafe",
+		{name: "started after a move out", after: startedAfter(helper.RestoreMoveOld, "world"), status: ops.Failed, journal: "rolling_back old_moved,staging unsafe",
 			left: true, elsewhere: true, guidance: "The restore was stopped partway.", trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe",
 				"cleanup config: rolling_back old_moved,staging unsafe"})},
-		{name: "started before commit", after: startedAfter("moveNew", "config"), status: ops.Failed, journal: "rolling_back replaced,replaced unsafe",
+		{name: "started before commit", after: startedAfter(helper.RestoreMoveNew, "config"), status: ops.Failed, journal: "rolling_back replaced,replaced unsafe",
 			left: true, elsewhere: true, restored: true, guidance: "The restore was stopped partway.", trace: swapped},
-		{name: "revoked after staging", after: revokedAfter("stage", "config"), status: ops.Failed, journal: "rolled_back", trace: slices.Concat(checked, unstaged)},
-		{name: "revoked after a move out", after: revokedAfter("moveOld", "world"), status: ops.Failed, journal: "rolled_back",
+		{name: "revoked after staging", after: revokedAfter(helper.RestoreStage, "config"), status: ops.Failed, journal: "rolled_back", trace: slices.Concat(checked, unstaged)},
+		{name: "revoked after a move out", after: revokedAfter(helper.RestoreMoveOld, "world"), status: ops.Failed, journal: "rolled_back",
 			trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe"}, worldRolledBack)},
-		{name: "revoked before commit", after: revokedAfter("moveNew", "config"), status: ops.Failed, journal: "rolled_back",
+		{name: "revoked before commit", after: revokedAfter(helper.RestoreMoveNew, "config"), status: ops.Failed, journal: "rolled_back",
 			trace: slices.Concat(swapped, rolledBack("replaced"))},
 		{name: "revoked during rollback", status: ops.Failed, journal: "rolled_back", trace: slices.Concat(swapped, rolledBack("old_moved")),
 			after: func(t *testing.T, f *fixture) afterHook {
-				fail := once("moveNew", "config", func(*fakedocker.Container, int) int { return 1 })
-				revoke := once("rollbackClean", "config", func(_ *fakedocker.Container, code int) int { f.revoke(t); return code })
+				fail := once(helper.RestoreMoveNew, "config", func(*fakedocker.Container, int) int { return 1 })
+				revoke := once(helper.RestoreRollbackClean, "config", func(_ *fakedocker.Container, code int) int { f.revoke(t); return code })
 				return func(c *fakedocker.Container, op, root string, code int) int {
 					return revoke(c, op, root, fail(c, op, root, code))
 				}
 			}},
-		{name: "revoked during cleanup", after: revokedAfter("cleanup", "world"), status: ops.Succeeded, journal: "cleaned", restored: true,
+		{name: "revoked during cleanup", after: revokedAfter(helper.RestoreCleanup, "world"), status: ops.Succeeded, journal: "cleaned", restored: true,
 			trace: slices.Concat(swapped, committed)},
 	}
 	for _, scenario := range scenarios {
@@ -490,7 +490,7 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 			want: "newer", guidance: undone, running: true},
 		// The server stays stopped, so the pass for restores that ended
 		// partway tries once more as startup finishes, and fails again.
-		{name: "rollback fails", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "old_moved"}}}, failOn: "rollbackOld",
+		{name: "rollback fails", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "old_moved"}}}, failOn: helper.RestoreRollbackOld,
 			arrange: func(t *testing.T, f *fixture, stage string) {
 				unpacked(t, f, stage)
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
@@ -542,7 +542,7 @@ func lastRestore(f *fixture) string {
 func TestRestoreStoppedBeforeMoveIn(t *testing.T) {
 	f := setup(t)
 	input := map[string]any{"backupId": twoRootBackup(t, f), "confirmation": "mc"}
-	trace := f.traceRestore(startedAfter("moveOld", "world")(t, f))
+	trace := f.traceRestore(startedAfter(helper.RestoreMoveOld, "world")(t, f))
 	if job := f.run(t, "restore", input); job.Status != ops.Failed {
 		t.Fatalf("%+v", job)
 	}

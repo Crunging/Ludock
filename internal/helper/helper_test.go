@@ -231,10 +231,10 @@ func TestRestoreSteps(t *testing.T) {
 	root, _ := dataRoot(t)
 	os.Remove(filepath.Join(root, "escape"))
 	stage := ".ludock-restore-6f9619ff-8b86-4011-b42d-00c04fc964ff"
-	if out, code := restore(t, root, stage, "space"); code != 0 || !strings.Contains(out, "availableBytes") {
+	if out, code := restore(t, root, stage, RestoreSpace); code != 0 || !strings.Contains(out, "availableBytes") {
 		t.Fatal(out)
 	}
-	if _, code := restore(t, root, ".ludock-restore-bad", "stage"); code == 0 {
+	if _, code := restore(t, root, ".ludock-restore-bad", RestoreStage); code == 0 {
 		t.Fatal("accepted a bad stage")
 	}
 	// Other names Ludock reserves, such as another restore's stage or one a
@@ -244,7 +244,7 @@ func TestRestoreSteps(t *testing.T) {
 		os.MkdirAll(filepath.Join(root, folder), 0o700)
 		os.WriteFile(filepath.Join(root, folder, "kept"), []byte("kept"), 0o644)
 	}
-	if _, code := restore(t, root, stage, "stage"); code != 0 {
+	if _, code := restore(t, root, stage, RestoreStage); code != 0 {
 		t.Fatal("stage")
 	}
 	records := []string{
@@ -273,7 +273,7 @@ func TestRestoreSteps(t *testing.T) {
 			t.Errorf("accepted %s", unsafe)
 		}
 	}
-	for _, step := range []string{"moveOld", "moveNew"} {
+	for _, step := range []string{RestoreMoveOld, RestoreMoveNew} {
 		if _, code := restore(t, root, stage, step); code != 0 {
 			t.Fatal(step)
 		}
@@ -285,7 +285,7 @@ func TestRestoreSteps(t *testing.T) {
 		t.Fatal("old data not kept")
 	}
 	// Roll back: remove the replacement and return the old data.
-	for _, step := range []string{"rollbackClean", "rollbackOld"} {
+	for _, step := range []string{RestoreRollbackClean, RestoreRollbackOld} {
 		if _, code := restore(t, root, stage, step); code != 0 {
 			t.Fatal(step)
 		}
@@ -293,7 +293,7 @@ func TestRestoreSteps(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "level" {
 		t.Fatal(string(data))
 	}
-	if _, code := restore(t, root, stage, "cleanup"); code != 0 {
+	if _, code := restore(t, root, stage, RestoreCleanup); code != 0 {
 		t.Fatal("cleanup")
 	}
 	if _, err := os.Stat(filepath.Join(root, stage)); !os.IsNotExist(err) {
@@ -304,13 +304,13 @@ func TestRestoreSteps(t *testing.T) {
 			t.Fatal("a restore moved", folder)
 		}
 	}
-	if _, code := restore(t, root, stage, "cleanup"); code != 0 {
+	if _, code := restore(t, root, stage, RestoreCleanup); code != 0 {
 		t.Fatal("cleanup is idempotent")
 	}
 	// Special files and hard links are never moved.
-	restore(t, root, stage, "stage")
+	restore(t, root, stage, RestoreStage)
 	os.Link(filepath.Join(root, "server.properties"), filepath.Join(root, "hardlink"))
-	if _, code := restore(t, root, stage, "moveOld"); code == 0 {
+	if _, code := restore(t, root, stage, RestoreMoveOld); code == 0 {
 		t.Fatal("moved a hard link")
 	}
 }
@@ -406,7 +406,7 @@ func TestFreeBytesCountsFundamentalBlocks(t *testing.T) {
 func TestRestoreExtractInterleavedDirectories(t *testing.T) {
 	root, _ := dataRoot(t)
 	stage := ".ludock-restore-7f9619ff-8b86-4011-b42d-00c04fc964ff"
-	if _, code := restore(t, root, stage, "stage"); code != 0 {
+	if _, code := restore(t, root, stage, RestoreStage); code != 0 {
 		t.Fatal("stage")
 	}
 	owner := `"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid())
@@ -430,7 +430,7 @@ func TestRestoreExtractInterleavedDirectories(t *testing.T) {
 func TestExtractionKeepsReserve(t *testing.T) {
 	root := t.TempDir()
 	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
-	if _, code := restore(t, root, stage, "stage"); code != 0 {
+	if _, code := restore(t, root, stage, RestoreStage); code != 0 {
 		t.Fatal("stage")
 	}
 	// The disk has room when the file starts, then another container fills
@@ -488,14 +488,14 @@ func TestRestoreItemRollbackOwnership(t *testing.T) {
 		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: operation, Item: "world/level.dat"})
 		return RunRestore(string(request), io.Discard, io.Discard)
 	}
-	if step("rollbackClean") == 0 {
+	if step(RestoreRollbackClean) == 0 {
 		t.Fatal("took back an entry the swap never installed")
 	}
 	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "someone else" {
 		t.Fatal(string(data))
 	}
 	os.Remove(filepath.Join(root, "world", "level.dat"))
-	if step("moveNew") != 0 || step("rollbackClean") != 0 || step("rollbackOld") != 0 {
+	if step(RestoreMoveNew) != 0 || step(RestoreRollbackClean) != 0 || step(RestoreRollbackOld) != 0 {
 		t.Fatal("rollback after the swap failed")
 	}
 	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "current" {
@@ -531,14 +531,14 @@ func TestRestoreRefusesUnremovableData(t *testing.T) {
 			t.Fatal(how, "moved the folder", err)
 		}
 	}
-	if step("check") != 0 {
+	if step(RestoreCheck) != 0 {
 		t.Fatal("refused a folder on one mount")
 	}
 	pipe := filepath.Join(root, "world/region/console.pipe")
 	if err := unix.Mkfifo(pipe, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if step("check") == 0 || step("moveOld") == 0 {
+	if step(RestoreCheck) == 0 || step(RestoreMoveOld) == 0 {
 		t.Fatal("accepted a folder with a named pipe inside it")
 	}
 	os.Remove(pipe)
@@ -557,7 +557,7 @@ func TestRestoreRefusesUnremovableData(t *testing.T) {
 		return 1, nil
 	}
 	t.Cleanup(func() { mountOf = mountID })
-	if step("check") == 0 || step("moveOld") != RestoreMounted || stepIn("moveOld", "") != RestoreMounted {
+	if step(RestoreCheck) == 0 || step(RestoreMoveOld) != RestoreMounted || stepIn(RestoreMoveOld, "") != RestoreMounted {
 		t.Fatal("accepted a folder with a mount inside it")
 	}
 	unmoved("found")
@@ -580,12 +580,12 @@ func TestRestoreRefusesUnremovableData(t *testing.T) {
 		filepath.Join(root, "config"): false,
 	} {
 		table(point)
-		if got := step("check") == RestoreMounted; got != refused {
+		if got := step(RestoreCheck) == RestoreMounted; got != refused {
 			t.Errorf("table %s: item check refused %v", point, got)
 		}
 	}
 	table(filepath.Join(root, "world/mods/cache"))
-	if step("moveOld") != RestoreMounted || stepIn("moveOld", "") != RestoreMounted {
+	if step(RestoreMoveOld) != RestoreMounted || stepIn(RestoreMoveOld, "") != RestoreMounted {
 		t.Fatal("moved data holding a mount from the table")
 	}
 	unmoved("table")
@@ -597,7 +597,7 @@ func TestRestoreRefusesUnremovableData(t *testing.T) {
 func TestExtractionCutInput(t *testing.T) {
 	root := t.TempDir()
 	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
-	if _, code := restore(t, root, stage, "stage"); code != 0 {
+	if _, code := restore(t, root, stage, RestoreStage); code != 0 {
 		t.Fatal("stage")
 	}
 	owner := `,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":420}`

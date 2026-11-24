@@ -142,7 +142,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 				if err != nil {
 					return err
 				}
-				found, err := j.restoreStep(ctx, data, rootPath, "", restore, "stageExists", nil)
+				found, err := j.restoreStep(ctx, data, rootPath, "", restore, helper.RestoreStageExists, nil)
 				if err != nil {
 					return err
 				}
