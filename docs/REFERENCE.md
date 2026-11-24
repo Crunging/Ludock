@@ -172,8 +172,9 @@ their images' documentation.
   answer on 15637. The game saves its world when Docker stops it, within a
   few seconds. With sknnr's image, files and backups take the `savegame`
   volume; mornedhels' keeps the 8 GB server download in `/opt/enshrouded`
-  with the world inside it, and files and backups take only
-  `/opt/enshrouded/server/savegame`. On both, a backup and its restore
+  with the world inside it, and files and backups take only its default
+  `/opt/enshrouded/server/savegame`; with another `SERVER_SAVE_DIR`, name it
+  in `ludock.files`. On both, a backup and its restore
   brought back the same world.
 - **7 Days to Die** (`vinanrra/7dtd-server`, 3.4): the image leaves
   `TelnetPassword` empty in `sdtdserver.xml`, so the game takes Telnet

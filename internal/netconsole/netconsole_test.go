@@ -150,19 +150,22 @@ func TestTelnet(t *testing.T) {
 
 // vinanrra/7dtd-server leaves TelnetPassword empty, so 7 Days to Die takes
 // commands without a prompt, inside its container only. Without a password
-// the command follows the banner, captured from 3.4, and the session ends
+// the command follows the banner, as captured from 3.4, and the session ends
 // with the exit the banner offers, since hanging up under the streamed log
 // makes the game log a failed write. A console that asks for a password
 // then is refused.
 func TestTelnetWithoutPassword(t *testing.T) {
 	banner := "*** Connected with 7DTD server.\r\n*** Server version: V 3.4.0 (b10) Compatibility Version: V 3.4.0\r\n" +
 		"*** Dedicated server only build\r\n\r\nServer IP:   203.0.113.10\r\nServer port: 26900\r\nMax players: 8\r\n" +
-		"Game mode:   GameModeSurvival\r\nWorld:       Navezgane\r\nGame name:   MyGame\r\nDifficulty:  1\r\n\r\n" +
-		"Press 'help' to get a list of all commands. Press 'exit' to end session.\r\n\r\n"
+		"Game mode:   GameModeSurvival\r\nWorld:       Navezgane\r\nGame name:   No Password PvE\r\nDifficulty:  1\r\n\r\n"
+	footer := "Press 'help' to get a list of all commands. Press 'exit' to end session.\r\n\r\n"
 	exited := make(chan string, 1)
 	host, port := listen(t, func(conn net.Conn) {
 		reader := bufio.NewReader(conn)
+		// The banner can arrive in parts.
 		conn.Write([]byte(banner))
+		time.Sleep(4 * telnetCommandGap)
+		conn.Write([]byte(footer))
 		command, _ := reader.ReadString('\n')
 		conn.Write([]byte("2026-11-24T05:29:59 220.919 INF Executing command '" + strings.TrimSpace(command) +
 			"' by Telnet from 127.0.0.1:45664\r\nTotal of 0 in the game\r\n"))

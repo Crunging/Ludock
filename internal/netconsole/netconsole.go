@@ -431,6 +431,8 @@ func PalworldAnnounce(ctx context.Context, host string, port int, password, mess
 var (
 	passwordPrompt = regexp.MustCompile(`(?i)password\s*[:>]?`)
 	endsSession    = regexp.MustCompile(`(?i)'exit' to end (the )?session`)
+	// A prompt ends its line, unlike banner text such as a game's name.
+	promptLine = regexp.MustCompile(`(?im)password\s*:\s*$`)
 	// authFailed is a console's own rejection reply, which starts its line;
 	// streamed chat or log lines that mention one do not.
 	authFailed = regexp.MustCompile(`(?im)^\s*(password\s+(is\s+)?incorrect|incorrect\s+password|invalid\s+password|authentication\s+failed|login\s+failed)`)
@@ -595,13 +597,17 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 			raw = append(raw, text...)
 			output := decodeText(raw)
 			if password == "" && !commandSent {
-				if passwordPrompt.MatchString(output) {
+				if promptLine.MatchString(output) {
 					return "", errors.New("Telnet console asks for a password")
 				}
-				if !commandArmed {
-					commandArmed = true
+				// The command waits for the banner's end, so the exit it
+				// offers is known, or for a banner that never offers one.
+				if endsSession.MatchString(output) {
 					commandTimer.Reset(telnetCommandGap)
+				} else if !commandArmed {
+					commandTimer.Reset(telnetQuiet)
 				}
+				commandArmed = true
 				continue
 			}
 			if !passwordSent && passwordPrompt.MatchString(output) {
