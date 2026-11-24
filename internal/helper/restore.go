@@ -254,8 +254,10 @@ func (h *restoreHelper) pinStage(root fd, optional bool) (fd, error) {
 }
 
 // pinAside makes, or reopens after an interrupted attempt, the set-aside
-// folder: a real directory on the root's mount.
-func (h *restoreHelper) pinAside(root fd) (fd, error) {
+// folder: a real directory on the root's mount, owned like the root once
+// undone. It is owned before anything moves in, so a retry fixes one that
+// an interruption left as the helper made it.
+func (h *restoreHelper) pinAside(root, stage fd) (fd, error) {
 	if err := unix.Mkdirat(int(root), h.request.Aside, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
 		return -1, err
 	}
@@ -265,6 +267,13 @@ func (h *restoreHelper) pinAside(root fd) (fd, error) {
 	}
 	if same, err := sameMount(root, aside); err != nil || !same {
 		return -1, errUnsafe
+	}
+	previous, err := rootBefore(root, stage)
+	if err != nil {
+		return -1, err
+	}
+	if err := ownRoot(aside, previous); err != nil {
+		return -1, err
 	}
 	return aside, nil
 }
@@ -479,7 +488,7 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 	if err := h.ownTree(root, false); err != nil {
 		return err
 	}
-	aside, err := h.pinAside(root)
+	aside, err := h.pinAside(root, stage)
 	if err != nil {
 		return err
 	}
@@ -497,15 +506,24 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 	if err := h.moveContents(old, root); err != nil {
 		return err
 	}
-	// Absent, moveOld never ran, so the root's own metadata never changed.
-	previous, err := lstatAt(stage, rootRecord)
-	if err == nil && isRegular(previous) {
-		err = ownRoot(root, previous)
-	}
-	if err != nil && !isNotExist(err) {
+	previous, err := rootBefore(root, stage)
+	if err != nil {
 		return err
 	}
-	return nil
+	return ownRoot(root, previous)
+}
+
+// rootBefore returns the root's owner and mode from before the restore.
+// Without a record, moveOld never ran, so the root's own never changed.
+func rootBefore(root, stage fd) (*unix.Stat_t, error) {
+	previous, err := lstatAt(stage, rootRecord)
+	if err == nil && isRegular(previous) {
+		return previous, nil
+	}
+	if err != nil && !isNotExist(err) {
+		return nil, err
+	}
+	return fstat(root)
 }
 
 // rootRecord is the file in a stage whose owner and mode are the root's
@@ -545,7 +563,7 @@ func (h *restoreHelper) recordRoot(root, stage fd) error {
 	return syncAll(stage)
 }
 
-// ownRoot gives the root the owner and mode of from, changing only what
+// ownRoot gives a folder the owner and mode of from, changing only what
 // differs, so a filesystem that refuses ownership changes refuses only real
 // ones.
 func ownRoot(root fd, from *unix.Stat_t) error {
@@ -886,7 +904,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 				return err
 			}
 		}
-		aside, err := h.pinAside(root)
+		aside, err := h.pinAside(root, stage)
 		if err != nil {
 			return err
 		}
