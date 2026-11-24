@@ -218,7 +218,7 @@ func TestStartRemovesLeftoverConsoleHelpers(t *testing.T) {
 	t.Cleanup(func() { engine.Close() })
 	leftover := engine.AddContainer(fakedocker.GameOptions{Name: "ludock-console-1", Image: "ludock", Running: true,
 		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "console-helper"}})
-	engine.FailRemoves = 2
+	engine.AddFault(`^DELETE .*/containers/[^/]+$`, 500, false, 2)
 	a, err := New(config.Config{DockerSocket: engine.Socket}, dbtest.Open(t), nil)
 	if err != nil {
 		t.Fatal(err)

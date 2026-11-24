@@ -1,8 +1,6 @@
 package fakedocker
 
 import (
-	"net"
-	"net/http"
 	"os"
 	"regexp"
 	"slices"
@@ -32,11 +30,11 @@ func (e *Engine) AddFault(pattern string, status int, stall bool, count int) err
 	return nil
 }
 
-// ClearFaults removes the delay and every fault.
+// ClearFaults removes every fault.
 func (e *Engine) ClearFaults() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.Delay, e.faults = 0, nil
+	e.faults = nil
 }
 
 // faultLocked uses up and returns the first fault matching request, if any.
@@ -95,17 +93,7 @@ func (e *Engine) Disconnect(duration time.Duration) error {
 	}
 	e.mu.Unlock()
 	time.Sleep(duration)
-	listener, err := net.Listen("unix", e.Socket)
-	if err != nil {
-		return err
-	}
-	e.mu.Lock()
-	e.listener = listener
-	e.server = &http.Server{Handler: http.HandlerFunc(e.serve)}
-	server = e.server
-	e.mu.Unlock()
-	go server.Serve(listener)
-	return nil
+	return e.listen()
 }
 
 // Refuse stops accepting connections for duration, as a daemon going down
@@ -120,15 +108,6 @@ func (e *Engine) Refuse(duration time.Duration) {
 	os.Remove(e.Socket)
 	go func() {
 		time.Sleep(duration)
-		listener, err := net.Listen("unix", e.Socket)
-		if err != nil {
-			return
-		}
-		e.mu.Lock()
-		e.listener = listener
-		e.server = &http.Server{Handler: http.HandlerFunc(e.serve)}
-		server := e.server
-		e.mu.Unlock()
-		server.Serve(listener)
+		e.listen()
 	}()
 }

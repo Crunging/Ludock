@@ -409,12 +409,6 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 			e.mu.Unlock()
 		})
 	case action == "" && r.Method == "DELETE":
-		if e.FailRemoves > 0 {
-			e.FailRemoves--
-			e.mu.Unlock()
-			fail(w, 500)
-			return
-		}
 		if c.State.Running && r.URL.Query().Get("force") != "true" {
 			e.mu.Unlock()
 			fail(w, 409)
@@ -446,11 +440,7 @@ func (e *Engine) mountsOf(body docker.ContainerCreate, config map[string]any) []
 			if len(parts) < 2 {
 				// A destination-only bind is an anonymous volume, which Docker
 				// reports without its name.
-				name := newID()
-				info := docker.VolumeInspect{Name: name, Driver: "local", Mountpoint: "/var/lib/docker/volumes/" + name + "/_data"}
-				e.mu.Lock()
-				e.volumes[name] = info
-				e.mu.Unlock()
+				info := e.addVolume(newID())
 				mounts = append(mounts, docker.MountPoint{Type: "volume", Source: info.Mountpoint, Destination: parts[0], RW: true})
 				mounted[parts[0]] = true
 				continue
@@ -469,12 +459,8 @@ func (e *Engine) mountsOf(body docker.ContainerCreate, config map[string]any) []
 		if mounted[destination] {
 			continue
 		}
-		name := newID()
-		info := docker.VolumeInspect{Name: name, Driver: "local", Mountpoint: "/var/lib/docker/volumes/" + name + "/_data"}
-		e.mu.Lock()
-		e.volumes[name] = info
-		e.mu.Unlock()
-		mounts = append(mounts, docker.MountPoint{Type: "volume", Source: info.Mountpoint, Destination: destination, RW: true, Name: name})
+		info := e.addVolume(newID())
+		mounts = append(mounts, docker.MountPoint{Type: "volume", Source: info.Mountpoint, Destination: destination, RW: true, Name: info.Name})
 	}
 	return mounts
 }
@@ -495,4 +481,13 @@ func (e *Engine) HelperLogging() map[string]string {
 		}
 	}
 	return kinds
+}
+
+// addVolume creates a local volume, replacing any of the same name.
+func (e *Engine) addVolume(name string) docker.VolumeInspect {
+	info := docker.VolumeInspect{Name: name, Driver: "local", Mountpoint: "/var/lib/docker/volumes/" + name + "/_data"}
+	e.mu.Lock()
+	e.volumes[name] = info
+	e.mu.Unlock()
+	return info
 }

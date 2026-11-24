@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/Crunging/Ludock/internal/docker"
 )
@@ -39,29 +38,19 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	e.mu.Lock()
 	e.Requests = append(e.Requests, r.Method+" "+r.URL.Path)
-	failure, delay, injected, hang := e.Fail, e.Delay, e.faultLocked(r.Method+" "+r.URL.Path), e.Hang
+	injected, hang := e.faultLocked(r.Method+" "+r.URL.Path), e.Hang
 	e.mu.Unlock()
 	if hang != nil && hang(r.Method+" "+r.URL.Path) {
 		io.Copy(io.Discard, r.Body)
 		<-r.Context().Done()
 		return
 	}
-	if delay > 0 {
-		select {
-		case <-time.After(delay):
-		case <-r.Context().Done():
-			return
-		}
-	}
 	if injected != nil && injected.stall {
 		<-r.Context().Done()
 		return
 	}
-	if injected != nil {
-		failure = injected.status
-	}
-	if failure != 0 {
-		fail(w, failure)
+	if injected != nil && injected.status != 0 {
+		fail(w, injected.status)
 		return
 	}
 	switch path {
@@ -96,11 +85,7 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 	case path == "/volumes/create" && r.Method == "POST":
 		var body struct{ Name string }
 		json.NewDecoder(r.Body).Decode(&body)
-		e.mu.Lock()
-		info := docker.VolumeInspect{Name: body.Name, Driver: "local", Mountpoint: "/var/lib/docker/volumes/" + body.Name + "/_data"}
-		e.volumes[body.Name] = info
-		e.mu.Unlock()
-		writeJSON(w, 201, info)
+		writeJSON(w, 201, e.addVolume(body.Name))
 	case path == "/images/create" && r.Method == "POST":
 		reference := r.URL.Query().Get("fromImage")
 		e.mu.Lock()

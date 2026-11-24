@@ -7,28 +7,20 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/Crunging/Ludock/internal/docker"
 )
 
 // control serves the /fake/ endpoints that journeys and tests use to change
-// the daemon; faults and delays never apply to them.
+// the daemon; faults never apply to them.
 func (e *Engine) control(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/fake/fault":
-		// Injects faults: POST /fake/fault?delay=MS holds every request;
-		// &match=REGEXP with &status=CODE fails, or &stall=1 stalls, the next
-		// &count=N requests whose "METHOD path" matches (every one without a
-		// count); &clear=1 removes all of them first.
+		// Injects faults: POST /fake/fault?match=REGEXP with &status=CODE
+		// fails, or &stall=1 stalls, the next &count=N requests whose
+		// "METHOD path" matches (every one without a count); &clear=1 removes
+		// all of them first.
 		query := r.URL.Query()
 		if query.Get("clear") != "" {
 			e.ClearFaults()
-		}
-		if delay := query.Get("delay"); delay != "" {
-			ms, _ := strconv.Atoi(delay)
-			e.mu.Lock()
-			e.Delay = time.Duration(ms) * time.Millisecond
-			e.mu.Unlock()
 		}
 		if pattern := query.Get("match"); pattern != "" {
 			status, _ := strconv.Atoi(query.Get("status"))
@@ -139,36 +131,6 @@ func (e *Engine) control(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()
 		if c := e.find(r.URL.Query().Get("container")); c != nil {
 			e.removeLocked(c.ID)
-		}
-		e.mu.Unlock()
-		w.WriteHeader(204)
-		return
-	case "/fake/health":
-		// Sets what a container's health check reports, as Docker does once
-		// its retries agree: POST /fake/health?container=NAME&status=unhealthy
-		// or healthy.
-		query := r.URL.Query()
-		e.mu.Lock()
-		if c := e.find(query.Get("container")); c != nil && c.State.Health != nil {
-			result := docker.HealthResult{End: time.Now().UTC().Format(time.RFC3339Nano)}
-			if query.Get("status") != "healthy" {
-				result.ExitCode = 1
-			}
-			// Docker keeps the latest five results.
-			c.State.Health.Status, c.State.Health.Log = query.Get("status"), append(c.State.Health.Log, result)
-			c.State.Health.Log = c.State.Health.Log[max(0, len(c.State.Health.Log)-5):]
-			e.emitLocked("health_status: "+c.State.Health.Status, c.ID)
-		}
-		e.mu.Unlock()
-		w.WriteHeader(204)
-		return
-	case "/fake/stats":
-		// Sets a container's memory in use: POST /fake/stats?container=NAME&memory=BYTES.
-		query := r.URL.Query()
-		memory, _ := strconv.ParseFloat(query.Get("memory"), 64)
-		e.mu.Lock()
-		if c := e.find(query.Get("container")); c != nil {
-			c.Stats.MemoryStats.Usage, c.Stats.MemoryStats.Stats = memory, nil
 		}
 		e.mu.Unlock()
 		w.WriteHeader(204)

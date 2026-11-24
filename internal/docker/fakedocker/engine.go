@@ -77,10 +77,6 @@ type Engine struct {
 	// lock; nil collects stdin in Container.Stdin.
 	Attach     func(c *Container, stdin *bufio.Reader, stdout func([]byte))
 	APIVersion string
-	// Fail makes every API request return this status when non-zero.
-	Fail int
-	// FailRemoves makes the next N container removals fail with status 500.
-	FailRemoves int
 	// HangExecStarts makes the next N exec starts accept the request and never
 	// answer, as a stalled daemon can. The exec ends when the client hangs up.
 	HangExecStarts int
@@ -107,10 +103,7 @@ type Engine struct {
 	Creates []docker.ContainerCreate
 	// RegistryAuth records the X-Registry-Auth header of each registry lookup.
 	RegistryAuth []string
-	// Delay holds every Engine API request this long before it is handled,
-	// as a slow daemon would; faults fail or stall chosen requests.
-	Delay  time.Duration
-	faults []*fault
+	faults       []*fault
 	// streams are the hijacked connections an outage cuts.
 	streams map[net.Conn]bool
 
@@ -127,16 +120,27 @@ func Start(dir string) (*Engine, error) {
 
 // StartSocket serves on the unix socket at path, which must not exist.
 func StartSocket(socket string) (*Engine, error) {
-	listener, err := net.Listen("unix", socket)
-	if err != nil {
-		return nil, err
-	}
 	engine := &Engine{containers: map[string]*Container{}, volumes: map[string]docker.VolumeInspect{},
 		images: map[string]string{}, imageConfigs: map[string]map[string]any{},
-		registry: map[string]string{}, registryFail: map[string]int{}, disks: map[string]string{}, execs: map[string]*exec{}, APIVersion: "1.47", listener: listener, Socket: socket}
-	engine.server = &http.Server{Handler: http.HandlerFunc(engine.serve)}
-	go engine.server.Serve(listener)
+		registry: map[string]string{}, registryFail: map[string]int{}, disks: map[string]string{}, execs: map[string]*exec{}, APIVersion: "1.47", Socket: socket}
+	if err := engine.listen(); err != nil {
+		return nil, err
+	}
 	return engine, nil
+}
+
+// listen starts a new server on the socket.
+func (e *Engine) listen() error {
+	listener, err := net.Listen("unix", e.Socket)
+	if err != nil {
+		return err
+	}
+	server := &http.Server{Handler: http.HandlerFunc(e.serve)}
+	e.mu.Lock()
+	e.listener, e.server = listener, server
+	e.mu.Unlock()
+	go server.Serve(listener)
+	return nil
 }
 
 func (e *Engine) Close() error {

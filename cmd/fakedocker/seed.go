@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -38,13 +37,6 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 		}
 	}
 	engine.AddContainer(fakedocker.GameOptions{ID: self, Name: self, Image: image, Running: true, Mounts: selfMounts})
-	engine.OnStart = func(c *fakedocker.Container) {
-		if c.CreateRequest.Labels["ludock.internal"] == "mount-validator" {
-			var out bytes.Buffer
-			helper.RunMountProof(c.CreateRequest.Cmd[2], "1", &out)
-			engine.Update(c.ID, func(c *fakedocker.Container) { c.Logs = []string{strings.TrimSpace(out.String())} })
-		}
-	}
 	// Console helpers run for real, so commands reach the fake game consoles
 	// on 127.0.0.1. A game with a stdin console reads its commands.
 	var stdinGames sync.Map
@@ -83,33 +75,21 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 		}
 		return true
 	}
-	engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
-		if len(cmd) > 2 && cmd[0] == helper.Binary {
-			args := append([]string(nil), cmd[2:]...)
-			if c.CreateRequest.HostConfig != nil {
-				for _, mount := range c.CreateRequest.HostConfig.Mounts {
-					for index := range args {
-						args[index] = strings.ReplaceAll(args[index], `"`+mount.Target, `"`+mount.Source)
-					}
+	engine.RunHelpers(func(c *fakedocker.Container, cmd, args []string, _ *bufio.Reader, stdout, stderr func([]byte)) (int, bool) {
+		// Journeys set disk figures with POST /fake/disk.
+		var request helper.FileRequest
+		if len(args) > 1 && args[0] == "file" && json.Unmarshal([]byte(args[1]), &request) == nil && request.Operation == "space" {
+			if result, ok := engine.Disk(request.Root); ok {
+				if result == "" {
+					stderr([]byte(helper.FileFailure))
+					return 1, true
 				}
+				stdout([]byte(result))
+				return 0, true
 			}
-			// Journeys set disk figures with POST /fake/disk.
-			var request helper.FileRequest
-			if args[0] == "file" && len(args) > 1 && json.Unmarshal([]byte(args[1]), &request) == nil && request.Operation == "space" {
-				if result, ok := engine.Disk(request.Root); ok {
-					if result == "" {
-						stderr([]byte(helper.FileFailure))
-						return 1
-					}
-					stdout([]byte(result))
-					return 0
-				}
-			}
-			var out, errs bytes.Buffer
-			code := helper.Main(args, stdin, &out, &errs)
-			stdout(out.Bytes())
-			stderr(errs.Bytes())
-			return code
+		}
+		if args != nil {
+			return 0, false
 		}
 		// Shell commands behind the bounded wrapper: timeout -k 5 60 /bin/sh -c command.
 		// Like sh, a command exits with its own status.
@@ -120,11 +100,11 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 			}
 			if code, ok := strings.CutPrefix(command, "exit "); ok {
 				status, _ := strconv.Atoi(code)
-				return status
+				return status, true
 			}
 		}
-		return 0
-	}
+		return 0, true
+	})
 }
 
 type writer func([]byte)
@@ -231,7 +211,7 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 			{Type: "bind", Source: valheimServer, Destination: "/opt/valheim", RW: true}},
 		Ports: map[string][]docker.PortBinding{"2456/udp": {{HostIP: "0.0.0.0", HostPort: "2456"}}}})
 	valheimID.Store(valheimContainer)
-	// 1 GiB of a 2 GiB limit; journeys change the use with POST /fake/stats.
+	// 1 GiB of a 2 GiB limit.
 	engine.Update(valheimContainer, func(c *fakedocker.Container) {
 		c.Stats.MemoryStats.Usage, c.Stats.MemoryStats.Limit, c.Host.Memory = 1<<30, 2*(1<<30), 2*(1<<30)
 	})

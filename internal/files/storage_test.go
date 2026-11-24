@@ -1,7 +1,6 @@
 package files
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -26,17 +25,6 @@ var ctx = context.Background()
 
 const image = "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab"
 
-func runHelpers(_ *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
-	if len(cmd) < 3 || cmd[0] != helper.Binary {
-		return 127
-	}
-	var out, errs bytes.Buffer
-	code := helper.Main(cmd[2:], stdin, &out, &errs)
-	stdout(out.Bytes())
-	stderr(errs.Bytes())
-	return code
-}
-
 type fixture struct {
 	engine  *fakedocker.Engine
 	service *Service
@@ -53,16 +41,9 @@ func setup(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { engine.Close() })
-	engine.Exec = runHelpers
+	engine.RunHelpers(nil)
 	helper.HostRoot = "/"
 	t.Cleanup(func() { helper.HostRoot = "/host" })
-	engine.OnStart = func(c *fakedocker.Container) {
-		if c.CreateRequest.Labels["ludock.internal"] == "mount-validator" {
-			var out bytes.Buffer
-			helper.RunMountProof(c.CreateRequest.Cmd[2], "1", &out)
-			engine.Update(c.ID, func(c *fakedocker.Container) { c.Logs = []string{strings.TrimSpace(out.String())} })
-		}
-	}
 	engine.AddImage(image)
 	data := filepath.Join(t.TempDir(), "data")
 	os.MkdirAll(filepath.Join(data, "World"), 0o755)
@@ -419,6 +400,12 @@ func TestDockerCallsThatNeverAnswerFailInTime(t *testing.T) {
 // Failed changes remove their helper before returning.
 func TestFailedChangeRemovesHelper(t *testing.T) {
 	f := setup(t)
+	// The first removal of each helper fails.
+	started := f.engine.OnStart
+	f.engine.OnStart = func(c *fakedocker.Container) {
+		f.engine.AddFault(`^DELETE .*/containers/`+c.ID+`$`, 500, false, 1)
+		started(c)
+	}
 	for name, change := range map[string]func() error{
 		"mkdir": func() error { return f.service.Mkdir(ctx, f.target, f.root, "", "World", nil) },
 		"rename": func() error {
@@ -430,7 +417,6 @@ func TestFailedChangeRemovesHelper(t *testing.T) {
 	} {
 		// The changed data may still be written, so removal is retried until
 		// Docker confirms it, even after failures.
-		f.engine.FailRemoves = 2
 		if err := change(); err == nil {
 			t.Fatal(name, "succeeded")
 		}
@@ -446,11 +432,11 @@ func TestLeftoverHelpersAreRemovedAtStartup(t *testing.T) {
 	validator := f.engine.AddContainer(fakedocker.GameOptions{Name: "validator", Image: image, Running: true,
 		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "mount-validator"}})
 	// Removal that Docker refuses is reported, so startup keeps the fence.
-	f.engine.FailRemoves = 100
+	f.engine.AddFault(`^DELETE .*/containers/[^/]+$`, 500, false, 0)
 	if err := f.service.RemoveLeftovers(ctx); err == nil {
 		t.Fatal("reported a helper removed that is still there")
 	}
-	f.engine.FailRemoves = 0
+	f.engine.ClearFaults()
 	if err := f.service.RemoveLeftovers(ctx); err != nil {
 		t.Fatal(err)
 	}

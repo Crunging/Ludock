@@ -249,7 +249,7 @@ func TestListFailsWholeSnapshot(t *testing.T) {
 	if _, err := s.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
-	engine.Fail = 500
+	engine.AddFault(".", 500, false, 0)
 	if _, err := s.RefreshNow(ctx); err == nil {
 		t.Fatal("partial snapshot accepted")
 	}
@@ -306,12 +306,12 @@ func TestSnapshotDuringDockerOutage(t *testing.T) {
 	admin := adminUser(t, s)
 	engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true})
 	views, _ := s.List(ctx, admin)
-	engine.Fail = 500
+	engine.AddFault(".", 500, false, 0)
 	snapshot, err := s.Snapshot(ctx, admin, views[0].ID)
 	if err != nil || !snapshot.DiscoveryUnavailable || snapshot.Server.State != "unknown" || snapshot.Stats != nil {
 		t.Fatalf("%+v %v", snapshot, err)
 	}
-	engine.Fail = 0
+	engine.ClearFaults()
 	snapshot, err = s.Snapshot(ctx, admin, views[0].ID)
 	if err != nil || snapshot.DiscoveryUnavailable || snapshot.Server.State != "running" || snapshot.Stats == nil {
 		t.Fatalf("%+v %v", snapshot, err)

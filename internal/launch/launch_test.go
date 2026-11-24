@@ -23,23 +23,6 @@ var ctx = context.Background()
 
 const pinnedImage = "ghcr.io/crunging/ludock@sha256:" + "abababababababababababababababababababababababababababababababab"
 
-// runHelpers executes `ludock helper` commands in-process, as a real helper
-// container would.
-func runHelpers(_ *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
-	if len(cmd) < 3 || cmd[0] != helper.Binary || cmd[1] != "helper" {
-		return 127
-	}
-	var out, errs bytes.Buffer
-	code := helper.Main(cmd[2:], stdin, &out, &errs)
-	if out.Len() > 0 {
-		stdout(out.Bytes())
-	}
-	if errs.Len() > 0 {
-		stderr(errs.Bytes())
-	}
-	return code
-}
-
 func setup(t *testing.T) (*fakedocker.Engine, *docker.Client, string) {
 	t.Helper()
 	engine, err := fakedocker.Start(t.TempDir())
@@ -47,7 +30,7 @@ func setup(t *testing.T) (*fakedocker.Engine, *docker.Client, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { engine.Close() })
-	engine.Exec = runHelpers
+	engine.RunHelpers(nil)
 	id := engine.AddContainer(fakedocker.GameOptions{Name: "helper", Image: pinnedImage, Running: true})
 	return engine, docker.New(engine.Socket), id
 }
@@ -68,7 +51,7 @@ func TestImageResolution(t *testing.T) {
 	if _, err := (&Images{Docker: client, Self: "native-host"}).Resolve(ctx); !apperr.Is(err, "HELPER_IMAGE_UNAVAILABLE") {
 		t.Fatal(err)
 	}
-	engine.Fail = 500
+	engine.AddFault(".", 500, false, 0)
 	if _, err := (&Images{Docker: client, Self: "other"}).Resolve(ctx); !apperr.Is(err, "HELPER_IMAGE_UNAVAILABLE") {
 		t.Fatal(err)
 	}
@@ -174,15 +157,6 @@ func TestMountProof(t *testing.T) {
 	os.MkdirAll(filepath.Join(host, "srv", "game"), 0o755)
 	helper.HostRoot = host
 	defer func() { helper.HostRoot = "/host" }()
-	engine.OnStart = func(c *fakedocker.Container) {
-		if c.CreateRequest.Labels["ludock.internal"] != "mount-validator" {
-			return
-		}
-		var out bytes.Buffer
-		args := c.CreateRequest.Cmd
-		helper.RunMountProof(args[2], "1", &out)
-		engine.Update(c.ID, func(c *fakedocker.Container) { c.Logs = []string{strings.TrimSpace(out.String())} })
-	}
 	engine.AddImage(pinnedImage)
 	images := &Images{Docker: client, Configured: pinnedImage}
 	proof, err := MountProof(ctx, client, images, []identity.Mount{{Type: "bind", Source: "/srv/game/", Destination: "/data/"}}, "")
