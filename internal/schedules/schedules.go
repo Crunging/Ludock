@@ -837,95 +837,112 @@ func (s *Service) Run(ctx context.Context, now int64) {
 	}
 }
 
+// dueRun is the run a schedule's evaluation was for, and whether its saved
+// configuration could be read.
+type dueRun struct {
+	slot, action       string
+	configurationValid bool
+}
+
 func (s *Service) runOne(ctx context.Context, r *row, now int64) {
-	slot, action := "", ""
-	configurationValid := false
-	err := func() error {
-		data, err := ParseSaved(r.input)
-		if err != nil {
-			return err
-		}
-		action = data.Action
-		if waiting(r) {
-			slot, configurationValid = r.lastSlot.String, true
-			return s.wait(ctx, r, data, now)
-		}
-		if !data.Enabled || oneTimeCompleted(r, data) {
-			return nil
-		}
-		// A run blocked by another operation is retried until its grace
-		// period ends, except on the last tick before then.
-		retryUntil, scheduledAt := int64(0), int64(0)
-		if data.Kind == "recurring" {
-			slot, scheduledAt = schedtime.DueSlot(data.Clock(), now, r.lastSlot.String, r.changedAt.Int64)
-			retryUntil = scheduledAt + schedtime.RecurringGraceMs - lastChance
-		} else {
-			slot = schedtime.Slot(data.Clock(), now)
-			scheduledAt, _ = schedtime.OneTimeRun(data.Clock())
-			retryUntil = scheduledAt + schedtime.OneTimeGraceMs - lastChance
-		}
-		configurationValid = true
-		if data.Kind == "once" && slot == "" {
-			runAt, ok := schedtime.OneTimeRun(data.Clock())
-			if ok && now < runAt+schedtime.OneTimeGraceMs {
-				return nil
-			}
-			// The run time passed while Ludock was stopped or the schedule could
-			// not be evaluated: record it as missed instead of running late.
-			slot = schedtime.OneTimeSlot(data.Clock())
-			return missed(!ok)
-		}
-		if slot == "" || slot == r.lastSlot.String {
-			return nil
-		}
-		state, err := authorityState(ctx, s.DB, r.serverID, r.ownerID)
-		if err != nil {
-			return err
-		}
-		user, binding, err := s.authority(ctx, s.DB, r, data)
-		if err != nil {
-			return err
-		}
-		if err := s.Servers.InspectRefusal(ctx, r.serverID, data.Action); errors.Is(err, servers.ErrAutoRemove) {
-			return Skip("Skipped: " + servers.AutoRemoveMessage)
-		} else if err != nil {
-			return err
-		}
-		if data.Action == ops.KindCommand {
-			if err := s.commandReady(ctx, user, r.serverID, binding.BindingRevision); err != nil {
-				return err
-			}
-		}
-		// Who is online is decided from a reading asked for once the run is
-		// due, so a running server waits for one even when it looks empty.
-		if data.WaitForEmpty != nil {
-			occupancy, err := s.occupancy(ctx, user, r.serverID, data, binding.BindingRevision)
-			if err != nil {
-				return err
-			}
-			if !occupancy.Stopped {
-				return s.startWaiting(ctx, r, slot, scheduledAt, now)
-			}
-		}
-		err = s.queue(ctx, r, data, state, user, binding, slot, now)
-		// A stopped server busy with other work keeps the run's full wait.
-		if apperr.Is(err, "OPERATION_CONFLICT") && data.WaitForEmpty != nil {
-			return s.startWaiting(ctx, r, slot, scheduledAt, now)
-		}
-		// A command is sent now or not at all, never after other work.
-		if apperr.Is(err, "OPERATION_CONFLICT") && data.Action == ops.KindCommand {
-			return SkipBusy
-		}
-		if apperr.Is(err, "OPERATION_CONFLICT") && now < retryUntil {
-			return errRetryLater
-		}
-		return err
-	}()
+	var d dueRun
+	err := s.evaluate(ctx, r, now, &d)
 	// A schedule or access changed since it was read, or another operation
 	// holds the server: the next check evaluates the current state.
 	if err == nil || errors.Is(err, errScheduleChanged) || errors.Is(err, errAccessChanged) || errors.Is(err, errRetryLater) {
 		return
 	}
+	s.recordSkip(ctx, r, now, d, err)
+}
+
+// evaluate decides what a schedule does now: nothing, wait, queue its run,
+// or end it with err, recording in d the run that was for.
+func (s *Service) evaluate(ctx context.Context, r *row, now int64, d *dueRun) error {
+	data, err := ParseSaved(r.input)
+	if err != nil {
+		return err
+	}
+	d.action = data.Action
+	if waiting(r) {
+		d.slot, d.configurationValid = r.lastSlot.String, true
+		return s.wait(ctx, r, data, now)
+	}
+	if !data.Enabled || oneTimeCompleted(r, data) {
+		return nil
+	}
+	// A run blocked by another operation is retried until its grace
+	// period ends, except on the last tick before then.
+	retryUntil, scheduledAt := int64(0), int64(0)
+	if data.Kind == "recurring" {
+		d.slot, scheduledAt = schedtime.DueSlot(data.Clock(), now, r.lastSlot.String, r.changedAt.Int64)
+		retryUntil = scheduledAt + schedtime.RecurringGraceMs - lastChance
+	} else {
+		d.slot = schedtime.Slot(data.Clock(), now)
+		scheduledAt, _ = schedtime.OneTimeRun(data.Clock())
+		retryUntil = scheduledAt + schedtime.OneTimeGraceMs - lastChance
+	}
+	d.configurationValid = true
+	if data.Kind == "once" && d.slot == "" {
+		runAt, ok := schedtime.OneTimeRun(data.Clock())
+		if ok && now < runAt+schedtime.OneTimeGraceMs {
+			return nil
+		}
+		// The run time passed while Ludock was stopped or the schedule could
+		// not be evaluated: record it as missed instead of running late.
+		d.slot = schedtime.OneTimeSlot(data.Clock())
+		return missed(!ok)
+	}
+	if d.slot == "" || d.slot == r.lastSlot.String {
+		return nil
+	}
+	state, err := authorityState(ctx, s.DB, r.serverID, r.ownerID)
+	if err != nil {
+		return err
+	}
+	user, binding, err := s.authority(ctx, s.DB, r, data)
+	if err != nil {
+		return err
+	}
+	if err := s.Servers.InspectRefusal(ctx, r.serverID, data.Action); errors.Is(err, servers.ErrAutoRemove) {
+		return Skip("Skipped: " + servers.AutoRemoveMessage)
+	} else if err != nil {
+		return err
+	}
+	if data.Action == ops.KindCommand {
+		if err := s.commandReady(ctx, user, r.serverID, binding.BindingRevision); err != nil {
+			return err
+		}
+	}
+	// Who is online is decided from a reading asked for once the run is
+	// due, so a running server waits for one even when it looks empty.
+	if data.WaitForEmpty != nil {
+		occupancy, err := s.occupancy(ctx, user, r.serverID, data, binding.BindingRevision)
+		if err != nil {
+			return err
+		}
+		if !occupancy.Stopped {
+			return s.startWaiting(ctx, r, d.slot, scheduledAt, now)
+		}
+	}
+	err = s.queue(ctx, r, data, state, user, binding, d.slot, now)
+	// A stopped server busy with other work keeps the run's full wait.
+	if apperr.Is(err, "OPERATION_CONFLICT") && data.WaitForEmpty != nil {
+		return s.startWaiting(ctx, r, d.slot, scheduledAt, now)
+	}
+	// A command is sent now or not at all, never after other work.
+	if apperr.Is(err, "OPERATION_CONFLICT") && data.Action == ops.KindCommand {
+		return SkipBusy
+	}
+	if apperr.Is(err, "OPERATION_CONFLICT") && now < retryUntil {
+		return errRetryLater
+	}
+	return err
+}
+
+// recordSkip records why a run won't happen, and alerts and calls off its
+// countdown when it should.
+func (s *Service) recordSkip(ctx context.Context, r *row, now int64, d dueRun, err error) {
+	slot, action, configurationValid := d.slot, d.action, d.configurationValid
 	reason := "Skipped: the server wasn’t ready, or other work on it was running"
 	var unavailableErr *UnavailableError
 	var skip Skip
