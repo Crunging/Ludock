@@ -297,6 +297,13 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 			return
 		}
 		form.Error = public.Message
+		// The form's notes follow the schedule as it is now, not as it was
+		// when the form was opened.
+		if scheduleID != "" {
+			if current, _ := latest(); current != nil {
+				form.TakesOver, form.Suspended = takesOver(request, current), current.NextRunUnavailableReason != ""
+			}
+		}
 		if scheduleID != "" && (public.Code == "SCHEDULE_CHANGED" || public.Status == http.StatusNotFound) {
 			form.Error = ""
 			current, err := latest()
