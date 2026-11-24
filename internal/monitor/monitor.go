@@ -506,6 +506,23 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			s.recallAnswer(ctx, server.ID, container, r)
 		}
 		if s.suppressed(server.ID, policy, r.suppressed, now, active[server.ID]) {
+			// An alerted outage that ends while Ludock acts on the server, by
+			// the test below, says so at once. A queued automatic restart
+			// announces its own outcome.
+			var recovery Recovery
+			up := r.notified == 1 && policy.Enabled && !policy.Maintenance && running && container.Health != "unhealthy" &&
+				container.Health != "starting" && decode(r.recovery, &recovery) == nil && !recovery.Pending
+			if up && s.Game != nil {
+				game := s.Game(server.ID, container)
+				up = game != GameNotAnswering && !((game == GameUnknown || game == GameWaiting) && r.lastState.String == NotAnswering)
+			}
+			if up {
+				if changed, err := s.recovered(ctx, server, r, now); err != nil {
+					log.Warn("Could not save a server's availability; it will be checked again")
+				} else if changed {
+					s.changed(server.ID)
+				}
+			}
 			continue
 		}
 		// Ludock vouches only for silence it watched: a silent game's outage
@@ -567,11 +584,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			if !r.outage.Valid && r.notified == 0 && r.intentional == 0 && r.lastState.String == "running" {
 				continue
 			}
-			var back []alert
-			if r.notified == 1 {
-				back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), server.DisplayName + ": the server is back up."}}
-			}
-			changed, err := s.transition(ctx, server.ID, r, back, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
+			changed, err := s.recovered(ctx, server, r, now)
 			if err != nil {
 				log.Warn("Could not save a server's availability; it will be checked again")
 				continue
@@ -676,6 +689,15 @@ func (s *Service) adopt(ctx context.Context, logical []identity.Server, rows map
 func (s *Service) transition(ctx context.Context, serverID string, r *row, alerts []alert, set string, args ...any) (bool, error) {
 	return s.apply(ctx, alerts, "UPDATE availability SET "+set+" WHERE server_id=? AND policy_json=? AND "+asRead,
 		append(append(args, serverID, r.policy), r.asRead()...)...)
+}
+
+// recovered ends an outage, with its recovery alert if it was alerted.
+func (s *Service) recovered(ctx context.Context, server identity.Server, r *row, now int64) (bool, error) {
+	var back []alert
+	if r.notified == 1 {
+		back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), server.DisplayName + ": the server is back up."}}
+	}
+	return s.transition(ctx, server.ID, r, back, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
 }
 
 // asRead matches a row whose outage, alert, pause and stop are still as r

@@ -129,8 +129,9 @@ func TestMonitorSuppression(t *testing.T) {
 }
 
 // Ludock acting on a server pauses its outage tracking. An outage already
-// alerted still ends with one recovery alert and never alerts again, unless a
-// stop or an automatic restart, which announces its own outcome, ends it.
+// alerted still ends with one recovery alert, sent as soon as the server is
+// back even within the pause, and never alerts again, unless a stop or an
+// automatic restart, which announces its own outcome, ends it.
 func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 	const down, silent, back = "Minecraft: the server is down.", "Minecraft: running, but the game stopped answering.", "Minecraft: the server is back up."
 	start := func(s *Service, id string) { s.Suppress(ctx, id); s.SetIntentionalStop(ctx, id, false) }
@@ -144,17 +145,22 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 		name            string
 		silent, alerted bool
 		act             func(*Service, string)
-		// after is the container and game once the pause has ended, checked
-		// twice; answersBack: a game that then answers ends it.
-		after       string
-		game        GameAnswer
-		want        []string
-		stillDown   bool
-		answersBack bool
+		// after is the container, its health check and game within the pause,
+		// once stopped, and after it, checked twice; answersBack: a game that
+		// then answers ends it.
+		after, health string
+		game          GameAnswer
+		want          []string
+		stillDown     bool
+		answersBack   bool
 	}{
-		{name: "started", alerted: true, act: start, after: "running", want: []string{down, back}},
+		{name: "started", alerted: true, act: start, after: "running", health: "healthy", want: []string{down, back}},
+		{name: "started but unhealthy", alerted: true, act: start, after: "running", health: "unhealthy", want: []string{down}, stillDown: true},
 		{name: "restarted", silent: true, alerted: true, act: restart, after: "running", game: GameWaiting, want: []string{silent},
 			stillDown: true, answersBack: true},
+		{name: "restarted and answering", silent: true, alerted: true, act: restart, after: "running", game: GameAnswering, want: []string{silent, back}},
+		{name: "backed up and answering", silent: true, alerted: true, act: func(s *Service, id string) { s.Suppress(ctx, id); s.Suppress(ctx, id) },
+			after: "running", game: GameAnswering, want: []string{silent, back}},
 		{name: "left stopped by other work", alerted: true, act: func(s *Service, id string) { s.Suppress(ctx, id); s.Suppress(ctx, id) },
 			after: "exited", want: []string{down}, stillDown: true},
 		{name: "stopped", silent: true, alerted: true, after: "exited", want: []string{silent}, act: func(s *Service, id string) {
@@ -187,11 +193,16 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 			}
 			c.act(s, server.ID)
 			game = c.game
-			for _, at := range []int64{now + 100_000, now + 200_000} {
-				s.Check(ctx, state(c.after, ""), at)
+			s.Check(ctx, state("exited", ""), now+5_000)
+			s.Check(ctx, state(c.after, c.health), now+10_000)
+			if !slices.Equal(events.events, c.want) {
+				t.Fatal("within the pause:", events.events)
 			}
-			if found, _ := problem(s, server.ID, now+200_000); (found != nil) != c.stillDown {
-				t.Fatal("outage shown:", found)
+			for _, at := range []int64{now + 90_000, now + 100_000, now + 200_000} {
+				if found, _ := problem(s, server.ID, at); (found != nil) != c.stillDown {
+					t.Fatal("outage shown:", found)
+				}
+				s.Check(ctx, state(c.after, c.health), at)
 			}
 			if c.answersBack {
 				game = GameAnswering
