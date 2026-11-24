@@ -1088,6 +1088,7 @@ td > .cancel-form { display: block; margin-top: 6px; }
 .create-user__access { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 14px; }
 .create-user__access legend { float: left; margin-right: 8px; font-weight: 600; font-size: 14px; }
 .create-user__access label { display: flex; align-items: center; gap: 8px; font-size: 14.5px; }
+.create-user__submit { margin-top: 14px; }
 .link-result { display: grid; gap: 10px; margin-bottom: 28px; }
 .link-result h2 { font-family: var(--display); font-size: 19px; font-weight: 600; }
 .link-result p { color: var(--ink-2); font-size: 14.5px; }

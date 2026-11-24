@@ -85,7 +85,8 @@ func (s *Server) destinationView(ctx context.Context, d notify.Destination) view
 // session ended and the response already redirects to sign-in.
 func (s *Server) settingStatus(w http.ResponseWriter, r *http.Request, request *Request, err error) (int, bool) {
 	public, ok := apperr.As(err)
-	if ok && public.Status == http.StatusUnauthorized {
+	// An account that is no longer an administrator is shown no settings.
+	if ok && (public.Status == http.StatusUnauthorized || public.Status == http.StatusForbidden) {
 		s.fail(w, r, request, err)
 		return 0, false
 	}
@@ -430,7 +431,7 @@ func (s *Server) testNotification(w http.ResponseWriter, r *http.Request, reques
 	}
 	delivery, err := s.App.Notify.QueueTest(r.Context(), request.User().ID, request.Principal.TokenHash, d)
 	err = authz.AdminMutationError(err)
-	if public, ok := apperr.As(err); ok && public.Status == http.StatusUnauthorized {
+	if public, ok := apperr.As(err); ok && (public.Status == http.StatusUnauthorized || public.Status == http.StatusForbidden) {
 		s.fail(w, r, request, err)
 		return
 	}
@@ -465,7 +466,7 @@ func (s *Server) testResult(w http.ResponseWriter, r *http.Request, request *Req
 func (s *Server) retryNotification(w http.ResponseWriter, r *http.Request, request *Request) {
 	delivery, err := s.App.Notify.Retry(r.Context(), request.User().ID, request.Principal.TokenHash, r.PathValue("id"))
 	err = authz.AdminMutationError(err)
-	if public, ok := apperr.As(err); ok && public.Status == http.StatusUnauthorized {
+	if public, ok := apperr.As(err); ok && (public.Status == http.StatusUnauthorized || public.Status == http.StatusForbidden) {
 		s.fail(w, r, request, err)
 		return
 	}

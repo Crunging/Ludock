@@ -114,7 +114,6 @@ templ UsersContent(u UsersView) {
 					// partial password would block an invite.
 					<input type="password" name="password" maxlength="128" autocomplete="new-password" aria-describedby="create-user-access-help"/>
 				</label>
-				<button class="primary-btn" type="submit" data-busy-label="Creating…">Create user</button>
 			</div>
 			<fieldset class="create-user__access">
 				<legend>First sign-in</legend>
@@ -127,6 +126,7 @@ templ UsersContent(u UsersView) {
 					Set a password now
 				</label>
 			</fieldset>
+			<button class="primary-btn create-user__submit" type="submit" data-busy-label="Creating…">Create user</button>
 			<div class="admin-form-help">
 				<p id="create-user-username-help">Usernames use 3–32 letters, numbers, periods, hyphens, or underscores.</p>
 				<p id="create-user-role-help">
