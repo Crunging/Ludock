@@ -3901,7 +3901,7 @@ func RemoveServer(server servers.View) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if server.Source == servers.SourceLabel {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 367, "<p class=\"muted\">Its <code>ludock.enable: \"true\"</code> label keeps this server in Ludock. Remove the label (or set it to <code>\"false\"</code>) where the container is defined and recreate it to take it out.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 367, "<p class=\"muted\">Its <code>ludock.enable: \"true\"</code> label keeps this server in Ludock. To take it out, set the label to <code>\"false\"</code> where the container is defined and recreate it.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

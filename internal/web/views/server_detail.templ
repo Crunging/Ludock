@@ -1022,7 +1022,7 @@ templ RemoveServer(server servers.View) {
 	<section class="stack-form remove-server" aria-labelledby="remove-server-title">
 		<h2 id="remove-server-title">Remove from Ludock</h2>
 		if server.Source == servers.SourceLabel {
-			<p class="muted">Its <code>ludock.enable: "true"</code> label keeps this server in Ludock. Remove the label (or set it to <code>"false"</code>) where the container is defined and recreate it to take it out.</p>
+			<p class="muted">Its <code>ludock.enable: "true"</code> label keeps this server in Ludock. To take it out, set the label to <code>"false"</code> where the container is defined and recreate it.</p>
 		} else {
 			<p class="muted">Ludock stops managing this server. Nothing changes in Docker, and its sharing, schedules, and backups come back if you add it again from the server list.</p>
 			<div>

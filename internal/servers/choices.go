@@ -466,7 +466,7 @@ func (s *Service) Remove(ctx context.Context, adminID, tokenHash, id string, aud
 	}
 	if container, ok := current[server.ContainerID]; ok && server.ContainerID != "" && container.Source == SourceLabel {
 		return nil, apperr.New("KEPT_BY_LABEL", 409,
-			`Its ludock.enable: "true" label keeps this server in Ludock. Remove the label (or set it to "false") where the container is defined and recreate it to take it out.`)
+			`Its ludock.enable: "true" label keeps this server in Ludock. To take it out, set the label to "false" where the container is defined and recreate it.`)
 	}
 	audit.Action, audit.TargetType, audit.TargetID = "server.removed", "server", server.ID
 	choices, err := s.Observer.choices(ctx)

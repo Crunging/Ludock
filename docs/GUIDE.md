@@ -19,9 +19,10 @@ click, and goes away once done.
   is on and working. If every alert sent to it so far has failed, the item says
   why and links straight to its settings.
 - **Back up your servers** offers **Back up every night**: after you confirm,
-  each server that has data folders and no repeating backup schedule (including
-  paused ones, or restarts with **Back up first**) gets a daily backup between
-  04:00 and 06:00 in your browser's time zone, spaced a few minutes apart. Like
+  each server that has data folders and no repeating schedule that backs it up
+  (a backup, or a restart with **Back up first**; a paused schedule still
+  counts) gets a daily backup between 04:00 and 06:00 in your browser's time
+  zone, spaced a few minutes apart. Like
   a new schedule, each waits for players to leave and warns anyone still on
   where the game allows. It appears once backup storage is on.
 - **Restart servers that stop answering** offers **Restart automatically** for
@@ -51,9 +52,8 @@ visible only to administrators until you share it.
 To take a server out, open it and choose **Remove from Ludock** at the bottom of
 its **Overview**. The container keeps running. Its sharing, schedules, and
 backups come back if you add it again. A server labeled
-`ludock.enable: "true"` can't be removed from the panel: remove the label (or
-set it to `"false"` for a supported game image) where it is defined and
-recreate the container.
+`ludock.enable: "true"` can't be removed from the panel: set the label to
+`"false"` where the container is defined and recreate it.
 
 Ludock never offers itself, its helpers, or Compose one-off containers.
 
