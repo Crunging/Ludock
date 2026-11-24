@@ -800,9 +800,14 @@ anything that was in progress:
   happen, and the server is returned to how it was; one interrupted while its
   new container was being checked is undone and the server left stopped (since
   the new version may have changed the game data); one that had begun removing
-  the original is finished, and its new container is started if the server was
-  running and Docker stopped it meanwhile. If it won't start, the server is
-  left stopped, listed in **Needs attention**, and its entry says so.
+  the original is finished, and its new container is started, once, if the
+  server was running and Docker stopped it meanwhile. Ludock then checks that
+  it keeps running for the same 10 seconds. If it won't start, stops again, or
+  was found stopped after the update had started it, the server is left
+  stopped, an alert is sent, it is listed in **Needs attention**, and its entry
+  says so. If Docker doesn't answer for that check, the entry says Ludock
+  couldn't confirm the server is running, and outage alerts report it if it
+  is down.
 - **Everything else:** work Ludock can't safely finish is marked interrupted,
   never repeated. Cancelled work stays cancelled, and a warning Ludock resumes
   can still be cancelled. One-time scheduled runs missed by more than 5 minutes
