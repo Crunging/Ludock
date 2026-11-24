@@ -171,14 +171,15 @@ func TestUpdateRecoveryUndoesUncheckedReplacement(t *testing.T) {
 // started once, since the server was running. Activity and an alert say the
 // server is stopped when it is at the end: Docker refused the start, the
 // new run exited at once, or it had stopped after the update had already
-// started it. One Docker doesn't answer about is not called stopped.
+// started it. One restarting, or Docker doesn't answer about, is not called
+// stopped.
 func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
 	finished := "Ludock restarted while the updated container replaced the previous one, so it finished the update."
 	stopped := finished + " Its new container is stopped, so the server is stopped. Check its logs, then start it."
 	for _, c := range []struct {
 		name                                string
 		left, stopped, wasStopped, restored bool
-		fails, exits, unreachable           bool
+		fails, exits, restarts, unreachable bool
 		guidance                            string
 	}{
 		{name: "original removed", guidance: finished},
@@ -188,6 +189,8 @@ func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
 		{name: "replacement won't start", stopped: true, fails: true, guidance: finished +
 			" Its new container had stopped, and Docker couldn’t start it again, so the server is stopped. Check it, then start it."},
 		{name: "replacement exits once started", stopped: true, exits: true, guidance: stopped},
+		{name: "replacement restarts once started", stopped: true, restarts: true, guidance: finished +
+			" Its new container restarted right after it started. Check its logs."},
 		{name: "stopped after the update started it", stopped: true, restored: true, guidance: stopped},
 		{name: "Docker stops answering", stopped: true, unreachable: true, guidance: finished +
 			" Ludock couldn’t reach Docker to check that its new container is running. Check the server."},
@@ -208,6 +211,9 @@ func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
 				f.engine.Update(container.ID, func(container *fakedocker.Container) {
 					container.State.Status, container.State.Running, container.State.ExitCode = "exited", false, 1
 				})
+			}
+			if c.restarts {
+				f.engine.Update(container.ID, func(container *fakedocker.Container) { container.State.Restarting = true })
 			}
 			if c.unreachable {
 				f.engine.AddFault("GET .*/containers/"+replacement+"/json", 500, false, 0)
@@ -255,7 +261,7 @@ func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
 		if intentional != (down || c.wasStopped) {
 			t.Fatalf("%s: intentionally stopped %v", c.name, intentional)
 		}
-		if alerted := len(f.alerts) > 0; alerted != (down || c.unreachable) {
+		if alerted := len(f.alerts) > 0; alerted != (down || c.restarts || c.unreachable) {
 			t.Fatalf("%s: alerts %q", c.name, f.alerts)
 		}
 	}

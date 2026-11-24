@@ -174,7 +174,9 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 		err = j.settle(ctx, job)
 		var started error
 		if err == nil && swap.reached(swapReplacing) {
-			started = j.startReplacement(ctx, job)
+			// Recovery runs without RideOut; an outage is waited out before
+			// the replacement is judged either way.
+			started = j.startReplacement(docker.RideOut(ctx, nil), job)
 		}
 		release()
 		if err != nil {
@@ -237,8 +239,13 @@ func (j *Jobs) finishedUpdate(ctx context.Context, job *ops.Context, started err
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, true))
 		alert("the server’s new container is stopped. Check its logs, then start it.")
 		return map[string]any{"guidance": finished + " Its new container is stopped, so the server is stopped. Check its logs, then start it."}
+	case apperr.Is(started, errReplacementRestarted.Code):
+		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, false))
+		alert("the server’s new container restarted right after it started. Check its logs.")
+		return map[string]any{"guidance": finished + " Its new container restarted right after it started. Check its logs."}
 	default:
 		// Not known to be stopped: outage tracking reports it if it is.
+		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, false))
 		check := "check"
 		if docker.Unavailable(started) {
 			check = "reach Docker to check"
@@ -520,7 +527,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 		return nil, err
 	}
 	if err := j.startReplacement(ctx, job); err != nil {
-		if _, known := apperr.As(err); known {
+		if apperr.Is(err, errReplacementDown.Code) || apperr.Is(err, errReplacementNotStarted.Code) {
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, true))
 		}
 		return nil, err
@@ -763,6 +770,8 @@ var (
 		"The server was updated, but its new container stopped before the update finished, as when Docker restarts, and Docker couldn’t start it again. Check the server, then start it.")
 	errReplacementDown = apperr.New("REPLACEMENT_DOWN", 409,
 		"The server was updated, but its new container is stopped. Check its logs, then start it.")
+	errReplacementRestarted = apperr.New("REPLACEMENT_RESTARTED", 409,
+		"The server was updated, but its new container restarted right after it started. Check its logs.")
 )
 
 // startReplacement starts the replacement of a server that was running once
@@ -776,9 +785,6 @@ func (j *Jobs) startReplacement(ctx context.Context, job *ops.Context) error {
 	if err != nil || swap == nil || swap.Stage != swapReplaced || recovery.InitialRunning == nil || !*recovery.InitialRunning {
 		return err
 	}
-	// Recovery runs without RideOut; an outage is waited out before the
-	// replacement is judged either way.
-	ctx = docker.RideOut(ctx, nil)
 	info, err := j.Docker.Inspect(ctx, swap.Replacement)
 	if docker.IsNotFound(err) {
 		return errReplacementNotStarted
@@ -804,6 +810,9 @@ func (j *Jobs) startReplacement(ctx context.Context, job *ops.Context) error {
 	// The replacement is started only as the server it became: discovery
 	// binds it, and the start confirms that binding.
 	if _, err := j.Servers.RefreshNow(ctx); err != nil {
+		if docker.Unavailable(err) {
+			return err
+		}
 		return errReplacementNotStarted
 	}
 	logical, err := j.Identity.Get(ctx, job.Job.ServerID)
@@ -834,9 +843,11 @@ func (j *Jobs) startReplacement(ctx context.Context, job *ops.Context) error {
 }
 
 // survives confirms a started container keeps its run through the settle
-// time, as a replacement is checked before it takes over.
+// time, as a replacement is checked before it takes over. One that ended
+// its run but runs again, or is restarting, is not called stopped.
 func (j *Jobs) survives(ctx context.Context, id string) error {
-	began, startedAt := time.Now(), ""
+	var began time.Time
+	startedAt := ""
 	for {
 		info, err := j.Docker.Inspect(ctx, id)
 		if docker.IsNotFound(err) {
@@ -845,11 +856,14 @@ func (j *Jobs) survives(ctx context.Context, id string) error {
 		if err != nil {
 			return err
 		}
-		if startedAt == "" {
-			startedAt = info.State.StartedAt
-		}
-		if !info.State.Running || info.State.Restarting || info.State.StartedAt != startedAt {
+		if !info.State.Running && !info.State.Restarting {
 			return errReplacementDown
+		}
+		if startedAt == "" {
+			startedAt, began = info.State.StartedAt, time.Now()
+		}
+		if info.State.Restarting || info.State.StartedAt != startedAt {
+			return errReplacementRestarted
 		}
 		if time.Since(began) >= j.replacementSettle() {
 			return nil
