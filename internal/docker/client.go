@@ -140,7 +140,9 @@ func (c *Client) negotiate(ctx context.Context) (string, error) {
 	}
 	var info struct{ ApiVersion, MinAPIVersion string }
 	if err := c.read(ctx, "/version", func(body io.Reader) error { return json.NewDecoder(body).Decode(&info) }); err != nil {
-		c.refuse(nil)
+		if ctx.Err() == nil {
+			c.refuse(nil)
+		}
 		return "", err
 	}
 	minor, err := apiMinor(info.ApiVersion)
