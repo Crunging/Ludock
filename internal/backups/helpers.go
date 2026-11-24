@@ -61,7 +61,7 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 		if !strings.HasPrefix(source.Source, "/") {
 			return nil, fail("BACKUP_ROOT_CHANGED", "Ludock couldn’t tell where one of the server’s data folders is on the host. Check how the server is defined, such as its Compose file, then try again.")
 		}
-		physical := path.Clean(source.Source + root.Path[len(source.Destination):])
+		physical := path.Clean(path.Join(source.Source, source.Subpath) + root.Path[len(source.Destination):])
 		if slices.ContainsFunc(physicalRoots, func(other string) bool {
 			return physical == other || strings.HasPrefix(physical, other+"/") || strings.HasPrefix(other, physical+"/")
 		}) {
@@ -74,8 +74,13 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 		if source.Type == "volume" && source.Name != "" {
 			mountSource = source.Name
 		}
-		plan.Mounts = append(plan.Mounts, docker.MountSettings{Type: source.Type, Source: mountSource, Target: alias, ReadOnly: readOnly})
-		checked := identity.Mount{Type: source.Type, Source: mountSource, Destination: alias, Writable: true}
+		settings := docker.MountSettings{Type: source.Type, Source: mountSource, Target: alias, ReadOnly: readOnly}
+		// NoCopy: Docker never fills an empty folder from the helper's image.
+		if source.Type == "volume" {
+			settings.VolumeOptions = &docker.VolumeOptions{NoCopy: true, Subpath: source.Subpath}
+		}
+		plan.Mounts = append(plan.Mounts, settings)
+		checked := identity.Mount{Type: source.Type, Source: mountSource, Destination: alias, Writable: true, Subpath: source.Subpath}
 		if source.Type == "volume" {
 			checked.Name = mountSource
 		}

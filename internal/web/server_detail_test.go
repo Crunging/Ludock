@@ -8,12 +8,14 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/schedules"
 )
 
 func TestServerDetailFollowsGrants(t *testing.T) {
@@ -212,5 +214,54 @@ func TestSavingMonitoringKeepsRecoveryNotOffered(t *testing.T) {
 	save(url.Values{"recoverOffered": {"true"}})
 	if recover() {
 		t.Fatal("unticking the switch left recovery on")
+	}
+}
+
+// A running server started with --rm, which Docker deletes when it stops,
+// is offered nothing that stops it: the page says why once, the checklist
+// skips it, schedules offer only what can run, a forged request is refused,
+// and a stopping schedule already saved says why it was skipped.
+func TestDeletedOnStopServerOffersNoStop(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	ctx := context.Background()
+	restart := schedules.Input{Kind: "recurring", Action: "restart", Enabled: true, Time: "08:00", Timezone: "UTC", Days: []int{0, 1, 2, 3, 4, 5, 6}}
+	if _, err := p.app.Schedules.Create(ctx, &p.admin.User, p.server, restart); err != nil {
+		t.Fatal(err)
+	}
+	p.engine.Update(p.docker, func(c *fakedocker.Container) {
+		c.HostConfig = map[string]any{"AutoRemove": true}
+		c.State.Running, c.State.Status = true, "running"
+	})
+	if _, err := p.app.Servers.RefreshNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	detail := p.do("GET", "/servers/"+p.server, p.admin, nil, nil).Body.String()
+	if strings.Count(detail, "started with --rm") != 1 || strings.Contains(detail, `/stop"`) || strings.Contains(detail, `/restart"`) {
+		t.Fatal(detail)
+	}
+	if body := p.do("GET", "/servers/"+p.server+"?tab=backups", p.admin, nil, nil).Body.String(); strings.Contains(body, `id="create-backup"`) {
+		t.Fatal(body)
+	}
+	if body := p.do("GET", "/servers/"+p.server+"?tab=schedules", p.admin, nil, nil).Body.String(); strings.Contains(body, `value="restart"`) ||
+		strings.Contains(body, `value="backup"`) || !strings.Contains(body, `value="start"`) {
+		t.Fatal(body)
+	}
+	if body := p.do("GET", "/fragments/checklist", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String(); strings.Contains(body, "/checklist/recovery") {
+		t.Fatal(body)
+	}
+	for _, path := range []string{"/stop", "/restart", "/backups"} {
+		if response := p.action("/servers/"+p.server+path, p.admin, nil); response.StatusCode != http.StatusConflict {
+			t.Fatal(path, response.StatusCode)
+		}
+	}
+	next := time.Now().UTC().Truncate(24 * time.Hour).Add(8 * time.Hour)
+	if !next.After(time.Now()) {
+		next = next.Add(24 * time.Hour)
+	}
+	p.app.Schedules.Run(ctx, next.UnixMilli())
+	list, err := p.app.Schedules.List(ctx, &p.admin.User, p.server)
+	if err != nil || len(list) != 1 || !strings.Contains(list[0].LastResult, "started with --rm") {
+		t.Fatal(list, err)
 	}
 }

@@ -862,6 +862,13 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 		if err != nil {
 			return err
 		}
+		if servers.StopsServer(data.Action) {
+			if deleted, err := s.deletedOnStop(ctx, r.serverID); err != nil {
+				return err
+			} else if deleted {
+				return Skip("Skipped: " + servers.AutoRemoveMessage)
+			}
+		}
 		if data.Action == "command" {
 			if err := s.commandReady(ctx, user, r.serverID, binding.BindingRevision); err != nil {
 				return err
@@ -1008,6 +1015,20 @@ const (
 	SkipNotRunning Skip = "Skipped: the server wasn't running"
 	SkipNoConsole  Skip = "Skipped: the server's game console isn't available"
 )
+
+// deletedOnStop: Docker deletes the server when it stops (--rm), so work
+// that stops it is refused.
+func (s *Service) deletedOnStop(ctx context.Context, serverID string) (bool, error) {
+	if s.Servers == nil {
+		return false, nil
+	}
+	binding, err := s.Identity.ResolveBinding(ctx, serverID, -1)
+	if err != nil {
+		return false, err
+	}
+	info, err := s.Servers.Observer.Docker.Inspect(ctx, binding.ContainerID)
+	return err == nil && info.Host.AutoRemove, err
+}
 
 // commandReady skips a command run unless the server is running, idle, and
 // has a game console.
@@ -1199,7 +1220,9 @@ func (s *Service) say(ctx context.Context, r *row, data Input, stillWaiting bool
 		return 0, err
 	}
 	template := ""
-	if current.Container.Console != nil && current.Container.Console.SupportsBroadcast {
+	// A run that would stop a --rm server is refused, so nobody hears it's coming.
+	if current.Container.Console != nil && current.Container.Console.SupportsBroadcast &&
+		!(current.Container.AutoRemove && servers.StopsServer(data.Action)) {
 		template = broadcastTemplate(current)
 	}
 	if template == "" {

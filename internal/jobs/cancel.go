@@ -10,6 +10,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedules"
+	"github.com/Crunging/Ludock/internal/servers"
 )
 
 // StartCapabilities are what starting an operation like job takes. Whoever
@@ -130,21 +131,40 @@ type registrar struct {
 func (r registrar) Register(kind string, handler ops.Handler) {
 	run := handler.Run
 	handler.Run = func(ctx context.Context, job *ops.Context) (map[string]any, error) {
-		if _, scheduled := job.Job.Input["scheduleId"].(string); scheduled {
-			// A refusal is final: the handler never runs after players hear
-			// it's off, even if access returns meanwhile.
-			if err := r.refusal(ctx, job); err != nil {
-				if _, public := apperr.As(err); public {
-					if heard := r.jobs.countedDown(ctx, job.Job); heard != 0 {
-						r.jobs.sayCalledOff(ctx, job.Job, heard)
-					}
+		// A refusal is final: the handler never runs after players hear
+		// it's off, even if access returns meanwhile.
+		_, scheduled := job.Job.Input["scheduleId"].(string)
+		var err error
+		if scheduled {
+			err = r.refusal(ctx, job)
+		}
+		// Refused before players are warned; the stop refuses it again.
+		if err == nil && servers.StopsServer(kind) {
+			err = r.assertNotDeletedOnStop(ctx, job)
+		}
+		if err != nil {
+			if _, public := apperr.As(err); public && scheduled {
+				if heard := r.jobs.countedDown(ctx, job.Job); heard != 0 {
+					r.jobs.sayCalledOff(ctx, job.Job, heard)
 				}
-				return nil, err
 			}
+			return nil, err
 		}
 		return run(ctx, job)
 	}
 	r.runner.Register(kind, handler)
+}
+
+func (r registrar) assertNotDeletedOnStop(ctx context.Context, job *ops.Context) error {
+	logical, err := r.jobs.Identity.ResolveBinding(ctx, job.Job.ServerID, -1)
+	if err != nil {
+		return err
+	}
+	info, err := r.jobs.Docker.Inspect(ctx, logical.ContainerID)
+	if err == nil && info.Host.AutoRemove {
+		err = servers.ErrAutoRemove
+	}
+	return err
 }
 
 // refusal is why the owner of scheduled job can't start it now, if they

@@ -207,11 +207,11 @@ func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 	if response := p.do("GET", "/fragments/servers/"+p.server+"/update", operator, nil, map[string]string{"HX-Request": "true"}); response.Code == http.StatusOK {
 		t.Fatal(response.Code)
 	}
-	// Docker removes a --rm container when it stops, so it can't be replaced:
+	// Docker deletes a --rm container when it stops, so it can't be replaced:
 	// the form is not offered and a forged request is refused.
 	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.HostConfig = map[string]any{"AutoRemove": true} })
 	panel := p.do("GET", "/fragments/servers/"+p.server+"/update", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String()
-	if !strings.Contains(panel, "removes this container when it stops") || !strings.Contains(panel, "Check again") || strings.Contains(panel, "/updates") {
+	if !strings.Contains(panel, "started with --rm") || !strings.Contains(panel, "Check again") || strings.Contains(panel, "/updates") {
 		t.Fatal(panel)
 	}
 	values.Set("skipBackupConfirmation", "valheim")

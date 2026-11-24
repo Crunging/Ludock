@@ -56,9 +56,9 @@ type Recovery struct {
 
 // RecoveryOffered reports whether a container's game can be recovered: only
 // a status query, or the image's health check in its place, tells a hung
-// game from a slow one.
+// game from a slow one. A restart would delete a --rm server.
 func RecoveryOffered(container servers.Container) bool {
-	return container.Query != nil || container.HealthAnswers
+	return (container.Query != nil || container.HealthAnswers) && !container.AutoRemove
 }
 
 // RecoveryWait is how long after a recovery restart the game has to answer
@@ -155,8 +155,9 @@ var errRecoveryChanged = errors.New("recovery changed")
 // Another operation on the server, or the pause after the last restart, makes
 // it wait.
 func (s *Service) recover(ctx context.Context, server identity.Server, container servers.Container, r *row, policy Policy, now int64) bool {
-	// A server awaiting review of a change can't be restarted by recovery.
-	if s.Runner == nil || server.SharingPaused {
+	// A server awaiting review of a change can't be restarted by recovery,
+	// nor one Docker deletes when it stops; its outage is alerted instead.
+	if s.Runner == nil || server.SharingPaused || container.AutoRemove {
 		return false
 	}
 	var state Recovery

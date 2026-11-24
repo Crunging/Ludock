@@ -74,12 +74,15 @@ var digits = regexp.MustCompile(`^\d+$`)
 
 func trimSlash(value string) string { return strings.TrimSuffix(path.Clean(value), "/") }
 
-// MountProof verifies volume drivers and pins bind sources through a private
-// validator that sees only directory device and inode numbers. It never runs
-// user commands, reads game files, or exposes its host mount to a file
-// endpoint. operationID, when set, labels the validator for recovery and
+// MountProof verifies volume drivers and pins bind sources and volume
+// subpaths through a private validator that sees only directory device and
+// inode numbers. Docker follows links inside a volume to mount a subpath;
+// the validator refuses links, so a helper's mount must prove it got the
+// real folder at that path. It never runs user commands, reads game files,
+// or exposes its host mount to a file endpoint. operationID, when set, labels the validator for recovery and
 // makes cleanup retry until it is gone.
 func MountProof(ctx context.Context, client *docker.Client, images *Images, mounts []identity.Mount, operationID string) (*Proof, error) {
+	var sources []helper.MountSource
 	for _, mount := range mounts {
 		if mount.Type != "volume" {
 			continue
@@ -98,8 +101,14 @@ func MountProof(ctx context.Context, client *docker.Client, images *Images, moun
 		if err != nil || info.Driver != "local" || len(info.Options) > 0 {
 			return nil, ErrUnverifiedMount
 		}
+		if mount.Subpath != "" {
+			if !strings.HasPrefix(info.Mountpoint, "/") {
+				return nil, ErrUnverifiedMount
+			}
+			sources = append(sources, helper.MountSource{Source: trimSlash(path.Join(info.Mountpoint, mount.Subpath)),
+				Destination: trimSlash(mount.Destination)})
+		}
 	}
-	var sources []helper.MountSource
 	for _, mount := range mounts {
 		if mount.Type == "bind" {
 			sources = append(sources, helper.MountSource{Source: trimSlash(mount.Source), Destination: trimSlash(mount.Destination)})

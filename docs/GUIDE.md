@@ -293,6 +293,13 @@ it's shared with can't use it, and their schedules wait, until an
 administrator chooses **Confirm and restore access**. Administrators keep using
 it meanwhile.
 
+A server started with `--rm` (Compose doesn't do this) is one Docker deletes
+the moment it stops, together with any unnamed volume its world may be in.
+Ludock never stops one: its page says so, and Stop, Restart, backups,
+restores, updates, scheduled stops and restarts, and automatic restarts
+aren't offered for it. Watching it, its console, logs, players, and files
+work as usual. Recreate it without `--rm` to manage it fully.
+
 ### Stopping and restarting
 
 When the game's console has a **Save world** shortcut, Ludock sends it and
@@ -389,7 +396,10 @@ start, such as `MOTD` into Minecraft's `server.properties` on
 `itzg/minecraft-server`, so an edit to one of those is undone at the next
 start; change it where you define the server instead. Ludock
 never follows symbolic links, and blocks system and sensitive paths and Docker
-sockets. To limit access to some folders, set
+sockets. A server given one folder of a volume (`volume-subpath`, or
+`volume.subpath` in Compose) shows just that folder, here and in its backups.
+A volume shared with `--volumes-from` isn't offered, since Docker doesn't show
+which folder of it the server has. To limit access to some folders, set
 [`ludock.files`](REFERENCE.md#labels). Ludock's own working folders, named
 `.ludock-…`, [stay out of Files](REFERENCE.md#ludocks-folders-in-server-data).
 Size and time limits are in the [reference](REFERENCE.md#limits).

@@ -27,8 +27,6 @@ type Service struct {
 var (
 	errPinned = apperr.New("UNSUPPORTED_IMAGE", 409,
 		"This server's image is pinned to a digest or image ID, so there is no newer version to pull. Change the image through the tool that created the container.")
-	errAutoRemove = apperr.New("UNSUPPORTED_CONTAINER", 409,
-		"Docker removes this container when it stops (--rm), so Ludock can't replace it. Recreate it through the tool that created it.")
 	errSwarm = apperr.New("UNSUPPORTED_CONTAINER", 409,
 		"Docker Swarm manages this container. Update its service through Swarm.")
 	errDependents = apperr.New("SERVICE_DEPENDENCY", 409,
@@ -104,7 +102,7 @@ func (s *Service) check(ctx context.Context, server *servers.Context, earlier *P
 		return nil, errPinned
 	}
 	if host.AutoRemove {
-		return nil, errAutoRemove
+		return nil, servers.ErrAutoRemove
 	}
 	if _, swarm := config.Labels["com.docker.swarm.service.id"]; swarm {
 		return nil, errSwarm

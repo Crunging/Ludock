@@ -201,6 +201,19 @@ func TestMountProof(t *testing.T) {
 	if proof, err := MountProof(ctx, client, images, []identity.Mount{{Type: "volume", Name: "world", Destination: "/data"}}, ""); err != nil || len(proof.Identities) != 0 {
 		t.Fatal(err)
 	}
+	// A volume's subpath is pinned as the folder it names now, which Docker
+	// would reach through a link inside the volume, so a link is refused.
+	worlds := filepath.Join(host, "var", "lib", "docker", "volumes", "world", "_data", "worlds")
+	os.MkdirAll(filepath.Join(worlds, "a"), 0o755)
+	os.Symlink("a", filepath.Join(worlds, "link"))
+	proof, err = MountProof(ctx, client, images, []identity.Mount{{Type: "volume", Name: "world", Destination: "/data", Subpath: "worlds/a"}}, "")
+	if err != nil || proof.Identities["/data"].Ino == "" {
+		t.Fatal(proof, err)
+	}
+	proof.Cleanup()
+	if _, err := MountProof(ctx, client, images, []identity.Mount{{Type: "volume", Name: "world", Destination: "/data", Subpath: "worlds/link"}}, ""); !errors.Is(err, ErrUnverifiedMount) {
+		t.Fatal(err)
+	}
 	// The identity check inside a data helper walks the projected paths.
 	identities := map[string]helper.MountIdentity{filepath.Join(host, "srv", "game"): {Dev: "1", Ino: "1"}}
 	if err := AssertMountIdentities(ctx, client, helperID, identities); !errors.Is(err, ErrUnverifiedMount) {

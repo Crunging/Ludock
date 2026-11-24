@@ -35,12 +35,38 @@ type Mount struct {
 	Destination string `json:"destination"`
 	Writable    bool   `json:"writable"`
 	Name        string `json:"name,omitempty"`
+	// Subpath is the folder inside a volume that Docker mounts instead of the
+	// whole volume, which Source and Name still name.
+	Subpath string `json:"subpath,omitempty"`
+	// Unresolved: a volume from --volumes-from, which may carry a subpath
+	// nothing in this container's inspection shows.
+	Unresolved bool `json:"unresolved,omitempty"`
 }
 
-func DockerMounts(points []docker.MountPoint) []Mount {
+// DockerMounts are a container's mounts with the volume subpaths that only
+// its --mount settings report.
+func DockerMounts(info *docker.ContainerInspect) []Mount {
+	declared := map[string]bool{}
+	subpaths := map[string]string{}
+	for _, settings := range info.Host.Mounts {
+		target := path.Clean(settings.Target)
+		declared[target] = true
+		if settings.Type == "volume" && settings.VolumeOptions != nil {
+			subpaths[target] = settings.VolumeOptions.Subpath
+		}
+	}
+	for _, bind := range info.Host.Binds {
+		// "source:destination[:options]", or a destination alone for an
+		// anonymous volume.
+		parts := strings.Split(bind, ":")
+		declared[path.Clean(parts[min(1, len(parts)-1)])] = true
+	}
 	var mounts []Mount
-	for _, point := range points {
-		mounts = append(mounts, Mount{Type: point.Type, Source: point.Source, Destination: point.Destination, Writable: point.RW, Name: point.Name})
+	for _, point := range info.Mounts {
+		destination := path.Clean(point.Destination)
+		mounts = append(mounts, Mount{Type: point.Type, Source: point.Source, Destination: point.Destination, Writable: point.RW, Name: point.Name,
+			Subpath:    subpaths[destination],
+			Unresolved: point.Type == "volume" && len(info.Host.VolumesFrom) > 0 && !declared[destination]})
 	}
 	return mounts
 }
@@ -69,6 +95,7 @@ type DataFolder struct {
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
 	ReadOnly    bool   `json:"readOnly"`
+	Subpath     string `json:"subpath,omitempty"`
 }
 
 type Status string
@@ -205,11 +232,11 @@ func BindingDigest(o Observation) string {
 	folders := []DataFolder{}
 	for _, folder := range o.DataFolders {
 		folders = append(folders, DataFolder{path.Clean(folder.Path), folder.Type, path.Clean(folder.Source), path.Clean(folder.Destination),
-			folder.ReadOnly})
+			folder.ReadOnly, folder.Subpath})
 	}
 	slices.SortFunc(folders, func(a, b DataFolder) int {
 		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(a.Destination, b.Destination), cmp.Compare(a.Type, b.Type),
-			cmp.Compare(a.Source, b.Source))
+			cmp.Compare(a.Source, b.Source), cmp.Compare(a.Subpath, b.Subpath))
 	})
 	encoded, _ := json.Marshal(struct {
 		GameType    string       `json:"gameType"`
