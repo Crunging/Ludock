@@ -185,7 +185,8 @@ test("a folder mounted for second copies is used without asking, until an admini
 });
 
 // A server whose data no backup can reach says so in plain words and
-// offers no backup, and the server list doesn't warn about it.
+// offers no backup anywhere: not on its Backups tab, in the Restart dialog,
+// before an update, or as a schedule. The server list doesn't warn about it.
 test("a server with no data folders says why it can't be backed up", async ({ session }) => {
   const page = await adminPage(session);
   await page.goto("/");
@@ -199,6 +200,18 @@ test("a server with no data folders says why it can't be backed up", async ({ se
   await expect(why).toContainText("give its game data a writable volume or bind mount");
   await expect(page.getByRole("button", { name: "Create backup" })).toHaveCount(0);
   await expect(page.locator("main")).not.toContainText("Ludock found no data folder it can back up");
+
+  await page.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
+  await expect(page.locator(".overview-facts").first()).not.toContainText("Last backup");
+  await page.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
+  await expect(page.locator("select[name=action] option[value=backup]")).toHaveCount(0);
+  await expect(page.getByLabel("Back up first")).toHaveCount(0);
+  await page.locator(".section-tabs").getByRole("link", { name: "Update" }).click();
+  const first = page.locator("#update-backup");
+  await expect(first).toBeDisabled();
+  await expect(first).not.toBeChecked();
+  await expect(page.locator("#update-panel")).toContainText("This server has no data folders Ludock can reach, so there is nothing to back up first.");
+  await expect(page.locator("#update-panel")).toContainText("to update without a backup");
 });
 
 test("starting on a beta's data says to start fresh, and leaves the data as it was", async ({ page }) => {

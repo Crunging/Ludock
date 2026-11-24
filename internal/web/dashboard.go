@@ -109,6 +109,12 @@ func (s *Server) downServers(ctx context.Context, list []servers.View) map[strin
 	return down
 }
 
+// canBeBackedUp: the server has data folders Ludock can reach, and stopping
+// it for a backup doesn't delete it.
+func canBeBackedUp(view *servers.View) bool {
+	return !view.NoDataFolders && !view.Refuses(ops.KindBackup)
+}
+
 func (s *Server) serverRow(r *http.Request, request *Request, view servers.View, showBackup, stale bool) views.ServerRow {
 	action := views.LifecycleAction(view.State)
 	active := view.BindingStatus == "active"
@@ -116,7 +122,7 @@ func (s *Server) serverRow(r *http.Request, request *Request, view servers.View,
 		Disabled: stale || view.ActiveOperation != nil || !active,
 		CanStart: action == "start" && can(&view, authz.ServerStart), CanStop: action == "stop" && !view.Refuses(ops.KindStop) && can(&view, authz.ServerStop),
 		CanRestart: view.State == "running" && !view.Refuses(ops.KindRestart) && can(&view, authz.ServerRestart),
-		CanBackup:  !view.Refuses(ops.KindBackup) && can(&view, authz.BackupsCreate),
+		CanBackup:  canBeBackedUp(&view) && can(&view, authz.BackupsCreate),
 		CanFiles:   can(&view, authz.FilesRead) && len(view.FileRoots) > 0, BackupSummary: backupSummary(request.User(), &view)}
 	// A saved state is not live, so it has no players.
 	consoleLists := view.Console != nil && view.Console.ListsPlayers

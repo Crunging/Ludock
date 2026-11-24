@@ -21,7 +21,7 @@ var scheduleActionCapabilities = map[string]authz.Capability{"start": authz.Serv
 func scheduleActions(view *servers.View) []string {
 	var actions []string
 	for _, action := range schedules.Actions {
-		if (action == "command" && view.Console == nil) || view.Refuses(action) {
+		if (action == "command" && view.Console == nil) || view.Refuses(action) || (action == "backup" && !canBeBackedUp(view)) {
 			continue
 		}
 		if can(view, scheduleActionCapabilities[action]) {
@@ -31,10 +31,12 @@ func scheduleActions(view *servers.View) []string {
 	return actions
 }
 
-// canRunSchedule: saving or resuming needs schedule access and every
-// capability the schedule uses. The service checks again.
+// canRunSchedule: saving or resuming needs schedule access, every capability
+// the schedule uses, and a server its action can run on. The service checks
+// again.
 func canRunSchedule(view *servers.View, input schedules.Input) bool {
-	if !can(view, authz.SchedulesManage) {
+	if !can(view, authz.SchedulesManage) || view.Refuses(input.Action) ||
+		((input.Action == "backup" || input.CreateBackup) && !canBeBackedUp(view)) {
 		return false
 	}
 	return !slices.ContainsFunc(input.Capabilities(), func(capability authz.Capability) bool { return !can(view, capability) })
@@ -52,7 +54,7 @@ func (s *Server) scheduleForm(r *http.Request, d *views.ServerDetail) views.Sche
 	} else if len(actions) > 0 {
 		input.Action = actions[0]
 	}
-	canBackup := can(view, authz.BackupsCreate)
+	canBackup := canBeBackedUp(view) && can(view, authz.BackupsCreate)
 	if input.Action == "restart" && canBackup {
 		input.CreateBackup = s.backupReady(r, view)
 	}

@@ -374,8 +374,9 @@ templ OverviewLive(d ServerDetail) {
 					}
 				</dd>
 			</div>
-			// The header says why a server that refuses backups has none.
-			if d.Row.BackupSummary && (server.LatestBackup != nil || !server.Refuses(ops.KindBackup)) {
+			// The header says why a server that refuses backups has none, and
+			// the Disk line why one with no data folders has none.
+			if d.Row.BackupSummary && (server.LatestBackup != nil || (!server.Refuses(ops.KindBackup) && !server.NoDataFolders)) {
 				<div>
 					<dt>Last backup</dt>
 					<dd>
