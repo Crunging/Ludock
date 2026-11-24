@@ -988,6 +988,9 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 	// current folder free room on its disk.
 	scanned := false
 	for _, backup := range spare {
+		if backup.destination != settings.Destination {
+			continue
+		}
 		room, need := s.room(ctx, list, settings, unconfirmed)
 		// Other servers' archives are looked for only when they could decide
 		// whether a spare goes.
@@ -1002,9 +1005,6 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 		}
 		if room >= need {
 			break
-		}
-		if backup.destination != settings.Destination {
-			continue
 		}
 		if err := s.removeIdle(ctx, backup); failed(backup, err) {
 			return err
