@@ -270,10 +270,13 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 			if scenario.item {
 				backupID, rootID := f.itemBackup(t)
 				input = map[string]any{"backupId": backupID, "root": rootID, "item": "world/level.dat"}
+				os.Chmod(f.data, 0o750)
 			} else {
 				input = map[string]any{"backupId": twoRootBackup(t, f), "confirmation": "mc"}
 				for _, root := range []string{"world", "config"} {
 					os.WriteFile(filepath.Join(f.data, root, "large.dat"), []byte("changed"), 0o644)
+					// The backup has the roots' own permissions, 0755.
+					os.Chmod(filepath.Join(f.data, root), 0o750)
 				}
 			}
 			var after afterHook
@@ -318,6 +321,20 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 			if journal := f.savedJournal(job.ID); job.Status != scenario.status || journal != scenario.journal || !f.running() ||
 				restored != scenario.restored || left != scenario.left {
 				t.Errorf("%s, %q, journal %q, restored %v, stage left %v", job.Status, job.Error, journal, restored, left)
+			}
+			// A whole restore gives each root the backup's permissions as it
+			// commits; one that didn't restore, or restored one item, leaves
+			// them as they were.
+			roots, mode := []string{"world", "config"}, os.FileMode(0o750)
+			if scenario.item {
+				roots = []string{""}
+			} else if scenario.restored {
+				mode = 0o755
+			}
+			for _, root := range roots {
+				if info, err := os.Stat(filepath.Join(f.data, root)); err != nil || info.Mode().Perm() != mode {
+					t.Errorf("root %q is %v, want %v", root, info.Mode().Perm(), mode)
+				}
 			}
 			// A restore that rolled back leaves the data exactly as it was.
 			if !scenario.restored && !scenario.left {
