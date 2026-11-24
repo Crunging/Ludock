@@ -493,10 +493,13 @@ func TestConsiderateDefaults(t *testing.T) {
 	}
 	for action, message := range map[string]string{"restart": "Server restart in 5 minutes.", "stop": "Server shutting down in 5 minutes.",
 		"backup": "Server restart for a backup in 5 minutes.", "update": "Server restart for an update in 5 minutes.",
-		"restore": "Server restart to restore a backup in 5 minutes."} {
+		"restore": "Server restart to restore a backup in 5 minutes.", "undo_restore": "Server restart to undo a restore in 5 minutes."} {
 		if got := WarningMessage(action, 5); got != message {
 			t.Fatal(got)
 		}
+	}
+	if got := CalledOffMessage("undo_restore"); got != "Server restart to undo a restore cancelled." {
+		t.Fatal(got)
 	}
 	if got := WarningMessage("stop", 1); got != "Server shutting down in 1 minute." {
 		t.Fatal(got)
