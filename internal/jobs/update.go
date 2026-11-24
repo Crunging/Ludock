@@ -182,6 +182,10 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 		if err != nil {
 			return nil, err
 		}
+		// Ludock stopping mid-check judged nothing: the next start does.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if swap.reached(swapReplacing) {
 			return j.finishedUpdate(ctx, job, started), nil
 		}
