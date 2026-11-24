@@ -457,8 +457,9 @@ func TestIdentityFollowsDataFolders(t *testing.T) {
 	}
 	// Another spelling of the same game, or no label where the image names it.
 	for _, game := range []string{"Minecraft", " MINECRAFT ", "minecraft", ""} {
-		if digest(func(c *fakedocker.Container) { c.Config.Labels["ludock.game"] = game }) != base {
-			t.Fatalf("game label %q changed the identity", game)
+		if digest(func(c *fakedocker.Container) { c.Config.Labels["ludock.game"] = game }) != base ||
+			inspectTest(t, s, id).Container.GameType != "minecraft" {
+			t.Fatalf("game label %q changed the game or identity", game)
 		}
 	}
 	other := digest(func(c *fakedocker.Container) { c.Config.Labels["ludock.game"] = "My Game" })
