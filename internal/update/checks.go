@@ -323,7 +323,7 @@ func (c *Checks) Run(ctx context.Context, current map[string]servers.Container, 
 	c.mu.Unlock()
 
 	if due != "" {
-		c.ask(ctx, due, now)
+		c.ask(ctx, due, now, nil)
 		// The containers are inspected again: whether Update server supports
 		// one can change without it being recreated.
 		for _, id := range checked {
@@ -356,7 +356,7 @@ func (c *Checks) active(ctx context.Context, current map[string]servers.Containe
 // CheckNow asks the registry about one server's image right away, unless
 // it answered moments ago, and returns the result. allowed confirms the
 // requester after the waits for another check and for Docker, before
-// anything is asked or saved.
+// anything is changed, and again right before the registry is asked.
 func (c *Checks) CheckNow(ctx context.Context, serverID string, container servers.Container, allowed func() error) *CheckStatus {
 	if !c.acquire(ctx) {
 		return nil
@@ -382,7 +382,9 @@ func (c *Checks) CheckNow(ctx context.Context, serverID string, container server
 	// A registry answer about to be replaced is not announced.
 	c.apply(ctx, o, now, ask)
 	if ask {
-		c.ask(ctx, o.key, now)
+		if !c.ask(ctx, o.key, now, allowed) {
+			return nil
+		}
 		c.apply(ctx, c.observe(ctx, serverID, container), now, false)
 		// Other servers on the tag are compared with the new answer next pass.
 		c.mu.Lock()
@@ -572,8 +574,10 @@ func updateMessage(container servers.Container) string {
 	return message
 }
 
-// ask records what the registry says key's tag points to now.
-func (c *Checks) ask(ctx context.Context, key string, now int64) {
+// ask records what the registry says key's tag points to now. allowed, when
+// set, confirms the requester once the credentials are read, which can wait
+// on their folder; ask reports false when it refuses.
+func (c *Checks) ask(ctx context.Context, key string, now int64, allowed func() error) bool {
 	c.mu.Lock()
 	reference, forgotten := key, c.forgotten[key]
 	if image := c.state.Images[key]; image != nil && image.Reference != "" {
@@ -581,6 +585,9 @@ func (c *Checks) ask(ctx context.Context, key string, now int64) {
 	}
 	c.mu.Unlock()
 	auth, err := registryAuth(c.Updates.DockerConfig, reference)
+	if allowed != nil && allowed() != nil {
+		return false
+	}
 	var info *docker.DistributionInspect
 	if err == nil {
 		info, err = c.Updates.Docker.DistributionInspect(ctx, reference, auth)
@@ -592,7 +599,7 @@ func (c *Checks) ask(ctx context.Context, key string, now int64) {
 	defer c.mu.Unlock()
 	image := c.state.Images[key]
 	if image == nil || c.forgotten[key] != forgotten {
-		return
+		return true
 	}
 	image.TriedAt = now
 	if err != nil {
@@ -603,10 +610,11 @@ func (c *Checks) ask(ctx context.Context, key string, now int64) {
 			image.Problem = "config"
 		}
 		image.NextAt = now + jitter(retryInterval, 30*time.Minute)
-		return
+		return true
 	}
 	image.Problem, image.Digest, image.Platforms, image.CheckedAt = "", info.Descriptor.Digest, info.Platforms, now
 	image.NextAt = now + jitter(checkInterval, time.Hour)
+	return true
 }
 
 var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
