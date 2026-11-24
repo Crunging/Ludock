@@ -793,7 +793,8 @@ func (s *Service) planRoots(ctx context.Context, server *servers.Context) (*Plan
 
 // AssertReady runs the checks that need no stop, so a backup that cannot
 // succeed never takes the server offline.
-func (s *Service) AssertReady(ctx context.Context, server *servers.Context) error {
+// protected backups, such as a restore's source, aren't counted as room.
+func (s *Service) AssertReady(ctx context.Context, server *servers.Context, protected ...string) error {
 	plan, err := s.planRoots(ctx, server)
 	if err != nil {
 		return err
@@ -810,7 +811,7 @@ func (s *Service) AssertReady(ctx context.Context, server *servers.Context) erro
 	// counts as room here.
 	err = s.assertRoom(ctx, settings, smallest, 0)
 	if capacity(err) {
-		err = s.assertRoom(ctx, settings, smallest, s.removable(ctx, server.Logical.ID, settings))
+		err = s.assertRoom(ctx, settings, smallest, s.removable(ctx, server.Logical.ID, settings, protected...))
 	}
 	if err != nil {
 		return err
@@ -1172,17 +1173,18 @@ func (s *Service) retention(list []Backup, protected []string) (expired, spare [
 	return expired, spare, unconfirmed
 }
 
-// removable is the size of a server's backups in the current folder that
-// Prune may remove, at most, to make room for its next backup.
-func (s *Service) removable(ctx context.Context, serverID string, settings Settings) int64 {
+// removable is the size of a server's archives in the current folder that
+// Prune may remove, at most, to make room for its next backup. One read
+// from a second copy frees nothing: removeIdle leaves it.
+func (s *Service) removable(ctx context.Context, serverID string, settings Settings, protected ...string) int64 {
 	list, err := s.List(ctx, serverID)
 	if err != nil {
 		return 0
 	}
-	expired, spare, _ := s.retention(list, nil)
+	expired, spare, _ := s.retention(list, protected)
 	var total int64
 	for _, backup := range append(expired, spare...) {
-		if backup.destination == settings.Destination {
+		if backup.destination == settings.Destination && !backup.FromCopy {
 			total += backup.Size
 		}
 	}

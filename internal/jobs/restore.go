@@ -543,7 +543,7 @@ func (r *restoreRun) validate() error {
 	}
 	r.folder, r.staged = folder, staged
 	if r.whole || r.job.Job.Input["createBackup"] == true {
-		if err := r.j.Backups.AssertReady(r.ctx, r.server); err != nil {
+		if err := r.j.Backups.AssertReady(r.ctx, r.server, r.row.ID); err != nil {
 			return err
 		}
 	} else if err := r.j.Backups.AssertNoOtherWriters(r.ctx, r.server, ""); err != nil {
