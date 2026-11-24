@@ -238,7 +238,7 @@ func UsersContent(u UsersView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "><span>Initial password</span><input type=\"password\" name=\"password\" maxlength=\"128\" autocomplete=\"new-password\" aria-describedby=\"create-user-access-help\"></label> <button class=\"primary-btn\" type=\"submit\" data-busy-label=\"Creating…\">Create user</button></div><fieldset class=\"create-user__access\"><legend>First sign-in</legend> <label><input type=\"radio\" name=\"access\" value=\"link\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "><span>Initial password</span><input type=\"password\" name=\"password\" maxlength=\"128\" autocomplete=\"new-password\" aria-describedby=\"create-user-access-help\"></label></div><fieldset class=\"create-user__access\"><legend>First sign-in</legend> <label><input type=\"radio\" name=\"access\" value=\"link\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -258,7 +258,7 @@ func UsersContent(u UsersView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, " aria-describedby=\"create-user-access-help\"> Set a password now</label></fieldset><div class=\"admin-form-help\"><p id=\"create-user-username-help\">Usernames use 3–32 letters, numbers, periods, hyphens, or underscores.</p><p id=\"create-user-role-help\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, " aria-describedby=\"create-user-access-help\"> Set a password now</label></fieldset><button class=\"primary-btn create-user__submit\" type=\"submit\" data-busy-label=\"Creating…\">Create user</button><div class=\"admin-form-help\"><p id=\"create-user-username-help\">Usernames use 3–32 letters, numbers, periods, hyphens, or underscores.</p><p id=\"create-user-role-help\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
