@@ -743,7 +743,7 @@ func (s *Service) Preflight(ctx context.Context, server *servers.Context) Prefli
 			issues = append(issues, readinessIssue(err, fallback))
 		}
 	}
-	_, err := PlanRoots(server, true)
+	_, err := s.planRoots(ctx, server)
 	check(err, Issue{"BACKUP_ROOT_UNAVAILABLE", "The server’s data folders couldn’t be checked. Review the folders mounted into it."})
 	if issue := s.hostMountIssue(server); issue != nil && err == nil {
 		issues = append(issues, *issue)
@@ -762,10 +762,19 @@ func (s *Service) Preflight(ctx context.Context, server *servers.Context) Prefli
 	return Preflight{Ready: len(issues) == 0, CheckedAt: time.Now().UnixMilli(), Issues: issues}
 }
 
+// planRoots plans a backup's read-only helper.
+func (s *Service) planRoots(ctx context.Context, server *servers.Context) (*Plan, error) {
+	own, err := s.Storage.Own.Read(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return PlanRoots(server, own, true)
+}
+
 // AssertReady runs the checks that need no stop, so a backup that cannot
 // succeed never takes the server offline.
 func (s *Service) AssertReady(ctx context.Context, server *servers.Context) error {
-	if _, err := PlanRoots(server, true); err != nil {
+	if _, err := s.planRoots(ctx, server); err != nil {
 		return err
 	}
 	settings, err := s.ForBackup(ctx)
@@ -897,18 +906,15 @@ func (s *Service) AssertSeparateDestination(ctx context.Context, observation ide
 // hostMounts is how a resolved folder reaches the Docker host through
 // Ludock's own mounts; none when that can't be shown.
 func (s *Service) hostMounts(ctx context.Context, folder string) ([]identity.Mount, error) {
-	if !docker.ContainerIDPattern.MatchString(s.Storage.Self) {
+	if !docker.ContainerIDPattern.MatchString(s.Storage.Own.Name()) {
 		return nil, nil
 	}
-	self, err := s.Docker.Inspect(ctx, s.Storage.Self)
-	if docker.IsNotFound(err) {
-		return nil, nil
-	}
+	own, err := s.Storage.Own.Read(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var mounts []identity.Mount
-	for _, mount := range self.Mounts {
+	for _, mount := range own.Mounts {
 		if within(folder, mount.Destination) {
 			mounts = append(mounts, identity.Mount{Type: mount.Type, Name: mount.Name,
 				Source: mount.Source + folder[len(mount.Destination):], Destination: folder, Writable: true})

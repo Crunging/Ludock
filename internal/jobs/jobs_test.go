@@ -29,6 +29,7 @@ import (
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
 )
@@ -105,10 +106,10 @@ func setup(t *testing.T) *fixture {
 	table := locks.New()
 	store := &identity.Store{DB: d}
 	authorization := &authz.Service{DB: d, Servers: store}
-	observer := &servers.Observer{Docker: client}
+	observer := &servers.Observer{Docker: client, Own: self.New(nil, "")}
 	service := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: observer}
-	images := &launch.Images{Docker: client, Configured: image}
-	storage := &backups.Storage{Docker: client, Roots: f.backupTo, Self: "ludock"}
+	images := &launch.Images{Configured: image}
+	storage := &backups.Storage{Roots: f.backupTo, Own: self.New(client, "ludock")}
 	backupService := &backups.Service{DB: d, Storage: storage, Docker: client, Observer: observer, Locks: table,
 		Helpers: &backups.Helpers{Docker: client, Images: images, Storage: storage}}
 	f.runner = &ops.Runner{DB: d, Locks: table}
@@ -709,7 +710,7 @@ func TestDeletedOnStopServerIsNeverStopped(t *testing.T) {
 	if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []string{"stop", "restart", "backup", "restore", UndoRestore, "update"} {
+	for _, kind := range []string{ops.KindStop, ops.KindRestart, ops.KindBackup, ops.KindRestore, ops.KindUndoRestore, ops.KindUpdate} {
 		job := f.run(t, kind, nil)
 		if job.Status != ops.Failed || job.Error != servers.AutoRemoveMessage || f.engine.Container(f.game) == nil || !f.running() {
 			t.Fatalf("%s: %s, container kept: %v", kind, job.Error, f.engine.Container(f.game) != nil)

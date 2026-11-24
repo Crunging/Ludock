@@ -14,6 +14,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -62,7 +63,7 @@ func setup(t *testing.T) *fixture {
 	d := dbtest.Open(t)
 	store := &identity.Store{DB: d}
 	authorization := &authz.Service{DB: d, Servers: store}
-	service := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: &servers.Observer{Docker: docker.New(engine.Socket)}}
+	service := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: &servers.Observer{Docker: docker.New(engine.Socket), Own: self.New(nil, "")}}
 	f := &fixture{engine: engine, authz: authorization,
 		admin:    &db.SessionUser{ID: "admin", Role: db.RoleAdmin},
 		friend:   &db.SessionUser{ID: "friend", Role: db.RoleMember},

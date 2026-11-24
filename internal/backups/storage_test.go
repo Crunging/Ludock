@@ -17,6 +17,7 @@ import (
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/launch"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -38,6 +39,8 @@ func startHelpers(t *testing.T) (*fakedocker.Engine, *docker.Client) {
 	engine.RunHelpers(nil)
 	return engine, docker.New(engine.Socket)
 }
+
+var notInContainer = self.Info{Answer: self.NotFound}
 
 func serverContext(data string) *servers.Context {
 	return &servers.Context{
@@ -72,16 +75,16 @@ func TestApprovedDirectories(t *testing.T) {
 func TestPlanRefusesNestedAndOverlappingRoots(t *testing.T) {
 	context := serverContext("/srv/game")
 	context.Observation.Mounts = append(context.Observation.Mounts, identity.Mount{Type: "bind", Source: "/srv/other", Destination: "/data/nested", Writable: true})
-	if _, err := PlanRoots(context, true); !apperr.Is(err, "NESTED_BACKUP_MOUNT") {
+	if _, err := PlanRoots(context, notInContainer, true); !apperr.Is(err, "NESTED_BACKUP_MOUNT") {
 		t.Fatal(err)
 	}
 	context = serverContext("/srv/game")
 	context.Container.FileRoots = append(context.Container.FileRoots, files.Root{ID: "root-1", Path: "/alias"})
 	context.Observation.Mounts = append(context.Observation.Mounts, identity.Mount{Type: "bind", Source: "/srv/game/world", Destination: "/alias", Writable: true})
-	if _, err := PlanRoots(context, true); !apperr.Is(err, "OVERLAPPING_BACKUP_ROOTS") {
+	if _, err := PlanRoots(context, notInContainer, true); !apperr.Is(err, "OVERLAPPING_BACKUP_ROOTS") {
 		t.Fatal(err)
 	}
-	plan, err := PlanRoots(serverContext("/srv/game"), true)
+	plan, err := PlanRoots(serverContext("/srv/game"), notInContainer, true)
 	if err != nil || plan.Mounts[0].Target != "/mounts/root-0" || plan.Aliases[0] != "/mounts/root-0" || !plan.Mounts[0].ReadOnly {
 		t.Fatal(plan, err)
 	}
@@ -96,8 +99,8 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	os.WriteFile(filepath.Join(data, "server.properties"), []byte("motd=hi"), 0o640)
 	destination := filepath.Join(base, "backups")
 	os.MkdirAll(destination, 0o755)
-	storage := &Storage{Docker: client, Roots: destination}
-	images := &launch.Images{Docker: client, Configured: image}
+	storage := &Storage{Roots: destination, Own: self.New(nil, "")}
+	images := &launch.Images{Configured: image}
 	helpers := &Helpers{Docker: client, Images: images, Storage: storage, pollInterval: 1}
 	context := serverContext(data)
 	dataHelper, err := helpers.NewDataHelper(ctx, context, true, "op-1")
@@ -187,8 +190,8 @@ func TestSnapshotRejectsSymlinksInData(t *testing.T) {
 	os.Symlink("/etc/passwd", filepath.Join(data, "escape"))
 	destination := filepath.Join(base, "backups")
 	os.MkdirAll(destination, 0o755)
-	storage := &Storage{Docker: client, Roots: destination}
-	helpers := &Helpers{Docker: client, Images: &launch.Images{Docker: client, Configured: image}, Storage: storage, pollInterval: 1}
+	storage := &Storage{Roots: destination, Own: self.New(nil, "")}
+	helpers := &Helpers{Docker: client, Images: &launch.Images{Configured: image}, Storage: storage, pollInterval: 1}
 	context := serverContext(data)
 	dataHelper, err := helpers.NewDataHelper(ctx, context, true, "op-3")
 	if err != nil {
@@ -216,8 +219,8 @@ func TestStalledArchiveStart(t *testing.T) {
 	os.MkdirAll(data, 0o755)
 	destination := filepath.Join(base, "backups")
 	os.MkdirAll(destination, 0o755)
-	storage := &Storage{Docker: client, Roots: destination}
-	helpers := &Helpers{Docker: client, Images: &launch.Images{Docker: client, Configured: image}, Storage: storage,
+	storage := &Storage{Roots: destination, Own: self.New(nil, "")}
+	helpers := &Helpers{Docker: client, Images: &launch.Images{Configured: image}, Storage: storage,
 		pollInterval: 1, openLimit: 200 * time.Millisecond}
 	context := serverContext(data)
 	dataHelper, err := helpers.NewDataHelper(ctx, context, true, "op-4")
@@ -255,8 +258,8 @@ func TestSnapshotTimeLimit(t *testing.T) {
 	os.WriteFile(filepath.Join(data, "world.dat"), make([]byte, 1<<20), 0o644)
 	destination := filepath.Join(base, "backups")
 	os.MkdirAll(destination, 0o755)
-	storage := &Storage{Docker: client, Roots: destination}
-	helpers := &Helpers{Docker: client, Images: &launch.Images{Docker: client, Configured: image}, Storage: storage,
+	storage := &Storage{Roots: destination, Own: self.New(nil, "")}
+	helpers := &Helpers{Docker: client, Images: &launch.Images{Configured: image}, Storage: storage,
 		pollInterval: 1, readLimit: time.Nanosecond}
 	context := serverContext(data)
 	dataHelper, err := helpers.NewDataHelper(ctx, context, true, "op-5")
@@ -296,7 +299,7 @@ func TestSnapshotEntryLimitSpansRoots(t *testing.T) {
 	// The header and each root's folder and two files: seven in all.
 	maxEntries = 6
 	t.Cleanup(func() { maxEntries = previous })
-	helpers := &Helpers{Docker: client, Images: &launch.Images{Docker: client, Configured: image}, Storage: &Storage{Docker: client, Roots: destination},
+	helpers := &Helpers{Docker: client, Images: &launch.Images{Configured: image}, Storage: &Storage{Roots: destination, Own: self.New(nil, "")},
 		pollInterval: 1}
 	dataHelper, err := helpers.NewDataHelper(ctx, context, true, "op-6")
 	if err != nil {

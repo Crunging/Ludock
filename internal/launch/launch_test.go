@@ -17,6 +17,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/self"
 )
 
 var ctx = context.Background()
@@ -37,22 +38,22 @@ func setup(t *testing.T) (*fakedocker.Engine, *docker.Client, string) {
 
 func TestImageResolution(t *testing.T) {
 	engine, client, _ := setup(t)
-	if _, err := (&Images{Docker: client, Configured: "ghcr.io/crunging/ludock:latest"}).Resolve(ctx); !errors.Is(err, ErrUnpinnedImage) {
+	if _, err := (&Images{Configured: "ghcr.io/crunging/ludock:latest"}).Resolve(ctx); !errors.Is(err, ErrUnpinnedImage) {
 		t.Fatal(err)
 	}
-	if image, err := (&Images{Docker: client, Configured: pinnedImage}).Resolve(ctx); err != nil || image != pinnedImage {
+	if image, err := (&Images{Configured: pinnedImage}).Resolve(ctx); err != nil || image != pinnedImage {
 		t.Fatal(image, err)
 	}
-	self := engine.AddContainer(fakedocker.GameOptions{Name: "ludock", Image: "ghcr.io/crunging/ludock:latest", Running: true})
-	images := &Images{Docker: client, Self: "ludock"}
-	if image, err := images.Resolve(ctx); err != nil || image != engine.Container(self).Image {
+	ludock := engine.AddContainer(fakedocker.GameOptions{Name: "ludock", Image: "ghcr.io/crunging/ludock:latest", Running: true})
+	images := &Images{Own: self.New(client, "ludock")}
+	if image, err := images.Resolve(ctx); err != nil || image != engine.Container(ludock).Image {
 		t.Fatal(image, err)
 	}
-	if _, err := (&Images{Docker: client, Self: "native-host"}).Resolve(ctx); !apperr.Is(err, "HELPER_IMAGE_UNAVAILABLE") {
+	if _, err := (&Images{Own: self.New(client, "native-host")}).Resolve(ctx); !apperr.Is(err, "HELPER_IMAGE_UNAVAILABLE") {
 		t.Fatal(err)
 	}
 	engine.AddFault(".", 500, false, 0)
-	if _, err := (&Images{Docker: client, Self: "other"}).Resolve(ctx); !apperr.Is(err, "HELPER_IMAGE_UNAVAILABLE") {
+	if _, err := (&Images{Own: self.New(client, "other")}).Resolve(ctx); !apperr.Is(err, "HELPER_IMAGE_UNAVAILABLE") {
 		t.Fatal(err)
 	}
 	for _, image := range []string{"alpine@sha256:" + strings.Repeat("a", 64), "localhost:5000/x/y:tag@sha256:" + strings.Repeat("b", 64)} {
@@ -158,7 +159,7 @@ func TestMountProof(t *testing.T) {
 	helper.HostRoot = host
 	defer func() { helper.HostRoot = "/host" }()
 	engine.AddImage(pinnedImage)
-	images := &Images{Docker: client, Configured: pinnedImage}
+	images := &Images{Configured: pinnedImage}
 	proof, err := MountProof(ctx, client, images, []identity.Mount{{Type: "bind", Source: "/srv/game/", Destination: "/data/"}}, "")
 	if err != nil || proof.Identities["/data"].Ino == "" {
 		t.Fatal(proof, err)
@@ -207,7 +208,7 @@ func TestMountProof(t *testing.T) {
 func TestMountProofDockerFailure(t *testing.T) {
 	engine, client, helperID := setup(t)
 	engine.AddImage(pinnedImage)
-	images := &Images{Docker: client, Configured: pinnedImage}
+	images := &Images{Configured: pinnedImage}
 	bind := []identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data"}}
 	for _, pattern := range []string{"^POST .*/containers/create", "^POST .*/containers/[^/]+/start$", "^GET .*/containers/[^/]+/logs"} {
 		engine.ClearFaults()
@@ -288,7 +289,7 @@ func TestStalledValidatorCreate(t *testing.T) {
 	engine.HangCreates = 1
 	done := make(chan error, 1)
 	go func() {
-		_, err := MountProof(ctx, client, &Images{Docker: client, Configured: pinnedImage},
+		_, err := MountProof(ctx, client, &Images{Configured: pinnedImage},
 			[]identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data"}}, "op-1")
 		done <- err
 	}()

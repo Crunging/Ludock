@@ -27,6 +27,7 @@ import (
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/logging"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/textutil"
 )
 
@@ -76,9 +77,11 @@ type Service struct {
 	DB     *db.DB
 	Docker *docker.Client
 	Images *launch.Images
+	// Own is Ludock's own container, whose folders no server may offer.
+	Own *self.Container
 	// Managed reports whether Ludock manages a container, including an
 	// administrator's choice; nil reads its labels and image alone.
-	Managed func(ctx context.Context, info *docker.ContainerInspect) bool
+	Managed func(ctx context.Context, info *docker.ContainerInspect) (bool, error)
 	// ListerIdle is how long a listing helper is kept after its last use; zero
 	// means 30 seconds.
 	ListerIdle time.Duration
@@ -211,11 +214,11 @@ func OwnerMount(rootPath string, mounts []identity.Mount) *identity.Mount {
 	return owner
 }
 
-func (s *Service) managed(ctx context.Context, info *docker.ContainerInspect) bool {
+func (s *Service) managed(ctx context.Context, info *docker.ContainerInspect) (bool, error) {
 	if s.Managed != nil {
 		return s.Managed(ctx, info)
 	}
-	return games.Evaluate(info.Config.Image, info.Config.Labels).Eligible
+	return games.Evaluate(info.Config.Image, info.Config.Labels).Eligible, nil
 }
 
 // Acquire starts a helper with only the root's own mount and its safe
@@ -228,17 +231,25 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 	if err != nil {
 		return nil, err
 	}
-	if inspection.ID != target.ContainerID || strings.TrimPrefix(inspection.Name, "/") != target.Name ||
-		!s.managed(ctx, inspection) {
+	if inspection.ID != target.ContainerID || strings.TrimPrefix(inspection.Name, "/") != target.Name {
 		return nil, Error("FILE_TARGET_CHANGED", 409)
 	}
+	if managed, err := s.managed(ctx, inspection); err != nil {
+		return nil, err
+	} else if !managed {
+		return nil, Error("FILE_TARGET_CHANGED", 409)
+	}
+	own, err := s.Own.Read(ctx)
+	if err != nil {
+		return nil, err
+	}
 	mounts := identity.DockerMounts(inspection)
-	fresh := Roots(target.GameType, inspection.Config.Labels, mounts)
+	fresh := Roots(target.GameType, inspection.Config.Labels, mounts, own)
 	if !slices.ContainsFunc(fresh, func(candidate Root) bool { return candidate.Path == root.Path }) {
 		return nil, Error("FILE_ROOT_CHANGED", 409)
 	}
 	owner := OwnerMount(root.Path, mounts)
-	if owner == nil || !SafeWritableDataMount(*owner) {
+	if owner == nil || !SafeWritableDataMount(*owner, own) {
 		return nil, Error("FILE_ROOT_CHANGED", 409)
 	}
 	var children []identity.Mount
@@ -249,7 +260,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 	}
 	var blocked []string
 	for _, mount := range children {
-		if !SafeWritableDataMount(mount) {
+		if !SafeWritableDataMount(mount, own) {
 			blocked = append(blocked, normalizedMountPath(mount.Destination))
 		}
 	}
@@ -257,7 +268,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 	var nested []string
 	for _, mount := range children {
 		destination := normalizedMountPath(mount.Destination)
-		if SafeWritableDataMount(mount) && !slices.ContainsFunc(blocked, func(b string) bool { return Within(destination, b) }) {
+		if SafeWritableDataMount(mount, own) && !slices.ContainsFunc(blocked, func(b string) bool { return Within(destination, b) }) {
 			selected = append(selected, mount)
 			nested = append(nested, destination)
 		}
@@ -343,10 +354,18 @@ func (s *Service) acquireLister(ctx context.Context, target Target, root Root, a
 func (s *Service) reusable(ctx context.Context, target Target, root Root, access *Access) bool {
 	inspection, err := s.Docker.Inspect(ctx, target.ContainerID)
 	if err != nil || inspection.ID != target.ContainerID || strings.TrimPrefix(inspection.Name, "/") != target.Name ||
-		!s.managed(ctx, inspection) || signature(inspection) != access.signature || inspection.State.StartedAt != access.startedAt {
+		signature(inspection) != access.signature || inspection.State.StartedAt != access.startedAt {
 		return false
 	}
-	fresh := Roots(target.GameType, inspection.Config.Labels, identity.DockerMounts(inspection))
+	// A helper that can't be confirmed is replaced; Acquire reports why.
+	if managed, err := s.managed(ctx, inspection); err != nil || !managed {
+		return false
+	}
+	own, err := s.Own.Read(ctx)
+	if err != nil {
+		return false
+	}
+	fresh := Roots(target.GameType, inspection.Config.Labels, identity.DockerMounts(inspection), own)
 	if !slices.ContainsFunc(fresh, func(candidate Root) bool { return candidate.Path == root.Path }) {
 		return false
 	}

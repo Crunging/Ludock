@@ -16,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/files"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/self"
 )
 
 var ctx = context.Background()
@@ -30,7 +31,7 @@ func setup(t *testing.T) (*fakedocker.Engine, *Service) {
 	d := dbtest.Open(t)
 	store := &identity.Store{DB: d}
 	return engine, &Service{DB: d, Identity: store, Authz: &authz.Service{DB: d, Servers: store},
-		Observer: &Observer{Docker: docker.New(engine.Socket)}}
+		Observer: &Observer{Docker: docker.New(engine.Socket), Own: self.New(nil, "")}}
 }
 
 func inspectTest(t *testing.T, s *Service, id string) *Observed {
@@ -487,13 +488,12 @@ func TestIdentityFollowsDataFolders(t *testing.T) {
 // access could otherwise download Ludock's password hashes and keys.
 func TestFileRootsLeaveOutLudocksOwnFolders(t *testing.T) {
 	engine, s := setup(t)
-	t.Cleanup(func() { files.SetOwnMounts(nil) })
 	engine.AddContainer(fakedocker.GameOptions{ID: "ludock-self", Name: "ludock-self", Image: "ghcr.io/crunging/ludock:1", Running: true,
 		Mounts: []docker.MountPoint{
 			{Type: "bind", Source: "/srv/games/ludock-backups", Destination: "/backups", RW: true},
 			{Type: "volume", Name: "ludock-data", Source: "/srv/docker/volumes/ludock-data/_data", Destination: "/data", RW: true},
 		}})
-	s.Observer.Self = "ludock-self"
+	s.Observer.Own = self.New(s.Observer.Docker, "ludock-self")
 	id := engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
 		Mounts: []docker.MountPoint{
 			{Type: "bind", Source: "/srv/games", Destination: "/data", RW: true},

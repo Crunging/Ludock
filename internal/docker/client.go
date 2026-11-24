@@ -152,6 +152,13 @@ func (c *Client) negotiate(ctx context.Context) (string, error) {
 	return version, nil
 }
 
+// Negotiate settles the API version, so a later request's status is that
+// request's own.
+func (c *Client) Negotiate(ctx context.Context) error {
+	_, err := c.negotiate(ctx)
+	return err
+}
+
 func (c *Client) path(ctx context.Context, path string, query url.Values) (string, error) {
 	version, err := c.negotiate(ctx)
 	if err != nil {

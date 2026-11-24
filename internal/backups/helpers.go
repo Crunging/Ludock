@@ -24,6 +24,7 @@ import (
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/launch"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/tarstream"
 )
@@ -39,7 +40,7 @@ type Plan struct {
 // PlanRoots maps each data root to a private alias. Roots that contain a
 // nested mount or overlap on the Docker host are refused: they would collide
 // during restore staging.
-func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
+func PlanRoots(context *servers.Context, own self.Info, readOnly bool) (*Plan, error) {
 	plan := &Plan{}
 	for _, root := range context.Container.FileRoots {
 		plan.Roots = append(plan.Roots, Root{ID: root.ID, Path: root.Path})
@@ -82,7 +83,7 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 			checked.Name = mountSource
 		}
 		plan.Checked = append(plan.Checked, checked)
-		if !files.SafeWritableDataMount(checked) {
+		if !files.SafeWritableDataMount(checked, own) {
 			return nil, fail("UNSAFE_BACKUP_ROOT", "One of the server’s data folders isn’t a kind Ludock can safely read or change, such as a volume with special options.")
 		}
 	}
@@ -158,7 +159,11 @@ func (h *Helpers) backupLimit() time.Duration {
 // find it after a restart, and proves its mounts. Cleanup retries until
 // Docker confirms removal.
 func (h *Helpers) NewDataHelper(ctx context.Context, context *servers.Context, readOnly bool, operationID string) (*DataHelper, error) {
-	plan, err := PlanRoots(context, readOnly)
+	own, err := h.Storage.Own.Read(ctx)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := PlanRoots(context, own, readOnly)
 	if err != nil {
 		return nil, err
 	}

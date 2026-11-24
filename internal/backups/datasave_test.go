@@ -15,6 +15,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -381,7 +382,7 @@ func TestSaveDataRefusesGameData(t *testing.T) {
 	f := newCopyFixture(t)
 	f.engine.AddContainer(fakedocker.GameOptions{ID: "mc", Name: "mc", Image: "itzg/minecraft-server", Running: true,
 		Mounts: []docker.MountPoint{{Type: "bind", Source: f.main, Destination: "/data", RW: false}}})
-	f.s.Observer = &servers.Observer{Docker: f.s.Docker}
+	f.s.Observer = &servers.Observer{Docker: f.s.Docker, Own: self.New(nil, "")}
 	if err := f.s.SaveData(ctx); err != nil {
 		t.Fatal(err)
 	}

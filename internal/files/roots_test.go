@@ -6,7 +6,10 @@ import (
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/self"
 )
+
+var notInContainer = self.Info{Answer: self.NotFound}
 
 func TestRootsOfferOnlySafeDataMounts(t *testing.T) {
 	got := Roots("custom", map[string]string{}, []identity.Mount{
@@ -16,7 +19,7 @@ func TestRootsOfferOnlySafeDataMounts(t *testing.T) {
 		{Type: "bind", Source: "/", Destination: "/host", Writable: true},
 		{Type: "bind", Source: "/var/run/docker.sock", Destination: "/var/run/docker.sock", Writable: true},
 		{Type: "tmpfs", Destination: "/cache", Writable: true},
-	})
+	}, notInContainer)
 	if !reflect.DeepEqual(got, []Root{{RootID("/data"), "data", "/data"}}) {
 		t.Fatal(got)
 	}
@@ -30,29 +33,27 @@ func TestLabelsCannotOpenUnsafeRoots(t *testing.T) {
 		{Type: "bind", Source: "/srv/read-only", Destination: "/secret"},
 		{Type: "bind", Source: "/srv/docker.sock", Destination: "/socket", Writable: true},
 		{Type: "bind", Source: "/srv/private", Destination: "/data/private"},
-	})
+	}, notInContainer)
 	if !reflect.DeepEqual(got, []Root{{RootID("/data"), "data", "/data"}}) {
 		t.Fatal(got)
 	}
-	got = Roots("custom", map[string]string{"ludock.files": "/data/world"}, []identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data", Writable: true}})
+	got = Roots("custom", map[string]string{"ludock.files": "/data/world"}, []identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data", Writable: true}}, notInContainer)
 	if !reflect.DeepEqual(got, []Root{{RootID("/data/world"), "world", "/data/world"}}) {
 		t.Fatal(got)
 	}
-	if got := Roots("custom", map[string]string{"ludock.files": "/data/../etc"}, []identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data", Writable: true}}); got != nil {
+	if got := Roots("custom", map[string]string{"ludock.files": "/data/../etc"}, []identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data", Writable: true}}, notInContainer); got != nil {
 		t.Fatal(got)
 	}
-	if Roots("custom", nil, nil) != nil {
+	if Roots("custom", nil, nil, notInContainer) != nil {
 		t.Fatal("roots without mounts")
 	}
 	SetSensitivePaths([]string{"/srv/game", "/other"})
 	t.Cleanup(func() { SetSensitivePaths(nil) })
-	if got := Roots("custom", nil, []identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data", Writable: true}}); got != nil {
+	if got := Roots("custom", nil, []identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data", Writable: true}}, notInContainer); got != nil {
 		t.Fatal("configured sensitive source offered", got)
 	}
 	// When Ludock can't read its own mounts, any folder could hold its data.
-	WithholdDataMounts()
-	t.Cleanup(func() { SetOwnMounts(nil) })
-	if got := Roots("custom", nil, []identity.Mount{{Type: "bind", Source: "/srv/other", Destination: "/data", Writable: true}}); got != nil {
+	if got := Roots("custom", nil, []identity.Mount{{Type: "bind", Source: "/srv/other", Destination: "/data", Writable: true}}, self.Info{Answer: self.Refused}); got != nil {
 		t.Fatal("offered a folder while Ludock's own mounts are unknown", got)
 	}
 }
@@ -62,12 +63,12 @@ func TestLabelsCannotOpenUnsafeRoots(t *testing.T) {
 func TestRootIDsFollowPaths(t *testing.T) {
 	mounts := []identity.Mount{{Type: "bind", Source: "/srv/a", Destination: "/a", Writable: true},
 		{Type: "bind", Source: "/srv/b", Destination: "/b", Writable: true}}
-	first := Roots("custom", nil, mounts)
-	second := Roots("custom", nil, []identity.Mount{mounts[1], mounts[0]})
+	first := Roots("custom", nil, mounts, notInContainer)
+	second := Roots("custom", nil, []identity.Mount{mounts[1], mounts[0]}, notInContainer)
 	if len(first) != 2 || first[0].ID == first[1].ID || first[0] != second[1] || first[1] != second[0] {
 		t.Fatal(first, second)
 	}
-	if relabeled := Roots("custom", map[string]string{"ludock.files": "/b"}, mounts); relabeled[0].ID != first[1].ID {
+	if relabeled := Roots("custom", map[string]string{"ludock.files": "/b"}, mounts, notInContainer); relabeled[0].ID != first[1].ID {
 		t.Fatal(relabeled)
 	}
 }
@@ -86,14 +87,14 @@ func TestRootsLeaveOutServerFiles(t *testing.T) {
 			{Type: "bind", Source: "/srv/game/data", Destination: game.data, Writable: true},
 			{Type: "volume", Source: "server", Destination: game.download, Writable: true},
 		}
-		if got := Roots(game.gameType, map[string]string{}, mounts); !reflect.DeepEqual(got, []Root{{RootID(game.data), game.label, game.data}}) {
+		if got := Roots(game.gameType, map[string]string{}, mounts, notInContainer); !reflect.DeepEqual(got, []Root{{RootID(game.data), game.label, game.data}}) {
 			t.Fatal(game.gameType, got)
 		}
-		if got := Roots("custom", map[string]string{}, mounts); len(got) != 2 {
+		if got := Roots("custom", map[string]string{}, mounts, notInContainer); len(got) != 2 {
 			t.Fatal(got)
 		}
 		labels := map[string]string{"ludock.files": game.data + "," + game.download}
-		if got := Roots(game.gameType, labels, mounts); len(got) != 2 || got[1].Path != strings.TrimSuffix(game.download, "/") {
+		if got := Roots(game.gameType, labels, mounts, notInContainer); len(got) != 2 || got[1].Path != strings.TrimSuffix(game.download, "/") {
 			t.Fatal(game.gameType, got)
 		}
 	}
@@ -105,15 +106,15 @@ func TestRootsLeaveOutServerFiles(t *testing.T) {
 func TestRootsTakeSavesInsideServerFiles(t *testing.T) {
 	mounts := []identity.Mount{{Type: "volume", Source: "palworld", Destination: "/palworld", Writable: true}}
 	want := []Root{{RootID("/palworld/Pal/Saved"), "Palworld saves", "/palworld/Pal/Saved"}}
-	if got := Roots("palworld", map[string]string{}, mounts); !reflect.DeepEqual(got, want) {
+	if got := Roots("palworld", map[string]string{}, mounts, notInContainer); !reflect.DeepEqual(got, want) {
 		t.Fatal(got)
 	}
-	if got := Roots("palworld", map[string]string{"ludock.files": "/palworld"}, mounts); len(got) != 1 || got[0].Path != "/palworld" {
+	if got := Roots("palworld", map[string]string{"ludock.files": "/palworld"}, mounts, notInContainer); len(got) != 1 || got[0].Path != "/palworld" {
 		t.Fatal(got)
 	}
 	// A save folder mounted on its own is that mount, as for any game.
 	saved := []identity.Mount{{Type: "bind", Source: "/srv/pal/saved", Destination: "/palworld/Pal/Saved", Writable: true}}
-	if got := Roots("palworld", map[string]string{}, saved); !reflect.DeepEqual(got, want) {
+	if got := Roots("palworld", map[string]string{}, saved, notInContainer); !reflect.DeepEqual(got, want) {
 		t.Fatal(got)
 	}
 }

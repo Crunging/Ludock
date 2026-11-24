@@ -268,10 +268,6 @@ func (j *Jobs) finishStoppedRestores(ctx context.Context) {
 	}
 }
 
-// UndoRestore is the operation an administrator starts to finish undoing
-// restores of a server that stopped partway.
-const UndoRestore = "undo_restore"
-
 func (j *Jobs) runUndoRestore(ctx context.Context, job *ops.Context) (map[string]any, error) {
 	server, err := j.resolve(ctx, job, authz.BackupsRestore, true)
 	if err != nil {

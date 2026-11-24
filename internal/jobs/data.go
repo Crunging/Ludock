@@ -23,16 +23,16 @@ var stoppedStates = []string{"exited", "dead", "created"}
 // dataAuthority rechecks the owner's capability for the data operation and
 // the original binding.
 func (j *Jobs) dataAuthority(ctx context.Context, server *servers.Context, job *ops.Context) error {
-	if job.Job.Kind == "restart" {
+	if job.Job.Kind == ops.KindRestart {
 		if err := j.assertCapability(ctx, job, authz.ServerRestart); err != nil {
 			return err
 		}
 	}
 	capability := authz.ServerUpdate
 	switch job.Job.Kind {
-	case "backup", "restart":
+	case ops.KindBackup, ops.KindRestart:
 		capability = authz.BackupsCreate
-	case "restore", UndoRestore:
+	case ops.KindRestore, ops.KindUndoRestore:
 		capability = authz.BackupsRestore
 	}
 	if err := j.assertCapability(ctx, job, capability); err != nil {

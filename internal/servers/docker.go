@@ -26,6 +26,7 @@ import (
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/self"
 )
 
 type Port struct {
@@ -186,11 +187,8 @@ type Observer struct {
 	Choices *identity.Store
 	// Now returns the current time; tests replace it.
 	Now func() time.Time
-	// Self names Ludock's own container, whose folders no server may offer.
-	Self string
-
-	ownMu    sync.Mutex
-	ownKnown bool
+	// Own is Ludock's own container, whose folders no server may offer.
+	Own *self.Container
 
 	mu          sync.Mutex
 	inspections map[string]inspection
@@ -287,7 +285,8 @@ func isImageID(image string) bool {
 // than a vanished or forbidden container fails the whole listing, so callers
 // never reconcile a partial snapshot.
 func (o *Observer) List(ctx context.Context) ([]Observed, error) {
-	if err := o.learnOwnMounts(ctx); err != nil {
+	own, err := o.Own.Read(ctx)
+	if err != nil {
 		return nil, err
 	}
 	containers, err := o.listContainers(ctx)
@@ -330,7 +329,7 @@ func (o *Observer) List(ctx context.Context) ([]Observed, error) {
 				if stop {
 					return
 				}
-				observed, cached, err := o.observeSummary(ctx, eligible[index], previous, choices)
+				observed, cached, err := o.observeSummary(ctx, eligible[index], previous, choices, own)
 				if err != nil {
 					status := docker.StatusCode(err)
 					if status == http.StatusNotFound || status == http.StatusForbidden || apperr.Is(err, "INVALID_COMPOSE_IDENTITY") ||
@@ -396,7 +395,7 @@ func isReplacement(names []string) bool {
 }
 
 func (o *Observer) observeSummary(ctx context.Context, container docker.ContainerSummary, previous map[string]inspection,
-	choices map[string]identity.Choice) (*Observed, *inspection, error) {
+	choices map[string]identity.Choice, own self.Info) (*Observed, *inspection, error) {
 	id, err := validContainerID(container.ID)
 	if err != nil {
 		return nil, nil, err
@@ -411,7 +410,7 @@ func (o *Observer) observeSummary(ctx context.Context, container docker.Containe
 		}
 		cached = inspection{summary: summary, inspectedAt: now, info: o.ownLabels(ctx, info)}
 	}
-	observed, _, err := observe(cached.info, choices)
+	observed, _, err := observe(cached.info, choices, own)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -428,7 +427,8 @@ func (o *Observer) Inspect(ctx context.Context, id string) (*Observed, *docker.C
 	if _, err := validContainerID(id); err != nil {
 		return nil, nil, err
 	}
-	if err := o.learnOwnMounts(ctx); err != nil {
+	own, err := o.Own.Read(ctx)
+	if err != nil {
 		return nil, nil, err
 	}
 	info, err := o.Docker.Inspect(ctx, id)
@@ -439,42 +439,15 @@ func (o *Observer) Inspect(ctx context.Context, id string) (*Observed, *docker.C
 	if err != nil {
 		return nil, nil, err
 	}
-	return observe(o.ownLabels(ctx, info), choices)
+	return observe(o.ownLabels(ctx, info), choices, own)
 }
 
-// learnOwnMounts reads Ludock's own mounts once, before any server's folders
-// are worked out; a container's mounts never change.
-func (o *Observer) learnOwnMounts(ctx context.Context) error {
-	o.ownMu.Lock()
-	defer o.ownMu.Unlock()
-	if o.ownKnown || o.Self == "" {
-		return nil
-	}
-	info, err := o.Docker.Inspect(ctx, o.Self)
-	switch docker.StatusCode(err) {
-	case http.StatusNotFound:
-		// Not in a container, such as a development build.
-		o.ownKnown = true
-		return nil
-	case http.StatusForbidden:
-		files.WithholdDataMounts()
-		o.ownKnown = true
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	files.SetOwnMounts(identity.DockerMounts(info))
-	o.ownKnown = true
-	return nil
-}
-
-func observe(info *docker.ContainerInspect, choices map[string]identity.Choice) (*Observed, *docker.ContainerInspect, error) {
+func observe(info *docker.ContainerInspect, choices map[string]identity.Choice, own self.Info) (*Observed, *docker.ContainerInspect, error) {
 	info, source := applyChoice(info, choices)
 	if err := assertEligible(info); err != nil {
 		return nil, nil, err
 	}
-	container, err := toContainer(info)
+	container, err := toContainer(info, own)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -536,7 +509,7 @@ func parseLeadingInt(value string) int {
 	return number
 }
 
-func toContainer(info *docker.ContainerInspect) (*Container, error) {
+func toContainer(info *docker.ContainerInspect, own self.Info) (*Container, error) {
 	id, err := validContainerID(info.ID)
 	if err != nil {
 		return nil, err
@@ -622,7 +595,7 @@ func toContainer(info *docker.ContainerInspect) (*Container, error) {
 		}
 	}
 	mounts := identity.DockerMounts(info)
-	container.FileRoots = files.Roots(gameType, container.Labels, mounts)
+	container.FileRoots = files.Roots(gameType, container.Labels, mounts, own)
 	container.NestedMount = slices.ContainsFunc(container.FileRoots, func(root files.Root) bool { return files.HoldsMount(root.Path, mounts) })
 	return container, nil
 }
