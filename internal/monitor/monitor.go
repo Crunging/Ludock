@@ -506,12 +506,12 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			s.recallAnswer(ctx, server.ID, container, r)
 		}
 		if s.suppressed(server.ID, policy, r.suppressed, now, active[server.ID]) {
-			// An alerted outage that ends while Ludock acts on the server, by
-			// the test below, says so at once. A queued automatic restart
-			// announces its own outcome.
-			var recovery Recovery
-			up := r.notified == 1 && policy.Enabled && !policy.Maintenance && running && container.Health != "unhealthy" &&
-				container.Health != "starting" && decode(r.recovery, &recovery) == nil && !recovery.Pending
+			// An alerted outage that ends, by the test below, in the pause
+			// after Ludock acted on the server says so at once. While the work
+			// still runs it may be about to stop the server, and an automatic
+			// restart announces its own outcome.
+			up := r.notified == 1 && !s.suppressed(server.ID, policy, 0, now, active[server.ID]) && running &&
+				container.Health != "unhealthy" && container.Health != "starting"
 			if up && s.Game != nil {
 				game := s.Game(server.ID, container)
 				up = game != GameNotAnswering && !((game == GameUnknown || game == GameWaiting) && r.lastState.String == NotAnswering)

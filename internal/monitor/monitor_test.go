@@ -159,8 +159,6 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 		{name: "restarted", silent: true, alerted: true, act: restart, after: "running", game: GameWaiting, want: []string{silent},
 			stillDown: true, answersBack: true},
 		{name: "restarted and answering", silent: true, alerted: true, act: restart, after: "running", game: GameAnswering, want: []string{silent, back}},
-		{name: "backed up and answering", silent: true, alerted: true, act: func(s *Service, id string) { s.Suppress(ctx, id); s.Suppress(ctx, id) },
-			after: "running", game: GameAnswering, want: []string{silent, back}},
 		{name: "left stopped by other work", alerted: true, act: func(s *Service, id string) { s.Suppress(ctx, id); s.Suppress(ctx, id) },
 			after: "exited", want: []string{down}, stillDown: true},
 		{name: "stopped", silent: true, alerted: true, after: "exited", want: []string{silent}, act: func(s *Service, id string) {
