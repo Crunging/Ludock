@@ -552,6 +552,8 @@ type uploadPart struct {
 	in      io.Reader
 	body    int64
 	trailer []byte
+	// ready: the helper asked for the trailer.
+	ready bool
 }
 
 var errUploadStream = errors.New("upload did not match its declared size or was interrupted")
@@ -634,11 +636,8 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	if h.buffer == nil {
 		h.buffer = make([]byte, 64*1024)
 	}
-	for {
+	for part.body > 0 {
 		n, readErr := part.read(h.buffer)
-		if readErr == nil {
-			idle.Reset(60 * time.Second)
-		}
 		for offset := 0; offset < n; {
 			written, err := unix.Write(int(file), h.buffer[offset:n])
 			if err != nil {
@@ -649,12 +648,28 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 			}
 			offset += written
 		}
-		if readErr == io.EOF {
-			break
-		}
 		if readErr != nil {
 			return readErr
 		}
+		idle.Reset(60 * time.Second)
+	}
+	// Set permissions while the helper still owns the new inode; CHOWN is
+	// enough to restore game ownership without granting FOWNER.
+	mode := uint32(0o666 &^ currentUmask())
+	if original != nil {
+		mode = original.Mode & 0o777
+	}
+	if err := unix.Fchmod(int(file), mode); err != nil {
+		return err
+	}
+	if err := unix.Fchown(int(file), int(owner.Uid), int(owner.Gid)); err != nil {
+		return err
+	}
+	if err := unix.Fsync(int(file)); err != nil {
+		return err
+	}
+	if err := h.readyForTrailer(part); err != nil {
+		return err
 	}
 	// A single upload ends with its input.
 	if h.request.Operation == "upload" {
@@ -671,21 +686,6 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 		if err := h.expectVersion(parent, name, original, *expected); err != nil {
 			return err
 		}
-	}
-	// Set permissions while the helper still owns the new inode; CHOWN is
-	// enough to restore game ownership without granting FOWNER.
-	mode := uint32(0o666 &^ currentUmask())
-	if original != nil {
-		mode = original.Mode & 0o777
-	}
-	if err := unix.Fchmod(int(file), mode); err != nil {
-		return err
-	}
-	if err := unix.Fchown(int(file), int(owner.Uid), int(owner.Gid)); err != nil {
-		return err
-	}
-	if err := unix.Fsync(int(file)); err != nil {
-		return err
 	}
 	current, err := uploadTarget(parent, name)
 	if err != nil {
@@ -718,6 +718,30 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	return nil
 }
 
+// readyForTrailer reads a part's trailer. In a batch the backend sends it
+// only after this line, so it checks access and the game right before each
+// file can be published rather than when the trailer was queued.
+func (h *fileHelper) readyForTrailer(part *uploadPart) error {
+	if h.request.Operation == "upload-files" {
+		if _, err := h.out.WriteString(`{"ready":true}` + "\n"); err != nil {
+			return err
+		}
+		if err := h.out.Flush(); err != nil {
+			return err
+		}
+	}
+	part.ready = true
+	for {
+		_, err := part.read(h.buffer)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
 // UploadSpare is the free space an upload leaves on the server's disk: 1 GiB,
 // or a twentieth of a smaller disk, so the game can still save.
 func UploadSpare(total int64) int64 { return min(1<<30, total/20) }
@@ -733,6 +757,8 @@ type UploadResult struct {
 	Code int `json:"code,omitempty"`
 	// Space is the disk's when Code is FileNoSpace.
 	Space *FileSpace `json:"space,omitempty"`
+	// Ready asks for the file's trailer, ahead of its result.
+	Ready bool `json:"ready,omitempty"`
 }
 
 // uploadFiles writes a batch into one folder: each file's body and trailer
@@ -790,16 +816,16 @@ func (h *fileHelper) uploadFiles(relative string) error {
 				part = &uploadPart{in: h.stdin, body: file.Size, trailer: []byte(file.UploadID)}
 			}
 			idle := time.AfterFunc(60*time.Second, func() { h.abortUpload(errors.New("upload interrupted")) })
-			for {
-				_, readErr := part.read(h.buffer)
-				if readErr == io.EOF {
-					break
-				}
-				if readErr != nil {
+			for part.body > 0 {
+				if _, readErr := part.read(h.buffer); readErr != nil {
 					idle.Stop()
 					return errUploadStream
 				}
 				idle.Reset(60 * time.Second)
+			}
+			if !part.ready && h.readyForTrailer(part) != nil {
+				idle.Stop()
+				return errUploadStream
 			}
 			idle.Stop()
 			var full *noSpaceError

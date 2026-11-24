@@ -69,7 +69,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	if err != nil {
 		return fail(err)
 	}
-	input := &batchInput{body: body, entries: entries, ids: make([]string, len(entries)), sent: make([]bool, len(entries))}
+	input := &batchInput{body: body, done: make(chan struct{}), entries: entries, ids: make([]string, len(entries)), sent: make([]bool, len(entries))}
 	if !slices.Contains(results, nil) {
 		return results, nil
 	}
@@ -122,7 +122,8 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	list, _ := json.Marshal(files)
 	input.trailer = binary.BigEndian.AppendUint64(nil, uint64(len(list)))
 	input.trailer = append(input.trailer, list...)
-	acks := &uploadAcks{limit: len(files)}
+	acks := &uploadAcks{limit: len(files), ready: make(chan struct{}, len(files))}
+	input.ready = acks.ready
 	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized},
 		launch.ExecOptions{Input: input, Stdout: acks})
 	// Exec can return while its input is still being read; once stopped, no
@@ -181,11 +182,13 @@ func isRefusal(err error) bool {
 }
 
 // batchInput is a batch's stdin: each accepted entry's body, then its
-// trailer once access is confirmed after the body's last write. Refused
-// entries are read past.
+// trailer once the helper has staged the file and asks for it, and access
+// and the game are confirmed. Refused entries are read past.
 type batchInput struct {
 	body    io.Reader
 	check   func() error
+	ready   <-chan struct{}
+	done    chan struct{}
 	entries []UploadEntry
 	ids     []string
 	index   int
@@ -205,6 +208,9 @@ var errInputStopped = errors.New("upload input stopped")
 func (b *batchInput) stop() []bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if !b.stopped {
+		close(b.done)
+	}
 	b.stopped = true
 	return slices.Clone(b.sent)
 }
@@ -243,6 +249,10 @@ func (b *batchInput) Read(p []byte) (int, error) {
 			}
 			continue
 		}
+		select {
+		case <-b.ready:
+		case <-b.done:
+		}
 		b.mu.Lock()
 		err := errInputStopped
 		if !b.stopped {
@@ -266,6 +276,9 @@ type uploadAcks struct {
 	limit   int
 	pending []byte
 	results []helper.UploadResult
+	// ready has a token for each file the helper asked the trailer of.
+	ready   chan struct{}
+	readies int
 }
 
 func (a *uploadAcks) Write(p []byte) (int, error) {
@@ -276,10 +289,22 @@ func (a *uploadAcks) Write(p []byte) (int, error) {
 			break
 		}
 		var result helper.UploadResult
-		if len(a.results) >= a.limit || json.Unmarshal(line, &result) != nil {
+		if json.Unmarshal(line, &result) != nil {
 			return 0, errors.New("unexpected upload output")
 		}
-		a.results, a.pending = append(a.results, result), rest
+		a.pending = rest
+		if result.Ready {
+			if a.readies >= a.limit {
+				return 0, errors.New("unexpected upload output")
+			}
+			a.readies++
+			a.ready <- struct{}{}
+			continue
+		}
+		if len(a.results) >= a.limit {
+			return 0, errors.New("unexpected upload output")
+		}
+		a.results = append(a.results, result)
 	}
 	if len(a.pending) > 4096 {
 		return 0, errors.New("unexpected upload output")

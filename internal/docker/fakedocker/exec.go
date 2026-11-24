@@ -2,6 +2,7 @@ package fakedocker
 
 import (
 	"bufio"
+	"bytes"
 	"io"
 	"net"
 	"net/http"
@@ -115,8 +116,9 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 			return func(data []byte) {
 				mu.Lock()
 				defer mu.Unlock()
-				// A lost result loses the helper's answer too.
-				if !lose || channel != 1 {
+				// A lost result loses the helper's answers too, but not a batch
+				// upload's requests for its next trailer, which it needs to go on.
+				if !lose || channel != 1 || bytes.Contains(data, []byte(`"ready":true`)) {
 					conn.Write(Frame(channel, data))
 				}
 			}
