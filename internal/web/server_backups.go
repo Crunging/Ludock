@@ -249,6 +249,14 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request, request *R
 		s.fail(w, r, request, err)
 		return
 	}
+	// The --rm refusal comes first: adding a data folder wouldn't lift it.
+	if err = resolved.Container.Refusal(ops.KindBackup); err == nil && len(resolved.Container.FileRoots) == 0 {
+		err = backups.ErrNoRoots
+	}
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
 	var input map[string]any
 	if r.PostFormValue(jobs.WarnInput) == "true" && warnOffer(resolved.Container) {
 		input = map[string]any{jobs.WarnInput: true}

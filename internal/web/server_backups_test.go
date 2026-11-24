@@ -32,7 +32,7 @@ func (p *pages) queued(t *testing.T) (kind string, input string) {
 
 func TestCreateBackupNeedsTheGrant(t *testing.T) {
 	t.Parallel()
-	p := newPages(t)
+	p := newDataPages(t)
 	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView)
 	if response := p.action("/servers/"+p.server+"/backups", operator, nil); response.StatusCode != http.StatusForbidden {
@@ -197,7 +197,7 @@ func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 // name typed, and a container Docker removes on stop is never replaced.
 func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 	t.Parallel()
-	p := newPages(t)
+	p := newDataPages(t)
 	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView, authz.ServerRestart)
 	values := url.Values{"createBackup": {"true"}}
@@ -225,8 +225,8 @@ func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 	}
 	// A server with no data folders has nothing to back up first: a form
 	// opened earlier, or a forged request, is refused before any image is
-	// pulled, and so is a restart, a schedule that would back it up, and
-	// resuming one saved while it had folders.
+	// pulled, and so is a backup, a restart, a schedule that would back it
+	// up, and resuming one saved while it had folders.
 	paused, err := p.app.Schedules.Create(context.Background(), &p.admin.User, p.admin.TokenHash, p.server, schedules.Input{Kind: "recurring",
 		Action: "backup", Time: "08:00", Timezone: "UTC", Days: []int{1}})
 	if err != nil {
@@ -263,6 +263,9 @@ func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 	if response := p.action("/servers/"+p.server+"/restart", p.admin, url.Values{"createBackup": {"true"}}); response.StatusCode != http.StatusConflict {
 		t.Fatal("restart with a backup first:", response.StatusCode)
 	}
+	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusConflict {
+		t.Fatal("create backup:", response.StatusCode)
+	}
 }
 
 // The Backups tab follows work that is still running even without a link
@@ -270,7 +273,7 @@ func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 // brings back the controls it paused.
 func TestBackupsTabFollowsRunningWork(t *testing.T) {
 	t.Parallel()
-	p := newPages(t)
+	p := newDataPages(t)
 	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusOK {
 		t.Fatal(response.StatusCode)
 	}
