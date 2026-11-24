@@ -31,7 +31,8 @@ func Read() ([]Mount, error) {
 func Parse(table string) []Mount {
 	var mounts []Mount
 	for line := range strings.Lines(table) {
-		fields := strings.Fields(line)
+		// Only ASCII spaces separate fields; a path may hold other whitespace.
+		fields := strings.Split(strings.TrimSuffix(line, "\n"), " ")
 		if len(fields) < 5 {
 			continue
 		}

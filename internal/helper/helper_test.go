@@ -628,6 +628,8 @@ func TestRestoreRefusesUnremovableData(t *testing.T) {
 		// The helper's own mount, and a sibling the item doesn't reach.
 		base:                          false,
 		filepath.Join(root, "config"): false,
+		// The kernel leaves a non-breaking space unescaped.
+		root + "\u00a0copy": false,
 	} {
 		table(point)
 		if got := step(RestoreCheck) == RestoreMounted; got != refused {

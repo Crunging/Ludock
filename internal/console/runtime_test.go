@@ -101,16 +101,20 @@ func TestShellCommandAndExitCodes(t *testing.T) {
 
 func TestOutputLimitAndRevocationCancel(t *testing.T) {
 	engine, runtime, id := setup(t)
-	var cancels int
+	// Each command and its cancellation name the same control file.
+	var controls []string
+	cancelled := map[string]bool{}
 	var mu sync.Mutex
 	chunks := 5
 	engine.Exec = func(_ *fakedocker.Container, cmd []string, _ *bufio.Reader, stdout, _ func([]byte)) int {
-		if len(cmd) > 3 && cmd[3] == "ludock-console-cancel" {
-			mu.Lock()
-			cancels++
+		mu.Lock()
+		if len(cmd) > 4 && cmd[3] == "ludock-console-cancel" {
+			cancelled[cmd[4]] = true
 			mu.Unlock()
 			return 0
 		}
+		controls = append(controls, cmd[4])
+		mu.Unlock()
 		chunk := bytes.Repeat([]byte("x"), 1<<20)
 		for range chunks {
 			stdout(chunk)
@@ -132,7 +136,7 @@ func TestOutputLimitAndRevocationCancel(t *testing.T) {
 	if !errors.Is(err, errCancelled) {
 		t.Fatal(err)
 	}
-	if !eventually(func() bool { mu.Lock(); defer mu.Unlock(); return cancels > 0 }) {
+	if !eventually(func() bool { mu.Lock(); defer mu.Unlock(); return cancelled[controls[len(controls)-1]] }) {
 		t.Fatal("no in-container cancellation requested")
 	}
 }

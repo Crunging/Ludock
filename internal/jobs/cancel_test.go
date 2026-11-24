@@ -94,7 +94,9 @@ func TestCancelledStaysCancelledAcrossRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	finished(t, next, behind.ID)
+	if job := finished(t, next, behind.ID); job.Status != ops.Succeeded {
+		t.Fatalf("%+v", job)
+	}
 	if job, _ := next.Get(ctx, id); job.Status != ops.Cancelled || f.startedAt() != before || !f.running() {
 		t.Fatalf("%+v", job)
 	}
