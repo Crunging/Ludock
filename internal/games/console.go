@@ -98,6 +98,10 @@ type Adapter struct {
 	// when no candidate variable is set: on its PasswordKey line, such as
 	// "password=<value>", or without a key on its first line.
 	PasswordFile, PasswordKey string
+	// PasswordProperty instead reads the file as XML: the value of its
+	// <property name="PasswordProperty" value="..."/>. An empty value means
+	// the console has no password.
+	PasswordProperty string
 	// TrimSlash drops a leading "/" from commands, which the game's console
 	// doesn't take.
 	TrimSlash bool
@@ -184,7 +188,7 @@ func ResolveAdapter(gameType string, labels map[string]string) *Adapter {
 		adapter.PasswordEnvCandidates = preset.PasswordEnvCandidates
 	}
 	if preset.PasswordFile != "" {
-		adapter.PasswordFile, adapter.PasswordKey = preset.PasswordFile, ""
+		adapter.PasswordFile, adapter.PasswordKey, adapter.PasswordProperty = preset.PasswordFile, "", preset.PasswordProperty
 	}
 	return &adapter
 }
