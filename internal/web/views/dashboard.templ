@@ -84,6 +84,8 @@ type ServerList struct {
 	// ShowPlayers: some server in the list can list its players.
 	ShowPlayers          bool
 	DiscoveryUnavailable bool
+	// DockerProblem says why Docker can't be used when it isn't a lost connection.
+	DockerProblem string
 	// AddOpen opens "Missing a server?", as the setup list's link asks.
 	AddOpen bool
 }
@@ -375,8 +377,12 @@ templ ServerListFragment(list ServerList) {
 	if list.DiscoveryUnavailable {
 		<div class="server-connection" role="status">
 			<div>
-				<p>Ludock can’t reach Docker right now.</p>
-				<p class="muted">Showing the last known state. Server controls come back once it can.</p>
+				<p>{ dockerOutage(list.DockerProblem, "Ludock can’t reach Docker right now.") }</p>
+				if list.DockerProblem != "" {
+					<p class="muted">Showing the last known state.</p>
+				} else {
+					<p class="muted">Showing the last known state. Server controls come back once it can.</p>
+				}
 			</div>
 			if list.Admin {
 				<a class="secondary-btn" href="/settings/system">Check the connection</a>
@@ -589,6 +595,7 @@ func LifecycleConfirm(action, serverName string, backupOption, warn bool, online
 type AttentionView struct {
 	Items                []attention.Item
 	DiscoveryUnavailable bool
+	DockerProblem        string
 	Admin                bool
 	Error                string
 }
@@ -712,7 +719,11 @@ templ needsAttention(view AttentionView) {
 		}
 		if view.DiscoveryUnavailable {
 			<p class="needs-attention__warning">
-				Ludock can’t reach Docker, so these come from the last known state.
+				if view.DockerProblem != "" {
+					{ view.DockerProblem } These come from the last known state.
+				} else {
+					Ludock can’t reach Docker, so these come from the last known state.
+				}
 				if view.Admin {
 					<a href="/settings/system" class="text-link">Check the connection</a>
 				}

@@ -42,7 +42,7 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 		Search: r.URL.Query().Get("search"), State: r.URL.Query().Get("state"), AddOpen: r.URL.Query().Has("add")}
 	all, err := s.App.Servers.List(ctx, request.User())
 	if err != nil {
-		list.DiscoveryUnavailable = true
+		list.DiscoveryUnavailable, list.DockerProblem = true, s.dockerProblem()
 		all, _ = s.App.Servers.ListSaved(ctx, request.User())
 	}
 	list.Total = len(all)
@@ -198,6 +198,9 @@ func (s *Server) attentionFragment(w http.ResponseWriter, r *http.Request, reque
 		view.Error = "Couldn’t check what needs attention. Try again."
 	} else {
 		view.DiscoveryUnavailable = result.DiscoveryUnavailable
+		if view.DiscoveryUnavailable {
+			view.DockerProblem = s.dockerProblem()
+		}
 		for _, item := range result.Items {
 			// Role ceilings stay applied to administrator-only workflows.
 			if item.Kind == "binding" && request.User().Role != db.RoleAdmin {

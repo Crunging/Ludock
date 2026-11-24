@@ -486,6 +486,9 @@ func (s *Server) retryNotification(w http.ResponseWriter, r *http.Request, reque
 func (s *Server) systemPage(w http.ResponseWriter, r *http.Request, request *Request) {
 	diagnostics, err := s.App.Observer.Diagnostics(r.Context())
 	d := views.SystemView{DockerConnected: err == nil, Diagnostics: diagnostics}
+	if err != nil {
+		d.DockerProblem = s.dockerProblem()
+	}
 	if err := s.recheckAdmin(r.Context(), request); err != nil {
 		s.fail(w, r, request, err)
 		return

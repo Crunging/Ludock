@@ -8,7 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Crunging/Ludock/internal/app"
+	"github.com/Crunging/Ludock/internal/config"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/db/dbtest"
+	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 )
 
 func TestSettingsNeedAnAdministrator(t *testing.T) {
@@ -165,6 +169,35 @@ func TestBackupFolderTakesOverTheCopyFolder(t *testing.T) {
 		{"/backups", "", true, "", true}} {
 		if copyTo, chosen := copyBeside(c.destination, c.copyTo, c.chosen); copyTo != c.wantCopy || chosen != c.wantChosen {
 			t.Errorf("%+v: %q %v", c, copyTo, chosen)
+		}
+	}
+}
+
+// A Docker Engine older than 25 answers but can't be used: the server list,
+// what needs attention, and Settings → System say so instead of blaming the
+// socket.
+func TestOldDockerEngineSaysSo(t *testing.T) {
+	t.Parallel()
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	engine.APIVersion = "1.43"
+	d := dbtest.Open(t)
+	services, err := app.New(config.Config{DockerSocket: engine.Socket}, d, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &pages{t: t, engine: engine, app: services}
+	p.web = &Server{App: services, DB: d, Auth: services.Auth, ClientIP: services.ClientIP, Docker: services.Docker.Ping}
+	p.handler = p.web.Handler()
+	admin := p.user("u-admin", "admin", db.RoleAdmin)
+	for _, target := range []string{"/", "/fragments/attention", "/settings/system"} {
+		body := p.do("GET", target, admin, nil, nil).Body.String()
+		if !strings.Contains(body, "needs Docker Engine 25 or later") || strings.Contains(body, "reach Docker") ||
+			strings.Contains(body, "socket mount") {
+			t.Error(target, body)
 		}
 	}
 }
