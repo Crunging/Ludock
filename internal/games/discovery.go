@@ -210,7 +210,7 @@ func Suggest(image, name string, ports []Port) string {
 	text := "-" + nonSlug.ReplaceAllString(strings.ToLower(reference+" "+name), "-") + "-"
 	best, length := "", 0
 	for _, game := range Integrations {
-		keys := append([]string{game.GameType, nonSlug.ReplaceAllString(strings.ToLower(game.Name), "-")}, game.Aliases...)
+		keys := append([]string{game.GameType, slug(game.Name)}, game.Aliases...)
 		for _, key := range keys {
 			key = strings.Trim(key, "-")
 			for _, form := range []string{key, strings.ReplaceAll(key, "-", "")} {

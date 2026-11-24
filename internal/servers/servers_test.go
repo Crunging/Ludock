@@ -455,6 +455,18 @@ func TestIdentityFollowsDataFolders(t *testing.T) {
 	}) != base {
 		t.Fatal("a setting outside the game and its data folders changed the identity")
 	}
+	// Another spelling of the same game, or no label where the image names it.
+	for _, game := range []string{"Minecraft", " MINECRAFT ", "minecraft", ""} {
+		if digest(func(c *fakedocker.Container) { c.Config.Labels["ludock.game"] = game }) != base ||
+			inspectTest(t, s, id).Container.GameType != "minecraft" {
+			t.Fatalf("game label %q changed the game or identity", game)
+		}
+	}
+	other := digest(func(c *fakedocker.Container) { c.Config.Labels["ludock.game"] = "My Game" })
+	if other == base || digest(func(c *fakedocker.Container) { c.Config.Labels["ludock.game"] = "my game" }) != other {
+		t.Fatal("an unknown game label's case changed the identity, or the label didn't")
+	}
+	engine.Update(id, func(c *fakedocker.Container) { delete(c.Config.Labels, "ludock.game") })
 	if digest(func(c *fakedocker.Container) { c.Mounts[1].Source = "/srv/worlds/two" }) == base {
 		t.Fatal("a different nested world kept the identity")
 	}

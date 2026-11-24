@@ -187,7 +187,7 @@ var Integrations = []Integration{
 		// Enshrouded takes players and answers queries on one port.
 		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 15637, PortEnv: []string{"SERVER_QUERYPORT", "PORT"}}},
 	{GameType: "dont-starve-together", StopTimeoutSeconds: 360, Name: "Don't Starve Together", GamePort: &Port{10999, "udp"},
-		Repositories: []string{"jamesits/dst-server"}, UpdatesOnStart: true, Aliases: []string{"dst", "don-t-starve-together"}},
+		Repositories: []string{"jamesits/dst-server"}, UpdatesOnStart: true, Aliases: []string{"dst"}},
 	// Core Keeper connects through Steam's relay by default and takes direct
 	// connections only on a port the image leaves unset.
 	{GameType: "core-keeper", Name: "Core Keeper", Repositories: []string{"escaping/core-keeper-dedicated"},
@@ -252,16 +252,38 @@ func DisplayName(gameType string) string {
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
 
-// Lookup finds an integration by game type or alias.
+// Lookup finds an integration by game type, alias, or name, in any case.
 func Lookup(gameType string) *Integration {
-	normalized := nonSlug.ReplaceAllString(strings.ToLower(strings.TrimSpace(gameType)), "-")
+	normalized := slug(gameType)
 	for index := range Integrations {
 		game := &Integrations[index]
-		if game.GameType == normalized || slices.Contains(game.Aliases, normalized) {
+		if game.GameType == normalized || slices.Contains(game.Aliases, normalized) || slug(game.Name) == normalized {
 			return game
 		}
 	}
 	return nil
+}
+
+func slug(text string) string {
+	return strings.Trim(nonSlug.ReplaceAllString(strings.ToLower(text), "-"), "-")
+}
+
+// TypeFor is a container's game type: what its ludock.game label names, else
+// what its image is.
+func TypeFor(image string, labels map[string]string) string {
+	if label := strings.TrimSpace(labels[LabelGame]); label != "" {
+		return Canonical(label)
+	}
+	return InferGameType(image)
+}
+
+// Canonical is the game type a spelling of a game names, or the text as
+// typed when it names no game Ludock knows.
+func Canonical(gameType string) string {
+	if integration := Lookup(gameType); integration != nil {
+		return integration.GameType
+	}
+	return strings.TrimSpace(gameType)
 }
 
 // NormalizeImageRepository strips a registry, tag, and digest.

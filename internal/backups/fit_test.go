@@ -33,6 +33,12 @@ func TestCompareFit(t *testing.T) {
 			t.Errorf("%s: %+v", test.name, fit)
 		}
 	}
+	bedrock := &Backup{Roots: []Root{data}, GameType: "bedrock"}
+	for _, game := range []string{"minecraft-bedrock", "Minecraft: Bedrock Edition"} {
+		if fit := CompareFit(bedrock, "now", game, []Root{data}); !fit.Moved || fit.Refusal != "" {
+			t.Errorf("bedrock as %s: %+v", game, fit)
+		}
+	}
 	unknown := &Backup{Roots: []Root{data}, fingerprint: "taken"}
 	if fit := CompareFit(unknown, "taken", "minecraft", []Root{data}); fit != (Fit{}) {
 		t.Errorf("same binding without a recorded game: %+v", fit)

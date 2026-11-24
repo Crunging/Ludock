@@ -10,27 +10,27 @@ the same list. Images are recognized by the end of the repository name,
 ignoring registry, tag, and digest, so private mirrors work; recognizing an
 image doesn't verify where it came from.
 
-| Game | Images | Console (port) | Status check (port) |
-| --- | --- | --- | --- |
-| Minecraft | `itzg/minecraft-server` | Minecraft RCON (25575) | Server List Ping (25565, `SERVER_PORT`) |
-| Factorio | `factoriotools/factorio` | Factorio RCON (27015) | Health check |
-| Palworld | `thijsvanloef/palworld-server-docker`, `jammsen/palworld-dedicated-server` | Palworld RCON (25575), REST API (8212) for warnings | Health check |
-| ARK: Survival Evolved | `hermsi/ark-server`, `hermsi1337/ark-server`, `indifferentbroccoli/ark-server-docker` | ARK RCON (27020) | Steam server query (27015, `SERVER_LIST_PORT`, `QUERY_PORT`) |
-| ARK: Survival Ascended | `sknnr/ark-ascended-server`, `mschnitzer/asa-linux-server` | ARK RCON (27020) | — |
-| Counter-Strike 2 | `joedwards32/cs2` | Source RCON (27015) | Steam server query (27015, `CS2_PORT`) |
-| Project Zomboid | `renegademaster/zomboid-dedicated-server`, `renegade-master/zomboid-dedicated-server`, `renegade_master/zomboid-dedicated-server` | Project Zomboid RCON (27015) | — |
-| Conan Exiles | `indifferentbroccoli/conan-exiles-enhanced-server-docker` | Conan Exiles RCON (25575) | Steam server query (27015, `QUERY_PORT`) |
-| V Rising | `trueosiris/vrising` | V Rising RCON (25575) | — |
-| Rust | `didstopia/rust-server` | Rust WebRCON (28016) | — |
-| 7 Days to Die | `vinanrra/7dtd-server` | 7 Days to Die Telnet (8081) | — |
-| Valheim | `community-valheim-tools/valheim-server`, `lloesche/valheim-server` | — | Steam server query (2457) |
-| Terraria | `hexlo/terraria-server-docker`, `beardedio/terraria`, `ryshe/terraria` | Terraria console (server input) | — |
-| Minecraft: Bedrock Edition | `itzg/minecraft-bedrock-server` | Bedrock console (server input) | Health check |
-| Satisfactory | `robtme/satisfactory-server`, `wolveix/satisfactory-server` | — | — |
-| Enshrouded | `sknnr/enshrouded-dedicated-server`, `mornedhels/enshrouded-server` | — | Steam server query (15637, `SERVER_QUERYPORT`, `PORT`) |
-| Don't Starve Together | `jamesits/dst-server` | — | — |
-| Core Keeper | `escaping/core-keeper-dedicated` | — | — |
-| Vintage Story | `zsuatem/vintagestory`, `devidian/vintagestory` | Vintage Story console (server input) | Health check |
+| Game | `ludock.game` | Images | Console (port) | Status check (port) |
+| --- | --- | --- | --- | --- |
+| Minecraft | `minecraft` | `itzg/minecraft-server` | Minecraft RCON (25575) | Server List Ping (25565, `SERVER_PORT`) |
+| Factorio | `factorio` | `factoriotools/factorio` | Factorio RCON (27015) | Health check |
+| Palworld | `palworld` | `thijsvanloef/palworld-server-docker`, `jammsen/palworld-dedicated-server` | Palworld RCON (25575), REST API (8212) for warnings | Health check |
+| ARK: Survival Evolved | `ark-survival-evolved` | `hermsi/ark-server`, `hermsi1337/ark-server`, `indifferentbroccoli/ark-server-docker` | ARK RCON (27020) | Steam server query (27015, `SERVER_LIST_PORT`, `QUERY_PORT`) |
+| ARK: Survival Ascended | `ark-survival-ascended` | `sknnr/ark-ascended-server`, `mschnitzer/asa-linux-server` | ARK RCON (27020) | — |
+| Counter-Strike 2 | `cs2` | `joedwards32/cs2` | Source RCON (27015) | Steam server query (27015, `CS2_PORT`) |
+| Project Zomboid | `project-zomboid` | `renegademaster/zomboid-dedicated-server`, `renegade-master/zomboid-dedicated-server`, `renegade_master/zomboid-dedicated-server` | Project Zomboid RCON (27015) | — |
+| Conan Exiles | `conan-exiles` | `indifferentbroccoli/conan-exiles-enhanced-server-docker` | Conan Exiles RCON (25575) | Steam server query (27015, `QUERY_PORT`) |
+| V Rising | `v-rising` | `trueosiris/vrising` | V Rising RCON (25575) | — |
+| Rust | `rust` | `didstopia/rust-server` | Rust WebRCON (28016) | — |
+| 7 Days to Die | `7-days-to-die` | `vinanrra/7dtd-server` | 7 Days to Die Telnet (8081) | — |
+| Valheim | `valheim` | `community-valheim-tools/valheim-server`, `lloesche/valheim-server` | — | Steam server query (2457) |
+| Terraria | `terraria` | `hexlo/terraria-server-docker`, `beardedio/terraria`, `ryshe/terraria` | Terraria console (server input) | — |
+| Minecraft: Bedrock Edition | `minecraft-bedrock` | `itzg/minecraft-bedrock-server` | Bedrock console (server input) | Health check |
+| Satisfactory | `satisfactory` | `robtme/satisfactory-server`, `wolveix/satisfactory-server` | — | — |
+| Enshrouded | `enshrouded` | `sknnr/enshrouded-dedicated-server`, `mornedhels/enshrouded-server` | — | Steam server query (15637, `SERVER_QUERYPORT`, `PORT`) |
+| Don't Starve Together | `dont-starve-together` | `jamesits/dst-server` | — | — |
+| Core Keeper | `core-keeper` | `escaping/core-keeper-dedicated` | — | — |
+| Vintage Story | `vintage-story` | `zsuatem/vintagestory`, `devidian/vintagestory` | Vintage Story console (server input) | Health check |
 
 The console port is where Ludock sends commands, inside the container; a
 container that sets `RCON_PORT` uses that port instead of the default. The
@@ -171,7 +171,7 @@ services:
 | --- | --- |
 | `ludock.enable` | `"true"` adds the container, even one that can control the host; `"false"` leaves it out, whatever the panel says |
 | `ludock.name` | Display name; defaults to the container name |
-| `ludock.game` | Game integration, such as `minecraft` or `terraria` |
+| `ludock.game` | The game: its `ludock.game` value under [Supported games](#supported-games), or its name there, in any case. Any other value is shown as typed |
 | `ludock.address` | Exactly what players type to connect, such as `mc.example.com`, `play.example.com:30000`, or `[2001:db8::1]:2456` |
 | `ludock.console` | `minecraft-rcon`, `source-rcon`, `rust-webrcon`, `telnet-console`, or `stdin-console`; `disabled` or `none` turns commands off |
 | `ludock.console.port` | The console port inside the container, if not the default |

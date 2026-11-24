@@ -38,7 +38,7 @@ func CompareFit(backup *Backup, fingerprint, gameType string, roots []Root) Fit 
 	if backup.GameType == "" || strings.EqualFold(backup.GameType, "unknown") || strings.EqualFold(gameType, "unknown") {
 		return Fit{Refusal: "Ludock can’t tell whether this backup and the server are the same game, so it restores only onto the data folders it was taken from."}
 	}
-	if !strings.EqualFold(backup.GameType, gameType) {
+	if !strings.EqualFold(games.Canonical(backup.GameType), games.Canonical(gameType)) {
 		return Fit{Refusal: "This backup holds " + games.DisplayName(backup.GameType) + " data, but the server now runs " +
 			games.DisplayName(gameType) + "."}
 	}

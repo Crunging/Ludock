@@ -8,7 +8,8 @@ import (
 )
 
 // The reference's two supported games tables say what Integrations says,
-// game by game, so the docs and Settings → System can't drift apart.
+// game by game, label value included, so the docs and Settings → System can't
+// drift apart.
 func TestReferenceListsIntegrations(t *testing.T) {
 	data, err := os.ReadFile("../../docs/REFERENCE.md")
 	if err != nil {
@@ -39,7 +40,7 @@ func TestReferenceListsIntegrations(t *testing.T) {
 			tables[header][name] = strings.Join(cells[1:], " | ")
 		}
 	}
-	consoles := tables["| Game | Images | Console (port) | Status check (port) |"]
+	consoles := tables["| Game | `ludock.game` | Images | Console (port) | Status check (port) |"]
 	extras := tables["| Game | Who's online | Kick and ban | Warnings to players | Restart updates the game |"]
 	if len(consoles) != len(Integrations) {
 		t.Errorf("the reference lists %d games' images, Ludock %d", len(consoles), len(Integrations))
@@ -49,7 +50,7 @@ func TestReferenceListsIntegrations(t *testing.T) {
 		game := &Integrations[i]
 		f := game.Features()
 		images := "`" + strings.Join(game.Repositories, "`, `") + "`"
-		if want := images + " | " + referenceConsole(f) + " | " + referenceStatusCheck(f); consoles[game.Name] != want {
+		if want := "`" + game.GameType + "` | " + images + " | " + referenceConsole(f) + " | " + referenceStatusCheck(f); consoles[game.Name] != want {
 			t.Errorf("%s: the reference says %q, want %q", game.Name, consoles[game.Name], want)
 		}
 		want := strings.Join([]string{f.Players, f.Moderation, mark[f.Warnings], mark[f.RestartUpdates]}, " | ")

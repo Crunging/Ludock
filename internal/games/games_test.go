@@ -336,9 +336,9 @@ func TestResolveQuery(t *testing.T) {
 func TestEveryGameIsRecognized(t *testing.T) {
 	digest := "@sha256:" + strings.Repeat("a", 64)
 	for _, integration := range Integrations {
-		for _, name := range append([]string{integration.GameType}, integration.Aliases...) {
-			if got := Lookup(" " + strings.ToUpper(name) + " "); got == nil || got.GameType != integration.GameType {
-				t.Errorf("%s: %+v", name, got)
+		for _, name := range append([]string{integration.GameType, integration.Name}, integration.Aliases...) {
+			if got := TypeFor("", map[string]string{LabelGame: " " + strings.ToUpper(name) + " "}); got != integration.GameType {
+				t.Errorf("%s: %s", name, got)
 			}
 		}
 		for _, repository := range integration.Repositories {
@@ -355,8 +355,11 @@ func TestEveryGameIsRecognized(t *testing.T) {
 			t.Errorf("%s: %s", image, got)
 		}
 	}
-	if got := Lookup("Don't Starve Together"); got == nil || got.GameType != "dont-starve-together" {
-		t.Errorf("%+v", got)
+	// A label naming nothing Ludock knows is kept as typed, ahead of the image.
+	for labels, want := range map[string]string{"": "minecraft", " ": "minecraft", " My Game ": "My Game"} {
+		if got := TypeFor("itzg/minecraft-server", map[string]string{LabelGame: labels}); got != want {
+			t.Errorf("%q: %s", labels, got)
+		}
 	}
 }
 

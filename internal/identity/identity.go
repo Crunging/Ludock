@@ -227,7 +227,8 @@ func ExternalIdentity(o Observation) (string, error) {
 
 // BindingDigest is the unkeyed digest of what makes a server the same in
 // substance: its game and the data folders Ludock reads, backs up, and
-// restores. Anything else in the container can change without a review.
+// restores. Anything else in the container can change without a review. A
+// game label naming no known game keeps its case for display only.
 func BindingDigest(o Observation) string {
 	folders := []DataFolder{}
 	for _, folder := range o.DataFolders {
@@ -241,7 +242,7 @@ func BindingDigest(o Observation) string {
 	encoded, _ := json.Marshal(struct {
 		GameType    string       `json:"gameType"`
 		DataFolders []DataFolder `json:"dataFolders"`
-	}{o.GameType, folders})
+	}{strings.ToLower(o.GameType), folders})
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])
 }
