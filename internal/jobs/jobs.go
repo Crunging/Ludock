@@ -122,6 +122,9 @@ func (j *Jobs) Register(queue *ops.Runner) {
 		if resumable(job) {
 			return nil, ops.ErrResume
 		}
+		if !j.backupCompleted(ctx, job) {
+			defer j.notifyInterrupted(ctx, job, notify.FailedWork, "backup-failed:"+job.Job.ID, backupInterrupted)
+		}
 		return nil, j.recoverBackup(ctx, job, true)
 	}})
 	// An interrupted command is reported as interrupted and never sent again.
@@ -165,6 +168,19 @@ func (j *Jobs) notify(alert notify.Alert, key, message string) {
 		j.Notify(alert, key, message)
 	}
 }
+
+// notifyInterrupted reports, on the next start, work that Ludock's restart
+// cut short. Work stopped by shutdown alerts only here, so a crash and a
+// restart send the same alert once.
+func (j *Jobs) notifyInterrupted(ctx context.Context, job *ops.Context, alert notify.Alert, key, message string) {
+	name := "A server"
+	if logical, err := j.Identity.Get(ctx, job.Job.ServerID); err == nil && logical != nil && logical.DisplayName != "" {
+		name = logical.DisplayName
+	}
+	j.notify(alert, key, name+": "+message)
+}
+
+const backupInterrupted = "Ludock restarted during a backup, so there’s no new backup. Its Activity says more."
 
 // notifyDone reports finished work nobody watched start: scheduled or
 // automatic work. Work started in the panel shows its result there, and

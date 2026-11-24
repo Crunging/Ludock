@@ -28,6 +28,7 @@ import (
 	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
@@ -53,6 +54,8 @@ type fixture struct {
 	failStep     string
 	// failTimes, when positive, is how many more times failStep fails.
 	failTimes int
+	// alerts are the messages sent, in order.
+	alerts []string
 }
 
 func setup(t *testing.T) *fixture {
@@ -134,6 +137,11 @@ func setup(t *testing.T) *fixture {
 		Monitor: &monitor.Service{DB: d, Locks: table, Store: store}, Console: &console.Runtime{Docker: client},
 		Backups: backupService, Updates: &update.Service{Docker: client}, SaveSettle: time.Millisecond, ReplacementSettle: 100 * time.Millisecond,
 		Poll: 20 * time.Millisecond}
+	f.jobs.Notify = func(_ notify.Alert, _, message string) {
+		f.mu.Lock()
+		f.alerts = append(f.alerts, message)
+		f.mu.Unlock()
+	}
 	f.jobs.Register(f.runner)
 	f.adminSession = dbtest.Session(t, d, f.admin.ID)
 	views, err := service.List(ctx, f.admin)

@@ -146,6 +146,7 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[
 		result["backupId"] = job.Job.Recovery.BackupID
 	} else {
 		result["guidance"] = "Ludock restarted before the backup finished, so there’s no new backup. The server was started again."
+		j.notifyInterrupted(ctx, job, notify.FailedWork, "backup-failed:"+job.Job.ID, backupInterrupted)
 	}
 	return withSave(job, result), nil
 }
@@ -338,7 +339,9 @@ func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (map[string]any,
 					log.Warn("Could not save that an update needs recovery; the failed operation still reports it")
 				}
 			}
-			j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": update failed. Its Activity says why; check the server before starting it.")
+			if ctx.Err() == nil {
+				j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": update failed. Its Activity says why; check the server before starting it.")
+			}
 		}
 		return result, err
 	})

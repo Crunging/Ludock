@@ -214,7 +214,10 @@ func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any,
 			return j.createStoppedBackup(ctx, server, job)
 		}()
 		if err != nil {
-			j.notify(notify.FailedWork, "backup-failed:"+job.Job.ID, server.Container.DisplayName+": backup failed. Its Activity says why.")
+			// Work cut by shutdown is reported when Ludock starts again.
+			if ctx.Err() == nil {
+				j.notify(notify.FailedWork, "backup-failed:"+job.Job.ID, server.Container.DisplayName+": backup failed. Its Activity says why.")
+			}
 			return nil, err
 		}
 		return withSave(job, map[string]any{"backupId": backup.ID, "size": backup.Size, "checksum": backup.Checksum}), nil
