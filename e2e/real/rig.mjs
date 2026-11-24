@@ -110,7 +110,15 @@ ${name}: ${service.ports.join(", ")}, container ${container.slice(0, 12)}, data 
 // Ludock started from its image, which may still hold a game's volumes.
 function removeHelpers() {
   const helpers = docker("ps", "--all", "--quiet", "--filter", "label=ludock.internal", "--filter", `ancestor=${image}`);
-  if (helpers) docker("rm", "--force", "--volumes", ...helpers.split("\n"));
+  for (const helper of helpers ? helpers.split("\n") : []) {
+    try {
+      docker("rm", "--force", "--volumes", helper);
+    } catch (error) {
+      // Ludock removes its own helpers, so one can be gone by now. Any
+      // other failure stops the teardown before game data is removed.
+      if (docker("ps", "--all", "--quiet", "--filter", `id=${helper}`)) throw error;
+    }
+  }
 }
 
 // remove takes one game apart, so another can start beside the same Ludock.

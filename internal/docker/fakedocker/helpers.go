@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -74,15 +75,14 @@ func hostArgs(c *Container, args []string) []string {
 			}
 			deepest := -1
 			for i, mount := range mounts {
-				if (value == mount.Target || strings.HasPrefix(value, mount.Target+"/")) &&
-					(deepest < 0 || len(mount.Target) > len(mounts[deepest].Target)) {
+				if helper.Within(value, mount.Target) && (deepest < 0 || len(mount.Target) > len(mounts[deepest].Target)) {
 					deepest = i
 				}
 			}
 			if deepest < 0 {
 				return quoted
 			}
-			encoded, _ := json.Marshal(mounts[deepest].Source + value[len(mounts[deepest].Target):])
+			encoded, _ := json.Marshal(filepath.Join(mounts[deepest].Source, strings.TrimPrefix(value, mounts[deepest].Target)))
 			return string(encoded)
 		})
 	}
