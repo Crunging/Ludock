@@ -59,7 +59,10 @@ func SafeWritableDataMount(mount identity.Mount) bool {
 	return !sharesOwnMount(mount)
 }
 
-var ownMounts atomic.Pointer[[]identity.Mount]
+var (
+	ownMounts  atomic.Pointer[[]identity.Mount]
+	ownUnknown atomic.Bool
+)
 
 // SetOwnMounts records the mounts of Ludock's own container. Its data and
 // backup folders hold password hashes and keys, so no game folder that
@@ -67,9 +70,17 @@ var ownMounts atomic.Pointer[[]identity.Mount]
 func SetOwnMounts(mounts []identity.Mount) {
 	mounts = slices.Clone(mounts)
 	ownMounts.Store(&mounts)
+	ownUnknown.Store(false)
 }
 
+// WithholdDataMounts offers no game folder at all, for when Ludock's own
+// container exists but its mounts can't be read: any folder could overlap them.
+func WithholdDataMounts() { ownUnknown.Store(true) }
+
 func sharesOwnMount(mount identity.Mount) bool {
+	if ownUnknown.Load() {
+		return true
+	}
 	own := ownMounts.Load()
 	if own == nil {
 		return false

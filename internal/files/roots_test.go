@@ -48,6 +48,12 @@ func TestLabelsCannotOpenUnsafeRoots(t *testing.T) {
 	if got := Roots("custom", nil, []identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data", Writable: true}}); got != nil {
 		t.Fatal("configured sensitive source offered", got)
 	}
+	// When Ludock can't read its own mounts, any folder could hold its data.
+	WithholdDataMounts()
+	t.Cleanup(func() { SetOwnMounts(nil) })
+	if got := Roots("custom", nil, []identity.Mount{{Type: "bind", Source: "/srv/other", Destination: "/data", Writable: true}}); got != nil {
+		t.Fatal("offered a folder while Ludock's own mounts are unknown", got)
+	}
 }
 
 // A root keeps its ID when Docker or the label lists the roots in another

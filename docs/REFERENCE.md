@@ -181,7 +181,7 @@ services:
 | `ludock.console.password-env` | The **name** of the container's environment variable that holds the console password, never the password |
 | `ludock.query` | `minecraft-ping` or `a2s`; `disabled` or `none` turns the status check off |
 | `ludock.query.port` | The status check port inside the container |
-| `ludock.files` | Comma-separated container folders for files and backups, such as `"/data/worlds,/data/config"`; empty turns both off. A folder that holds, or is inside, one of Ludock's own folders or volumes is never offered |
+| `ludock.files` | Comma-separated container folders for files and backups, such as `"/data/worlds,/data/config"`; empty turns both off. A folder that holds, or is inside, one of Ludock's own folders or volumes is never offered, and none is when Docker won't let Ludock inspect its own container |
 | `ludock.secret-env` | Comma-separated **names** of more environment variables to hide from logs and consoles |
 
 A `ludock.game` label alone doesn't add an unsupported image; add the

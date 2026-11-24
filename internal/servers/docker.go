@@ -391,8 +391,13 @@ func (o *Observer) learnOwnMounts(ctx context.Context) error {
 		return nil
 	}
 	info, err := o.Docker.Inspect(ctx, o.Self)
-	if status := docker.StatusCode(err); status == http.StatusNotFound || status == http.StatusForbidden {
-		// Not in a container Ludock may inspect, such as a development build.
+	switch docker.StatusCode(err) {
+	case http.StatusNotFound:
+		// Not in a container, such as a development build.
+		o.ownKnown = true
+		return nil
+	case http.StatusForbidden:
+		files.WithholdDataMounts()
 		o.ownKnown = true
 		return nil
 	}
