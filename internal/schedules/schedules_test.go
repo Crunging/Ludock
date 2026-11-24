@@ -25,11 +25,19 @@ var ctx = context.Background()
 var (
 	admin  = &db.SessionUser{ID: "11111111-1111-4111-8111-111111111111", Username: "owner", Role: db.RoleAdmin}
 	friend = &db.SessionUser{ID: "22222222-2222-4222-8222-222222222222", Username: "friend", Role: db.RoleMember}
-	// adminSession is the admin's token hash in the current setup.
-	adminSession string
+	// adminSession and friendSession are their token hashes in the current
+	// setup.
+	adminSession, friendSession string
 )
 
 var base = Input{Kind: "recurring", Action: "start", Enabled: true, Time: "08:00", Days: []int{0, 1, 2, 3, 4, 5, 6}, Timezone: "America/Los_Angeles"}
+
+func session(actor *db.SessionUser) string {
+	if actor.ID == admin.ID {
+		return adminSession
+	}
+	return friendSession
+}
 
 func at(value string) int64 {
 	t, _ := time.Parse(time.RFC3339, value)
@@ -52,7 +60,7 @@ func setup(t *testing.T) *fixture {
 	for _, user := range []*db.SessionUser{admin, friend} {
 		d.CreateUser(ctx, db.UserRecord{User: db.User{ID: user.ID, Username: user.Username, Role: user.Role, CreatedAt: 1}, PasswordHash: "x"})
 	}
-	adminSession = dbtest.Session(t, d, admin.ID)
+	adminSession, friendSession = dbtest.Session(t, d, admin.ID), dbtest.Session(t, d, friend.ID)
 	store := &identity.Store{DB: d}
 	obs := identity.Observation{ContainerID: "original", Name: "world", DisplayName: "World", GameType: "minecraft"}
 	list, _ := store.Reconcile(ctx, []identity.Observation{obs}, "", 0)
@@ -92,30 +100,30 @@ func TestBackupOptionOnlyForRestarts(t *testing.T) {
 	f := setup(t)
 	withBackup := base
 	withBackup.CreateBackup = true
-	if _, err := f.s.Create(ctx, admin, f.serverID, withBackup); err == nil || !strings.Contains(err.Error(), "only available for restart") {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, withBackup); err == nil || !strings.Contains(err.Error(), "only available for restart") {
 		t.Fatal(err)
 	}
 	withBackup.Action = "restart"
-	schedule, err := f.s.Create(ctx, admin, f.serverID, withBackup)
+	schedule, err := f.s.Create(ctx, admin, adminSession, f.serverID, withBackup)
 	if err != nil || !schedule.CreateBackup {
 		t.Fatal(err)
 	}
 	plain := withBackup
 	plain.CreateBackup = false
-	updated, _ := f.s.Update(ctx, admin, f.serverID, schedule.ID, 1, plain)
+	updated, _ := f.s.Update(ctx, admin, adminSession, f.serverID, schedule.ID, 1, plain)
 	if updated.Revision != 2 || updated.CreateBackup {
 		t.Fatal(updated)
 	}
 	// Backup restarts need backups.create for the requester.
 	f.grant(t, authz.ServerView, authz.ServerRestart, authz.SchedulesManage)
-	if _, err := f.s.Create(ctx, friend, f.serverID, withBackup); !apperr.Is(err, "FORBIDDEN") {
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, withBackup); !apperr.Is(err, "FORBIDDEN") {
 		t.Fatal(err)
 	}
 }
 
 func TestRunsOncePerSlotWithoutCatchingUp(t *testing.T) {
 	f := setup(t)
-	if _, err := f.s.Create(ctx, friend, f.serverID, base); err != nil {
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, base); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due)
@@ -147,7 +155,7 @@ func TestRunsOncePerSlotWithoutCatchingUp(t *testing.T) {
 func TestLateRunsRespectSavesAndRetryConflicts(t *testing.T) {
 	f := setup(t)
 	db.Now = func() int64 { return due + 60_000 }
-	if _, err := f.s.Create(ctx, friend, f.serverID, base); err != nil {
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, base); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due+2*60_000)
@@ -157,7 +165,7 @@ func TestLateRunsRespectSavesAndRetryConflicts(t *testing.T) {
 	// Saved during its own minute, it still runs for that minute.
 	f.s.DB.Exec("DELETE FROM schedules")
 	db.Now = func() int64 { return due + 30_000 }
-	if _, err := f.s.Create(ctx, friend, f.serverID, base); err != nil {
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, base); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due+45_000)
@@ -167,7 +175,7 @@ func TestLateRunsRespectSavesAndRetryConflicts(t *testing.T) {
 	f.s.DB.Exec("DELETE FROM operations")
 	db.Now = func() int64 { return due - 3600_000 }
 	f.s.DB.Exec("DELETE FROM schedules")
-	schedule, err := f.s.Create(ctx, friend, f.serverID, base)
+	schedule, err := f.s.Create(ctx, friend, friendSession, f.serverID, base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +207,7 @@ func schedtimeRecurringGrace() int64 { return 15 * 60_000 }
 // Revoked actions, disabled owners, and paused sharing stop a schedule.
 func TestScheduleAuthorityChanges(t *testing.T) {
 	f := setup(t)
-	f.s.Create(ctx, friend, f.serverID, base)
+	f.s.Create(ctx, friend, friendSession, f.serverID, base)
 	if f.first(t, friend).NextRunAt == 0 {
 		t.Fatal("no next run")
 	}
@@ -241,16 +249,16 @@ func TestScheduleAuthorityChanges(t *testing.T) {
 
 func TestStaleEditsAndOwnership(t *testing.T) {
 	f := setup(t)
-	schedule, _ := f.s.Create(ctx, friend, f.serverID, base)
-	if _, err := f.s.SetEnabled(ctx, friend, f.serverID, schedule.ID, 1, false); err != nil {
+	schedule, _ := f.s.Create(ctx, friend, friendSession, f.serverID, base)
+	if _, err := f.s.SetEnabled(ctx, friend, friendSession, f.serverID, schedule.ID, 1, false); err != nil {
 		t.Fatal(err)
 	}
 	later := base
 	later.Time = "09:00"
-	if _, err := f.s.Update(ctx, friend, f.serverID, schedule.ID, 1, later); !apperr.Is(err, "SCHEDULE_CHANGED") {
+	if _, err := f.s.Update(ctx, friend, friendSession, f.serverID, schedule.ID, 1, later); !apperr.Is(err, "SCHEDULE_CHANGED") {
 		t.Fatal(err)
 	}
-	if _, err := f.s.SetEnabled(ctx, friend, f.serverID, schedule.ID, 1, true); !apperr.Is(err, "SCHEDULE_CHANGED") {
+	if _, err := f.s.SetEnabled(ctx, friend, friendSession, f.serverID, schedule.ID, 1, true); !apperr.Is(err, "SCHEDULE_CHANGED") {
 		t.Fatal(err)
 	}
 	current := f.first(t, friend)
@@ -259,17 +267,17 @@ func TestStaleEditsAndOwnership(t *testing.T) {
 	}
 	// A member can't change another owner's schedule; a stale admin
 	// principal is rechecked.
-	owned, _ := f.s.Create(ctx, admin, f.serverID, base)
+	owned, _ := f.s.Create(ctx, admin, adminSession, f.serverID, base)
 	stale := &db.SessionUser{ID: friend.ID, Username: friend.Username, Role: db.RoleAdmin}
-	if _, err := f.s.Update(ctx, stale, f.serverID, owned.ID, 1, later); !apperr.Is(err, "NOT_FOUND") {
+	if _, err := f.s.Update(ctx, stale, friendSession, f.serverID, owned.ID, 1, later); !apperr.Is(err, "NOT_FOUND") {
 		t.Fatal(err)
 	}
 	backup := base
 	backup.Action = "backup"
-	if _, err := f.s.Update(ctx, friend, f.serverID, schedule.ID, 2, backup); !apperr.Is(err, "FORBIDDEN") {
+	if _, err := f.s.Update(ctx, friend, friendSession, f.serverID, schedule.ID, 2, backup); !apperr.Is(err, "FORBIDDEN") {
 		t.Fatal(err)
 	}
-	if _, err := f.s.Update(ctx, admin, f.serverID, schedule.ID, 2, backup); err == nil || !strings.Contains(err.Error(), "can no longer") {
+	if _, err := f.s.Update(ctx, admin, adminSession, f.serverID, schedule.ID, 2, backup); err == nil || !strings.Contains(err.Error(), "can no longer") {
 		t.Fatal(err)
 	}
 }
@@ -277,14 +285,14 @@ func TestStaleEditsAndOwnership(t *testing.T) {
 // Pausing allowed after revocation but not resume.
 func TestPauseAfterRevocation(t *testing.T) {
 	f := setup(t)
-	schedule, _ := f.s.Create(ctx, friend, f.serverID, base)
+	schedule, _ := f.s.Create(ctx, friend, friendSession, f.serverID, base)
 	f.grant(t, authz.ServerView, authz.SchedulesManage)
-	paused, err := f.s.SetEnabled(ctx, friend, f.serverID, schedule.ID, 1, false)
+	paused, err := f.s.SetEnabled(ctx, friend, friendSession, f.serverID, schedule.ID, 1, false)
 	if err != nil || paused.Enabled || paused.NextRunAt != 0 {
 		t.Fatal(paused, err)
 	}
 	for _, actor := range []*db.SessionUser{friend, admin} {
-		if _, err := f.s.SetEnabled(ctx, actor, f.serverID, schedule.ID, 2, true); err == nil {
+		if _, err := f.s.SetEnabled(ctx, actor, session(actor), f.serverID, schedule.ID, 2, true); err == nil {
 			t.Fatal("resumed without action access")
 		}
 	}
@@ -296,15 +304,15 @@ func TestOneTimeSchedules(t *testing.T) {
 	f.grant(t, authz.ServerView, authz.ServerStop, authz.SchedulesManage)
 	past := once
 	past.Date = "2026-09-08"
-	if _, err := f.s.Create(ctx, friend, f.serverID, past); !apperr.Is(err, "SCHEDULE_TIME_PAST") {
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, past); !apperr.Is(err, "SCHEDULE_TIME_PAST") {
 		t.Fatal(err)
 	}
 	gap := once
 	gap.Date, gap.Time = "2027-03-14", "02:30"
-	if _, err := f.s.Create(ctx, friend, f.serverID, gap); !apperr.Is(err, "SCHEDULE_TIME_INVALID") {
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, gap); !apperr.Is(err, "SCHEDULE_TIME_INVALID") {
 		t.Fatal(err)
 	}
-	schedule, err := f.s.Create(ctx, friend, f.serverID, once)
+	schedule, err := f.s.Create(ctx, friend, friendSession, f.serverID, once)
 	if err != nil || schedule.NextRunAt != due {
 		t.Fatal(schedule, err)
 	}
@@ -318,7 +326,7 @@ func TestOneTimeSchedules(t *testing.T) {
 	// A run missed while Ludock was stopped is recorded, not replayed.
 	missedRun := once
 	missedRun.Date = "2026-09-10"
-	second, _ := f.s.Create(ctx, friend, f.serverID, missedRun)
+	second, _ := f.s.Create(ctx, friend, friendSession, f.serverID, missedRun)
 	f.s.Run(ctx, due+86400_000+schedtimeGrace()+60_000)
 	list, _ := f.s.List(ctx, friend, f.serverID)
 	for _, s := range list {
@@ -352,7 +360,7 @@ func schedtimeGrace() int64 { return 5 * 60_000 }
 // Warning is claimed only when the claim commits.
 func TestWarningClaimCommits(t *testing.T) {
 	f := setup(t)
-	schedule, err := f.s.Create(ctx, admin, f.serverID, base)
+	schedule, err := f.s.Create(ctx, admin, adminSession, f.serverID, base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +387,7 @@ func TestWarningClaimCommits(t *testing.T) {
 // Run read before an edit leaves the slot to the edit.
 func TestRunRacingAnEdit(t *testing.T) {
 	f := setup(t)
-	schedule, err := f.s.Create(ctx, friend, f.serverID, base)
+	schedule, err := f.s.Create(ctx, friend, friendSession, f.serverID, base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +395,7 @@ func TestRunRacingAnEdit(t *testing.T) {
 	// An edit that keeps this Wednesday's slot.
 	edited := base
 	edited.Days = []int{1, 2, 3, 4, 5, 6}
-	if _, err := f.s.Update(ctx, friend, f.serverID, schedule.ID, schedule.Revision, edited); err != nil {
+	if _, err := f.s.Update(ctx, friend, friendSession, f.serverID, schedule.ID, schedule.Revision, edited); err != nil {
 		t.Fatal(err)
 	}
 	f.s.runOne(ctx, stale, due)
@@ -419,7 +427,7 @@ func TestWritesRecheckAccess(t *testing.T) {
 
 func TestInternalErrorsLeaveTheSlotToRetry(t *testing.T) {
 	f := setup(t)
-	if _, err := f.s.Create(ctx, friend, f.serverID, base); err != nil {
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, base); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.s.DB.Exec("ALTER TABLE operations RENAME TO operations_unavailable"); err != nil {
@@ -441,7 +449,7 @@ func TestScheduleRemovedAfterCreate(t *testing.T) {
 	if _, err := f.s.DB.Exec(`CREATE TRIGGER gone AFTER INSERT ON schedules BEGIN DELETE FROM schedules WHERE id = NEW.id; END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.s.Create(ctx, friend, f.serverID, base); !apperr.Is(err, "NOT_FOUND") {
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, base); !apperr.Is(err, "NOT_FOUND") {
 		t.Fatal(err)
 	}
 }
@@ -450,7 +458,7 @@ func TestConcurrentScheduleWritesDoNotStall(t *testing.T) {
 	f := setup(t)
 	var created []Schedule
 	for range 8 {
-		schedule, err := f.s.Create(ctx, admin, f.serverID, base)
+		schedule, err := f.s.Create(ctx, admin, adminSession, f.serverID, base)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -462,7 +470,7 @@ func TestConcurrentScheduleWritesDoNotStall(t *testing.T) {
 	errs := make(chan error, len(created))
 	for _, schedule := range created {
 		go func() {
-			_, err := f.s.SetEnabled(ctx, admin, f.serverID, schedule.ID, schedule.Revision, false)
+			_, err := f.s.SetEnabled(ctx, admin, adminSession, f.serverID, schedule.ID, schedule.Revision, false)
 			errs <- err
 		}()
 	}
@@ -518,23 +526,23 @@ func TestCommandSchedulesNeedConsoleAccess(t *testing.T) {
 	f := setup(t)
 	input := base
 	input.Action, input.Command = "command", "save-all"
-	if _, err := f.s.Create(ctx, friend, f.serverID, input); !apperr.Is(err, "FORBIDDEN") {
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, input); !apperr.Is(err, "FORBIDDEN") {
 		t.Fatal(err)
 	}
 	f.grant(t, authz.ServerView, authz.ConsoleExecute, authz.SchedulesManage)
-	schedule, err := f.s.Create(ctx, friend, f.serverID, input)
+	schedule, err := f.s.Create(ctx, friend, friendSession, f.serverID, input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.s.SetEnabled(ctx, friend, f.serverID, schedule.ID, 1, false); err != nil {
+	if _, err := f.s.SetEnabled(ctx, friend, friendSession, f.serverID, schedule.ID, 1, false); err != nil {
 		t.Fatal(err)
 	}
 	f.grant(t, authz.ServerView, authz.SchedulesManage)
-	if _, err := f.s.SetEnabled(ctx, friend, f.serverID, schedule.ID, 2, true); !apperr.Is(err, "FORBIDDEN") {
+	if _, err := f.s.SetEnabled(ctx, friend, friendSession, f.serverID, schedule.ID, 2, true); !apperr.Is(err, "FORBIDDEN") {
 		t.Fatal(err)
 	}
 	f.grant(t, authz.ServerView, authz.ConsoleExecute, authz.SchedulesManage)
-	if _, err := f.s.SetEnabled(ctx, friend, f.serverID, schedule.ID, 2, true); err != nil {
+	if _, err := f.s.SetEnabled(ctx, friend, friendSession, f.serverID, schedule.ID, 2, true); err != nil {
 		t.Fatal(err)
 	}
 	f.grant(t, authz.ServerView, authz.SchedulesManage)
@@ -552,7 +560,7 @@ func TestCommandSkippedWhileServerBusy(t *testing.T) {
 	f.s.Notify = func(_ notify.Alert, key, message string) { notified = append(notified, key) }
 	input := base
 	input.Action, input.Command = "command", "save-all"
-	if _, err := f.s.Create(ctx, admin, f.serverID, input); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, input); err != nil {
 		t.Fatal(err)
 	}
 	release, err := f.s.Locks.Acquire([]string{locks.ServerKey(f.serverID)}, nil)
@@ -575,10 +583,10 @@ func TestOthersCommandsNeedConsoleAccess(t *testing.T) {
 	f := setup(t)
 	command := base
 	command.Action, command.Command = "command", "op someone"
-	if _, err := f.s.Create(ctx, admin, f.serverID, command); err != nil {
+	if _, err := f.s.Create(ctx, admin, adminSession, f.serverID, command); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.s.Create(ctx, friend, f.serverID, base); err != nil {
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, base); err != nil {
 		t.Fatal(err)
 	}
 	owned := func() Schedule {

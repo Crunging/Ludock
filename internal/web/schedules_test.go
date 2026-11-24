@@ -124,7 +124,7 @@ func TestOthersSchedulesAreReadOnly(t *testing.T) {
 	p := newPages(t)
 	member := p.user("u-member", "member", db.RoleMember)
 	p.grant(member, authz.ServerView, authz.SchedulesManage, authz.ServerStart)
-	owned, err := p.app.Schedules.Create(context.Background(), &p.admin.User, p.server, schedules.Input{Kind: "recurring", Action: "start",
+	owned, err := p.app.Schedules.Create(context.Background(), &p.admin.User, p.admin.TokenHash, p.server, schedules.Input{Kind: "recurring", Action: "start",
 		Enabled: true, Time: "08:00", Timezone: "Europe/Berlin", Days: []int{1}})
 	if err != nil {
 		t.Fatal(err)

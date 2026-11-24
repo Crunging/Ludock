@@ -165,9 +165,12 @@ func (s *Service) CanCancelWait(ctx context.Context, actor *db.SessionUser, item
 // CancelWait ends the run of slot waiting for players to leave without
 // acting. Only a write that finds that run still waiting succeeds, as with
 // the run's own end, so exactly one of them wins. The schedule keeps its
-// next run. An administrator's session and role are checked again in the
-// write, by tokenHash.
+// next run. The session, role, and grants are checked again in the write.
 func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, tokenHash, serverID, id, slot string) error {
+	state, err := authorityState(ctx, s.DB, serverID, actor.ID)
+	if err != nil {
+		return err
+	}
 	r, err := s.get(ctx, s.DB, id, serverID)
 	if err != nil {
 		return err
@@ -190,12 +193,8 @@ func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, tokenHa
 	if !waiting(r) || r.lastSlot.String != slot {
 		return errWaitOver
 	}
-	within := func(fn func(*sql.Tx) error) error { return s.DB.Tx(ctx, fn) }
-	if actor.Role == db.RoleAdmin {
-		within = func(fn func(*sql.Tx) error) error { return s.DB.AdminMutation(ctx, actor.ID, tokenHash, db.Now(), fn) }
-	}
 	var heard int64
-	err = within(func(tx *sql.Tx) error {
+	err = s.write(ctx, actor, tokenHash, actor.Role == db.RoleAdmin, state, serverID, []string{actor.ID}, func(tx *sql.Tx) error {
 		now := db.Now()
 		result, err := tx.ExecContext(ctx, "UPDATE schedules SET last_result=?,last_run_at=? WHERE id=? AND revision=? AND last_slot=?"+stillWaitingSQL,
 			"Cancelled by "+actor.Username+" while it waited for players to leave", now, r.id, r.revision, slot)

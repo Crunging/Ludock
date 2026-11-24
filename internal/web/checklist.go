@@ -336,13 +336,9 @@ func (s *Server) scheduleNightlyBackups(w http.ResponseWriter, r *http.Request, 
 		input := schedules.Input{Kind: "recurring", Action: "backup", Enabled: true, Time: at, Timezone: timezone,
 			Days: []int{0, 1, 2, 3, 4, 5, 6}}
 		input.Considerate(targets[index].Warn, targets[index].Wait)
-		// Create audits each schedule and rechecks the account; the session
-		// is checked here, as it may end while earlier ones are made.
-		if err := s.recheckAdmin(ctx, request); err != nil {
-			s.fail(w, r, request, err)
-			return
-		}
-		if _, err := s.App.Schedules.Create(ctx, request.User(), targets[index].ID, input); err != nil {
+		// Each schedule's write checks this session and the administrator
+		// role again, as either may end while earlier ones are made.
+		if _, err := s.App.Schedules.CreateAsAdmin(ctx, request.User(), request.Principal.TokenHash, targets[index].ID, input); err != nil {
 			if public, ok := apperr.As(err); !ok || public.Status == http.StatusUnauthorized || public.Status == http.StatusForbidden {
 				s.fail(w, r, request, err)
 				return
