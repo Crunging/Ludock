@@ -47,9 +47,10 @@ var undoneLines = []string{"stageExists world: rolling_back old_moved,staging un
 
 // checkUndone confirms stoppedRestore was finished: previous data in place,
 // what the game wrote kept beside it, no stage folder, and both Activity
-// entries saying so.
-func (f *fixture) checkUndone(t *testing.T, restoreID string, later *ops.Job) {
+// entries saying so, the restore's still at the time it failed.
+func (f *fixture) checkUndone(t *testing.T, failed *ops.Job, later *ops.Job) {
 	t.Helper()
+	restoreID := failed.ID
 	aside := helper.SetAsideName(restoreID)
 	if read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" || read(t, filepath.Join(f.data, "world", aside, "generated.dat")) != "generated" {
 		t.Error("previous data not returned, or the game's writes not kept")
@@ -61,7 +62,8 @@ func (f *fixture) checkUndone(t *testing.T, restoreID string, later *ops.Job) {
 		}
 	}
 	restore, _ := f.runner.Get(ctx, restoreID)
-	if guidance, _ := restore.Result["guidance"].(string); restore.Status != ops.Failed || f.savedJournal(restoreID) != "rolled_back" ||
+	if guidance, _ := restore.Result["guidance"].(string); restore.Status != ops.Failed || restore.UpdatedAt != failed.UpdatedAt ||
+		f.savedJournal(restoreID) != "rolled_back" ||
 		!strings.Contains(guidance, "back in place") || !strings.Contains(guidance, aside) {
 		t.Errorf("%+v, journal %s", restore, f.savedJournal(restoreID))
 	}
@@ -86,7 +88,7 @@ func TestNextBackupFinishesStoppedRestore(t *testing.T) {
 	if got := trace.lines()[before:]; !slices.Equal(got, want) {
 		t.Errorf("trace:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	f.checkUndone(t, restore.ID, backup)
+	f.checkUndone(t, restore, backup)
 	if pending, _ := f.jobs.pendingRestores(ctx, f.serverID); len(pending) != 0 {
 		t.Fatal(pending)
 	}
@@ -102,7 +104,7 @@ func TestRestartWithBackupFinishesStoppedRestore(t *testing.T) {
 	if restart.Status != ops.Succeeded || !f.running() {
 		t.Fatalf("%+v", restart)
 	}
-	f.checkUndone(t, restore.ID, restart)
+	f.checkUndone(t, restore, restart)
 }
 
 // Ludock restarts while the server is stopped after a restore stopped

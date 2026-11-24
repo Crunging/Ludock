@@ -50,6 +50,8 @@ type Item struct {
 	ForceStopped  bool
 	// Recovery: an automatic restart did the work.
 	Recovery bool
+	// Undone: a restore that ended without finishing was undone.
+	Undone bool
 	// notifications, with Since and Reason
 	Destination notify.Destination
 }
@@ -180,24 +182,35 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		// Limit recent work before filtering issues; read summary fields only.
 		// Work that failed is settled once the same kind of work succeeds
 		// later, unless it may have left something only a person can sort
-		// out: an interrupted restore, a force-stop, or an error asking for
-		// an administrator.
+		// out: a force-stop, or an error asking for an administrator. A
+		// restore is settled by a later backup, restore or update once its
+		// journal is final, or, with none, unless it ended asking for an
+		// administrator or a restored copy of Ludock's data dropped its
+		// journal.
 		rows, err := s.DB.QueryContext(ctx, `SELECT id,kind,status,updated_at,actor_id=?,
-      CASE WHEN json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1 THEN 1 ELSE 0 END
-      FROM (SELECT id,kind,status,updated_at,actor_id,result_json,created_at,error FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100) o
-      WHERE (status IN ('failed','interrupted') AND ((kind='restore' AND status='interrupted') OR instr(COALESCE(error,''),'administrator') > 0 OR
-        (json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1) OR
-        NOT EXISTS (SELECT 1 FROM operations later WHERE later.server_id=? AND later.kind=o.kind AND later.status='succeeded' AND
+      CASE WHEN json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1 THEN 1 ELSE 0 END,
+      kind='restore' AND json_valid(recovery_json) AND COALESCE(json_extract(recovery_json,'$.restore.status') = 'rolled_back', 0)
+      FROM (SELECT id,kind,status,updated_at,actor_id,result_json,recovery_json,created_at,error FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100) o
+      WHERE (status IN ('failed','interrupted') AND (
+        CASE WHEN kind='restore' THEN NOT CASE
+          WHEN NOT json_valid(recovery_json) THEN 0
+          WHEN json_type(recovery_json,'$.restore') IS NOT NULL THEN COALESCE(json_extract(recovery_json,'$.restore.status') IN ('rolled_back','cleaned'), 0)
+          ELSE instr(COALESCE(error,''),'administrator') = 0 AND
+            instr(COALESCE(CASE WHEN json_valid(result_json) THEN json_extract(result_json,'$.guidance') END,''),?) = 0 END
+        ELSE instr(COALESCE(error,''),'administrator') > 0 OR (json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1) END OR
+        NOT EXISTS (SELECT 1 FROM operations later WHERE later.server_id=? AND later.status='succeeded' AND
+          (later.kind=o.kind OR (o.kind='restore' AND later.kind IN ('backup','update'))) AND
           (later.created_at > o.created_at OR (later.created_at = o.created_at AND later.id > o.id)))))
         OR (status='succeeded' AND kind IN ('stop','restart') AND
-        CASE WHEN json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1 THEN 1 ELSE 0 END)`, ops.RecoveryActor, server.ID, server.ID)
+        CASE WHEN json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1 THEN 1 ELSE 0 END)`,
+			ops.RecoveryActor, server.ID, db.RestoreEndUnknown, server.ID)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
 			item := base
 			var forced int
-			if err := rows.Scan(&item.OperationID, &item.OperationKind, &item.Status, &item.UpdatedAt, &item.Recovery, &forced); err != nil {
+			if err := rows.Scan(&item.OperationID, &item.OperationKind, &item.Status, &item.UpdatedAt, &item.Recovery, &forced, &item.Undone); err != nil {
 				rows.Close()
 				return nil, err
 			}

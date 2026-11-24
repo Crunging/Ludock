@@ -619,6 +619,9 @@ func describeAttention(item attention.Item) attentionText {
 		return attentionText{"Alerts aren’t reaching " + item.Destination.Label(), DestinationURL(item.Destination), "Check " + item.Destination.Label()}
 	case "operation":
 		title := Capitalize(item.OperationKind) + " " + item.Status
+		if item.Undone {
+			title += ", then undone"
+		}
 		if item.ForceStopped {
 			title = "Force-stopped; recent progress may be lost"
 		}

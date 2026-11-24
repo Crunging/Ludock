@@ -142,8 +142,7 @@ func settleOperations(ctx context.Context, path string) error {
 	_, err = conn.ExecContext(ctx, `UPDATE operations SET recovery_json=json_remove(recovery_json,'$.restore','$.dataUnsafe'),
     result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.guidance',?||id||?)
     WHERE kind='restore' AND json_valid(recovery_json) AND json_extract(recovery_json,'$.restore.status') IN ('staging','replacing','rolling_back','committed')`,
-		"Ludock’s data was saved before this restore finished, so this copy doesn’t know how it ended, and Ludock won’t change the server’s data for it. "+
-			"If one of the server’s data folders still has a folder named .ludock-restore-",
+		RestoreEndUnknown+"If one of the server’s data folders still has a folder named .ludock-restore-",
 		", it holds what the restore was moving: the server’s previous data in its old folder and the backup’s in new. "+
 			"New backups leave that folder out, so they don’t keep that previous data: copy out or put back what you need, then delete the folder on the host.")
 	return err
@@ -369,3 +368,7 @@ func checkRestored(path string, key []byte) error {
 	}
 	return nil
 }
+
+// RestoreEndUnknown begins the guidance of a restore whose journal a restored
+// copy of Ludock's data dropped.
+const RestoreEndUnknown = "Ludock’s data was saved before this restore finished, so this copy doesn’t know how it ended, and Ludock won’t change the server’s data for it. "
