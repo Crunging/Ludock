@@ -279,12 +279,19 @@ container:
   make to the definition still apply the next time you run your own tool.
 - Files changed inside the container outside its volumes and mounts are lost,
   as with any recreation.
-- Docker can give the new container an unnamed volume of the old one only by
-  its name, and then counts it as named: `docker compose down -v` and
-  `docker rm -v` leave it behind, and **Activity** says so after the update.
-  For a new server, naming the volume in the Compose file avoids this. An
-  existing server's data stays in its unnamed volume, so copy it into a named
-  one before switching, or the server starts with an empty one.
+- An unnamed volume, such as one an image declares or a Compose `- /data`
+  line makes, stays with the server. Docker hands an existing volume to a new
+  container only by its name. `docker rm -v` removes only volumes a
+  container got without one, and `docker compose down -v` those and the
+  volumes the Compose file names, so both leave it behind. Compose does the
+  same when it recreates a container itself. **Activity** says so after the
+  update. Before `down -v`, list the server's volumes with
+  `docker inspect -f '{{range .Mounts}}{{.Name}} {{.Destination}}{{"\n"}}{{end}}' <container>`,
+  then, once you no longer want its data, remove the one left over with
+  `docker volume rm <name>`. Naming the volume
+  in the Compose file avoids this for a new server; an existing server's data
+  stays in its unnamed volume, so copy it into a named one before switching,
+  or the server starts with an empty one.
 - **Advanced → Update even if the image is already up to date** recreates the
   container anyway, such as to pick up a game update that installs on startup.
 
@@ -415,6 +422,21 @@ and on its address, then waits instead of exiting, so a container that
 restarts on its own doesn't repeat the message. Start it with a new data
 volume.
 
+### Remove Ludock
+
+In the folder with its `compose.yaml`, let running work finish, then:
+
+```bash
+docker compose down
+```
+
+Your servers keep running as they were, and Ludock's data and backups stay
+in their volumes for a later `docker compose up -d`. Backups restore
+[without Ludock](#restore-a-backup-without-ludock). `docker compose down -v`
+also deletes those volumes, with every backup in the example `ludock-backups`
+volume. A server Ludock updated keeps the container Ludock made, with a
+`ludock.update` label nothing reads once Ludock is gone.
+
 ### Logs
 
 ```bash
@@ -506,13 +528,21 @@ of the folder's container path. Most servers have one folder, such as `/data`:
 id=root-$(printf %s /data | sha256sum | cut -c1-12)
 tar -tf backup.tar | head          # shows snapshot/$id/...
 sudo mkdir restored
-sudo tar -xpf backup.tar --numeric-owner -C restored --strip-components=2 "snapshot/$id"
+sudo tar -xpf backup.tar --numeric-owner -C restored --strip-components=1 "snapshot/$id"
 ```
 
 Run these as root so owners stay as they were. Stop the game, then replace the
-contents of its data folder with those of `restored/`, still as root and
-keeping owners and permissions, such as with `sudo cp -a restored/. <folder>/`
-after emptying the folder.
+contents of its data folder with those of `restored/$id/`, still as root and
+keeping owners and permissions, such as with
+`sudo cp -a "restored/$id/." <folder>/` after emptying the folder. For a data
+folder that is a whole named volume, the folder is the one
+`docker volume inspect -f '{{.Mountpoint}}' <volume>` prints; for one inside a
+volume, add the rest of its container path to that.
+
+In the backup folder itself, each archive is `<id>.tar`. `ls -lt` lists the
+newest first, and `tar -tf` shows which game's files one holds, which tells
+servers of different games apart. Files starting `ludock-data-` are
+[Ludock's own data](#ludocks-own-data), not game backups.
 
 ### Recover an administrator account
 
