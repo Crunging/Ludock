@@ -20,6 +20,8 @@ type UsersView struct {
 	DraftPassword bool
 	// Reach lists the servers shared with each member.
 	Reach map[string][]Reach
+	// Schedules counts the schedules each account set up.
+	Schedules map[string]int
 	// Link is a link just made, shown this once.
 	Link *LinkResult
 }
@@ -266,7 +268,7 @@ templ userRow(u UsersView, user db.User) {
 				hx-target="#users"
 				hx-swap="outerHTML"
 				hx-confirm={ "Delete " + user.Username + "?" }
-				data-confirm-detail="This signs them out everywhere and can’t be undone."
+				data-confirm-detail={ deleteDetail(u.Schedules[user.ID]) }
 				data-confirm-action="Delete user"
 				data-confirm-danger
 			>Delete</button>
@@ -328,4 +330,15 @@ func accessValues(user db.User) string {
 
 func roleValues(role db.Role) string {
 	return `{"role":"` + string(role) + `"}`
+}
+
+func deleteDetail(schedules int) string {
+	detail := "This signs them out everywhere and can’t be undone."
+	switch {
+	case schedules == 1:
+		detail += " Their schedule stops until an administrator saves it again."
+	case schedules > 1:
+		detail += " Their " + strconv.Itoa(schedules) + " schedules stop until an administrator saves them again."
+	}
+	return detail
 }

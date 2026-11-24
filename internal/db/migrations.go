@@ -188,10 +188,12 @@ var Migrations = []Migration{
       CREATE INDEX backups_deleting_idx ON backups(created_at, id) WHERE state = 'deleting';
       CREATE INDEX backups_copy_idx ON backups(copy_next_at, created_at, id) WHERE copy_state IN ('pending', 'failed');
       -- A recurring run may start late, but never for a minute before
-      -- changed_at, when the schedule was last saved.
+      -- changed_at, when the schedule was last saved. owner_id is NULL once
+      -- the owner's account is deleted; the schedule is suspended until an
+      -- administrator takes it over.
       CREATE TABLE schedules (
         id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES logical_servers(id),
-        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        owner_id TEXT REFERENCES users(id) ON DELETE SET NULL,
         input_json TEXT NOT NULL, binding_revision INTEGER NOT NULL,
         created_at INTEGER NOT NULL, changed_at INTEGER NOT NULL CHECK (changed_at >= 0),
         revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),

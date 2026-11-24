@@ -69,6 +69,7 @@ test("a new game pauses shared access until an administrator confirms it", async
   await friend.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
   await friend.locator("#schedule-form").getByRole("button", { name: "Add schedule" }).click();
   await expect(friend.locator("#schedule-list tbody tr")).toHaveCount(1);
+  let friendDeleted = false;
   try {
     await recreate("enshrouded", { label: ["ludock.game=valheim"] });
 
@@ -107,8 +108,30 @@ test("a new game pauses shared access until an administrator confirms it", async
     await expect(schedule).toHaveCount(1);
     await expect(schedule).not.toContainText("changed");
     await expect(schedule).toContainText("Restart");
+
+    // Deleting the friend stops their schedule until an administrator saves
+    // it, which makes it theirs.
+    await adminPage.goto("/users");
+    await adminPage.locator(".user-row", { hasText: "friend" }).getByRole("button", { name: "Delete" }).click();
+    const confirm = adminPage.getByRole("dialog", { name: "Delete friend?" });
+    await expect(confirm).toContainText("Their schedule stops until an administrator saves it again.");
+    await confirm.getByRole("button", { name: "Delete user" }).click();
+    await expect(adminPage.locator("#users .alert--success")).toHaveText("Deleted friend.");
+    friendDeleted = true;
+    await openServer(adminPage, "enshrouded");
+    await adminPage.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
+    const orphan = adminPage.locator("#schedule-list tbody tr");
+    await expect(orphan).toContainText("Set up by a deleted account");
+    await expect(orphan).toContainText("Its owner’s account was deleted.");
+    await orphan.getByRole("link", { name: "Edit" }).click();
+    await adminPage.locator("#schedule-form").getByRole("button", { name: "Save changes" }).click();
+    await expect(orphan).not.toContainText("deleted");
+    await expect(orphan).not.toContainText("Set up by");
+    await orphan.getByRole("button", { name: "Delete" }).click();
+    await adminPage.getByRole("dialog", { name: "Delete this schedule?" }).getByRole("button", { name: "Delete schedule" }).click();
+    await expect(adminPage.locator("#schedule-list")).toContainText("No schedules.");
   } finally {
-    await deleteUser(adminPage, "friend");
+    if (!friendDeleted) await deleteUser(adminPage, "friend");
     await recreate("enshrouded", { label: ["ludock.game"] });
   }
 });
