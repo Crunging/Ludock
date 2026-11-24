@@ -824,11 +824,12 @@ func TestCopyDueSkipsBusyServers(t *testing.T) {
 	}
 }
 
-// Two of a day's backups lost their archives, as a hand-cleaned folder
-// would leave them; one still has its second copy, and another server's
-// kept backup lost its archive too. Retention keeps the newest three that can be restored,
-// so the earlier ones stay, and the total limit doesn't count the lost
-// archives. The lost ones stay listed, marked missing. With the second
+// Two of a day's backups lost their archives, one cut to nothing and one
+// gone, as a hand-cleaned folder would leave them; the cut one's second copy
+// is now a folder, and the other still has its second copy. Another server's
+// kept backup lost its archive too. Retention keeps the newest three that
+// can be restored, so the earlier ones stay, and the total limit doesn't
+// count the lost archives. The lost ones stay listed, marked missing. With the second
 // folder unreachable, the backup read from it can't be confirmed and takes
 // no place in the rule either.
 func TestRetentionCountsReadableBackups(t *testing.T) {
@@ -852,11 +853,17 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 	}
 	kept := f.add(t, "world data", at(8, 12))
 	f.s.DB.Exec("UPDATE backups SET kept_at=1, server_id=? WHERE id=?", other, kept.ID)
-	for _, path := range []string{filepath.Join(f.main, b.ID+".tar"), filepath.Join(f.copies, b.ID+".tar"), filepath.Join(f.main, c.ID+".tar"),
+	for _, path := range []string{filepath.Join(f.copies, b.ID+".tar"), filepath.Join(f.main, c.ID+".tar"),
 		filepath.Join(f.main, kept.ID+".tar")} {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.Truncate(filepath.Join(f.main, b.ID+".tar"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(f.copies, b.ID+".tar"), 0o700); err != nil {
+		t.Fatal(err)
 	}
 	newest := f.add(t, "world data", at(10, 13))
 	// Six rows of 10 bytes, four archives: the next needs 11 bytes, and room

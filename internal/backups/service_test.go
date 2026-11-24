@@ -33,7 +33,7 @@ func recorded(t *testing.T) (*Service, Backup, string) {
 	}
 	destination := t.TempDir()
 	s := &Service{DB: d, Storage: &Storage{Roots: destination, Own: self.New(nil, "")}, Locks: locks.New()}
-	backup := Backup{ID: "6f9619ff-8b86-4011-b42d-00c04fc964ff", ServerID: list[0].ID, CreatedAt: 1}
+	backup := Backup{ID: "6f9619ff-8b86-4011-b42d-00c04fc964ff", ServerID: list[0].ID, CreatedAt: 1, Size: int64(len("archive"))}
 	archive := filepath.Join(destination, backup.ID+".tar")
 	if err := os.WriteFile(archive, []byte("archive"), 0o600); err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func TestPruneSparesKeptAndOpenArchives(t *testing.T) {
 	s.DB.QueryRow("SELECT binding_fingerprint FROM backups WHERE id=?", first.ID).Scan(&fingerprint)
 	ids := []string{first.ID}
 	for index := 1; index < 7; index++ {
-		backup := Backup{ID: identity.NewUUID(), ServerID: first.ServerID, CreatedAt: int64(index) * 60_000, State: "complete"}
+		backup := Backup{ID: identity.NewUUID(), ServerID: first.ServerID, CreatedAt: int64(index) * 60_000, State: "complete", Size: first.Size}
 		if err := os.WriteFile(filepath.Join(destination, backup.ID+".tar"), []byte("archive"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -322,10 +322,12 @@ func TestPruneMakesRoomForTheNextBackup(t *testing.T) {
 	var fingerprint string
 	s.DB.QueryRow("SELECT binding_fingerprint FROM backups WHERE id=?", first.ID).Scan(&fingerprint)
 	s.DB.Exec("UPDATE backups SET size=100, destination='/earlier' WHERE id=?", first.ID)
+	archive := make([]byte, 100)
+	os.WriteFile(filepath.Join(destination, first.ID+".tar"), archive, 0o600)
 	ids := []string{first.ID}
 	for day := 1; day < 6; day++ {
 		backup := Backup{ID: identity.NewUUID(), ServerID: first.ServerID, Size: 100, CreatedAt: int64(day) * 86_400_000, State: "complete"}
-		if err := os.WriteFile(filepath.Join(destination, backup.ID+".tar"), []byte("archive"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(destination, backup.ID+".tar"), archive, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.Record(ctx, backup, fingerprint, destination); err != nil {

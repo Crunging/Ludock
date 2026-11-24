@@ -825,25 +825,26 @@ func lookOptions(stalled error, limit time.Duration) guardOptions {
 	return guardOptions{lane: laneLook, limit: limit, check: min(limit/4, time.Second), stalled: stalled, hook: "reaching"}
 }
 
-// look reports whether a backup's archive is in folder, within measureWait.
-func (s *Service) look(folder, id string, stalled error) (bool, error) {
+// look reports whether a backup's archive is intact in folder, within
+// measureWait.
+func (s *Service) look(folder string, backup *Backup, stalled error) (bool, error) {
 	var found bool
 	err := s.reach(folder, stalled, measureWait, func(func()) error {
 		var err error
-		found, err = s.Storage.present(folder, id)
+		found, err = s.Storage.present(folder, backup.ID, backup.Size)
 		return err
 	})
 	return err == nil && found, err
 }
 
 // ArchiveFolder is where a backup's archive is read from: its own folder,
-// or a second copy when the archive is missing there, preferring the one in
+// or a second copy when the archive is missing or the wrong size there, preferring the one in
 // the chosen folder. It sets FromCopy, FolderAway (also when that folder
 // isn't responding), and Missing, and fails when a folder it must look into
 // isn't.
 func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 	backup.FromCopy, backup.Missing, backup.found = false, false, false
-	found, err := s.look(backup.destination, backup.ID, errFolderStalled)
+	found, err := s.look(backup.destination, backup, errFolderStalled)
 	backup.FolderAway = err != nil
 	if errors.Is(err, errFolderStalled) {
 		return "", err
@@ -861,7 +862,7 @@ func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 		if folder == "" {
 			continue
 		}
-		found, err := s.look(folder, backup.ID, errCopyStalled)
+		found, err := s.look(folder, backup, errCopyStalled)
 		if errors.Is(err, errCopyStalled) {
 			return "", err
 		}

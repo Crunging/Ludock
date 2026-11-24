@@ -333,7 +333,7 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
   // With the archive gone from the backup folder, the copy stands in for it.
   rmSync(join(backupFolder, `${id}.tar`));
   await page.reload();
-  await expect(row).toContainText("Missing from the backup folder; using the second copy");
+  await expect(row).toContainText("Missing or damaged in the backup folder; using the second copy");
   const downloadLink = await menuItem(row, "link", "Download");
   const [download] = await Promise.all([page.waitForEvent("download"), downloadLink.click()]);
   expect(readFileSync(await download.path())).toEqual(readFileSync(copy));
@@ -361,11 +361,11 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
   const safetyId = (await safety.getByRole("link", { name: "Download", includeHidden: true }).getAttribute("href")).split("/")[4];
   for (const folder of [backupFolder, copyFolder]) rmSync(join(folder, `${safetyId}.tar`), { force: true });
   await page.reload();
-  await expect(safety).toContainText("Its archive is missing from the backup folder, so it can’t be restored");
+  await expect(safety).toContainText("Its archive is missing or damaged in the backup folder, so it can’t be restored");
   await expect(safety.getByRole("link", { name: "Restore…" })).toHaveCount(0);
   await (await menuItem(safety, "button", "Delete")).click();
   const confirm = page.getByRole("dialog", { name: "Delete this backup?" });
-  await expect(confirm).toContainText("already missing from the backup folder");
+  await expect(confirm).toContainText("already missing or damaged in the backup folder");
   await confirm.getByRole("button", { name: "Delete backup" }).click();
   await expect(safety).toHaveCount(0);
 

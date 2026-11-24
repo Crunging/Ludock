@@ -505,9 +505,9 @@ func (s *Service) ArchiveBytes(ctx context.Context) (total, kept int64, err erro
 }
 
 // FoundBytes is ArchiveBytes without the backups whose archives are gone
-// from their folder and from any second copy, as the total limit counts
-// them. It lists each folder once; a folder that can't be listed counts all
-// its backups.
+// from their folder and from any second copy, or the wrong size there, as
+// the total limit counts them. It lists each folder once; a folder that
+// can't be listed counts all its backups.
 func (s *Service) FoundBytes(ctx context.Context) (total, kept int64, err error) {
 	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE state='complete'")
 	if err != nil {
@@ -527,35 +527,32 @@ func (s *Service) FoundBytes(ctx context.Context) (total, kept int64, err error)
 		return 0, 0, err
 	}
 	// A nil listing is a folder that couldn't be listed.
-	listings := map[string]map[string]bool{}
-	gone := func(folder, name string) bool {
+	listings := map[string]map[string]int64{}
+	gone := func(folder string, backup *Backup) bool {
 		if folder == "" {
 			return true
 		}
-		names, seen := listings[folder]
+		sizes, seen := listings[folder]
 		if !seen {
-			var entries []string
+			var listed map[string]int64
 			if s.reach(folder, errFolderStalled, measureWait, func(func()) error {
 				var err error
-				entries, err = s.Storage.list(folder)
+				listed, err = s.Storage.archives(folder)
 				return err
 			}) == nil {
-				names = map[string]bool{}
-				for _, entry := range entries {
-					names[entry] = true
-				}
+				sizes = listed
 			}
-			listings[folder] = names
+			listings[folder] = sizes
 		}
-		return names != nil && !names[name]
+		size, found := sizes[backup.ID+".tar"]
+		return sizes != nil && (!found || size != backup.Size)
 	}
 	for _, backup := range list {
 		copied := ""
 		if backup.CopyState == "complete" {
 			copied = backup.copyDestination
 		}
-		name := backup.ID + ".tar"
-		if gone(backup.destination, name) && gone(copied, name) && gone(backup.copyPrevious, name) {
+		if gone(backup.destination, backup) && gone(copied, backup) && gone(backup.copyPrevious, backup) {
 			continue
 		}
 		total += backup.Size
@@ -1119,7 +1116,7 @@ func (s *Service) removeIdle(ctx context.Context, backup Backup) error {
 		return nil
 	}
 	defer release()
-	if found, err := s.look(backup.destination, backup.ID, errFolderStalled); err != nil || !found {
+	if found, err := s.look(backup.destination, &backup, errFolderStalled); err != nil || !found {
 		return err
 	}
 	if err := s.remove(ctx, &backup, nil, false); !errors.Is(err, errKept) {
