@@ -98,8 +98,12 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 		}, nil); err != nil {
 			return err
 		}
-		if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
-			return err
+		// A server already stopped elsewhere keeps its outage, which was
+		// alerted once.
+		if info.State.Running {
+			if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
+				return err
+			}
 		}
 		dispatching = true
 		return nil
@@ -127,7 +131,9 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 	if err := j.finishPendingRestores(ctx, server, job, stopped.State.StartedAt); err != nil {
 		return err
 	}
-	if stopped.State.ExitCode == 137 || stopped.State.OOMKilled {
+	// Only a stop this work made is judged: a server killed earlier, such as
+	// one Docker had to kill when stopped outside Ludock, is copied as it is.
+	if initial := job.Job.Recovery.InitialRunning; initial != nil && *initial && (stopped.State.ExitCode == 137 || stopped.State.OOMKilled) {
 		return fail("UNCLEAN_SHUTDOWN", "The server didn’t shut down by itself and had to be forced to stop, so Ludock went no further: its last save may be incomplete. Give it more time to stop where it is defined (its stop timeout), then try again.")
 	}
 	return nil

@@ -622,6 +622,28 @@ func TestBackupHelperCreateFails(t *testing.T) {
 	}
 }
 
+// A server Docker had to kill when it was stopped outside Ludock, and whose
+// outage was already alerted, is backed up as it is, and its outage stays
+// alerted, so the backup doesn't bring a second alert.
+func TestBackupOfServerKilledElsewhere(t *testing.T) {
+	f := setup(t)
+	f.engine.Update(f.game, func(c *fakedocker.Container) {
+		c.State.Running, c.State.Status, c.State.ExitCode = false, "exited", 137
+	})
+	if err := f.jobs.Monitor.SetIntentionalStop(ctx, f.serverID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.jobs.DB.Exec("UPDATE availability SET outage_started_at=5,notified=1 WHERE server_id=?", f.serverID); err != nil {
+		t.Fatal(err)
+	}
+	job := f.run(t, "backup", nil)
+	var started, notified int64
+	f.jobs.DB.QueryRow("SELECT outage_started_at,notified FROM availability WHERE server_id=?", f.serverID).Scan(&started, &notified)
+	if job.Status != ops.Succeeded || f.running() || started != 5 || notified != 1 {
+		t.Fatalf("%+v, outage %d, notified %d", job, started, notified)
+	}
+}
+
 // Docker fails just as a backup's archive is read, comes back from a
 // restart without the archive's exec, or fails to start the archive's
 // command, as a daemon stalled at that moment does. A failing Docker fails
