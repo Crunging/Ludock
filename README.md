@@ -60,8 +60,8 @@ is. The old data volume stays as it was; keep it, or remove it with
 
 ## What it does
 
-- **Start, stop, and restart**, saving the world first on games that can and
-  warning players first.
+- **Start, stop, and restart**, saving the world and warning players first on
+  games that can.
 - **Consoles and logs** in the browser, and a list of who is online, with kick,
   ban, and the Minecraft allowlist.
 - **Files:** upload, edit, unpack, and download a server's data.
