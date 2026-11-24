@@ -156,7 +156,7 @@ func (s *Service) assertNoDependents(ctx context.Context, spec *docker.Container
 	}
 	name := strings.TrimPrefix(spec.Name, "/")
 	for _, candidate := range containers {
-		if candidate.ID == spec.ID || candidate.Labels["ludock.internal"] == launch.ConsoleHelper {
+		if candidate.ID == spec.ID || candidate.Labels[launch.InternalLabel] == launch.ConsoleHelper {
 			continue
 		}
 		other, err := s.Docker.InspectSpec(ctx, candidate.ID)
