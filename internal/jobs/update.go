@@ -796,11 +796,10 @@ func (j *Jobs) startReplacement(ctx context.Context, job *ops.Context) error {
 		if recovery.StateRestored {
 			return nil
 		}
-		// Started before Ludock restarted, and not yet seen to last.
-		if recovery.StartRequested {
-			if err := j.survives(ctx, swap.Replacement); err != nil {
-				return err
-			}
+		// Running, by Ludock's start or Docker's own restart policy, but not
+		// yet seen to last.
+		if err := j.survives(ctx, swap.Replacement); err != nil {
+			return err
 		}
 		return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.StateRestored = true }, nil)
 	}
