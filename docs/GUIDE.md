@@ -400,7 +400,9 @@ start, such as `MOTD` into Minecraft's `server.properties` on
 start; change it where you define the server instead. Ludock
 never follows symbolic links, and blocks system and sensitive paths and Docker
 sockets. A server given one folder of a volume (`volume-subpath`, or
-`volume.subpath` in Compose) shows just that folder, here and in its backups.
+`volume.subpath` in Compose) shows just that folder, here and in its backups,
+and servers on separate folders of one volume don't hold up each other's
+backups.
 A volume shared with `--volumes-from` isn't offered, since Docker doesn't show
 which folder of it the server has. To limit access to some folders, set
 [`ludock.files`](REFERENCE.md#labels). Ludock's own working folders, named

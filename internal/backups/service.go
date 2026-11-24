@@ -735,19 +735,44 @@ func (s *Service) AssertNoOtherWriters(ctx context.Context, server *servers.Cont
 		if candidate.ID == server.Container.ID || candidate.ID == helperID || !slices.Contains([]string{"running", "restarting", "paused"}, state) {
 			continue
 		}
+		var inspected []identity.Mount
 		for _, mount := range candidate.Mounts {
 			if !mount.RW {
 				continue
 			}
 			other := identity.Mount{Type: mount.Type, Source: mount.Source, Destination: mount.Destination, Writable: true, Name: mount.Name}
 			for _, source := range sources {
-				if MountsOverlap(source, other) {
-					return fail("SHARED_DATA_WRITER", "Another running container can write to this server’s data. Stop that container before backing up or restoring.")
+				if !MountsOverlap(source, other) || s.otherSubfolder(ctx, candidate.ID, source, other, &inspected) {
+					continue
 				}
+				return fail("SHARED_DATA_WRITER", "Another running container can write to this server’s data. Stop that container before backing up or restoring.")
 			}
 		}
 	}
 	return nil
+}
+
+// otherSubfolder reports whether a container's mount of the volume that
+// holds source is a folder of it apart from source's subpath. The container
+// list doesn't report subpaths, so the container is inspected, once, into
+// inspected. A subpath that can't be established counts as the whole volume.
+func (s *Service) otherSubfolder(ctx context.Context, containerID string, source, other identity.Mount, inspected *[]identity.Mount) bool {
+	if source.Type != "volume" || other.Type != "volume" || source.Name == "" || source.Name != other.Name || source.Subpath == "" || source.Unresolved {
+		return false
+	}
+	if *inspected == nil {
+		info, err := s.Docker.Inspect(ctx, containerID)
+		if err != nil {
+			return false
+		}
+		*inspected = identity.DockerMounts(info)
+	}
+	for _, mount := range *inspected {
+		if mount.Name == other.Name && path.Clean(mount.Destination) == path.Clean(other.Destination) {
+			return mount.Subpath != "" && !mount.Unresolved && !overlaps(path.Clean("/"+source.Subpath), path.Clean("/"+mount.Subpath))
+		}
+	}
+	return false
 }
 
 // AssertSeparateDestination proves the destination is mounted into Ludock

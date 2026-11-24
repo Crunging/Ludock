@@ -16,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/servers"
 )
 
 var forbidden = apperr.New("FORBIDDEN", 403, "Forbidden")
@@ -169,6 +170,9 @@ func TestFailingDeletionsDoNotBlockOthers(t *testing.T) {
 
 // Among many running containers, one that can write the server's data
 // refuses the backup; containers that only read it or are stopped do not.
+// On a volume, another subfolder doesn't conflict; the whole volume, a
+// folder nested with the server's, or one inherited with --volumes-from
+// does.
 func TestAssertNoOtherWriters(t *testing.T) {
 	engine, client := startHelpers(t)
 	data := t.TempDir()
@@ -197,6 +201,46 @@ func TestAssertNoOtherWriters(t *testing.T) {
 	engine.AddContainer(fakedocker.GameOptions{Name: "writer", Image: "alpine", Running: true,
 		Mounts: []docker.MountPoint{{Type: "bind", Source: filepath.Join(data, "world"), Destination: "/world", RW: true}}})
 	if err := s.AssertNoOtherWriters(ctx, server, ""); !apperr.Is(err, "SHARED_DATA_WRITER") {
+		t.Fatal(err)
+	}
+
+	volume := "/var/lib/docker/volumes/worlds/_data"
+	onVolume := func(name, subpath string, volumesFrom bool) string {
+		id := engine.AddContainer(fakedocker.GameOptions{Name: name, Image: "alpine", Running: true,
+			Mounts: []docker.MountPoint{{Type: "volume", Name: "worlds", Source: volume, Destination: "/data", RW: true}}})
+		engine.Update(id, func(c *fakedocker.Container) {
+			if volumesFrom {
+				c.HostConfig = map[string]any{"VolumesFrom": []any{"seed"}}
+			} else if subpath != "" {
+				c.HostConfig = map[string]any{"Mounts": []any{map[string]any{"Type": "volume", "Source": "worlds", "Target": "/data",
+					"VolumeOptions": map[string]any{"Subpath": subpath}}}}
+			}
+		})
+		return id
+	}
+	game := &servers.Context{Observation: identity.Observation{Mounts: []identity.Mount{
+		{Type: "volume", Name: "worlds", Source: volume, Destination: "/data", Writable: true, Subpath: "a"}}}}
+	game.Container.ID = onVolume("game-a", "a", false)
+	sibling := onVolume("game-b", "b", false)
+	if err := s.AssertNoOtherWriters(ctx, game, ""); err != nil {
+		t.Fatal("a game on another subfolder of the volume conflicts", err)
+	}
+	for index, writer := range []struct {
+		subpath     string
+		volumesFrom bool
+	}{{"", false}, {"a/world", false}, {"", true}} {
+		id := onVolume("volume-writer-"+strconv.Itoa(index), writer.subpath, writer.volumesFrom)
+		if err := s.AssertNoOtherWriters(ctx, game, ""); !apperr.Is(err, "SHARED_DATA_WRITER") {
+			t.Fatal(writer, err)
+		}
+		engine.Update(id, func(c *fakedocker.Container) { c.State.Status, c.State.Running = "exited", false })
+	}
+	// The whole volume conflicts with every folder of it.
+	game.Observation.Mounts[0].Subpath = ""
+	if err := s.AssertNoOtherWriters(ctx, game, sibling); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AssertNoOtherWriters(ctx, game, ""); !apperr.Is(err, "SHARED_DATA_WRITER") {
 		t.Fatal(err)
 	}
 }
