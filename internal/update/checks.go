@@ -355,13 +355,14 @@ func (c *Checks) active(ctx context.Context, current map[string]servers.Containe
 
 // CheckNow asks the registry about one server's image right away, unless
 // it answered moments ago, and returns the result. allowed confirms the
-// requester once the check's turn comes, since it can wait behind another.
+// requester after the waits for another check and for Docker, before
+// anything is asked or saved.
 func (c *Checks) CheckNow(ctx context.Context, serverID string, container servers.Container, allowed func() error) *CheckStatus {
 	if !c.acquire(ctx) {
 		return nil
 	}
 	defer c.release()
-	if !c.Enabled(ctx) || allowed() != nil {
+	if !c.Enabled(ctx) {
 		return nil
 	}
 	now := db.Now()
@@ -375,6 +376,9 @@ func (c *Checks) CheckNow(ctx context.Context, serverID string, container server
 		ask = image == nil || now-image.TriedAt >= checkNowSpacing.Milliseconds()
 	}
 	c.mu.Unlock()
+	if allowed() != nil {
+		return nil
+	}
 	// A registry answer about to be replaced is not announced.
 	c.apply(ctx, o, now, ask)
 	if ask {

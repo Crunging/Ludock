@@ -71,6 +71,12 @@ func (s *Server) usersResult(w http.ResponseWriter, r *http.Request, request *Re
 	if change != nil {
 		change(&u)
 	}
+	// Building the list can wait; a refused change shows it only to an
+	// administrator still.
+	if err != nil {
+		s.renderAdmin(w, r, request, status, views.UsersContent(u))
+		return
+	}
 	render(w, r, status, views.UsersContent(u))
 }
 

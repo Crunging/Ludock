@@ -60,6 +60,12 @@ func (s *Server) sharingResult(w http.ResponseWriter, r *http.Request, request *
 	if change != nil {
 		change(&v)
 	}
+	// Building the list waits on Docker; a refused change shows it only to
+	// an administrator still.
+	if err != nil {
+		s.renderAdmin(w, r, request, status, views.SharingContent(v))
+		return
+	}
 	render(w, r, status, views.SharingContent(v))
 }
 
