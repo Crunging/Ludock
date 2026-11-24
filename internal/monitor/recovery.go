@@ -194,10 +194,20 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 	state.Attempts = recentAttempts(state.Attempts, now)
 	if len(state.Attempts) >= RecoveryAttempts {
 		state.Last, state.LastAt = RecoveryGaveUp, now
-		if !s.saveRecovery(ctx, server.ID, r, state, alert{"recovery-gave-up:" + server.ID + ":" + strconv.FormatInt(state.SilentSince, 10),
-			server.DisplayName + ": the game stopped answering again. Ludock already tried restarting it 3 times in 6 hours, so it won’t restart it again for now; it needs a look."}) {
+		// Like the restart below, giving up is announced only for the outage
+		// as it was read: a stop or pause recorded since ends it.
+		saved := encode(state)
+		changed, err := s.apply(ctx, []alert{{"recovery-gave-up:" + server.ID + ":" + strconv.FormatInt(state.SilentSince, 10),
+			server.DisplayName + ": the game stopped answering again. Ludock already tried restarting it 3 times in 6 hours, so it won’t restart it again for now; it needs a look."}},
+			"UPDATE availability SET recovery_json=? WHERE server_id=? AND policy_json=? AND recovery_json IS ? AND "+asRead,
+			append([]any{saved, server.ID, r.policy, r.recovery}, r.asRead()...)...)
+		if err != nil {
+			log.Warn("Could not save a server's automatic restart; it will be checked again")
+		}
+		if !changed {
 			return false
 		}
+		r.recovery = saved
 		s.changed(server.ID)
 		return true
 	}
@@ -205,14 +215,14 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 	var saved sql.NullString
 	var restarting []alert
 	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
-		// The policy and restarts are as judged above, read on this connection.
-		var policyNow string
-		var recoveryNow sql.NullString
-		if err := tx.QueryRowContext(ctx, "SELECT policy_json,recovery_json FROM availability WHERE server_id=?", server.ID).
-			Scan(&policyNow, &recoveryNow); err != nil {
+		// The policy, restarts and outage are as judged above, read on this
+		// connection: a stop or pause recorded since ends the outage.
+		var same int
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM availability WHERE server_id=? AND policy_json=? AND recovery_json IS ? AND "+asRead,
+			append([]any{server.ID, r.policy, r.recovery}, r.asRead()...)...).Scan(&same); err != nil {
 			return err
 		}
-		if policyNow != r.policy || recoveryNow != r.recovery {
+		if same != 1 {
 			return errRecoveryChanged
 		}
 		var err error

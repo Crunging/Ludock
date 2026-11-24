@@ -659,10 +659,15 @@ func (s *Service) adopt(ctx context.Context, logical []identity.Server, rows map
 // meanwhile is never overwritten and raises no alert from the old state.
 // alerts are queued with the change.
 func (s *Service) transition(ctx context.Context, serverID string, r *row, alerts []alert, set string, args ...any) (bool, error) {
-	return s.apply(ctx, alerts, "UPDATE availability SET "+set+` WHERE server_id=? AND policy_json=? AND
-    outage_started_at IS ? AND notified=? AND suppressed_until=? AND intentionally_stopped=?`,
-		append(args, serverID, r.policy, r.outage, r.notified, r.suppressed, r.intentional)...)
+	return s.apply(ctx, alerts, "UPDATE availability SET "+set+" WHERE server_id=? AND policy_json=? AND "+asRead,
+		append(append(args, serverID, r.policy), r.asRead()...)...)
 }
+
+// asRead matches a row whose outage, alert, pause and stop are still as r
+// read them.
+const asRead = "outage_started_at IS ? AND notified=? AND suppressed_until=? AND intentionally_stopped=?"
+
+func (r *row) asRead() []any { return []any{r.outage, r.notified, r.suppressed, r.intentional} }
 
 // testHook, set only by tests, runs at named points in Check so a test can
 // force an interleaving.
