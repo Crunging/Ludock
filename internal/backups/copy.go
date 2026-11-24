@@ -522,34 +522,46 @@ const copyLimit = 50
 
 // CopyDue makes due second copies one at a time, skipping servers that have
 // work running so a copy never reads while a backup or restore holds them.
+// A pass looks at each due copy once, in order, so busy servers' copies
+// don't hold back the rest, and the next pass starts again from the first.
 func (s *Service) CopyDue(ctx context.Context) error {
+	var after copyCursor
 	for {
 		if err := s.finishCopyRemovals(ctx); err != nil {
 			return err
 		}
-		attempted, err := s.copyBatch(ctx)
-		if err != nil || !attempted {
+		more, err := s.copyBatch(ctx, &after)
+		if err != nil || !more {
 			return err
 		}
 	}
 }
 
-// copyBatch attempts the copies due now and reports whether it tried any.
-func (s *Service) copyBatch(ctx context.Context) (bool, error) {
-	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+` FROM backups
-    WHERE state='complete' AND copy_state IN ('pending','failed') AND copy_next_at<=?
-    ORDER BY copy_next_at,created_at,id LIMIT ?`, time.Now().UnixMilli(), copyLimit)
+// copyCursor is the last due copy a pass looked at.
+type copyCursor struct {
+	nextAt, created int64
+	id              string
+}
+
+// copyBatch attempts the due copies after cursor, moves cursor past them,
+// and reports whether more may follow.
+func (s *Service) copyBatch(ctx context.Context, after *copyCursor) (bool, error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+`,copy_next_at FROM backups
+    WHERE state='complete' AND copy_state IN ('pending','failed') AND copy_next_at<=? AND (copy_next_at,created_at,id)>(?,?,?)
+    ORDER BY copy_next_at,created_at,id LIMIT ?`, time.Now().UnixMilli(), after.nextAt, after.created, after.id, copyLimit)
 	if err != nil {
 		return false, err
 	}
 	var due []*Backup
 	for rows.Next() {
-		backup, err := scanBackup(rows)
+		var nextAt int64
+		backup, err := scanBackup(scanWith{rows, &nextAt})
 		if err != nil {
 			rows.Close()
 			return false, err
 		}
 		due = append(due, backup)
+		*after = copyCursor{nextAt, backup.CreatedAt, backup.ID}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -559,7 +571,6 @@ func (s *Service) copyBatch(ctx context.Context) (bool, error) {
 	if settings, _, err := s.SavedSettings(ctx); err == nil && settings != nil {
 		reserve = settings.ReserveBytes
 	}
-	attempted := false
 	for _, backup := range due {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
@@ -567,13 +578,20 @@ func (s *Service) copyBatch(ctx context.Context) (bool, error) {
 		if s.Locks != nil && s.Locks.ServerBusy(backup.ServerID) {
 			continue
 		}
-		attempted = true
 		if err := s.copyOne(ctx, backup, reserve); err != nil {
 			return false, err
 		}
 	}
-	return attempted, nil
+	return len(due) == copyLimit, nil
 }
+
+// scanWith scans a row's backup columns, then extra.
+type scanWith struct {
+	row   interface{ Scan(...any) error }
+	extra any
+}
+
+func (s scanWith) Scan(dest ...any) error { return s.row.Scan(append(dest, s.extra)...) }
 
 // copyOne makes one attempt at a backup's second copy. Only a database
 // error is returned; a failed copy is recorded on the backup.

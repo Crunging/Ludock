@@ -773,6 +773,51 @@ func TestBackupsInALostFolder(t *testing.T) {
 	}
 }
 
+// A server whose lock is held has a full query's worth of older copies
+// due. Another server's copy is still made in the same pass, and the busy
+// server's are attempted once it is free.
+func TestCopyDueSkipsBusyServers(t *testing.T) {
+	f := newCopyFixture(t)
+	list, err := (&identity.Store{DB: f.s.DB}).Reconcile(ctx, []identity.Observation{
+		{ContainerID: "mc", Name: "mc", DisplayName: "Minecraft", GameType: "minecraft"},
+		{ContainerID: "mc2", Name: "mc2", DisplayName: "Minecraft 2", GameType: "minecraft"}}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range copyLimit {
+		if _, err := f.s.DB.Exec(`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,
+      copy_destination,copy_state) VALUES(?,?,'x',?,'[]',1,'',?,'complete',?,'pending')`,
+			identity.NewUUID(), f.serverID, f.main, index+1, f.copies); err != nil {
+			t.Fatal(err)
+		}
+	}
+	idle := f.add(t, "world data", time.Now().UnixMilli())
+	other := list[0].ID
+	if other == f.serverID {
+		other = list[1].ID
+	}
+	f.s.DB.Exec("UPDATE backups SET server_id=? WHERE id=?", other, idle.ID)
+	release, err := f.s.Locks.Acquire([]string{locks.ServerKey(f.serverID)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if state, _, _, _ := f.row(t, idle.ID); state != "complete" {
+		t.Fatal("the idle server's copy waited behind a busy one", state)
+	}
+	release()
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var waiting int
+	f.s.DB.QueryRow("SELECT COUNT(*) FROM backups WHERE copy_attempts=0 AND copy_state<>'complete'").Scan(&waiting)
+	if waiting != 0 {
+		t.Fatal("copies of the server that was busy were never attempted", waiting)
+	}
+}
+
 // Two of a day's backups lost their archives, as a hand-cleaned folder
 // would leave them; one still has its second copy. Retention keeps the
 // newest three that can be restored, so the earlier ones stay, and the
