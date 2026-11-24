@@ -182,8 +182,9 @@ var errDeleteAway = fail("BACKUP_FOLDER_AWAY", "The folder this backup was saved
 // Delete removes a backup under the server and storage locks. It also
 // finishes an interrupted deletion. With forget, a backup whose folder can't
 // be reached is removed from Ludock with its second copies, leaving its
-// archive wherever it is; left reports that.
-func (s *Service) Delete(ctx context.Context, serverID, id string, forget bool, assertAccess func() error) (left bool, err error) {
+// archive wherever it is; left reports that. assertAccess checks the
+// requester through the transaction that marks the backup deleting.
+func (s *Service) Delete(ctx context.Context, serverID, id string, forget bool, assertAccess func(*sql.Tx) error) (left bool, err error) {
 	backup, err := scanBackup(s.DB.QueryRowContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE server_id=? AND id=? AND state IN ('complete','deleting')",
 		serverID, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -202,7 +203,7 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, forget bool, 
 		return false, cmp.Or(err, error(errNotFound))
 	}
 	if assertAccess != nil {
-		if err := assertAccess(); err != nil {
+		if err := s.DB.Tx(ctx, assertAccess); err != nil {
 			return false, err
 		}
 	}
@@ -225,10 +226,10 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, forget bool, 
 
 // remove marks a backup deleting before unlinking its archive, so an
 // interrupted removal leaves a row that is never offered and is retried by
-// Delete or Prune. If assertAccess refuses right before marking, the backup is
-// left as it was. A folder that can't be reached leaves it as it was too,
-// unless forget, which removes the row without touching the folder.
-func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func() error, forget bool) error {
+// Delete or Prune. If assertAccess refuses in the marking transaction, the
+// backup is left as it was. A folder that can't be reached leaves it as it
+// was too, unless forget, which removes the row without touching the folder.
+func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func(*sql.Tx) error, forget bool) error {
 	if !forget {
 		if err := s.reach(backup.destination, errFolderStalled, measureWait, func(func()) error {
 			return s.Storage.reachable(backup.destination)
@@ -238,21 +239,24 @@ func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func(
 	}
 	marked := false
 	mark := func() error {
-		if assertAccess != nil {
-			if err := assertAccess(); err != nil {
+		err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+			if assertAccess != nil {
+				if err := assertAccess(tx); err != nil {
+					return err
+				}
+			}
+			// Kept between listing and marking, the backup stays.
+			result, err := tx.ExecContext(ctx, "UPDATE backups SET state='deleting' WHERE id=? AND (state='deleting' OR kept_at IS NULL)", backup.ID)
+			if err != nil {
 				return err
 			}
-		}
-		// Kept between listing and marking, the backup stays.
-		result, err := s.DB.ExecContext(ctx, "UPDATE backups SET state='deleting' WHERE id=? AND (state='deleting' OR kept_at IS NULL)", backup.ID)
-		if err != nil {
-			return err
-		}
-		if changed, err := result.RowsAffected(); err != nil || changed == 0 {
-			return errKept
-		}
-		marked = true
-		return nil
+			if changed, err := result.RowsAffected(); err != nil || changed == 0 {
+				return errKept
+			}
+			return nil
+		})
+		marked = err == nil
+		return err
 	}
 	check := mark
 	if assertAccess == nil || forget {
@@ -822,10 +826,12 @@ func (s *Service) AssertReady(ctx context.Context, server *servers.Context, prot
 // MakeRoom applies retention to a server's backups right before a backup
 // stops it, as Prune does after one, then refuses a backup that can't fit
 // even empty data folders. A removal that fails leaves the backup to try.
-// No new backup exists yet to justify a removal, so assertAccess is asked
-// before each one, and losing access ends the work. The caller holds the
-// server and storage locks.
-func (s *Service) MakeRoom(ctx context.Context, server *servers.Context, assertAccess func() error, protected ...string) error {
+// No new backup exists yet to justify a removal, so allowedIn is asked in
+// the transaction that marks each one deleting, and losing access ends the
+// work, which assertAccess confirms after. The caller holds the server and
+// storage locks.
+func (s *Service) MakeRoom(ctx context.Context, server *servers.Context, assertAccess func() error, allowedIn func(*sql.Tx) error,
+	protected ...string) error {
 	plan, err := s.planRoots(ctx, server)
 	if err != nil {
 		return err
@@ -834,7 +840,18 @@ func (s *Service) MakeRoom(ctx context.Context, server *servers.Context, assertA
 	if err != nil {
 		return err
 	}
-	_ = s.prune(ctx, server.Logical.ID, settings, assertAccess, protected...)
+	// The first refusal ends every removal after it, in any folder, and is
+	// the answer.
+	var refused error
+	_ = s.prune(ctx, server.Logical.ID, settings, func(tx *sql.Tx) error {
+		if refused == nil {
+			refused = allowedIn(tx)
+		}
+		return refused
+	}, protected...)
+	if refused != nil {
+		return refused
+	}
 	if err := assertAccess(); err != nil {
 		return err
 	}
@@ -1109,7 +1126,7 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 	return s.prune(ctx, serverID, settings, nil, protected...)
 }
 
-func (s *Service) prune(ctx context.Context, serverID string, settings Settings, assertAccess func() error, protected ...string) error {
+func (s *Service) prune(ctx context.Context, serverID string, settings Settings, allowedIn func(*sql.Tx) error, protected ...string) error {
 	list, err := s.List(ctx, serverID)
 	if err != nil {
 		return err
@@ -1128,7 +1145,7 @@ func (s *Service) prune(ctx context.Context, serverID string, settings Settings,
 	}
 	expired, spare, unconfirmed := s.retention(list, protected)
 	for _, backup := range expired {
-		if err := s.removeIdle(ctx, backup, assertAccess); failed(backup, err) {
+		if err := s.removeIdle(ctx, backup, allowedIn); failed(backup, err) {
 			return err
 		}
 	}
@@ -1154,7 +1171,7 @@ func (s *Service) prune(ctx context.Context, serverID string, settings Settings,
 		if room >= need {
 			break
 		}
-		if err := s.removeIdle(ctx, backup, assertAccess); failed(backup, err) {
+		if err := s.removeIdle(ctx, backup, allowedIn); failed(backup, err) {
 			return err
 		}
 	}
@@ -1204,7 +1221,7 @@ func (s *Service) removable(ctx context.Context, serverID string, settings Setti
 // kept since it was listed. One whose archive isn't in its folder stays: an
 // unmounted disk can leave its folder empty, and the second copy may then be
 // the only one.
-func (s *Service) removeIdle(ctx context.Context, backup Backup, assertAccess func() error) error {
+func (s *Service) removeIdle(ctx context.Context, backup Backup, allowedIn func(*sql.Tx) error) error {
 	release, idle := s.Storage.claimIdle(backup.ID)
 	if !idle {
 		return nil
@@ -1213,7 +1230,7 @@ func (s *Service) removeIdle(ctx context.Context, backup Backup, assertAccess fu
 	if found, err := s.look(backup.destination, &backup, errFolderStalled); err != nil || !found {
 		return err
 	}
-	if err := s.remove(ctx, &backup, assertAccess, false); !errors.Is(err, errKept) {
+	if err := s.remove(ctx, &backup, allowedIn, false); !errors.Is(err, errKept) {
 		return err
 	}
 	return nil

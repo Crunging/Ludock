@@ -3,6 +3,7 @@ package jobs
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -218,12 +219,32 @@ func TestBackupSettingsNeedAdminSession(t *testing.T) {
 	}
 }
 
+// An owner disabled before their stop runs, or just as work that stops the
+// server first checks them in a write, stops nothing, removes no backup, and
+// leaves outage tracking as it was.
 func TestRevokedOwnerCannotRun(t *testing.T) {
 	f := setup(t)
 	f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, true)
 	job := f.run(t, "stop", nil)
 	if job.Status != ops.Failed || job.Error != "The person who asked for this can no longer use the server" || !f.running() {
 		t.Fatalf("%+v", job)
+	}
+	f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, false)
+	backup := f.run(t, "backup", nil)
+	f.jobs.DB.Exec("DELETE FROM availability")
+	f.jobs.Authz.Rechecking = func(tx *sql.Tx) { tx.Exec("UPDATE users SET disabled=1 WHERE id='admin'") }
+	for _, kind := range []string{"stop", "backup", "update"} {
+		var input map[string]any
+		if kind == "update" {
+			input = skipBackup
+		}
+		job = f.run(t, kind, input)
+		var paused int
+		f.jobs.DB.QueryRow("SELECT COUNT(*) FROM availability WHERE suppressed_until > 0").Scan(&paused)
+		if kept, _ := f.jobs.Backups.Exists(ctx, backup.Result["backupId"].(string), true); job.Status != ops.Failed || paused != 0 ||
+			!f.running() || !kept {
+			t.Fatalf("%s: %+v paused=%d kept=%v", kind, job, paused, kept)
+		}
 	}
 }
 
@@ -920,12 +941,13 @@ func TestBackupMakesRoomBeforeTheStop(t *testing.T) {
 			}
 			if c.revoked {
 				checks := 0
-				err := f.jobs.Backups.MakeRoom(ctx, server, func() error {
+				allowed := func() error {
 					if checks++; checks > 1 {
 						return apperr.New("FORBIDDEN", 403, "You can’t do that on this server")
 					}
 					return nil
-				})
+				}
+				err := f.jobs.Backups.MakeRoom(ctx, server, allowed, func(*sql.Tx) error { return allowed() })
 				if !apperr.Is(err, "FORBIDDEN") || left() != c.want {
 					t.Errorf("%v, left %q, want %q", err, left(), c.want)
 				}

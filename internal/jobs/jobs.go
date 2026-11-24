@@ -227,7 +227,20 @@ var (
 // also requires the schedule to be unchanged and the owner to still manage
 // schedules. A deleted owner fails closed.
 func (j *Jobs) Actor(ctx context.Context, job *ops.Context) (*db.SessionUser, error) {
-	user, err := j.DB.FindUserByID(ctx, job.Job.ActorID)
+	return j.actor(ctx, nil, job)
+}
+
+// actor is Actor, through tx when it is set.
+func (j *Jobs) actor(ctx context.Context, tx *sql.Tx, job *ops.Context) (*db.SessionUser, error) {
+	var q interface {
+		QueryRowContext(context.Context, string, ...any) *sql.Row
+	} = j.DB
+	find := j.DB.FindUserByID
+	if tx != nil {
+		q = tx
+		find = func(ctx context.Context, id string) (*db.UserRecord, error) { return db.FindUserIn(ctx, tx, id) }
+	}
+	user, err := find(ctx, job.Job.ActorID)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +254,7 @@ func (j *Jobs) Actor(ctx context.Context, job *ops.Context) (*db.SessionUser, er
 	}
 	var owner, input string
 	var revision int64
-	err = j.DB.QueryRowContext(ctx, "SELECT COALESCE(owner_id,''),input_json,revision FROM schedules WHERE id=? AND server_id=?",
+	err = q.QueryRowContext(ctx, "SELECT COALESCE(owner_id,''),input_json,revision FROM schedules WHERE id=? AND server_id=?",
 		scheduleID, job.Job.ServerID).Scan(&owner, &input, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errScheduleRevoked
@@ -255,10 +268,28 @@ func (j *Jobs) Actor(ctx context.Context, job *ops.Context) (*db.SessionUser, er
 		settings.CreateBackup != (job.Job.Input["createBackup"] == true) {
 		return nil, errScheduleRevoked
 	}
-	if _, err := j.Authz.Assert(ctx, actor, job.Job.ServerID, authz.SchedulesManage); err != nil {
+	if tx != nil {
+		err = j.Authz.AssertAccountIn(ctx, tx, actor.ID, job.Job.ServerID, authz.SchedulesManage)
+	} else {
+		_, err = j.Authz.Assert(ctx, actor, job.Job.ServerID, authz.SchedulesManage)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return actor, nil
+}
+
+// allowedIn is assertCapability through tx, for work whose authority must
+// hold in the transaction that writes for it.
+func (j *Jobs) allowedIn(ctx context.Context, tx *sql.Tx, job *ops.Context, capabilities ...authz.Capability) error {
+	if job.Job.ActorID == ops.RecoveryActor {
+		return j.recoveryAllowed(ctx, tx, job)
+	}
+	actor, err := j.actor(ctx, tx, job)
+	if err != nil {
+		return err
+	}
+	return j.Authz.AssertAccountIn(ctx, tx, actor.ID, job.Job.ServerID, capabilities...)
 }
 
 var errRecoveryOff = apperr.New("RECOVERY_OFF", 403, "Automatic restarts were turned off for this server, or it changed and awaits review")
@@ -266,15 +297,26 @@ var errRecoveryOff = apperr.New("RECOVERY_OFF", 403, "Automatic restarts were tu
 // recoveryAllowed is the authority of a recovery restart: the server's
 // monitoring policy still asks for it, and no change to the server awaits
 // an administrator's review.
-func (j *Jobs) recoveryAllowed(ctx context.Context, job *ops.Context) error {
+// It reads through tx when that is set.
+func (j *Jobs) recoveryAllowed(ctx context.Context, tx *sql.Tx, job *ops.Context) error {
 	if job.Job.Kind != ops.KindRestart || job.Job.Input["createBackup"] == true {
 		return errRecoveryOff
 	}
-	availability, err := j.Monitor.Get(ctx, job.Job.ServerID)
+	getAvailability, getServer, getRecovery := j.Monitor.Get, j.Identity.Get, j.Monitor.Recovery
+	if tx != nil {
+		getAvailability = func(ctx context.Context, id string) (*monitor.Availability, error) {
+			return j.Monitor.GetIn(ctx, tx, id)
+		}
+		getServer = func(ctx context.Context, id string) (*identity.Server, error) { return j.Identity.GetIn(ctx, tx, id) }
+		getRecovery = func(ctx context.Context, id string) (monitor.Recovery, error) {
+			return j.Monitor.RecoveryIn(ctx, tx, id)
+		}
+	}
+	availability, err := getAvailability(ctx, job.Job.ServerID)
 	if err != nil {
 		return err
 	}
-	logical, err := j.Identity.Get(ctx, job.Job.ServerID)
+	logical, err := getServer(ctx, job.Job.ServerID)
 	if err != nil {
 		return err
 	}
@@ -283,7 +325,7 @@ func (j *Jobs) recoveryAllowed(ctx context.Context, job *ops.Context) error {
 	}
 	// Turning recovery off forgets the restart it queued, even if it is on
 	// again by now.
-	state, err := j.Monitor.Recovery(ctx, job.Job.ServerID)
+	state, err := getRecovery(ctx, job.Job.ServerID)
 	if err != nil {
 		return err
 	}
@@ -299,7 +341,7 @@ func (j *Jobs) resolve(ctx context.Context, job *ops.Context, capability authz.C
 		revision = job.Job.BindingRevision
 	}
 	if job.Job.ActorID == ops.RecoveryActor {
-		return j.Servers.ResolveChecked(ctx, job.Job.ServerID, revision, func(ctx context.Context) error { return j.recoveryAllowed(ctx, job) })
+		return j.Servers.ResolveChecked(ctx, job.Job.ServerID, revision, func(ctx context.Context) error { return j.recoveryAllowed(ctx, nil, job) })
 	}
 	actor, err := j.Actor(ctx, job)
 	if err != nil {
@@ -310,7 +352,7 @@ func (j *Jobs) resolve(ctx context.Context, job *ops.Context, capability authz.C
 
 func (j *Jobs) assertCapability(ctx context.Context, job *ops.Context, capability authz.Capability) error {
 	if job.Job.ActorID == ops.RecoveryActor {
-		return j.recoveryAllowed(ctx, job)
+		return j.recoveryAllowed(ctx, nil, job)
 	}
 	actor, err := j.Actor(ctx, job)
 	if err != nil {
@@ -521,8 +563,11 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			}
 			return err
 		}
-		// Pause outage tracking before acting, or the change could alert.
-		if err := j.suppressFor(job)(ctx, server.Logical.ID); err != nil {
+		// Pause outage tracking before acting, or the change could alert,
+		// and only for work that may still go ahead.
+		if err := j.suppressFor(job)(ctx, server.Logical.ID, func(tx *sql.Tx) error {
+			return j.allowedIn(ctx, tx, job, permission)
+		}); err != nil {
 			return nil, err
 		}
 		// server is nil after a failed resolve, so the ID is kept apart.
@@ -566,7 +611,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 
 // suppressFor is how a lifecycle action pauses outage tracking: an automatic
 // restart announces its own outcome, so it ends the outage it acts on.
-func (j *Jobs) suppressFor(job *ops.Context) func(context.Context, string) error {
+func (j *Jobs) suppressFor(job *ops.Context) func(context.Context, string, func(*sql.Tx) error) error {
 	if job.Job.ActorID == ops.RecoveryActor {
 		return j.Monitor.SuppressRecovered
 	}
@@ -574,7 +619,7 @@ func (j *Jobs) suppressFor(job *ops.Context) func(context.Context, string) error
 }
 
 func (j *Jobs) suppressAfter(ctx context.Context, job *ops.Context, serverID string) {
-	j.noteAvailability(j.suppressFor(job)(context.WithoutCancel(ctx), serverID))
+	j.noteAvailability(j.suppressFor(job)(context.WithoutCancel(ctx), serverID, nil))
 }
 
 var (

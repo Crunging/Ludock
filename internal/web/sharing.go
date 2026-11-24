@@ -42,8 +42,7 @@ func (s *Server) sharingView(r *http.Request, request *Request, serverID string)
 // Errors keep the share form's choices.
 func (s *Server) sharingResult(w http.ResponseWriter, r *http.Request, request *Request, err error, change func(*views.SharingView)) {
 	// An account that is no longer an administrator is shown no list.
-	if public, ok := apperr.As(err); ok && (public.Status == http.StatusUnauthorized || public.Status == http.StatusForbidden) {
-		s.fail(w, r, request, err)
+	if s.adminRefused(w, r, request, err) {
 		return
 	}
 	v, viewErr := s.sharingView(r, request, r.PathValue("id"))
@@ -60,6 +59,12 @@ func (s *Server) sharingResult(w http.ResponseWriter, r *http.Request, request *
 	}
 	if change != nil {
 		change(&v)
+	}
+	// Building the list waits on Docker; a refused change shows it only to
+	// an administrator still.
+	if err != nil {
+		s.renderAdmin(w, r, request, status, views.SharingContent(v))
+		return
 	}
 	render(w, r, status, views.SharingContent(v))
 }

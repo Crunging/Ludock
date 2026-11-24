@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"database/sql"
 	"slices"
 	"time"
 
@@ -23,23 +24,35 @@ var stoppedStates = []string{"exited", "dead", "created"}
 // dataAuthority rechecks the owner's capability for the data operation and
 // the original binding.
 func (j *Jobs) dataAuthority(ctx context.Context, server *servers.Context, job *ops.Context) error {
-	if job.Job.Kind == ops.KindRestart {
-		if err := j.assertCapability(ctx, job, authz.ServerRestart); err != nil {
+	for _, capability := range dataCapabilities(job) {
+		if err := j.assertCapability(ctx, job, capability); err != nil {
 			return err
 		}
 	}
-	capability := authz.ServerUpdate
-	switch job.Job.Kind {
-	case ops.KindBackup, ops.KindRestart:
-		capability = authz.BackupsCreate
-	case ops.KindRestore, ops.KindUndoRestore:
-		capability = authz.BackupsRestore
-	}
-	if err := j.assertCapability(ctx, job, capability); err != nil {
-		return err
-	}
 	_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, server.Observation, server.Logical.BindingRevision)
 	return err
+}
+
+// dataAuthorityIn is dataAuthority through tx, for a write the data
+// operation makes.
+func (j *Jobs) dataAuthorityIn(ctx context.Context, tx *sql.Tx, server *servers.Context, job *ops.Context) error {
+	if err := j.allowedIn(ctx, tx, job, dataCapabilities(job)...); err != nil {
+		return err
+	}
+	_, err := j.Identity.AssertObservedBindingIn(ctx, tx, server.Logical.ID, server.Observation, server.Logical.BindingRevision)
+	return err
+}
+
+func dataCapabilities(job *ops.Context) []authz.Capability {
+	switch job.Job.Kind {
+	case ops.KindRestart:
+		return []authz.Capability{authz.ServerRestart, authz.BackupsCreate}
+	case ops.KindBackup:
+		return []authz.Capability{authz.BackupsCreate}
+	case ops.KindRestore, ops.KindUndoRestore:
+		return []authz.Capability{authz.BackupsRestore}
+	}
+	return []authz.Capability{authz.ServerUpdate}
 }
 
 // withSave adds the outcome of the save before the stop to a result.
@@ -60,7 +73,8 @@ func withSave(job *ops.Context, result map[string]any) map[string]any {
 // retention would after it. A restore's source stays.
 func (j *Jobs) stopForBackup(ctx context.Context, server *servers.Context, job *ops.Context) error {
 	source, _ := text(job.Job.Input["backupId"])
-	if err := j.Backups.MakeRoom(ctx, server, func() error { return j.dataAuthority(ctx, server, job) }, source); err != nil {
+	if err := j.Backups.MakeRoom(ctx, server, func() error { return j.dataAuthority(ctx, server, job) },
+		func(tx *sql.Tx) error { return j.dataAuthorityIn(ctx, tx, server, job) }, source); err != nil {
 		return err
 	}
 	return j.stopForData(ctx, server, job)
@@ -112,26 +126,39 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 		if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observation, server.Logical.BindingRevision); err != nil {
 			return err
 		}
-		// Called again after a stop that never reached Docker: the new
-		// inspection replaces the stop state, but not the initial state.
-		if err := job.Progress("stopping", func(r *ops.Recovery) {
-			recordStop(r, info)
-			if r.InitialRunning == nil {
-				initial := r.StopStarted
-				r.InitialRunning = &initial
-			}
-			r.ContainerID, r.Fingerprint, r.LockKeys = server.Container.ID, server.Logical.BindingFingerprint, server.LockKeys
-			r.DataUnsafe = false
-		}, nil); err != nil {
-			return err
-		}
-		// A server already stopped elsewhere keeps its outage, which was
-		// alerted once.
-		if info.State.Running {
-			if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
+		// The stop is recorded, and outage tracking paused, in the
+		// transaction that confirms the job may still stop the server, so a
+		// refusal leaves neither to undo. A server already stopped elsewhere
+		// keeps its outage, which was alerted once. Called again after a stop
+		// that never reached Docker: the new inspection replaces the stop
+		// state, but not the initial state.
+		var saved func()
+		record := func(tx *sql.Tx) error {
+			if err := j.dataAuthorityIn(ctx, tx, server, job); err != nil {
 				return err
 			}
+			var err error
+			saved, err = job.ProgressIn(tx, "stopping", func(r *ops.Recovery) {
+				recordStop(r, info)
+				if r.InitialRunning == nil {
+					initial := r.StopStarted
+					r.InitialRunning = &initial
+				}
+				r.ContainerID, r.Fingerprint, r.LockKeys = server.Container.ID, server.Logical.BindingFingerprint, server.LockKeys
+				r.DataUnsafe = false
+			}, nil)
+			return err
 		}
+		var err error
+		if info.State.Running {
+			err = j.Monitor.Suppress(ctx, server.Logical.ID, record)
+		} else {
+			err = j.DB.Tx(ctx, record)
+		}
+		if err != nil {
+			return err
+		}
+		saved()
 		dispatching = true
 		return nil
 	}, unsent)
@@ -324,7 +351,7 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 	if err := job.Progress("state_restored", func(r *ops.Recovery) { r.StateRestored = true }, nil); err != nil {
 		return err
 	}
-	return j.Monitor.Suppress(ctx, server.Logical.ID)
+	return j.Monitor.Suppress(ctx, server.Logical.ID, nil)
 }
 
 // keepStoppedAfterFailedBackup leaves the server stopped, since starting

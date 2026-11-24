@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -228,8 +229,11 @@ func (s *Server) startServer(w http.ResponseWriter, r *http.Request, request *Re
 	}
 	defer action.Done()
 	app := s.App
-	// Pause outage tracking before acting, or the start could alert.
-	if err := app.Monitor.Suppress(action.Ctx, action.Logical.ID); err != nil {
+	// Pause outage tracking before acting, or the start could alert, and
+	// only for a request that may still start the server.
+	if err := app.Monitor.Suppress(action.Ctx, action.Logical.ID, func(tx *sql.Tx) error {
+		return app.Authz.AssertIn(action.Ctx, tx, request.User().ID, request.Principal.TokenHash, action.Logical.ID, authz.ServerStart)
+	}); err != nil {
 		s.fail(w, r, request, err)
 		return
 	}

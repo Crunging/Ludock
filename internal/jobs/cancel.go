@@ -69,9 +69,9 @@ func (j *Jobs) assertCanCancel(ctx context.Context, user *db.SessionUser, job *o
 var errCannotCancel = apperr.New("FORBIDDEN", 403, "You can’t cancel this")
 
 // Cancel calls off an operation on serverID that is still waiting, on
-// behalf of user, whose access the caller has just rechecked; an
-// administrator's session and role are checked again in the write, by
-// tokenHash. Players who were warned hear that it's off.
+// behalf of user, whose access the caller has just rechecked. The session
+// tokenHash and its access are checked again in the write. Players who were
+// warned hear that it's off.
 func (j *Jobs) Cancel(ctx context.Context, user *db.SessionUser, tokenHash, serverID, id string) error {
 	if _, err := j.Authz.Assert(ctx, user, serverID, authz.ServerView); err != nil {
 		return err
@@ -86,9 +86,17 @@ func (j *Jobs) Cancel(ctx context.Context, user *db.SessionUser, tokenHash, serv
 	if err := j.assertCanCancel(ctx, user, job, true); err != nil {
 		return err
 	}
-	var within func(func(*sql.Tx) error) error
-	if user.Role == db.RoleAdmin {
-		within = func(fn func(*sql.Tx) error) error { return j.DB.AdminMutation(ctx, user.ID, tokenHash, db.Now(), fn) }
+	within := func(fn func(*sql.Tx) error) error { return j.DB.AdminMutation(ctx, user.ID, tokenHash, db.Now(), fn) }
+	if user.Role != db.RoleAdmin {
+		capabilities := StartCapabilities(job)
+		within = func(fn func(*sql.Tx) error) error {
+			return j.DB.Tx(ctx, func(tx *sql.Tx) error {
+				if err := j.Authz.AssertIn(ctx, tx, user.ID, tokenHash, serverID, capabilities...); err != nil {
+					return err
+				}
+				return fn(tx)
+			})
+		}
 	}
 	before, err := j.runner.Cancel(ctx, id, user.ID, within)
 	if err != nil {

@@ -1,7 +1,9 @@
 package web
 
 import (
+	"cmp"
 	"context"
+	"database/sql"
 	"errors"
 	"math"
 	"net"
@@ -15,6 +17,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/datasize"
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
@@ -81,19 +84,34 @@ func (s *Server) destinationView(ctx context.Context, d notify.Destination) view
 	return views.NotificationDestinationView{Configuration: s.App.Notify.Configuration(ctx, d), Health: s.notificationHealth(ctx)[d]}
 }
 
+// adminRefused answers an administrator's failed change with its refusal,
+// reporting true, once the session is no longer an administrator's. A change
+// refused before its write, such as for invalid input, never checked the
+// session, so it is checked here before the form shows what is saved.
+func (s *Server) adminRefused(w http.ResponseWriter, r *http.Request, request *Request, err error) bool {
+	if err == nil {
+		return false
+	}
+	if public, ok := apperr.As(err); !ok || (public.Status != http.StatusUnauthorized && public.Status != http.StatusForbidden) {
+		if err = s.recheckAdmin(r.Context(), request); err == nil {
+			return false
+		}
+	}
+	s.fail(w, r, request, err)
+	return true
+}
+
 // settingStatus is the status for a settings form result; false means the
-// session ended and the response already redirects to sign-in.
+// response, a refusal, is already written.
 func (s *Server) settingStatus(w http.ResponseWriter, r *http.Request, request *Request, err error) (int, bool) {
-	public, ok := apperr.As(err)
 	// An account that is no longer an administrator is shown no settings.
-	if ok && (public.Status == http.StatusUnauthorized || public.Status == http.StatusForbidden) {
-		s.fail(w, r, request, err)
+	if s.adminRefused(w, r, request, err) {
 		return 0, false
 	}
 	if err == nil {
 		return http.StatusOK, true
 	}
-	if ok {
+	if public, ok := apperr.As(err); ok {
 		return public.Status, true
 	}
 	return http.StatusInternalServerError, true
@@ -123,11 +141,16 @@ func (s *Server) saveConnection(w http.ResponseWriter, r *http.Request, request 
 // checkLudock asks the registry about Ludock's own image now.
 func (s *Server) checkLudock(w http.ResponseWriter, r *http.Request, request *Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
-	check := s.App.Checks.CheckSelfNow(ctx)
+	var refused error
+	check := s.App.Checks.CheckSelfNow(ctx, func() error {
+		refused = authz.AdminMutationError(s.App.DB.AdminMutation(ctx, request.User().ID, request.Principal.TokenHash, db.Now(),
+			func(*sql.Tx) error { return nil }))
+		return refused
+	})
 	cancel()
 	// The check can wait behind another; the session may have lost the
 	// administrator role meanwhile.
-	if err := s.recheckAdmin(r.Context(), request); err != nil {
+	if err := cmp.Or(refused, s.recheckAdmin(r.Context(), request)); err != nil {
 		s.fail(w, r, request, err)
 		return
 	}
@@ -431,8 +454,7 @@ func (s *Server) testNotification(w http.ResponseWriter, r *http.Request, reques
 	}
 	delivery, err := s.App.Notify.QueueTest(r.Context(), request.User().ID, request.Principal.TokenHash, d)
 	err = authz.AdminMutationError(err)
-	if public, ok := apperr.As(err); ok && (public.Status == http.StatusUnauthorized || public.Status == http.StatusForbidden) {
-		s.fail(w, r, request, err)
+	if s.adminRefused(w, r, request, err) {
 		return
 	}
 	n := s.destinationView(r.Context(), d)
@@ -466,8 +488,7 @@ func (s *Server) testResult(w http.ResponseWriter, r *http.Request, request *Req
 func (s *Server) retryNotification(w http.ResponseWriter, r *http.Request, request *Request) {
 	delivery, err := s.App.Notify.Retry(r.Context(), request.User().ID, request.Principal.TokenHash, r.PathValue("id"))
 	err = authz.AdminMutationError(err)
-	if public, ok := apperr.As(err); ok && (public.Status == http.StatusUnauthorized || public.Status == http.StatusForbidden) {
-		s.fail(w, r, request, err)
+	if s.adminRefused(w, r, request, err) {
 		return
 	}
 	if err == nil {
