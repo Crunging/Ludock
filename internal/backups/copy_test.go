@@ -773,6 +773,132 @@ func TestBackupsInALostFolder(t *testing.T) {
 	}
 }
 
+// A server whose lock is held has a full query's worth of older copies
+// due. Another server's copy is still made in the same pass, and the busy
+// server's are attempted once it is free.
+func TestCopyDueSkipsBusyServers(t *testing.T) {
+	f := newCopyFixture(t)
+	list, err := (&identity.Store{DB: f.s.DB}).Reconcile(ctx, []identity.Observation{
+		{ContainerID: "mc", Name: "mc", DisplayName: "Minecraft", GameType: "minecraft"},
+		{ContainerID: "mc2", Name: "mc2", DisplayName: "Minecraft 2", GameType: "minecraft"}}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range copyLimit {
+		if _, err := f.s.DB.Exec(`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,
+      copy_destination,copy_state) VALUES(?,?,'x',?,'[]',1,'',?,'complete',?,'pending')`,
+			identity.NewUUID(), f.serverID, f.main, index+1, f.copies); err != nil {
+			t.Fatal(err)
+		}
+	}
+	idle := f.add(t, "world data", time.Now().UnixMilli())
+	other := list[0].ID
+	if other == f.serverID {
+		other = list[1].ID
+	}
+	f.s.DB.Exec("UPDATE backups SET server_id=? WHERE id=?", other, idle.ID)
+	release, err := f.s.Locks.Acquire([]string{locks.ServerKey(f.serverID)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if state, _, _, _ := f.row(t, idle.ID); state != "complete" {
+		t.Fatal("the idle server's copy waited behind a busy one", state)
+	}
+	release()
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var waiting int
+	f.s.DB.QueryRow("SELECT COUNT(*) FROM backups WHERE copy_attempts=0 AND copy_state<>'complete'").Scan(&waiting)
+	if waiting != 0 {
+		t.Fatal("copies of the server that was busy were never attempted", waiting)
+	}
+}
+
+// Two of a day's backups lost their archives, as a hand-cleaned folder
+// would leave them; one still has its second copy, and another server's
+// kept backup lost its archive too. Retention keeps the newest three that can be restored,
+// so the earlier ones stay, and the total limit doesn't count the lost
+// archives. The lost ones stay listed, marked missing. With the second
+// folder unreachable, the backup read from it can't be confirmed and takes
+// no place in the rule either.
+func TestRetentionCountsReadableBackups(t *testing.T) {
+	f := newCopyFixture(t)
+	at := func(day, hour int) int64 { return time.Date(2026, 1, day, hour, 0, 0, 0, time.Local).UnixMilli() }
+	earlier := f.add(t, "world data", at(9, 12))
+	a, b, c := f.add(t, "world data", at(10, 10)), f.add(t, "world data", at(10, 11)), f.add(t, "world data", at(10, 12))
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Another server's kept backup.
+	servers, err := (&identity.Store{DB: f.s.DB}).Reconcile(ctx, []identity.Observation{
+		{ContainerID: "mc", Name: "mc", DisplayName: "Minecraft", GameType: "minecraft"},
+		{ContainerID: "mc2", Name: "mc2", DisplayName: "Minecraft 2", GameType: "minecraft"}}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := servers[0].ID
+	if other == f.serverID {
+		other = servers[1].ID
+	}
+	kept := f.add(t, "world data", at(8, 12))
+	f.s.DB.Exec("UPDATE backups SET kept_at=1, server_id=? WHERE id=?", other, kept.ID)
+	for _, path := range []string{filepath.Join(f.main, b.ID+".tar"), filepath.Join(f.copies, b.ID+".tar"), filepath.Join(f.main, c.ID+".tar"),
+		filepath.Join(f.main, kept.ID+".tar")} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newest := f.add(t, "world data", at(10, 13))
+	// Six rows of 10 bytes, four archives: the next needs 11 bytes, and room
+	// is 15 bytes, or less counting a lost one.
+	settings := f.settings
+	settings.MaxBytes = 55
+	prune := func() {
+		t.Helper()
+		if err := f.s.Prune(ctx, f.serverID, settings, newest.ID); err != nil {
+			t.Fatal(err)
+		}
+		for _, backup := range []Backup{earlier, a, b, c, newest} {
+			if found, _ := f.s.Exists(ctx, backup.ID, true); !found {
+				t.Fatal("retention removed a backup that can be restored, or a lost one", backup.ID)
+			}
+		}
+	}
+	prune()
+	listed, err := f.s.List(ctx, f.serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Locate(listed); err != nil {
+		t.Fatal(err)
+	}
+	for _, backup := range listed {
+		if lost := backup.ID == b.ID; backup.Missing != lost || backup.FromCopy != (backup.ID == c.ID) {
+			t.Fatalf("%+v", backup)
+		}
+	}
+	// The records alone reach the limit; the archives found leave room, so
+	// the Backups tab offers the next backup.
+	if _, err := f.s.DB.Exec(`UPDATE settings SET value_json=json_set(value_json,'$.maxBytes',55) WHERE key='backups'`); err != nil {
+		t.Fatal(err)
+	}
+	if issues := f.s.Status(ctx).Issues; len(issues) != 0 {
+		t.Fatal(issues)
+	}
+	if err := os.Rename(f.copies, f.copies+"-away"); err != nil {
+		t.Fatal(err)
+	}
+	// Admitting a backup still counts the archive it can't look for.
+	if total, _, err := f.s.FoundBytes(ctx); err != nil || total != 50 {
+		t.Fatal(total, err)
+	}
+	prune()
+}
+
 // A backup folder that stops responding is given up on within a few seconds,
 // so the Backups tab and a restore holding the server's locks don't wait on
 // it. Until the stuck look returns, others fail at once instead of piling up.

@@ -30,8 +30,12 @@ func nothingProtected(string) bool { return false }
 
 // planRemovals is what Prune removes when each removal frees its size of
 // room: everything expired, then spare backups while room is short of need.
+// Backups with Missing set can't be read.
 func planRemovals(list []Backup, zone *time.Location, protected func(string) bool, room, need int64) []Backup {
-	expired, spare := planRetention(list, zone, protected)
+	readable := func(id string) bool {
+		return !slices.ContainsFunc(list, func(b Backup) bool { return b.ID == id && b.Missing })
+	}
+	expired, spare := planRetention(list, zone, protected, readable)
 	for _, backup := range expired {
 		room += backup.Size
 	}
@@ -142,7 +146,8 @@ func TestRetentionDaylightSavingDays(t *testing.T) {
 }
 
 // Kept backups are never removed and don't take a place in the rule; a
-// protected backup stays even when its clock reads older than the rest.
+// protected backup stays even when its clock reads older than the rest. A
+// backup that can't be read takes no place either, and stays.
 func TestRetentionKeptAndProtected(t *testing.T) {
 	zone := time.UTC
 	var times []time.Time
@@ -152,13 +157,14 @@ func TestRetentionKeptAndProtected(t *testing.T) {
 	list := series(times...)
 	list[0].KeptAt, list[9].KeptAt = 1, 1
 	list[5].State = "deleting"
+	list[2].Missing = true
 	protected := func(id string) bool { return id == list[8].ID }
 	left := remaining(list, planRemovals(list, zone, protected, 0, 0))
 	var ids []string
 	for _, backup := range left {
 		ids = append(ids, backup.ID)
 	}
-	want := []string{list[0].ID, list[1].ID, list[2].ID, list[3].ID, list[5].ID, list[8].ID, list[9].ID}
+	want := []string{list[0].ID, list[1].ID, list[2].ID, list[3].ID, list[4].ID, list[5].ID, list[8].ID, list[9].ID}
 	if !slices.Equal(ids, want) {
 		t.Fatal(ids, want)
 	}

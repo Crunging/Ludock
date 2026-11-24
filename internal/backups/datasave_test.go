@@ -441,34 +441,57 @@ func TestSaveDataNewFolderSavesAtOnce(t *testing.T) {
 }
 
 // Another installation saving into the same folders saved in the same
-// second: its save keeps its name and contents, and this save, and its
-// second copy, take the next free second instead.
+// second, and so did an earlier save of this one's with other data: both
+// keep their names and contents, and this save, and its second copy, take
+// the next free second instead. After the backup folder changes, a save
+// there that takes the copied save's name is copied again, beside it.
 func TestSaveDataKeepsAnotherInstallationsSave(t *testing.T) {
 	f := newCopyFixture(t)
 	at := time.Date(2026, 11, 20, 3, 15, 0, 0, time.UTC)
 	before := dataNow
 	t.Cleanup(func() { dataNow = before })
 	dataNow = func() time.Time { return at }
+	second := func(n int) string { return dataFileName(at.Add(time.Duration(n) * time.Second)) }
 	other := otherSave(t)
-	for _, folder := range []string{f.main, f.copies} {
-		os.WriteFile(filepath.Join(folder, dataFileName(at)), other, 0o600)
+	for _, folder := range []string{f.main, f.copies, f.other} {
+		os.WriteFile(filepath.Join(folder, second(0)), other, 0o600)
 	}
-	os.WriteFile(filepath.Join(f.copies, dataFileName(at.Add(time.Second))), other, 0o600)
+	os.WriteFile(filepath.Join(f.copies, second(1)), other, 0o600)
+	for _, folder := range []string{f.main, f.other} {
+		f.ownSave(t, folder, second(1))
+	}
+	earlier, _ := os.ReadFile(filepath.Join(f.main, second(1)))
+	f.s.DB.SetSetting(ctx, nil, "changed", true)
 	if err := f.s.SaveData(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.s.CopyData(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for folder, own := range map[string]string{f.main: dataFileName(at.Add(time.Second)), f.copies: dataFileName(at.Add(2 * time.Second))} {
-		if body, _ := os.ReadFile(filepath.Join(folder, dataFileName(at))); !bytes.Equal(body, other) {
+	for folder, own := range map[string]string{f.main: second(2), f.copies: second(2)} {
+		if body, _ := os.ReadFile(filepath.Join(folder, second(0))); !bytes.Equal(body, other) {
 			t.Fatal("replaced another installation's save in", folder)
 		}
 		if !f.s.Storage.isOwnSave(folder, own, f.s.DB.IsOwnSave) {
 			t.Fatal("no save of this installation's at", folder, own, dataFiles(t, folder))
 		}
 	}
+	if body, _ := os.ReadFile(filepath.Join(f.main, second(1))); !bytes.Equal(body, earlier) {
+		t.Fatal("replaced an earlier save with other data")
+	}
 	if status := f.s.Status(ctx); status.DataProblem != "" {
 		t.Fatal(status.DataProblem)
+	}
+
+	f.s.DB.Exec(`UPDATE settings SET value_json=json_set(value_json,'$.destination',?) WHERE key='backups'`, f.other)
+	if err := f.s.SaveData(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.CopyData(ctx); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := os.ReadFile(filepath.Join(f.other, second(2)))
+	if copied, _ := os.ReadFile(filepath.Join(f.copies, second(3))); len(saved) == 0 || !bytes.Equal(copied, saved) {
+		t.Fatal("the new folder's save wasn't copied", dataFiles(t, f.copies))
 	}
 }

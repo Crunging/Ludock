@@ -16,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/servers"
 )
 
 var forbidden = apperr.New("FORBIDDEN", 403, "Forbidden")
@@ -169,6 +170,9 @@ func TestFailingDeletionsDoNotBlockOthers(t *testing.T) {
 
 // Among many running containers, one that can write the server's data
 // refuses the backup; containers that only read it or are stopped do not.
+// On a volume, another subfolder doesn't conflict; the whole volume, a
+// folder nested with the server's, or one inherited with --volumes-from
+// does.
 func TestAssertNoOtherWriters(t *testing.T) {
 	engine, client := startHelpers(t)
 	data := t.TempDir()
@@ -197,6 +201,46 @@ func TestAssertNoOtherWriters(t *testing.T) {
 	engine.AddContainer(fakedocker.GameOptions{Name: "writer", Image: "alpine", Running: true,
 		Mounts: []docker.MountPoint{{Type: "bind", Source: filepath.Join(data, "world"), Destination: "/world", RW: true}}})
 	if err := s.AssertNoOtherWriters(ctx, server, ""); !apperr.Is(err, "SHARED_DATA_WRITER") {
+		t.Fatal(err)
+	}
+
+	volume := "/var/lib/docker/volumes/worlds/_data"
+	onVolume := func(name, subpath string, volumesFrom bool) string {
+		id := engine.AddContainer(fakedocker.GameOptions{Name: name, Image: "alpine", Running: true,
+			Mounts: []docker.MountPoint{{Type: "volume", Name: "worlds", Source: volume, Destination: "/data", RW: true}}})
+		engine.Update(id, func(c *fakedocker.Container) {
+			if volumesFrom {
+				c.HostConfig = map[string]any{"VolumesFrom": []any{"seed"}}
+			} else if subpath != "" {
+				c.HostConfig = map[string]any{"Mounts": []any{map[string]any{"Type": "volume", "Source": "worlds", "Target": "/data",
+					"VolumeOptions": map[string]any{"Subpath": subpath}}}}
+			}
+		})
+		return id
+	}
+	game := &servers.Context{Observation: identity.Observation{Mounts: []identity.Mount{
+		{Type: "volume", Name: "worlds", Source: volume, Destination: "/data", Writable: true, Subpath: "a"}}}}
+	game.Container.ID = onVolume("game-a", "a", false)
+	sibling := onVolume("game-b", "b", false)
+	if err := s.AssertNoOtherWriters(ctx, game, ""); err != nil {
+		t.Fatal("a game on another subfolder of the volume conflicts", err)
+	}
+	for index, writer := range []struct {
+		subpath     string
+		volumesFrom bool
+	}{{"", false}, {"a/world", false}, {"", true}} {
+		id := onVolume("volume-writer-"+strconv.Itoa(index), writer.subpath, writer.volumesFrom)
+		if err := s.AssertNoOtherWriters(ctx, game, ""); !apperr.Is(err, "SHARED_DATA_WRITER") {
+			t.Fatal(writer, err)
+		}
+		engine.Update(id, func(c *fakedocker.Container) { c.State.Status, c.State.Running = "exited", false })
+	}
+	// The whole volume conflicts with every folder of it.
+	game.Observation.Mounts[0].Subpath = ""
+	if err := s.AssertNoOtherWriters(ctx, game, sibling); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AssertNoOtherWriters(ctx, game, ""); !apperr.Is(err, "SHARED_DATA_WRITER") {
 		t.Fatal(err)
 	}
 }
@@ -269,7 +313,8 @@ func TestPruneSparesKeptAndOpenArchives(t *testing.T) {
 
 // Space pressure removes the oldest backups only until the next one fits,
 // measuring again after each removal, and skips archives left in an earlier
-// backup folder, which free nothing there.
+// backup folder, which free nothing there. While that folder can't be
+// reached, its archive doesn't count toward the limit, so nothing goes.
 func TestPruneMakesRoomForTheNextBackup(t *testing.T) {
 	s, first, _ := recorded(t)
 	destination := s.Storage.Roots
@@ -289,16 +334,25 @@ func TestPruneMakesRoomForTheNextBackup(t *testing.T) {
 	}
 	// Six daily backups of 100 bytes leave 50 under the limit; the next
 	// needs 110.
-	if err := s.Prune(ctx, first.ServerID, Settings{Destination: destination, MaxBytes: 650}, ids[5]); err != nil {
-		t.Fatal(err)
-	}
-	var left []string
-	for _, id := range ids {
-		if exists, _ := s.Exists(ctx, id, true); exists {
-			left = append(left, id)
+	prune := func(want ...string) {
+		t.Helper()
+		if err := s.Prune(ctx, first.ServerID, Settings{Destination: destination, MaxBytes: 650}, ids[5]); err != nil {
+			t.Fatal(err)
+		}
+		var left []string
+		for _, id := range ids {
+			if exists, _ := s.Exists(ctx, id, true); exists {
+				left = append(left, id)
+			}
+		}
+		if !slices.Equal(left, want) {
+			t.Fatal(left)
 		}
 	}
-	if !slices.Equal(left, []string{ids[0], ids[2], ids[3], ids[4], ids[5]}) {
-		t.Fatal(left)
-	}
+	prune(ids...)
+	earlier := filepath.Join(destination, "earlier")
+	os.Mkdir(earlier, 0o755)
+	os.Rename(filepath.Join(destination, first.ID+".tar"), filepath.Join(earlier, first.ID+".tar"))
+	s.DB.Exec("UPDATE backups SET destination=? WHERE id=?", earlier, first.ID)
+	prune(ids[0], ids[2], ids[3], ids[4], ids[5])
 }

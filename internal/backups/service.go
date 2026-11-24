@@ -48,6 +48,11 @@ type Backup struct {
 	// FolderAway is set by ArchiveFolder and Locate when the folder the
 	// backup was saved in can't be opened or isn't responding.
 	FolderAway bool
+	// Missing is set by ArchiveFolder when its archive is in none of the
+	// folders it could be in, and every one of them could be looked into.
+	Missing bool
+	// found is set by ArchiveFolder when it located the archive.
+	found bool
 
 	// FromCopy is set by ArchiveFolder when the archive is read from the
 	// second copy, and Copying by Locate while the copy is being made.
@@ -494,6 +499,68 @@ func (s *Service) ArchiveBytes(ctx context.Context) (total, kept int64, err erro
 	return total, kept, err
 }
 
+// FoundBytes is ArchiveBytes without the backups whose archives are gone
+// from their folder and from any second copy, as the total limit counts
+// them. It lists each folder once; a folder that can't be listed counts all
+// its backups.
+func (s *Service) FoundBytes(ctx context.Context) (total, kept int64, err error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE state='complete'")
+	if err != nil {
+		return 0, 0, err
+	}
+	var list []*Backup
+	for rows.Next() {
+		backup, err := scanBackup(rows)
+		if err != nil {
+			rows.Close()
+			return 0, 0, err
+		}
+		list = append(list, backup)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+	// A nil listing is a folder that couldn't be listed.
+	listings := map[string]map[string]bool{}
+	gone := func(folder, name string) bool {
+		if folder == "" {
+			return true
+		}
+		names, seen := listings[folder]
+		if !seen {
+			var entries []string
+			if s.reach(folder, errFolderStalled, measureWait, func(func()) error {
+				var err error
+				entries, err = s.Storage.list(folder)
+				return err
+			}) == nil {
+				names = map[string]bool{}
+				for _, entry := range entries {
+					names[entry] = true
+				}
+			}
+			listings[folder] = names
+		}
+		return names != nil && !names[name]
+	}
+	for _, backup := range list {
+		copied := ""
+		if backup.CopyState == "complete" {
+			copied = backup.copyDestination
+		}
+		name := backup.ID + ".tar"
+		if gone(backup.destination, name) && gone(copied, name) && gone(backup.copyPrevious, name) {
+			continue
+		}
+		total += backup.Size
+		if backup.KeptAt != 0 {
+			kept += backup.Size
+		}
+	}
+	return total, kept, nil
+}
+
 // unlimited stands in for "no total limit"; it fits JSON's exact integers.
 const unlimited = maxSetting
 
@@ -613,7 +680,14 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 			status.CopyIssue = errCopyMissing.Message
 		}
 	}
-	if _, err := Remaining(*settings, status.ArchiveBytes, kept); err != nil {
+	_, err = Remaining(*settings, status.ArchiveBytes, kept)
+	if err != nil {
+		// Only then are archives looked for: lost ones don't hold up a backup.
+		if found, foundKept, failed := s.FoundBytes(ctx); failed == nil {
+			_, err = Remaining(*settings, found, foundKept)
+		}
+	}
+	if err != nil {
 		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_CAPACITY", "The backup size limit could not be checked."}))
 	}
 	// A share or Docker that stops responding mustn't hold up the page.
@@ -732,19 +806,44 @@ func (s *Service) AssertNoOtherWriters(ctx context.Context, server *servers.Cont
 		if candidate.ID == server.Container.ID || candidate.ID == helperID || !slices.Contains([]string{"running", "restarting", "paused"}, state) {
 			continue
 		}
+		var inspected []identity.Mount
 		for _, mount := range candidate.Mounts {
 			if !mount.RW {
 				continue
 			}
 			other := identity.Mount{Type: mount.Type, Source: mount.Source, Destination: mount.Destination, Writable: true, Name: mount.Name}
 			for _, source := range sources {
-				if MountsOverlap(source, other) {
-					return fail("SHARED_DATA_WRITER", "Another running container can write to this server’s data. Stop that container before backing up or restoring.")
+				if !MountsOverlap(source, other) || s.otherSubfolder(ctx, candidate.ID, source, other, &inspected) {
+					continue
 				}
+				return fail("SHARED_DATA_WRITER", "Another running container can write to this server’s data. Stop that container before backing up or restoring.")
 			}
 		}
 	}
 	return nil
+}
+
+// otherSubfolder reports whether a container's mount of the volume that
+// holds source is a folder of it apart from source's subpath. The container
+// list doesn't report subpaths, so the container is inspected, once, into
+// inspected. A subpath that can't be established counts as the whole volume.
+func (s *Service) otherSubfolder(ctx context.Context, containerID string, source, other identity.Mount, inspected *[]identity.Mount) bool {
+	if source.Type != "volume" || other.Type != "volume" || source.Name == "" || source.Name != other.Name || source.Subpath == "" || source.Unresolved {
+		return false
+	}
+	if *inspected == nil {
+		info, err := s.Docker.Inspect(ctx, containerID)
+		if err != nil {
+			return false
+		}
+		*inspected = identity.DockerMounts(info)
+	}
+	for _, mount := range *inspected {
+		if mount.Name == other.Name && path.Clean(mount.Destination) == path.Clean(other.Destination) {
+			return mount.Subpath != "" && !mount.Unresolved && !overlaps(path.Clean("/"+source.Subpath), path.Clean("/"+mount.Subpath))
+		}
+	}
+	return false
 }
 
 // AssertSeparateDestination proves the destination is mounted into Ludock
@@ -933,9 +1032,22 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 			}
 		}
 	}
+	// Only backups that can be read count toward what the rule keeps: rows
+	// whose archives are gone, or can't be looked for now, would otherwise
+	// take the places of ones that can be restored. They aren't removed, and
+	// their sizes, any server's, don't make the total limit remove others.
+	readable := map[string]bool{}
+	var unconfirmed int64
+	for index := range list {
+		if backup := &list[index]; backup.State == "complete" {
+			if readable[backup.ID] = s.readable(backup); !readable[backup.ID] {
+				unconfirmed += backup.Size
+			}
+		}
+	}
 	expired, spare := planRetention(list, time.Local, func(id string) bool {
 		return slices.Contains(protected, id) || s.Storage.Reading(id)
-	})
+	}, func(id string) bool { return readable[id] })
 	for _, backup := range expired {
 		if err := s.removeIdle(ctx, backup); failed(backup, err) {
 			return err
@@ -943,12 +1055,25 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 	}
 	// Space is measured again after each removal, and only archives in the
 	// current folder free room on its disk.
+	scanned := false
 	for _, backup := range spare {
-		if room, need := s.room(ctx, list, settings); room >= need {
-			break
-		}
 		if backup.destination != settings.Destination {
 			continue
+		}
+		room, need := s.room(ctx, list, settings, unconfirmed)
+		// Other servers' archives are looked for only when they could decide
+		// whether a spare goes.
+		if room < need && !scanned && settings.MaxBytes > 0 {
+			scanned = true
+			others, err := s.unconfirmedBytes(ctx, serverID)
+			if err != nil {
+				return err
+			}
+			unconfirmed += others
+			room, need = s.room(ctx, list, settings, unconfirmed)
+		}
+		if room >= need {
+			break
 		}
 		if err := s.removeIdle(ctx, backup); failed(backup, err) {
 			return err
@@ -976,10 +1101,41 @@ func (s *Service) removeIdle(ctx context.Context, backup Backup) error {
 	return nil
 }
 
+// unconfirmedBytes is the size of other servers' complete backups whose
+// archives can't be found.
+func (s *Service) unconfirmedBytes(ctx context.Context, serverID string) (int64, error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE state='complete' AND server_id<>?", serverID)
+	if err != nil {
+		return 0, err
+	}
+	var others []*Backup
+	for rows.Next() {
+		backup, err := scanBackup(rows)
+		if err != nil {
+			rows.Close()
+			return 0, err
+		}
+		others = append(others, backup)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, backup := range others {
+		if !s.readable(backup) {
+			total += backup.Size
+		}
+	}
+	return total, nil
+}
+
 // room is the space left for the server's next backup and the space it
-// should need: its newest backup's size plus a margin. When either is
-// unknown, need is zero, so space alone removes nothing.
-func (s *Service) room(ctx context.Context, list []Backup, settings Settings) (room, need int64) {
+// should need: its newest backup's size plus a margin. unconfirmed is the
+// size of backups whose archives weren't found, which the total limit
+// doesn't count. When either is unknown, need is zero, so space alone
+// removes nothing.
+func (s *Service) room(ctx context.Context, list []Backup, settings Settings, unconfirmed int64) (room, need int64) {
 	index := slices.IndexFunc(list, func(backup Backup) bool { return backup.State == "complete" })
 	if index < 0 {
 		return 0, 0
@@ -994,7 +1150,7 @@ func (s *Service) room(ctx context.Context, list []Backup, settings Settings) (r
 		if err != nil {
 			return 0, 0
 		}
-		room = min(room, settings.MaxBytes-used)
+		room = min(room, settings.MaxBytes-used+unconfirmed)
 	}
 	size := list[index].Size
 	return room, size + size*spaceMargin/100

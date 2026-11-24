@@ -87,11 +87,9 @@ func (s *Storage) CopyFile(ctx context.Context, source io.Reader, directory, nam
 	return err
 }
 
-// nameClaim lets a copy keep off a name another writer of the folder holds.
+// nameClaim lets a copy keep off a name another file of the folder holds.
 type nameClaim struct {
-	// ours recognizes a file at the name that this copy may replace.
-	ours func(io.Reader) bool
-	// next is the name to try when another's file holds name.
+	// next is the name to try when a different file holds name.
 	next func(name string) string
 	// partial is the copy's partial file, recorded before it is written: a
 	// same-second writer's partial shares its prefix, so none is removed.
@@ -99,8 +97,8 @@ type nameClaim struct {
 }
 
 // copyFile is CopyFile, returning the name the copy was published as: with
-// claim, a different file at name that isn't ours is kept, and the copy
-// takes claim's next name.
+// claim, a different file at name is kept, and the copy takes claim's next
+// name.
 func (s *Storage) copyFile(ctx context.Context, source io.Reader, directory, name string, size int64, checksum string,
 	reserve int64, progress func(), modified time.Time, claim *nameClaim) (string, error) {
 	if !fileName.MatchString(name) || strings.HasSuffix(name, ".partial") {
@@ -189,8 +187,8 @@ func (s *Storage) copyFile(ctx context.Context, source io.Reader, directory, nam
 
 // publish gives a verified partial file its final name and returns it. A
 // valid file already there is kept, so an attempt that wakes after a newer
-// one never replaces its file; an invalid one is replaced, unless claim says
-// it is another's, which moves the copy on to claim's next name.
+// one never replaces its file; an invalid one is replaced, unless there is a
+// claim, which moves the copy on to claim's next name.
 func publish(ctx context.Context, dir pinned, partial, name string, size int64, checksum string, claim *nameClaim) (string, error) {
 	for attempt := 0; ; attempt++ {
 		err := unix.Renameat2(dir.fd, partial, dir.fd, name, unix.RENAME_NOREPLACE)
@@ -218,7 +216,7 @@ func publish(ctx context.Context, dir pinned, partial, name string, size int64, 
 			if ctx.Err() != nil {
 				return "", errCopyStalled
 			}
-			if claim != nil && !claim.holds(dir, name) {
+			if claim != nil {
 				if attempt == 60 {
 					return "", errCopyFailed
 				}
@@ -238,20 +236,6 @@ func publish(ctx context.Context, dir pinned, partial, name string, size int64, 
 		}
 		return name, nil
 	}
-}
-
-// holds reports whether the file at name is one claim may replace.
-func (c *nameClaim) holds(dir pinned, name string) bool {
-	fd, err := unix.Openat(dir.fd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return false
-	}
-	file := os.NewFile(uintptr(fd), name)
-	defer file.Close()
-	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
-		return false
-	}
-	return c.ours(file)
 }
 
 // removePartials removes the partial files of name's earlier attempts.
@@ -538,34 +522,48 @@ const copyLimit = 50
 
 // CopyDue makes due second copies one at a time, skipping servers that have
 // work running so a copy never reads while a backup or restore holds them.
+// A pass looks at each due copy once, in order, so busy servers' copies
+// don't hold back the rest, and the next pass starts again from the first.
 func (s *Service) CopyDue(ctx context.Context) error {
+	after := copyCursor{due: time.Now().UnixMilli()}
 	for {
 		if err := s.finishCopyRemovals(ctx); err != nil {
 			return err
 		}
-		attempted, err := s.copyBatch(ctx)
-		if err != nil || !attempted {
+		more, err := s.copyBatch(ctx, &after)
+		if err != nil || !more {
 			return err
 		}
 	}
 }
 
-// copyBatch attempts the copies due now and reports whether it tried any.
-func (s *Service) copyBatch(ctx context.Context) (bool, error) {
-	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+` FROM backups
-    WHERE state='complete' AND copy_state IN ('pending','failed') AND copy_next_at<=?
-    ORDER BY copy_next_at,created_at,id LIMIT ?`, time.Now().UnixMilli(), copyLimit)
+// copyCursor is the last due copy a pass looked at.
+type copyCursor struct {
+	// due is when the pass started: copies retried during it wait for the next.
+	due             int64
+	nextAt, created int64
+	id              string
+}
+
+// copyBatch attempts the due copies after cursor, moves cursor past them,
+// and reports whether more may follow.
+func (s *Service) copyBatch(ctx context.Context, after *copyCursor) (bool, error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+`,copy_next_at FROM backups
+    WHERE state='complete' AND copy_state IN ('pending','failed') AND copy_next_at<=? AND (copy_next_at,created_at,id)>(?,?,?)
+    ORDER BY copy_next_at,created_at,id LIMIT ?`, after.due, after.nextAt, after.created, after.id, copyLimit)
 	if err != nil {
 		return false, err
 	}
 	var due []*Backup
 	for rows.Next() {
-		backup, err := scanBackup(rows)
+		var nextAt int64
+		backup, err := scanBackup(scanWith{rows, &nextAt})
 		if err != nil {
 			rows.Close()
 			return false, err
 		}
 		due = append(due, backup)
+		after.nextAt, after.created, after.id = nextAt, backup.CreatedAt, backup.ID
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -575,7 +573,6 @@ func (s *Service) copyBatch(ctx context.Context) (bool, error) {
 	if settings, _, err := s.SavedSettings(ctx); err == nil && settings != nil {
 		reserve = settings.ReserveBytes
 	}
-	attempted := false
 	for _, backup := range due {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
@@ -583,13 +580,20 @@ func (s *Service) copyBatch(ctx context.Context) (bool, error) {
 		if s.Locks != nil && s.Locks.ServerBusy(backup.ServerID) {
 			continue
 		}
-		attempted = true
 		if err := s.copyOne(ctx, backup, reserve); err != nil {
 			return false, err
 		}
 	}
-	return attempted, nil
+	return len(due) == copyLimit, nil
 }
+
+// scanWith scans a row's backup columns, then extra.
+type scanWith struct {
+	row   interface{ Scan(...any) error }
+	extra any
+}
+
+func (s scanWith) Scan(dest ...any) error { return s.row.Scan(append(dest, s.extra)...) }
 
 // copyOne makes one attempt at a backup's second copy. Only a database
 // error is returned; a failed copy is recorded on the backup.
@@ -806,18 +810,21 @@ func (s *Service) look(folder, id string, stalled error) (bool, error) {
 
 // ArchiveFolder is where a backup's archive is read from: its own folder,
 // or a second copy when the archive is missing there, preferring the one in
-// the chosen folder. It sets FromCopy and FolderAway (also when that folder
-// isn't responding), and fails when a folder it must look into isn't.
+// the chosen folder. It sets FromCopy, FolderAway (also when that folder
+// isn't responding), and Missing, and fails when a folder it must look into
+// isn't.
 func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
-	backup.FromCopy = false
+	backup.FromCopy, backup.Missing, backup.found = false, false, false
 	found, err := s.look(backup.destination, backup.ID, errFolderStalled)
 	backup.FolderAway = err != nil
 	if errors.Is(err, errFolderStalled) {
 		return "", err
 	}
 	if found {
+		backup.found = true
 		return backup.destination, nil
 	}
+	looked := err == nil
 	var copies []string
 	if backup.CopyState == "complete" {
 		copies = append(copies, backup.copyDestination)
@@ -831,11 +838,21 @@ func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 			return "", err
 		}
 		if found {
-			backup.FromCopy = true
+			backup.FromCopy, backup.found = true, true
 			return folder, nil
 		}
+		looked = looked && err == nil
 	}
+	backup.Missing = looked
 	return backup.destination, nil
+}
+
+// readable reports whether a backup's archive was found, in its folder or
+// as a verified second copy. One that is missing, or that Ludock can't
+// look for, is not.
+func (s *Service) readable(backup *Backup) bool {
+	_, err := s.ArchiveFolder(backup)
+	return err == nil && backup.found
 }
 
 // Locate sets FromCopy and FolderAway on backups and Copying on complete
