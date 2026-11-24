@@ -112,7 +112,15 @@ type fileHelper struct {
 	abortErr error
 }
 
-func within(value, root string) bool { return value == root || strings.HasPrefix(value, root+"/") }
+// Within reports whether the slash-separated path value is root or inside
+// it. "/" holds every absolute path.
+func Within(value, root string) bool {
+	// Discovery calls this for every mount and system path; no concatenation.
+	if root == "/" {
+		return strings.HasPrefix(value, "/")
+	}
+	return strings.HasPrefix(value, root) && (len(value) == len(root) || value[len(root)] == '/')
+}
 
 func components(value string) ([]string, error) {
 	if strings.Contains(value, "\x00") || slices.Contains(strings.Split(value, "/"), "..") {
@@ -139,7 +147,7 @@ func ownParts(value string) ([]string, error) {
 
 func (h *fileHelper) blocked(value string, recursive bool) bool {
 	for _, root := range h.request.Blocked {
-		if within(value, root) || (recursive && within(root, value)) {
+		if Within(value, root) || (recursive && Within(root, value)) {
 			return true
 		}
 	}
@@ -371,7 +379,7 @@ func (h *fileHelper) removeEntry(parent fd, name string, depth int) error {
 // ludock.files, shows the folder that holds it.
 func (h *fileHelper) unmounted(parent fd, name, relative string) error {
 	absolute := h.absolute(relative)
-	if slices.ContainsFunc(h.request.Mounts, func(mount string) bool { return within(mount, absolute) }) {
+	if slices.ContainsFunc(h.request.Mounts, func(mount string) bool { return Within(mount, absolute) }) {
 		return errMounted
 	}
 	count := 0

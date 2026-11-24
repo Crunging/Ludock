@@ -62,8 +62,6 @@ func checkID(id string) error {
 	return nil
 }
 
-func within(value, root string) bool { return value == root || strings.HasPrefix(value, root+"/") }
-
 // RootList splits a colon-delimited root setting such as
 // LUDOCK_BACKUP_ROOTS, dropping blanks and duplicates.
 func RootList(value string) []string {
@@ -313,7 +311,7 @@ func (s *Storage) validateFolder(ctx context.Context, folder string) (string, er
 	var mount *identity.Mount
 	for index := range own.Mounts {
 		entry := &own.Mounts[index]
-		if within(directory, entry.Destination) && (mount == nil || len(entry.Destination) > len(mount.Destination)) {
+		if helper.Within(directory, entry.Destination) && (mount == nil || len(entry.Destination) > len(mount.Destination)) {
 			mount = entry
 		}
 	}
@@ -351,7 +349,7 @@ func (s *Storage) resolveDirectory(directory string) (string, error) {
 	for _, value := range configured {
 		// Only roots that can hold the directory are resolved, so an
 		// unreachable second folder leaves the others usable.
-		if !filepath.IsAbs(value) || filepath.Clean(value) == "/" || !within(filepath.Clean(directory), filepath.Clean(value)) {
+		if !filepath.IsAbs(value) || filepath.Clean(value) == "/" || !helper.Within(filepath.Clean(directory), filepath.Clean(value)) {
 			continue
 		}
 		canonical, err := filepath.EvalSymlinks(value)
@@ -368,8 +366,8 @@ func (s *Storage) resolveDirectory(directory string) (string, error) {
 		return "", err
 	}
 	cleaned := filepath.Clean(directory)
-	index := slices.IndexFunc(roots, func(root string) bool { return within(resolved, root) })
-	if index < 0 || !within(cleaned, roots[index]) {
+	index := slices.IndexFunc(roots, func(root string) bool { return helper.Within(resolved, root) })
+	if index < 0 || !helper.Within(cleaned, roots[index]) {
 		return "", fail("BACKUP_DESTINATION", "The backup folder must be an existing mounted folder inside LUDOCK_BACKUP_ROOTS, with no symbolic links in its path.")
 	}
 	root := roots[index]

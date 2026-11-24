@@ -18,6 +18,7 @@ import (
 	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
+	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -801,7 +802,7 @@ func (s *Service) AssertReady(ctx context.Context, server *servers.Context) erro
 }
 
 func overlaps(left, right string) bool {
-	return left == "/" || right == "/" || left == right || strings.HasPrefix(left, right+"/") || strings.HasPrefix(right, left+"/")
+	return helper.Within(left, right) || helper.Within(right, left)
 }
 
 // MountsOverlap reports two mounts that can reach the same data.
@@ -915,7 +916,7 @@ func (s *Service) hostMounts(ctx context.Context, folder string) ([]identity.Mou
 	}
 	var mounts []identity.Mount
 	for _, mount := range own.Mounts {
-		if within(folder, mount.Destination) {
+		if helper.Within(folder, mount.Destination) {
 			mounts = append(mounts, identity.Mount{Type: mount.Type, Name: mount.Name,
 				Source: mount.Source + folder[len(mount.Destination):], Destination: folder, Writable: true})
 		}

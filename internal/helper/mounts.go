@@ -118,7 +118,7 @@ var MountTable = func() ([]byte, error) { return os.ReadFile("/proc/self/mountin
 // walk of the data, so it is read before anything stops or moves.
 func ownMount(base, root string) error {
 	base, root = path.Clean(base), path.Clean(root)
-	if !strings.HasPrefix(base, "/") || base == "/" || !within(root, base) {
+	if !strings.HasPrefix(base, "/") || base == "/" || !Within(root, base) {
 		return errUnsafe
 	}
 	table, err := MountTable()
@@ -133,7 +133,7 @@ func ownMount(base, root string) error {
 			continue
 		}
 		point := unescapeMount(fields[4])
-		if point != base && within(point, base) && (within(point, root) || within(root, point)) {
+		if point != base && Within(point, base) && (Within(point, root) || Within(root, point)) {
 			return errMounted
 		}
 	}
