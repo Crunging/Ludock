@@ -172,10 +172,10 @@ func TestNextBackupAfterStaleRestoreJournal(t *testing.T) {
 
 // Finishing a restore that stopped partway would move live data holding
 // another restore's stage folder: a backup, a restart with a backup first,
-// and an undo, each asked to warn players, are refused before anyone is
-// warned or the server stops. A step that fails after the stop, before any
-// live data moves, fails the backup, but the server it stopped is running
-// again and the undo is left for the next operation.
+// an undo, and an update, each asked to warn players, are refused before
+// anyone is warned or the server stops. A step that fails after the stop,
+// before any live data moves, fails the backup, but the server it stopped
+// is running again and the undo is left for the next operation.
 func TestFailedUndoReturnsServerToRunning(t *testing.T) {
 	f := setup(t)
 	restore, _ := f.stoppedRestore(t)
@@ -190,6 +190,7 @@ func TestFailedUndoReturnsServerToRunning(t *testing.T) {
 		{ops.KindBackup, map[string]any{WarnInput: true}},
 		{ops.KindRestart, map[string]any{"createBackup": true, WarnInput: true}},
 		{ops.KindUndoRestore, map[string]any{WarnInput: true}},
+		{ops.KindUpdate, map[string]any{"request": skipBackup["request"], WarnInput: true}},
 	} {
 		before := len(f.engine.Requests)
 		job := f.run(t, work.kind, work.input)

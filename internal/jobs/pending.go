@@ -256,7 +256,7 @@ func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *bac
 func (j *Jobs) assertPendingUndoable(ctx context.Context, server *servers.Context, job *ops.Context, assertAccess func() error) error {
 	pending, err := j.pendingRestores(ctx, server.Logical.ID)
 	if err != nil {
-		return err
+		return nil
 	}
 	var data *backups.DataHelper
 	defer func() {
