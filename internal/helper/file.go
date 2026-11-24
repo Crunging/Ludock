@@ -353,41 +353,44 @@ func (h *fileHelper) unmounted(parent fd, name, relative string) error {
 	if slices.ContainsFunc(h.request.Mounts, func(mount string) bool { return within(mount, absolute) }) {
 		return errMounted
 	}
-	info, err := lstatAt(parent, name)
-	if err != nil || !isDir(info) {
-		return err
-	}
 	count := 0
 	return h.oneMount(parent, name, 0, &count)
 }
 
+// oneMount checks files too: unlinking a mounted file fails only after
+// what was removed before it is gone.
 func (h *fileHelper) oneMount(parent fd, name string, depth int, count *int) error {
 	if *count++; depth > 64 || *count > 1000000 {
 		return errors.New("the folder has too many entries to check")
 	}
-	directory, err := h.t.openAt(parent, name, directoryFlags, 0)
+	info, err := lstatAt(parent, name)
 	if err != nil {
 		return err
 	}
-	defer h.t.close(directory)
-	if same, err := sameMount(parent, directory); err != nil {
+	flags := directoryFlags
+	if !isDir(info) {
+		flags = unix.O_PATH | unix.O_NOFOLLOW | unix.O_CLOEXEC
+	}
+	entry, err := h.t.openAt(parent, name, flags, 0)
+	if err != nil {
+		return err
+	}
+	defer h.t.close(entry)
+	if same, err := sameMount(parent, entry); err != nil {
 		return err
 	} else if !same {
 		return errMounted
 	}
-	children, err := names(directory)
+	if !isDir(info) {
+		return nil
+	}
+	children, err := names(entry)
 	if err != nil {
 		return err
 	}
 	for _, child := range children {
-		info, err := lstatAt(directory, child)
-		if err != nil {
+		if err := h.oneMount(entry, child, depth+1, count); err != nil {
 			return err
-		}
-		if isDir(info) {
-			if err := h.oneMount(directory, child, depth+1, count); err != nil {
-				return err
-			}
 		}
 	}
 	return nil

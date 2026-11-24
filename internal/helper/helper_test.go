@@ -650,19 +650,22 @@ func TestReservedNamesStayOutOfFiles(t *testing.T) {
 	}
 }
 
-// A folder mounted separately inside a data folder, whether the backend
-// declared it or only the file system shows it, is never entered or moved:
-// deleting, renaming, or moving it or a folder holding it is refused before
-// anything changes. Tests can't mount, so the file system's answer is faked
-// by inode.
+// A folder or file mounted separately inside a data folder, whether the
+// backend declared it or only the file system shows it, is never entered or
+// moved: deleting, renaming, or moving it or a folder holding it is refused
+// before anything changes. Tests can't mount, so the file system's answer is
+// faked by inode.
 func TestChangesNeverCrossAMount(t *testing.T) {
 	root, _ := dataRoot(t)
 	os.Remove(filepath.Join(root, "escape"))
 	mods := filepath.Join(root, "world", "mods")
 	os.MkdirAll(mods, 0o755)
 	os.WriteFile(filepath.Join(mods, "a.jar"), []byte("jar"), 0o644)
-	var mounted unix.Stat_t
+	var mounted, mountedFile unix.Stat_t
 	if err := unix.Stat(mods, &mounted); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Stat(filepath.Join(root, "world", "level.dat"), &mountedFile); err != nil {
 		t.Fatal(err)
 	}
 	requests := map[string]FileRequest{
@@ -705,6 +708,13 @@ func TestChangesNeverCrossAMount(t *testing.T) {
 		}
 	}
 	intact("found")
+	mounted.Ino = mountedFile.Ino
+	for _, name := range []string{"delete the folder", "delete a selection"} {
+		if _, code := runFile(t, requests[name], nil); code != FileMounted {
+			t.Errorf("file: %s: %d", name, code)
+		}
+	}
+	intact("file")
 	mountOf = mountID
 	if _, code := runFile(t, requests["delete the folder"], nil); code != 0 {
 		t.Fatal("refused a folder on one mount", code)

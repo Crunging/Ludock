@@ -735,8 +735,9 @@ Every name that starts with `.ludock-`, in any letter case, is Ludock's:
 Files doesn't show these names, and no one can create, rename, move, upload,
 unpack, download, or delete one there; a folder holding one can still be
 deleted as a whole, except that a restore's folder is only ever at the top of
-a data folder. Backups leave them out, and restores leave them where they are,
-so one left over, or made by hand, never blocks a backup or a restore. To
+a data folder. Backups leave them out, and a restore leaves those at the top of a data folder
+where they are, so one left over, or made by hand, never blocks a backup or a
+restore. To
 remove one Ludock no longer needs, delete it on the host. The previous data of
 a restore that stopped partway is in its `.ludock-restore-<id>/old`.
 
