@@ -440,10 +440,9 @@ docker compose up -d ludock
 Its data and your servers stay as they are. Work Ludock is stopped in the
 middle of is recovered at the next start.
 
-Ludock can't use data from a beta (1.0 starts fresh, see
-[Coming from a beta](../README.md#coming-from-a-beta)), from a newer version
-than the one starting, or from another program. It says which in its log and
-on its address, leaves the data as it was, and waits instead of exiting, so a
+Ludock can't use data from a newer version than the one starting, from a
+pre-1.0 build, or from another program. It says which in its log and on its
+address, leaves the data as it was, and waits instead of exiting, so a
 container that restarts on its own doesn't repeat the message.
 
 ### Remove Ludock
@@ -485,7 +484,7 @@ an administrator's change. Nothing stops while it saves.
 - Ludock keeps the 3 newest saves and the newest of each of the last 7 days
   with one, and removes older ones only after a newer save is checked. It
   removes only its own saves, which hold its identity key; saves from another
-  installation or a beta stay as they are.
+  installation stay as they are.
 - With a second copy chosen, the newest save is copied there too, and that
   folder keeps saves by the same rule.
 - **Settings → Backups** shows when Ludock's data was last saved, or why
@@ -552,9 +551,7 @@ sudo mkdir restored
 sudo tar -xpf backup.tar --numeric-owner -C restored --strip-components=1 "snapshot/$id"
 ```
 
-A backup from a beta may number its folders instead, `snapshot/root-0/` and
-so on, in the order the server listed them; `tar -tf` shows which `$id` to
-use. Run these as root so owners stay as they were. Stop the game, then
+Run these as root so owners stay as they were. Stop the game, then
 replace the contents of its data folder with those of `restored/$id/`, still
 as root and keeping owners and permissions, such as with
 `sudo cp -a "restored/$id/." <folder>/` after emptying the folder. For a data

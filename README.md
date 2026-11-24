@@ -41,23 +41,6 @@ Servers on [supported game images](./docs/REFERENCE.md#supported-games) appear
 by themselves; several were [checked on real servers](./docs/REFERENCE.md#checked-on-real-servers). For any other container, choose **Missing a server?** under the
 server list.
 
-### Coming from a beta
-
-Ludock 1.0 starts fresh: it can't use a beta's data, and says so instead of
-starting. Give it a new, empty data volume: in `compose.yaml`, rename
-`ludock-data` in both places, such as to `ludock-data-1`, then run
-`docker compose up -d` and set it up as above. Leave `ludock-backups` as it
-is. The old data volume stays as it was; keep it, or remove it with
-`docker volume rm`.
-
-- **Carries over:** your game servers, which Ludock never owned, and the
-  backup archives in the backup folder. They stay plain tar files; 1.0 doesn't
-  list them and never changes or removes them.
-  [Restore one by hand](./docs/REFERENCE.md#restore-a-backup-without-ludock)
-  when you need it.
-- **Starts over:** accounts, sharing, schedules, settings, monitoring, and
-  Activity. A beta's `ludock-data-*.tar` saves can't be restored.
-
 ## What it does
 
 - **Start, stop, and restart**, saving the world and warning players first on
