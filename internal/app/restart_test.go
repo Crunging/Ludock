@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
-	"runtime"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -359,9 +359,10 @@ func TestAnnouncedHangKeepsItsRecoveryTiming(t *testing.T) {
 	}
 }
 
-// Ludock ends just as it alerts that a server is down, and the server is
-// still down when it starts again: the outage alert is queued all the same,
-// before the one saying the server is back up.
+// Ludock ends just as it queues the alert that a server is down, and the
+// server is still down when it starts again: the outage is not saved as
+// alerted without its alert, so the next process queues it, before the one
+// saying the server is back up.
 func TestOutageAlertSurvivesALudockRestart(t *testing.T) {
 	ctx := context.Background()
 	d := dbtest.Open(t)
@@ -379,11 +380,15 @@ func TestOutageAlertSurvivesALudockRestart(t *testing.T) {
 		notify.Config{Enabled: true, URL: "https://discord.com/api/webhooks/1/token"}, false); err != nil {
 		t.Fatal(err)
 	}
-	// ends is a process that stops at its first alert, before anything after it runs.
+	// ends is a process that stops as its alert is written, before anything
+	// it wrote commits.
 	start := func(ends bool) *monitor.Service {
 		m := &monitor.Service{DB: d, Locks: locks.New(), Store: store, Queue: notifications.QueueIn, Alerted: notifications.Poke}
 		if ends {
-			m.Alerted = func() { runtime.Goexit() }
+			m.Queue = func(ctx context.Context, tx *sql.Tx, alert notify.Alert, key, message string) (bool, error) {
+				notifications.QueueIn(ctx, tx, alert, key, message)
+				return false, errors.New("ended")
+			}
 		}
 		return m
 	}
@@ -394,12 +399,7 @@ func TestOutageAlertSurvivesALudockRestart(t *testing.T) {
 	}
 	check := func(m *monitor.Service, state string, at int64) {
 		t.Helper()
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			m.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: state}}, at)
-		}()
-		<-done
+		m.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: state}}, at)
 	}
 	before := start(true)
 	check(before, "running", 1000)
