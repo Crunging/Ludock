@@ -16,7 +16,7 @@ import (
 // actions in the source, and server.<kind> for every operation kind.
 func TestAuditLabelsCoverRecordedActions(t *testing.T) {
 	literal := regexp.MustCompile(`"((?:auth|authorization|availability|backup|checklist|notifications|schedule|server|settings|user)\.[a-z0-9_.-]+)"`)
-	kind := regexp.MustCompile(`\.Register\("([a-z_]+)"`)
+	kind := regexp.MustCompile(`\bKind[A-Z]\w* += "([a-z_]+)"|\.Register\("([a-z_]+)"`)
 	// Literals that look like actions but name capabilities or game files.
 	ignored := []string{"server.properties", "server.save"}
 	for _, capability := range authz.All {
@@ -38,7 +38,7 @@ func TestAuditLabelsCoverRecordedActions(t *testing.T) {
 			}
 		}
 		for _, match := range kind.FindAllStringSubmatch(string(source), -1) {
-			actions["server."+match[1]] = true
+			actions["server."+match[1]+match[2]] = true
 		}
 		return nil
 	})

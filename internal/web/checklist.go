@@ -16,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/notify"
+	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedtime"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -179,8 +180,8 @@ type backupTarget struct {
 	Warn, Wait bool
 }
 
-// backupTargets lists the servers that can be backed up, which a --rm one
-// or one with another mount in its data can't, and have no recurring backup, and the times existing recurring backups use.
+// backupTargets lists the servers that can be backed up and have no
+// recurring backup, and the times existing recurring backups use.
 func (s *Server) backupTargets(ctx context.Context, user *db.SessionUser, all []servers.View) ([]backupTarget, []string, error) {
 	if settings, _, err := s.App.Backups.SavedSettings(ctx); err != nil || settings == nil {
 		return nil, nil, err
@@ -199,7 +200,7 @@ func (s *Server) backupTargets(ctx context.Context, user *db.SessionUser, all []
 				taken = append(taken, schedule.Time)
 			}
 		}
-		if !covered && view.BindingStatus == "active" && len(view.FileRoots) > 0 && !view.AutoRemove && !view.NestedMount &&
+		if !covered && view.BindingStatus == "active" && len(view.FileRoots) > 0 && !view.Refuses(ops.KindBackup) && !view.NestedMount &&
 			!s.App.Backups.HostMounted(view.ID, view.BindingRevision) && view.Can(authz.BackupsCreate) {
 			targets = append(targets, backupTarget{ID: view.ID, Name: view.DisplayName, Warn: canWarn(&view),
 				Wait: s.App.Players.Source.Lists(view.Container)})

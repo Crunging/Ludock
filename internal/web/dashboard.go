@@ -114,9 +114,10 @@ func (s *Server) serverRow(r *http.Request, request *Request, view servers.View,
 	active := view.BindingStatus == "active"
 	row := views.ServerRow{Server: view, Address: views.ConnectAddress(view.Connection, r.Host), ShowBackup: showBackup,
 		Disabled: stale || view.ActiveOperation != nil || !active,
-		CanStart: action == "start" && can(&view, authz.ServerStart), CanStop: action == "stop" && !view.AutoRemove && can(&view, authz.ServerStop),
-		CanRestart: view.State == "running" && !view.AutoRemove && can(&view, authz.ServerRestart), CanBackup: !view.AutoRemove && can(&view, authz.BackupsCreate),
-		CanFiles: can(&view, authz.FilesRead) && len(view.FileRoots) > 0, BackupSummary: backupSummary(request.User(), &view)}
+		CanStart: action == "start" && can(&view, authz.ServerStart), CanStop: action == "stop" && !view.Refuses(ops.KindStop) && can(&view, authz.ServerStop),
+		CanRestart: view.State == "running" && !view.Refuses(ops.KindRestart) && can(&view, authz.ServerRestart),
+		CanBackup:  !view.Refuses(ops.KindBackup) && can(&view, authz.BackupsCreate),
+		CanFiles:   can(&view, authz.FilesRead) && len(view.FileRoots) > 0, BackupSummary: backupSummary(request.User(), &view)}
 	// A saved state is not live, so it has no players.
 	consoleLists := view.Console != nil && view.Console.ListsPlayers
 	row.Players = views.PlayersView{Listed: consoleLists || view.Query != nil, Running: view.State == "running" && active && !stale}
@@ -260,22 +261,14 @@ func (s *Server) audit(r *http.Request, request *Request, action, serverID strin
 func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Request, *Request) {
 	return func(w http.ResponseWriter, r *http.Request, request *Request) {
 		capability := authz.Capability("server." + kind)
-		createBackup := kind == "restart" && r.PostFormValue("createBackup") == "true"
-		warn := r.PostFormValue(jobs.WarnInput) == "true"
-		resolved, err := s.App.Servers.ResolveAuthorized(r.Context(), request.User(), r.PathValue("id"), capability, -1)
-		if err != nil {
-			s.fail(w, r, request, err)
-			return
-		}
-		current, err := s.App.Auth.Recheck(r.Context(), request.Principal)
+		createBackup := kind == ops.KindRestart && r.PostFormValue("createBackup") == "true"
+		resolved, user, err := s.resolveFresh(r, request, r.PathValue("id"), capability)
+		// Refused before the backup checks, whose refusals would mislead.
 		if err == nil {
-			_, err = s.App.Authz.Assert(r.Context(), &current.User, resolved.Logical.ID, capability)
-		}
-		if err == nil && resolved.Container.AutoRemove && servers.StopsServer(kind) {
-			err = servers.ErrAutoRemove
+			err = resolved.Container.Refusal(kind)
 		}
 		if err == nil && createBackup {
-			if _, err = s.App.Authz.Assert(r.Context(), &current.User, resolved.Logical.ID, authz.BackupsCreate); err == nil {
+			if _, err = s.App.Authz.Assert(r.Context(), user, resolved.Logical.ID, authz.BackupsCreate); err == nil {
 				err = jobs.AssertRunningForBackupRestart(resolved.Container.State)
 			}
 		}
@@ -287,11 +280,10 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 		if createBackup {
 			input["createBackup"] = true
 		}
-		if warn && warnOffer(resolved.Container) {
+		if r.PostFormValue(jobs.WarnInput) == "true" && warnOffer(resolved.Container) {
 			input[jobs.WarnInput] = true
 		}
-		job, err := s.App.Runner.Enqueue(r.Context(), nil, ops.EnqueueOptions{ServerID: resolved.Logical.ID, ActorID: current.User.ID,
-			Kind: kind, BindingRevision: resolved.Logical.BindingRevision, Input: input, IdempotencyKey: requestKey(r)})
+		job, err := s.queue(r, request, resolved, user, kind, input)
 		if err != nil {
 			s.fail(w, r, request, err)
 			return

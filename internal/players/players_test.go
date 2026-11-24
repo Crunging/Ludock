@@ -625,7 +625,6 @@ func TestHungReadingHoldsUpNoOther(t *testing.T) {
 	const hungGames = parallel + 1
 	ctx := context.Background()
 	// Restored after the service stops, which waits for its readings.
-	t.Cleanup(func(wait time.Duration) func() { return func() { passWait = wait } }(passWait))
 	engine, err := fakedocker.Start(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -656,7 +655,7 @@ func TestHungReadingHoldsUpNoOther(t *testing.T) {
 			close(source.release)
 		}
 	})
-	passWait = 10 * time.Millisecond
+	players.PassWait = 10 * time.Millisecond
 	players.Monitored = func(context.Context) map[string]bool { return stuck }
 	read := func(want int) {
 		t.Helper()

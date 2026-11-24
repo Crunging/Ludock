@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/db"
@@ -32,8 +33,11 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
 		LatestBackup: view.LatestBackup, NoData: view.NoDataFolders, BindingRevision: view.BindingRevision,
 		Warn: warnOffer(view.Container), Running: view.Container.State == "running", DeletedOnStop: view.AutoRemove}
-	if view.AutoRemove {
-		b.CanCreate, b.CanRestore = false, false
+	if view.Refuses(ops.KindBackup) {
+		b.CanCreate = false
+	}
+	if view.Refuses(ops.KindRestore) {
+		b.CanRestore = false
 	}
 	// The tab follows any running work, so readiness and paused controls come
 	// back when it ends.
@@ -45,7 +49,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 	if b.Operation.SelectedID != "" {
 		s.selectOperation(r, &b.Operation)
 	}
-	if last, err := s.App.Runner.LastOutcome(r.Context(), view.ID, "backup"); err != nil {
+	if last, err := s.App.Runner.LastOutcome(r.Context(), view.ID, ops.KindBackup); err != nil {
 		log.Warn("Could not read a server's last backup attempt")
 	} else if last != nil && last.Status != ops.Succeeded {
 		b.LastFailed = last
@@ -194,14 +198,14 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, request *Reques
 
 func (s *Server) queue(r *http.Request, request *Request, resolved *servers.Context, user *db.SessionUser,
 	kind string, input map[string]any) (*ops.Job, error) {
-	if resolved.Container.AutoRemove && servers.StopsServer(kind) {
-		return nil, servers.ErrAutoRemove
+	if err := resolved.Container.Refusal(kind); err != nil {
+		return nil, err
 	}
 	options := ops.EnqueueOptions{ServerID: resolved.Logical.ID, ActorID: user.ID, Kind: kind,
 		BindingRevision: resolved.Logical.BindingRevision, Input: input, IdempotencyKey: requestKey(r)}
 	var job *ops.Job
 	var err error
-	if kind == "restore" || kind == "update" || kind == jobs.UndoRestore {
+	if kind == ops.KindRestore || kind == ops.KindUpdate || kind == ops.KindUndoRestore {
 		err = s.App.DB.AdminMutation(r.Context(), user.ID, request.Principal.TokenHash, db.Now(), func(tx *sql.Tx) error {
 			job, err = s.App.Runner.Enqueue(r.Context(), tx, options)
 			return err
@@ -242,7 +246,7 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request, request *R
 	if r.PostFormValue(jobs.WarnInput) == "true" && warnOffer(resolved.Container) {
 		input = map[string]any{jobs.WarnInput: true}
 	}
-	s.enqueue(w, r, request, resolved, user, "backup", input)
+	s.enqueue(w, r, request, resolved, user, ops.KindBackup, input)
 }
 
 func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *Request) {
@@ -294,7 +298,7 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 	if fit.Moved {
 		input[jobs.MovedInput] = true
 	}
-	s.enqueue(w, r, request, resolved, user, "restore", input)
+	s.enqueue(w, r, request, resolved, user, ops.KindRestore, input)
 }
 
 func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request, request *Request) {
@@ -435,9 +439,8 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 			snapshot, err := s.App.Servers.Summary(r.Context(), request.User(), id)
 			return err != nil || snapshot.Server.ActiveOperation != nil
 		})
-		// Restarting a --rm server would delete it.
-		result.UpdatesOnStart = result.UpdatesOnStart && !resolved.Container.AutoRemove
-		if err = s.recheckCapability(r, request, id, capability, true); err == nil {
+		result.UpdatesOnStart = result.UpdatesOnStart && !resolved.Container.Refuses(ops.KindRestart)
+		if _, err = s.recheckAdminCapability(r, request, id, capability); err == nil {
 			u.Capability = &result
 			u.ChecksOff = !s.App.Checks.Enabled(r.Context())
 			u.Check = s.App.Checks.Status(r.Context(), id, resolved.Container.ID)
@@ -484,18 +487,18 @@ func (s *Server) checkImage(w http.ResponseWriter, r *http.Request, request *Req
 	render(w, r, http.StatusOK, views.ImageCheck(u))
 }
 
-func (s *Server) recheckCapability(r *http.Request, request *Request, id string, capability authz.Capability, admin bool) error {
+func (s *Server) recheckAdminCapability(r *http.Request, request *Request, id string, capability authz.Capability) (*db.SessionUser, error) {
 	current, err := s.App.Auth.Recheck(r.Context(), request.Principal)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if admin {
-		if err := s.recheckAdmin(r.Context(), request); err != nil {
-			return err
-		}
+	if err := auth.RequireAdmin(current); err != nil {
+		return nil, err
 	}
-	_, err = s.App.Authz.Assert(r.Context(), &current.User, id, capability)
-	return err
+	if _, err := s.App.Authz.Assert(r.Context(), &current.User, id, capability); err != nil {
+		return nil, err
+	}
+	return &current.User, nil
 }
 
 // queueUpdate pulls a server's image and recreates its container
@@ -522,10 +525,12 @@ func (s *Server) queueUpdate(w http.ResponseWriter, r *http.Request, request *Re
 		s.fail(w, r, request, err)
 		return
 	}
-	if err := s.recheckCapability(r, request, id, capability, true); err != nil {
+	if _, err := s.recheckAdminCapability(r, request, id, capability); err != nil {
 		s.fail(w, r, request, err)
 		return
 	}
+	// Checked again after the capability, so a session ended meanwhile
+	// records no confirmation.
 	current, err := s.App.Auth.Recheck(r.Context(), request.Principal)
 	if err != nil {
 		s.fail(w, r, request, err)
@@ -539,10 +544,10 @@ func (s *Server) queueUpdate(w http.ResponseWriter, r *http.Request, request *Re
 	input := map[string]any{"request": updateRequest}
 	// Unlike a restart, an update asked to warn keeps that through an empty
 	// server: it stops later, after the download.
-	if r.PostFormValue(jobs.WarnInput) == "true" && resolved.Container.State == "running" && jobs.CanWarn(resolved.Container) {
+	if r.PostFormValue(jobs.WarnInput) == "true" && warnOffer(resolved.Container) {
 		input[jobs.WarnInput] = true
 	}
-	s.enqueue(w, r, request, resolved, &current.User, "update", input)
+	s.enqueue(w, r, request, resolved, &current.User, ops.KindUpdate, input)
 }
 
 // undoRestore finishes undoing a server's restores that stopped partway. It
@@ -559,10 +564,10 @@ func (s *Server) undoRestore(w http.ResponseWriter, r *http.Request, request *Re
 		input = map[string]any{jobs.WarnInput: true}
 	}
 	if fromDetail(r) {
-		s.enqueue(w, r, request, resolved, user, jobs.UndoRestore, input)
+		s.enqueue(w, r, request, resolved, user, ops.KindUndoRestore, input)
 		return
 	}
-	if _, err := s.queue(r, request, resolved, user, jobs.UndoRestore, input); err != nil {
+	if _, err := s.queue(r, request, resolved, user, ops.KindUndoRestore, input); err != nil {
 		s.fail(w, r, request, err)
 		return
 	}

@@ -10,7 +10,6 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedules"
-	"github.com/Crunging/Ludock/internal/servers"
 )
 
 // StartCapabilities are what starting an operation like job takes. Whoever
@@ -19,21 +18,21 @@ import (
 func StartCapabilities(job *ops.Job) []authz.Capability {
 	var capabilities []authz.Capability
 	switch job.Kind {
-	case "start", "stop", "restart":
+	case ops.KindStart, ops.KindStop, ops.KindRestart:
 		capabilities = []authz.Capability{authz.Capability("server." + job.Kind)}
 		if job.Input["createBackup"] == true {
 			capabilities = append(capabilities, authz.BackupsCreate)
 		}
-	case "backup":
+	case ops.KindBackup:
 		capabilities = []authz.Capability{authz.BackupsCreate}
-	case "restore", UndoRestore:
+	case ops.KindRestore, ops.KindUndoRestore:
 		capabilities = []authz.Capability{authz.BackupsRestore}
-	case "update":
+	case ops.KindUpdate:
 		capabilities = []authz.Capability{authz.ServerUpdate}
 		if request, _ := job.Input["request"].(map[string]any); request["forceRecreate"] == true {
 			capabilities = append(capabilities, authz.ServerRecreate)
 		}
-	case "command":
+	case ops.KindCommand:
 		capabilities = []authz.Capability{authz.ConsoleExecute}
 	}
 	return capabilities
@@ -138,9 +137,9 @@ func (r registrar) Register(kind string, handler ops.Handler) {
 		if scheduled {
 			err = r.refusal(ctx, job)
 		}
-		// Refused before players are warned; the stop refuses it again.
-		if err == nil && servers.StopsServer(kind) {
-			err = r.assertNotDeletedOnStop(ctx, job)
+		// Refused before players are warned.
+		if err == nil {
+			err = r.jobs.Servers.InspectRefusal(ctx, job.Job.ServerID, kind)
 		}
 		if err != nil {
 			if _, public := apperr.As(err); public && scheduled {
@@ -153,18 +152,6 @@ func (r registrar) Register(kind string, handler ops.Handler) {
 		return run(ctx, job)
 	}
 	r.runner.Register(kind, handler)
-}
-
-func (r registrar) assertNotDeletedOnStop(ctx context.Context, job *ops.Context) error {
-	logical, err := r.jobs.Identity.ResolveBinding(ctx, job.Job.ServerID, -1)
-	if err != nil {
-		return err
-	}
-	info, err := r.jobs.Docker.Inspect(ctx, logical.ContainerID)
-	if err == nil && info.Host.AutoRemove {
-		err = servers.ErrAutoRemove
-	}
-	return err
 }
 
 // refusal is why the owner of scheduled job can't start it now, if they

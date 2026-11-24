@@ -127,7 +127,7 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 	if err != nil {
 		return err
 	}
-	if running(stopped) {
+	if servers.IsRunning(stopped) {
 		return fail("SERVER_DID_NOT_STOP", "The server did not stop; no data was copied.")
 	}
 	if err := job.Progress("stopped", func(r *ops.Recovery) {
@@ -184,17 +184,11 @@ func (j *Jobs) assertStillStopped(ctx context.Context, server *servers.Context, 
 	if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observed.Observation, server.Logical.BindingRevision); err != nil {
 		return err
 	}
-	if running(info) || info.State.Paused || info.State.Restarting ||
+	if servers.IsRunning(info) || info.State.Paused || info.State.Restarting ||
 		info.State.StartedAt != job.Job.Recovery.StoppedStartedAt {
 		return changed
 	}
 	return nil
-}
-
-// running is the same test servers.StopRecoveryState makes, which decides
-// Recovery.InitialRunning.
-func running(info *docker.ContainerInspect) bool {
-	return info.State.Running || info.State.Status == "running"
 }
 
 func wasRunning(job *ops.Context) bool {

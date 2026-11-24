@@ -1,5 +1,7 @@
 package web
 
+import "github.com/Crunging/Ludock/internal/ops"
+
 // routes registers the signed-in pages, fragments, and actions.
 func (s *Server) routes() {
 	m := s.mux
@@ -100,6 +102,6 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /settings/notifications/deliveries/{id}/retry", s.admin(s.retryNotification))
 	m.HandleFunc("GET /settings/system", s.admin(s.systemPage))
 	m.HandleFunc("POST /servers/{id}/start", s.authed(s.startServer))
-	m.HandleFunc("POST /servers/{id}/stop", s.authed(s.queueLifecycle("stop")))
-	m.HandleFunc("POST /servers/{id}/restart", s.authed(s.queueLifecycle("restart")))
+	m.HandleFunc("POST /servers/{id}/stop", s.authed(s.queueLifecycle(ops.KindStop)))
+	m.HandleFunc("POST /servers/{id}/restart", s.authed(s.queueLifecycle(ops.KindRestart)))
 }

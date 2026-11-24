@@ -14,6 +14,7 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/games"
+	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -155,7 +156,7 @@ func (s *Service) assertNoDependents(ctx context.Context, spec *docker.Container
 	}
 	name := strings.TrimPrefix(spec.Name, "/")
 	for _, candidate := range containers {
-		if candidate.ID == spec.ID || candidate.Labels["ludock.internal"] == "console-helper" {
+		if candidate.ID == spec.ID || candidate.Labels["ludock.internal"] == launch.ConsoleHelper {
 			continue
 		}
 		other, err := s.Docker.InspectSpec(ctx, candidate.ID)

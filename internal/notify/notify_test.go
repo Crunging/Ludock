@@ -302,9 +302,8 @@ func TestUnsavedResultIsNotResentEveryTick(t *testing.T) {
 }
 
 func TestEventsAreQueuedAgainAfterAFailure(t *testing.T) {
-	retryDelay = 10 * time.Millisecond
-	t.Cleanup(func() { retryDelay = time.Second })
 	s := setup(t, func(*http.Request) (*http.Response, error) { return respond(204, "") })
+	s.RetryDelay = 10 * time.Millisecond
 	t.Cleanup(s.Stop)
 	if _, err := s.DB.Exec(`CREATE TRIGGER busy BEFORE INSERT ON notification_deliveries
 		BEGIN SELECT RAISE(ABORT, 'database is locked'); END`); err != nil {

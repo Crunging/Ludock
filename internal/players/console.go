@@ -26,15 +26,15 @@ type GameSource struct {
 	Locks   *locks.Table
 }
 
+// settle is how long a reading after a command waits for a game on standard
+// input to carry the command out.
+const settle = 2 * time.Second
+
 func (c *GameSource) Lists(container servers.Container) bool {
 	return (container.Console != nil && container.Console.ListsPlayers) || container.Query != nil
 }
 
 var errSkipped = errors.New("player reading skipped")
-
-// settle is how long a reading after a command waits for a game on standard
-// input to carry the command out.
-var settle = 2 * time.Second
 
 // Read takes one reading under the server lock, as background work that
 // anything needing the server cancels, unless the caller holds it.

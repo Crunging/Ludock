@@ -42,12 +42,6 @@ const (
 	answerFresh = IdleInterval + Interval
 )
 
-// passWait is how long Poll waits for its readings, so a game that doesn't
-// answer holds up no other server's next reading. A reading still running
-// after it has hung: it gives up its slot, and the game's later readings take
-// the hung lane, one game at a time, until one ends within passWait.
-var passWait = 5 * time.Second
-
 // Reading is one server's players as Ludock last read them.
 type Reading struct {
 	// ContainerID and StartedAt are the container run it was read from; a
@@ -251,6 +245,12 @@ type Service struct {
 	Monitored func(ctx context.Context) map[string]bool
 	// Changed is told when a server's reading changes. It must not block.
 	Changed func(serverID string)
+	// PassWait is how long Poll waits for its readings, so a game that
+	// doesn't answer holds up no other server's next reading; zero is 5
+	// seconds. A reading still running after it has hung: it gives up its
+	// slot, and the game's later readings take the hung lane, one game at a
+	// time, until one ends within PassWait.
+	PassWait time.Duration
 
 	mu       sync.Mutex
 	readings map[string]*Reading
@@ -268,7 +268,7 @@ type Service struct {
 	healthy map[string]healthRun
 	// recalled holds the answers Recall was told of.
 	recalled map[string]healthRun
-	// hung holds the games whose last reading ran past passWait, which
+	// hung holds the games whose last reading ran past PassWait, which
 	// take the hung lane instead of a slot.
 	hung  map[string]bool
 	slots chan struct{}
@@ -280,6 +280,13 @@ type Service struct {
 	quit    chan struct{}
 	work    sync.WaitGroup
 	stopped bool
+}
+
+func (s *Service) passWait() time.Duration {
+	if s.PassWait == 0 {
+		return 5 * time.Second
+	}
+	return s.PassWait
 }
 
 type retry struct {
@@ -393,7 +400,7 @@ func (s *Service) Poll(ctx context.Context, watched func(serverID string) bool) 
 		wait.Wait()
 		close(done)
 	}()
-	timer := time.NewTimer(passWait)
+	timer := time.NewTimer(s.passWait())
 	defer timer.Stop()
 	select {
 	case <-done:
@@ -544,9 +551,9 @@ func (s *Service) start(ctx context.Context, server identity.Server, players, fr
 		case <-ctx.Done():
 			return
 		}
-		limit := passWait
+		limit := s.passWait()
 		var moving sync.Mutex
-		// A reading past passWait gives its slot to the games that answer.
+		// A reading past PassWait gives its slot to the games that answer.
 		// It takes the lane if that is free; otherwise it runs out its limit
 		// holding nothing, which each game does at most once before its
 		// readings wait for the lane.

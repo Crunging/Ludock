@@ -53,6 +53,19 @@ const PhaseWarningPlayers = "warning_players"
 // stops without acting.
 var ErrCancelled = errors.New("operation cancelled")
 
+// Kinds of operation. Lanes, capabilities and the --rm refusal all switch
+// on these.
+const (
+	KindStart       = "start"
+	KindStop        = "stop"
+	KindRestart     = "restart"
+	KindBackup      = "backup"
+	KindRestore     = "restore"
+	KindUndoRestore = "undo_restore"
+	KindUpdate      = "update"
+	KindCommand     = "command"
+)
+
 // RecoveryActor starts the restarts of automatic recovery, on the authority
 // of the server's monitoring policy instead of an account.
 const RecoveryActor = "ludock-recovery"
@@ -539,7 +552,7 @@ func (r *Runner) queueScheduledFailure(ctx context.Context, tx *sql.Tx, rw *row)
 	}
 	// The backup handler may already have recorded its failure; share its key.
 	key := "schedule-failed:" + rw.id
-	if rw.kind == "backup" {
+	if rw.kind == KindBackup {
 		key = "backup-failed:" + rw.id
 	}
 	name := "A server"
@@ -644,11 +657,11 @@ var testHook func(point string)
 
 func laneFor(rw *row) string {
 	switch rw.kind {
-	case "start", "stop":
+	case KindStart, KindStop:
 		return laneLifecycle
-	case "command":
+	case KindCommand:
 		return laneConsole
-	case "restart":
+	case KindRestart:
 		input, err := parseObject(rw.input)
 		if err == nil && input["createBackup"] == true {
 			return laneData

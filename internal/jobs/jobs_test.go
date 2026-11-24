@@ -231,7 +231,7 @@ func TestFailedRestoreRollsBack(t *testing.T) {
 	backupID := backup.Result["backupId"].(string)
 	os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("newer"), 0o644)
 	f.mu.Lock()
-	f.failStep = "moveNew"
+	f.failStep = helper.RestoreMoveNew
 	f.mu.Unlock()
 	restore := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "mc"})
 	if restore.Status != ops.Failed {
@@ -272,7 +272,7 @@ func TestRestoreCleanupAfterCommit(t *testing.T) {
 		return false
 	}
 	f.mu.Lock()
-	f.failStep, f.failTimes = "cleanup", 1
+	f.failStep, f.failTimes = helper.RestoreCleanup, 1
 	f.mu.Unlock()
 	restored := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "mc"})
 	if restored.Status != ops.Succeeded || staged() || !f.running() {
@@ -282,7 +282,7 @@ func TestRestoreCleanupAfterCommit(t *testing.T) {
 		t.Fatal("the backup was not restored")
 	}
 	f.mu.Lock()
-	f.failStep, f.failTimes = "cleanup", 0
+	f.failStep, f.failTimes = helper.RestoreCleanup, 0
 	f.mu.Unlock()
 	stuck := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "mc"})
 	if stuck.Status != ops.Failed || !strings.Contains(stuck.Error, ".ludock-restore-"+stuck.ID) || !staged() || !f.running() {
@@ -430,7 +430,7 @@ func spaceReports(f *fixture, free func(check int) (bytes int, device string)) *
 	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
 		var request helper.RestoreRequest
 		if len(cmd) > 3 && cmd[0] == helper.Binary && cmd[2] == "restore" && json.Unmarshal([]byte(cmd[3]), &request) == nil &&
-			request.Operation == "space" {
+			request.Operation == helper.RestoreSpace {
 			*checks++
 			bytes, device := free(*checks)
 			out, _ := json.Marshal(map[string]any{"availableBytes": bytes, "device": device})

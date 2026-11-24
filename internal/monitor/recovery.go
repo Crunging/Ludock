@@ -55,9 +55,9 @@ type Recovery struct {
 
 // RecoveryOffered reports whether a container's game can be recovered: only
 // a status query, or the image's health check in its place, tells a hung
-// game from a slow one. A restart would delete a --rm server.
+// game from a slow one.
 func RecoveryOffered(container servers.Container) bool {
-	return (container.Query != nil || container.HealthAnswers) && !container.AutoRemove
+	return (container.Query != nil || container.HealthAnswers) && !container.Refuses(ops.KindRestart)
 }
 
 // RecoveryWait is how long after a recovery restart the game has to answer
@@ -156,7 +156,7 @@ var errRecoveryChanged = errors.New("recovery changed")
 func (s *Service) recover(ctx context.Context, server identity.Server, container servers.Container, r *row, policy Policy, now int64) bool {
 	// A server awaiting review of a change can't be restarted by recovery,
 	// nor one Docker deletes when it stops; its outage is alerted instead.
-	if s.Runner == nil || server.SharingPaused || container.AutoRemove {
+	if s.Runner == nil || server.SharingPaused || container.Refuses(ops.KindRestart) {
 		return false
 	}
 	var state Recovery
@@ -227,7 +227,7 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 		}
 		var err error
 		// The restart acts only on the container run judged hung.
-		if job, err = s.Runner.Enqueue(ctx, tx, ops.EnqueueOptions{ServerID: server.ID, ActorID: ops.RecoveryActor, Kind: "restart",
+		if job, err = s.Runner.Enqueue(ctx, tx, ops.EnqueueOptions{ServerID: server.ID, ActorID: ops.RecoveryActor, Kind: ops.KindRestart,
 			BindingRevision: server.BindingRevision, Input: map[string]any{"run": container.StateSince, "answered": answered}}); err != nil {
 			return err
 		}
