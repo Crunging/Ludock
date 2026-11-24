@@ -63,7 +63,7 @@ func (f *fixture) checkUndone(t *testing.T, failed *ops.Job, later *ops.Job) {
 	}
 	restore, _ := f.runner.Get(ctx, restoreID)
 	if guidance, _ := restore.Result["guidance"].(string); restore.Status != ops.Failed || restore.UpdatedAt != failed.UpdatedAt ||
-		f.savedJournal(restoreID) != "rolled_back" ||
+		f.savedJournal(restoreID) != "rolled_back put back" ||
 		!strings.Contains(guidance, "back in place") || !strings.Contains(guidance, aside) {
 		t.Errorf("%+v, journal %s", restore, f.savedJournal(restoreID))
 	}
@@ -119,7 +119,7 @@ func TestStartupFinishesStoppedRestoreOnStoppedServer(t *testing.T) {
 	if err := f.runner.Start(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
-	if f.savedJournal(restore.ID) != "rolled_back" || f.running() {
+	if f.savedJournal(restore.ID) != "rolled_back put back" || f.running() {
 		t.Fatal(f.savedJournal(restore.ID))
 	}
 	if read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" ||
@@ -164,8 +164,9 @@ func TestNextBackupAfterStaleRestoreJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	backup := f.run(t, "backup", nil)
-	if undone, _ := backup.Result["undone"].(string); backup.Status != ops.Succeeded || !f.running() || !strings.Contains(undone, "nothing to put back") {
-		t.Fatalf("%+v, running %v", backup, f.running())
+	if undone, _ := backup.Result["undone"].(string); backup.Status != ops.Succeeded || !f.running() || !strings.Contains(undone, "nothing to put back") ||
+		f.savedJournal(restoreID) != "rolled_back stage missing" {
+		t.Fatalf("%+v, running %v, journal %s", backup, f.running(), f.savedJournal(restoreID))
 	}
 	if pending, _ := f.jobs.pendingRestores(ctx, f.serverID); len(pending) != 0 {
 		t.Fatal(pending)

@@ -200,7 +200,7 @@ func TestRestoreSnapshot(t *testing.T) {
 	restored.QueryRow(`SELECT group_concat(id||'='||COALESCE(json_extract(recovery_json,'$.restore.status'),'none')||
     CASE WHEN instr(COALESCE(result_json,''),'.ludock-restore-'||id) > 0 THEN ' guided' ELSE '' END, ' ')
     FROM (SELECT * FROM operations WHERE kind='restore' ORDER BY id)`).Scan(&journals)
-	if journals != "restore-failed=none guided restore-running=none guided restore-undone=rolled_back" {
+	if journals != "restore-failed=unknown guided restore-running=unknown guided restore-undone=rolled_back" {
 		t.Fatal("restored journals", journals)
 	}
 	restored.Close()

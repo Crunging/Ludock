@@ -10,7 +10,6 @@ import (
 	"github.com/Crunging/Ludock/internal/db/dbtest"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/monitor"
-	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedules"
 )
 
@@ -108,7 +107,7 @@ func TestAttentionSettlesFailuresByALaterSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	const (
-		undone   = `{"restore":{"status":"rolled_back"}}`
+		undone   = `{"restore":{"status":"rolled_back","putBack":true}}`
 		stranded = `{"restore":{"status":"replacing","roots":[{"phase":"old_moved"}]}}`
 	)
 	operations := []struct {
@@ -129,10 +128,11 @@ func TestAttentionSettlesFailuresByALaterSuccess(t *testing.T) {
 		{"12", "restart", "failed", "The game didn't stop.", "{}", "{}"},
 		{"14", "restore", "interrupted", "Ludock restarted while this ran. Check the server before trying again.", "{}", undone},
 		{"15", "restore", "failed", "The server was started while this ran.", "{}", stranded},
-		{"16", "restore", "failed", "The backup is damaged.", `{"guidance":"` + db.RestoreEndUnknown + `"}`, "{}"},
+		{"16", "restore", "failed", "The backup is damaged.", "{}", `{"restore":{"status":"unknown"}}`},
 		{"17", "backup", "succeeded", "", "{}", "{}"},
 		{"18", "restore", "failed", "The server was started while this ran.", "{}", undone},
-		{"19", "restore", "failed", "The server was started while this ran.", `{"guidance":"Ludock found ` + ops.NothingPutBack + `."}`, undone},
+		{"19", "restore", "failed", "The server was started while this ran.", "{}", `{"restore":{"status":"rolled_back","stageMissing":true}}`},
+		{"20", "restore", "failed", "The backup is damaged.", "{}", `{"restore":{"status":"rolled_back"}}`},
 	}
 	for index, operation := range operations {
 		if _, err := d.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,result_json,error,binding_revision,created_at,updated_at)
@@ -151,10 +151,10 @@ func TestAttentionSettlesFailuresByALaterSuccess(t *testing.T) {
 	for _, item := range result.Items {
 		listed = append(listed, item.OperationID[len(item.OperationID)-2:])
 	}
-	if want := []string{"15", "19", "18", "16", "12", "13", "05", "04", "03"}; !slices.Equal(listed, want) {
+	if want := []string{"15", "20", "19", "18", "16", "12", "13", "05", "04", "03"}; !slices.Equal(listed, want) {
 		t.Fatalf("listed %v, want %v", listed, want)
 	}
-	if result.Items[0].Kind != "restore" || result.Items[1].Undone || !result.Items[2].Undone || result.Items[3].Undone {
-		t.Fatalf("%+v", result.Items[:4])
+	if result.Items[0].Kind != "restore" || result.Items[1].Undone || result.Items[2].Undone || !result.Items[3].Undone || result.Items[4].Undone {
+		t.Fatalf("%+v", result.Items[:5])
 	}
 }
