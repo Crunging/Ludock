@@ -53,7 +53,8 @@ type Backup struct {
 	// folders it could be in, and every one of them could be looked into.
 	Missing bool
 	// CopyAway is set by ArchiveFolder when the archive is missing or
-	// damaged in its own folder and a second copy's folder can't be opened.
+	// damaged in its own folder and a second copy's folder can't be opened
+	// or isn't responding.
 	CopyAway bool
 	// found is set by ArchiveFolder when it located the archive.
 	found bool

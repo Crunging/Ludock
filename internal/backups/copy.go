@@ -872,6 +872,7 @@ func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 		}
 		found, err := s.look(folder, backup, errCopyStalled)
 		if errors.Is(err, errCopyStalled) {
+			backup.CopyAway = !backup.FolderAway
 			return "", err
 		}
 		if found {
