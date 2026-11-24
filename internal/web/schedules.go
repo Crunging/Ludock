@@ -255,6 +255,9 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 		err = apperr.New("INVALID_REQUEST", 400, "This server's game console doesn't accept commands")
 	}
 	if err == nil {
+		err = d.Row.Server.Refusal(input.Action)
+	}
+	if err == nil {
 		if scheduleID == "" {
 			saved, err = s.App.Schedules.Create(ctx, request.User(), request.Principal.TokenHash, serverID, draftForSave(input))
 		} else {

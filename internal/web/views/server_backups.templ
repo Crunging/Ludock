@@ -765,6 +765,9 @@ type UpdateView struct {
 	Warn bool
 	// Running: the server is up, so taking it down disconnects whoever is on.
 	Running bool
+	// DeletedOnStop: Docker deletes the server when it stops, so it can't
+	// be updated; the page header says why.
+	DeletedOnStop bool
 }
 
 templ UpdateTab(serverID string, recreate bool) {
@@ -796,7 +799,9 @@ templ UpdatePanel(u UpdateView) {
 				</div>
 			}
 			<h3>Update the server’s image</h3>
-			if !capability.Available {
+			if u.DeletedOnStop {
+				<p class="section-note">Ludock can’t update this server.</p>
+			} else if !capability.Available {
 				<p class="section-note">{ capability.UnavailableReason }</p>
 				<div class="inline-actions">
 					@reloadUpdate(u.ServerID, "Check again")

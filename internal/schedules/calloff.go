@@ -6,8 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/schedtime"
+	"github.com/Crunging/Ludock/internal/servers"
 )
 
 // announcedRun is the run of r that Announce counts players down to, and
@@ -118,28 +120,33 @@ func (s *Service) sayCalledOff(serverID, action string, binding int64) {
 		defer s.warnings.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := s.tellCalledOff(ctx, serverID, action, binding); err != nil {
+		if err := TellCalledOff(ctx, s.Servers, s.Locks, s.Console, serverID, action, binding, false); err != nil {
 			log.Debug("Could not tell players a scheduled run is off", logging.F("serverId", serverID))
 		}
 	}()
 }
 
-// tellCalledOff runs on Ludock's own authority, like a warning's own
-// call-off: it only takes back what Ludock told the players, in fixed words,
-// and the schedule's owner may be the one who lost access. A server rebound
-// since the warning is not the one players heard it on, so it is refused.
-func (s *Service) tellCalledOff(ctx context.Context, serverID, action string, binding int64) error {
+// TellCalledOff tells players on serverID, at the binding revision they
+// were warned on, that a warned action is off. It runs on Ludock's own
+// authority: it only takes back what Ludock told the players, in fixed
+// words, and whoever owned the action may be the one who lost access. A
+// server rebound since the warning is not the one players heard it on, so
+// it is refused. held says the caller already holds the server's locks.
+func TellCalledOff(ctx context.Context, servers *servers.Service, table *locks.Table, console Broadcaster,
+	serverID, action string, binding int64, held bool) error {
 	allowed := func(context.Context) error { return nil }
-	initial, err := s.Servers.ResolveChecked(ctx, serverID, binding, allowed)
-	if err != nil {
-		return err
+	if !held {
+		initial, err := servers.ResolveChecked(ctx, serverID, binding, allowed)
+		if err != nil {
+			return err
+		}
+		release, err := table.AcquirePreempting(ctx, initial.LockKeys, nil)
+		if err != nil {
+			return err
+		}
+		defer release()
 	}
-	release, err := s.Locks.AcquirePreempting(ctx, initial.LockKeys, nil)
-	if err != nil {
-		return err
-	}
-	defer release()
-	current, err := s.Servers.ResolveChecked(ctx, serverID, binding, allowed)
+	current, err := servers.ResolveChecked(ctx, serverID, binding, allowed)
 	if err != nil {
 		return err
 	}
@@ -153,8 +160,8 @@ func (s *Service) tellCalledOff(ctx context.Context, serverID, action string, bi
 	if template == "" {
 		return nil
 	}
-	return s.Console.Broadcast(ctx, current, strings.ReplaceAll(template, "{message}", CalledOffMessage(action)), func() error {
-		_, err := s.Identity.AssertObservedBinding(ctx, serverID, current.Observation, binding)
+	return console.Broadcast(ctx, current, strings.ReplaceAll(template, "{message}", CalledOffMessage(action)), func() error {
+		_, err := servers.Identity.AssertObservedBinding(ctx, serverID, current.Observation, binding)
 		return err
 	})
 }
