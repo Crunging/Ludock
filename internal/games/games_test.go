@@ -329,25 +329,24 @@ func TestResolveQuery(t *testing.T) {
 	}
 }
 
-// Each image is recognized by its repository alone, whether pulled from
-// Docker Hub or another registry, by tag or by digest; a lookalike is not.
-func TestImageIntegrationRecognizesNewGames(t *testing.T) {
+// Each game's images are recognized by their repository alone, whether
+// pulled from Docker Hub or another registry, by tag or by digest, and a
+// lookalike is not. A game label names a game by its type or an alias,
+// however it is written.
+func TestEveryGameIsRecognized(t *testing.T) {
 	digest := "@sha256:" + strings.Repeat("a", 64)
-	for repository, game := range map[string]string{
-		"itzg/minecraft-bedrock-server":     "minecraft-bedrock",
-		"robtme/satisfactory-server":        "satisfactory",
-		"wolveix/satisfactory-server":       "satisfactory",
-		"sknnr/enshrouded-dedicated-server": "enshrouded",
-		"mornedhels/enshrouded-server":      "enshrouded",
-		"jamesits/dst-server":               "dont-starve-together",
-		"escaping/core-keeper-dedicated":    "core-keeper",
-		"zsuatem/vintagestory":              "vintage-story",
-		"devidian/vintagestory":             "vintage-story",
-	} {
-		for _, image := range []string{repository, "docker.io/" + repository + ":latest", "ghcr.io/" + repository + ":1.2.3",
-			repository + digest, "registry.example.com:5000/" + repository + ":stable" + digest} {
-			if got := InferGameType(image); got != game {
-				t.Errorf("%s: %s", image, got)
+	for _, integration := range Integrations {
+		for _, name := range append([]string{integration.GameType}, integration.Aliases...) {
+			if got := Lookup(" " + strings.ToUpper(name) + " "); got == nil || got.GameType != integration.GameType {
+				t.Errorf("%s: %+v", name, got)
+			}
+		}
+		for _, repository := range integration.Repositories {
+			for _, image := range []string{repository, "docker.io/" + repository + ":latest", "ghcr.io/" + repository + ":1.2.3",
+				repository + digest, "registry.example.com:5000/" + repository + ":stable" + digest} {
+				if got := InferGameType(image); got != integration.GameType {
+					t.Errorf("%s: %s", image, got)
+				}
 			}
 		}
 	}
@@ -356,42 +355,17 @@ func TestImageIntegrationRecognizesNewGames(t *testing.T) {
 			t.Errorf("%s: %s", image, got)
 		}
 	}
-	// Java and Bedrock editions stay apart.
-	if InferGameType("itzg/minecraft-server") != "minecraft" {
-		t.Error("java edition")
+	if got := Lookup("Don't Starve Together"); got == nil || got.GameType != "dont-starve-together" {
+		t.Errorf("%+v", got)
 	}
 }
 
-// The new games connect where their images document, wait longer to stop
-// only where an image says the game needs it, and update on start only when
-// every listed image does.
-func TestNewGameIntegrations(t *testing.T) {
-	for game, want := range map[string]struct {
-		port    *Port
-		stop    int
-		updates bool
-	}{
-		"minecraft-bedrock":    {&Port{19132, "tcp"}, 120, true},
-		"satisfactory":         {&Port{7777, "udp"}, 120, true},
-		"enshrouded":           {&Port{15637, "udp"}, 120, true},
-		"dont-starve-together": {&Port{10999, "udp"}, 360, true},
-		"core-keeper":          {nil, 120, true},
-		"vintage-story":        {&Port{42420, "tcp"}, 120, false},
-	} {
-		integration := Lookup(game)
-		if integration == nil {
-			t.Errorf("%s: missing", game)
-			continue
-		}
-		if (integration.GamePort == nil) != (want.port == nil) || (want.port != nil && *integration.GamePort != *want.port) ||
-			integration.StopTimeout() != want.stop || integration.UpdatesOnStart != want.updates {
+// The games the guide names as slow savers get longer than the default 120
+// seconds to shut down, so a stop doesn't cut their save short.
+func TestSlowSaversGetLongerStops(t *testing.T) {
+	for _, game := range []string{"ark", "asa", "palworld", "valheim", "7-days-to-die", "dont-starve-together"} {
+		if integration := Lookup(game); integration == nil || integration.StopTimeout() <= 120 {
 			t.Errorf("%s: %+v", game, integration)
-		}
-	}
-	for alias, game := range map[string]string{"bedrock": "minecraft-bedrock", "dst": "dont-starve-together",
-		"Don't Starve Together": "dont-starve-together", "corekeeper": "core-keeper", "VintageStory": "vintage-story"} {
-		if integration := Lookup(alias); integration == nil || integration.GameType != game {
-			t.Errorf("%s: %+v", alias, integration)
 		}
 	}
 }

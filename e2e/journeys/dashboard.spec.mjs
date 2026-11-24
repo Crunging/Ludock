@@ -178,47 +178,42 @@ test("copying a server's address", async ({ page, context }) => {
   await expect(copy.locator("svg")).toBeVisible();
 });
 
-test("a state chosen while the list is loading still applies", async ({ page }) => {
+test("filters changed while the list is loading all apply", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".server-row").first()).toBeVisible();
-  // Holds the next list response, so the choice lands while it loads.
-  let release;
-  const held = new Promise((resolve) => { release = resolve; });
-  let waiting = false;
+  // hold() refreshes the list and holds its response, so the changes made
+  // before the returned release() land while it loads.
+  let gate = null;
   await page.route("**/fragments/servers?*", async (route) => {
-    if (!waiting) {
-      waiting = true;
-      await held;
+    const held = gate;
+    gate = null;
+    if (held) {
+      held.arrived();
+      await held.released;
     }
     await route.continue();
   });
-  await refreshList(page);
-  await expect.poll(() => waiting).toBe(true);
+  const hold = async () => {
+    let arrived, release;
+    const reached = new Promise((resolve) => { arrived = resolve; });
+    gate = { arrived, released: new Promise((resolve) => { release = resolve; }) };
+    await refreshList(page);
+    await reached;
+    return release;
+  };
+
+  // A state chosen alone.
+  let release = await hold();
   await page.getByLabel("State").selectOption("running");
   release();
   await expect(page).toHaveURL(/\/\?state=running$/);
   await expect(page.getByLabel("State")).toHaveValue("running");
-});
 
-test("filters changed while the list is loading all apply", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.locator(".server-row").first()).toBeVisible();
-  let release;
-  const held = new Promise((resolve) => { release = resolve; });
-  let waiting = false;
-  await page.route("**/fragments/servers?*", async (route) => {
-    if (!waiting) {
-      waiting = true;
-      await held;
-    }
-    await route.continue();
-  });
-  await refreshList(page);
-  await expect.poll(() => waiting).toBe(true);
-  // A search, then a state chosen and set back, while the refresh loads.
+  // A search, then a state chosen and set back, which leaves the search.
+  release = await hold();
   await page.getByPlaceholder("Find a server…").fill("valh");
   await page.waitForTimeout(400);
-  await page.getByLabel("State").selectOption("running");
+  await page.getByLabel("State").selectOption("exited");
   await page.getByLabel("State").selectOption("all");
   release();
   await expect(page.locator("#server-count")).toHaveText("1 of 4 servers");

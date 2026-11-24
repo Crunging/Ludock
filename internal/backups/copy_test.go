@@ -588,6 +588,8 @@ func TestStuckSecondFolderIsAbandoned(t *testing.T) {
 		}
 	}
 	f.due(t)
+	// The copy that works isn't timed: a slow machine isn't a stuck folder.
+	copyStall = previous
 	within("copying again", func() error { return f.s.CopyDue(ctx) })
 	if state, _, _, _ := f.row(t, backup.ID); state != "complete" {
 		t.Fatal(state)
@@ -665,10 +667,11 @@ func TestSlowVerificationIsNotAStall(t *testing.T) {
 	f := newCopyFixture(t)
 	backup := f.add(t, strings.Repeat("world data ", 20_000), 1)
 	previous := copyStall
-	copyStall = 100 * time.Millisecond
+	// Wide enough that only the slowed verification outlasts it.
+	copyStall = 500 * time.Millisecond
 	testHook = func(point string) {
 		if point == "verifying" {
-			time.Sleep(40 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond)
 		}
 	}
 	t.Cleanup(func() { testHook = nil; copyStall = previous })
