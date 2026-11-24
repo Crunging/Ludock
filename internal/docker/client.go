@@ -97,9 +97,10 @@ type Client struct {
 	// seconds.
 	OutageLimit time.Duration
 
-	mu      sync.Mutex
-	version string
-	writes  atomic.Uint64
+	mu           sync.Mutex
+	version      string
+	incompatible error
+	writes       atomic.Uint64
 }
 
 func New(socket string) *Client {
@@ -147,7 +148,7 @@ func (c *Client) negotiate(ctx context.Context) (string, error) {
 	}
 	minor = min(minor, maxAPIMinor)
 	if minor < minAPIMinor {
-		return "", ErrEngineTooOld
+		return "", c.refuse(ErrEngineTooOld)
 	}
 	if info.MinAPIVersion != "" {
 		least, err := apiMinor(info.MinAPIVersion)
@@ -155,14 +156,30 @@ func (c *Client) negotiate(ctx context.Context) (string, error) {
 			return "", err
 		}
 		if minor < least {
-			return "", ErrEngineTooNew
+			return "", c.refuse(ErrEngineTooNew)
 		}
 	}
 	version = fmt.Sprintf("v1.%d", minor)
 	c.mu.Lock()
-	c.version = version
+	c.version, c.incompatible = version, nil
 	c.mu.Unlock()
 	return version, nil
+}
+
+func (c *Client) refuse(err error) error {
+	c.mu.Lock()
+	c.incompatible = err
+	c.mu.Unlock()
+	return err
+}
+
+// Incompatible is the last refusal of this engine's API versions, without
+// asking Docker again. An engine upgrade replaces the socket, which restarts
+// Ludock.
+func (c *Client) Incompatible() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.incompatible
 }
 
 // Negotiate settles the API version, so a later request's status is that

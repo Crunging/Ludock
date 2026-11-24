@@ -378,7 +378,11 @@ templ ServerListFragment(list ServerList) {
 		<div class="server-connection" role="status">
 			<div>
 				<p>{ dockerOutage(list.DockerProblem, "Ludock can’t reach Docker right now.") }</p>
-				<p class="muted">Showing the last known state. Server controls come back once it can.</p>
+				if list.DockerProblem != "" {
+					<p class="muted">Showing the last known state.</p>
+				} else {
+					<p class="muted">Showing the last known state. Server controls come back once it can.</p>
+				}
 			</div>
 			if list.Admin {
 				<a class="secondary-btn" href="/settings/system">Check the connection</a>

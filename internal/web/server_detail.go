@@ -41,7 +41,7 @@ func (s *Server) detail(r *http.Request, request *Request, id, tab string, withS
 	d := &views.ServerDetail{Row: s.serverRow(r, request, *view, false, snapshot.DiscoveryUnavailable), Stats: snapshot.Stats,
 		DiscoveryUnavailable: snapshot.DiscoveryUnavailable, Admin: admin, Now: db.Now()}
 	if d.DiscoveryUnavailable {
-		d.DockerProblem = s.dockerProblem(ctx)
+		d.DockerProblem = s.dockerProblem()
 	}
 	d.Row.ShowPlayers, d.Row.Down = true, s.downServers(ctx, []servers.View{*view})[view.ID]
 	if can(view, authz.ConsoleExecute) && view.BindingStatus == "active" {
