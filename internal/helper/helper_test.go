@@ -247,11 +247,14 @@ func TestRestoreSteps(t *testing.T) {
 	if _, code := restore(t, root, stage, RestoreStage); code != 0 {
 		t.Fatal("stage")
 	}
+	// The backup's root is 0755 and the live one 0750.
+	os.Chmod(root, 0o750)
 	records := []string{
+		`{"name":"","type":"directory","size":0,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":493}`,
 		`{"name":"world","type":"directory","size":0,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":493,"mtime":1700000000}`,
 		`{"name":"world/level.dat","type":"file","size":8,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":420,"mtime":1700000000.5}`,
 	}
-	input := records[0] + "\n" + records[1] + "\nrestored"
+	input := strings.Join(records, "\n") + "\nrestored"
 	argument, _ := json.Marshal(map[string]any{"root": root, "stage": stage, "maxBytes": 100, "reserveBytes": 0})
 	var stdout, stderr bytes.Buffer
 	if code := RunRestoreExtract(string(argument), strings.NewReader(input), &stdout, &stderr); code != 0 || !strings.HasPrefix(stdout.String(), "ok ") {
@@ -284,14 +287,25 @@ func TestRestoreSteps(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, stage, "old", "server.properties")); err != nil {
 		t.Fatal("old data not kept")
 	}
-	// Roll back: remove the replacement and return the old data.
-	for _, step := range []string{RestoreRollbackClean, RestoreRollbackOld} {
-		if _, code := restore(t, root, stage, step); code != 0 {
-			t.Fatal(step)
-		}
+	// Undo as if a server started elsewhere wrote the replacement: it is set
+	// aside in a folder its owner can open, owned like the data folder it
+	// sits in once that has its own back.
+	aside := SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")
+	argument, _ = json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreSetAside, Aside: aside, Base: root})
+	if code := RunRestore(string(argument), io.Discard, io.Discard); code != 0 {
+		t.Fatal("set aside")
+	}
+	if _, code := restore(t, root, stage, RestoreRollbackOld); code != 0 {
+		t.Fatal("rollback")
 	}
 	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "level" {
 		t.Fatal(string(data))
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, aside, "world", "level.dat")); string(data) != "restored" {
+		t.Fatal(string(data))
+	}
+	if info, _ := os.Stat(filepath.Join(root, aside)); info.Mode().Perm() != 0o750 {
+		t.Fatal("set-aside folder is", info.Mode())
 	}
 	if _, code := restore(t, root, stage, RestoreCleanup); code != 0 {
 		t.Fatal("cleanup")
