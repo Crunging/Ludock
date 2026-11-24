@@ -534,7 +534,8 @@ func rawHeader(header Header, flag byte) ([]byte, error) {
 	return block, nil
 }
 
-// FormatSeconds writes a timestamp like JavaScript's String(number).
+// FormatSeconds writes a PAX number as the shortest decimal that reads back
+// the same, never with an exponent.
 func FormatSeconds(value float64) string { return strconv.FormatFloat(value, 'f', -1, 64) }
 
 // EncodeHeader writes an entry header, preceded by a PAX header when the

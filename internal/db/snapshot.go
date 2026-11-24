@@ -348,7 +348,7 @@ func checkRestored(path string, key []byte) error {
 		return err
 	}
 	defer restored.Close()
-	switch err := AssertCompatible(bg, restored, BaseSchemaVersion, LatestVersion()); err {
+	switch err := AssertCompatible(bg, restored, LatestVersion()); err {
 	case nil:
 	case ErrNewerDatabase:
 		return errRestoreNewer

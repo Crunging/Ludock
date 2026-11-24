@@ -261,9 +261,9 @@ func pragmaInt(ctx context.Context, q queryer, name string) (int64, error) {
 }
 
 // AssertCompatible accepts an empty database or a Ludock 1.x database whose
-// schema version is within [earliest, latest]. The marker, not the version,
+// schema version is at most latest. The marker, not the version,
 // tells a beta's database apart: betas numbered their schemas from 1 too.
-func AssertCompatible(ctx context.Context, q queryer, earliest, latest int) error {
+func AssertCompatible(ctx context.Context, q queryer, latest int) error {
 	marker, err := pragmaInt(ctx, q, "application_id")
 	if err != nil {
 		return err
@@ -285,7 +285,7 @@ func AssertCompatible(ctx context.Context, q queryer, earliest, latest int) erro
 		return ErrBetaDatabase
 	case marker == ApplicationID && version > int64(latest):
 		return ErrNewerDatabase
-	case marker != ApplicationID || version < int64(earliest):
+	case marker != ApplicationID || version < BaseSchemaVersion:
 		return ErrIncompatible
 	}
 	return nil
@@ -297,14 +297,13 @@ func ApplyMigrations(ctx context.Context, conn *sql.Conn, migrations []Migration
 	if len(migrations) == 0 || migrations[0].Version != BaseSchemaVersion {
 		return fmt.Errorf("database migrations must start at version %d", BaseSchemaVersion)
 	}
-	first := migrations[0].Version
 	for index, migration := range migrations {
-		if migration.Version != first+index {
+		if migration.Version != BaseSchemaVersion+index {
 			return errors.New("database migrations must have consecutive versions")
 		}
 	}
 	latest := migrations[len(migrations)-1].Version
-	if err := AssertCompatible(ctx, conn, first, latest); err != nil {
+	if err := AssertCompatible(ctx, conn, latest); err != nil {
 		return err
 	}
 	// A migration may rebuild a table others reference, which SQLite allows

@@ -15,7 +15,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Crunging/Ludock/internal/apperr"
-	"github.com/Crunging/Ludock/internal/identity"
 )
 
 // Ludock saves its own data (the database and identity key, from
@@ -40,10 +39,7 @@ const (
 	dataCopyKey    = "data-save-copy"
 )
 
-var (
-	dataName    = regexp.MustCompile(`^ludock-data-\d{8}-\d{6}\.tar$`)
-	dataPartial = regexp.MustCompile(`^ludock-data-\d{8}-\d{6}\.tar\.[0-9a-f]{8}\.partial$`)
-)
+var dataName = regexp.MustCompile(`^ludock-data-\d{8}-\d{6}\.tar$`)
 
 const dataStamp = "20060102-150405"
 
@@ -385,7 +381,7 @@ func (s *Storage) publishData(ctx context.Context, source io.Reader, directory, 
 	if err := s.removeDataLeftovers(directory, owner.leftover); err != nil {
 		return "", errCopyFailed
 	}
-	partial := name + "." + identity.NewUUID()[:8] + ".partial"
+	partial := partialName(name)
 	if err := owner.begin(partial); err != nil {
 		return "", err
 	}
@@ -434,7 +430,7 @@ func (s *Storage) isOwnSave(directory, name string, ours func(io.Reader) bool) b
 // installation's saves into one folder run one at a time, so it isn't being
 // written.
 func (s *Storage) removeDataLeftovers(directory, leftover string) error {
-	if !dataPartial.MatchString(leftover) {
+	if of, ok := partialOf(leftover); !ok || !dataName.MatchString(of) {
 		return nil
 	}
 	dir, err := s.pin(directory)

@@ -769,12 +769,12 @@ type helperReply struct {
 // may still be sending a command, and none holds its server's lock. One
 // Ludock runs per Docker host, so at startup every one is left over.
 func (r *Runtime) RemoveLeftovers(ctx context.Context) error {
-	helpers, err := r.Docker.ListContainers(ctx, true, docker.Filters{"label": {"ludock.internal=console-helper"}})
+	helpers, err := r.Docker.ListContainers(ctx, true, docker.Filters{"label": {launch.InternalLabel + "=" + launch.ConsoleHelper}})
 	if err != nil {
 		return err
 	}
 	for _, candidate := range helpers {
-		if candidate.Labels["ludock.internal"] != "console-helper" {
+		if candidate.Labels[launch.InternalLabel] != launch.ConsoleHelper {
 			continue
 		}
 		if err := r.Docker.RemoveHelper(ctx, candidate.ID); err != nil {
@@ -844,13 +844,12 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 	}
 	create, cancelCreate := context.WithTimeout(context.WithoutCancel(ctx), limit)
 	defer cancelCreate()
+	host := launch.HelperHost(nil)
+	host.NetworkMode = "container:" + containerID
 	created, err := r.Docker.CreateHelper(create, docker.ContainerCreate{Name: name, Image: image,
 		Entrypoint: []string{helper.Binary}, Cmd: []string{"helper", "network-console"}, User: "65534:65534",
 		OpenStdin: true, StdinOnce: true, Env: launch.HelperEnv,
-		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "console-helper"},
-		HostConfig: &docker.HostConfig{NetworkMode: "container:" + containerID, ReadonlyRootfs: true, AutoRemove: true,
-			CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges"}, PidsLimit: 64, Memory: 256 * 1024 * 1024,
-			NanoCpus: 1_000_000_000, LogConfig: launch.NoLogs}})
+		Labels: launch.HelperLabels(launch.ConsoleHelper), HostConfig: host})
 	helperRef := created
 	if helperRef == "" {
 		// A lost create response may still have created the named helper.

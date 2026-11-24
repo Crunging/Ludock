@@ -194,25 +194,17 @@ var readStall = 2 * time.Minute
 // Archive is an open backup archive; retention leaves it alone until it
 // is closed. A read blocked in the kernel can't be interrupted, so reads run
 // on a goroutine of their own and one that doesn't return within readStall,
-// as on a network share that stopped responding, fails with errFolderStalled
-// and stays in the folder guard's record until it returns.
+// as on a network share that stopped responding, fails with errFolderStalled.
 // Read and Close are for one goroutine.
 type Archive struct {
 	file     *os.File
 	once     sync.Once
 	done     func()
-	guard    *folderGuard
-	folder   string
-	requests chan archiveRequest
+	requests chan int
 	results  chan archiveRead
 	exited   chan struct{}
 	buffer   []byte
 	stalled  bool
-}
-
-type archiveRequest struct {
-	size int
-	read *pending
 }
 
 type archiveRead struct {
@@ -223,18 +215,17 @@ type archiveRead struct {
 // readArchive is a seam for a read that never returns.
 var readArchive = func(file *os.File, p []byte) (int, error) { return file.Read(p) }
 
-func newArchive(file *os.File, done func(), guard *folderGuard, folder string) *Archive {
-	a := &Archive{file: file, done: done, guard: guard, folder: folder, requests: make(chan archiveRequest),
+func newArchive(file *os.File, done func()) *Archive {
+	a := &Archive{file: file, done: done, requests: make(chan int),
 		results: make(chan archiveRead, 1), exited: make(chan struct{})}
 	go func() {
 		defer close(a.exited)
 		defer file.Close()
-		for request := range a.requests {
-			if len(a.buffer) < request.size {
-				a.buffer = make([]byte, request.size)
+		for size := range a.requests {
+			if len(a.buffer) < size {
+				a.buffer = make([]byte, size)
 			}
-			n, err := readArchive(file, a.buffer[:request.size])
-			guard.finish(request.read)
+			n, err := readArchive(file, a.buffer[:size])
 			a.results <- archiveRead{n, err}
 		}
 	}()
@@ -248,15 +239,13 @@ func (a *Archive) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	read := &pending{folder: a.folder, lane: laneArchive}
-	a.requests <- archiveRequest{min(len(p), 1<<20), read}
+	a.requests <- min(len(p), 1<<20)
 	timer := time.NewTimer(readStall)
 	defer timer.Stop()
 	select {
 	case result := <-a.results:
 		return copy(p, a.buffer[:result.n]), result.err
 	case <-timer.C:
-		a.guard.abandon(read)
 		a.stalled = true
 		return 0, errFolderStalled
 	}
@@ -477,6 +466,10 @@ func (s *Storage) AssertSpace(directory string, reserve, additional int64) error
 	return err
 }
 
+// archivePartial is the file a backup's archive is written to before it is
+// published. Only one backup writes an ID, so the name is fixed.
+func archivePartial(id string) string { return id + ".tar.partial" }
+
 // RemovePartial removes an unpublished archive.
 func (s *Storage) RemovePartial(directory, id string) error {
 	if err := checkID(id); err != nil {
@@ -487,7 +480,7 @@ func (s *Storage) RemovePartial(directory, id string) error {
 		return err
 	}
 	defer dir.close()
-	if err := unix.Unlinkat(dir.fd, id+".tar.partial", 0); err != nil && !errors.Is(err, unix.ENOENT) {
+	if err := unix.Unlinkat(dir.fd, archivePartial(id), 0); err != nil && !errors.Is(err, unix.ENOENT) {
 		return err
 	}
 	return nil
@@ -509,7 +502,7 @@ func (s *Storage) Open(directory, id string) (*Archive, error) {
 		}
 		return nil, err
 	}
-	return newArchive(file, func() { s.endRead(id) }, &s.folders, directory), nil
+	return newArchive(file, func() { s.endRead(id) }), nil
 }
 
 func (s *Storage) openFile(directory, id string) (*os.File, error) {

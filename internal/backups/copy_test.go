@@ -118,7 +118,7 @@ func exists(path string) bool {
 func TestCopyResumesAfterRestart(t *testing.T) {
 	f := newCopyFixture(t)
 	backup := f.add(t, "world data", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).UnixMilli())
-	partial := filepath.Join(f.copies, backup.ID+".tar.partial")
+	partial := filepath.Join(f.copies, backup.ID+".tar.1a2b3c4d.partial")
 	os.WriteFile(partial, []byte("world"), 0o600)
 	f.s.DB.Exec("UPDATE backups SET copy_attempts=1, copy_next_at=? WHERE id=?", time.Now().Add(time.Minute).UnixMilli(), backup.ID)
 
@@ -1049,17 +1049,11 @@ func TestStalledArchiveReadIsGivenUp(t *testing.T) {
 	if waited := time.Since(started); waited > 5*time.Second {
 		t.Fatal("a stuck read held its reader", waited)
 	}
-	if f.s.Storage.folders.busyIn(f.main, laneArchive) != 1 {
-		t.Fatal("the folder guard doesn't record the stuck read")
-	}
 	close(release)
 	select {
 	case <-archive.exited:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the stuck read never let go of the file")
-	}
-	if f.s.Storage.folders.busyIn(f.main, laneArchive) != 0 {
-		t.Fatal("the stuck read stayed recorded after it returned")
 	}
 	whole, err := f.s.Storage.Open(f.main, backup.ID)
 	if err != nil {
