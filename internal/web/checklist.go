@@ -200,7 +200,7 @@ func (s *Server) backupTargets(ctx context.Context, user *db.SessionUser, all []
 			}
 		}
 		if !covered && view.BindingStatus == "active" && len(view.FileRoots) > 0 && !view.AutoRemove && !view.NestedMount &&
-			!s.App.Backups.HostMounted(view.ID) && view.Can(authz.BackupsCreate) {
+			!s.App.Backups.HostMounted(view.ID, view.BindingRevision) && view.Can(authz.BackupsCreate) {
 			targets = append(targets, backupTarget{ID: view.ID, Name: view.DisplayName, Warn: canWarn(&view),
 				Wait: s.App.Players.Source.Lists(view.Container)})
 		}

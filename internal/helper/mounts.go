@@ -128,7 +128,7 @@ func ownMount(base, root string) error {
 	for _, line := range strings.Split(string(table), "\n") {
 		// The fifth field is the mount point, with space, tab, newline, and
 		// backslash escaped as octal.
-		fields := strings.Fields(line)
+		fields := strings.Split(line, " ")
 		if len(fields) < 5 {
 			continue
 		}

@@ -526,6 +526,8 @@ func (r *restoreRun) validate() error {
 		if err := r.j.Backups.AssertReady(r.ctx, r.server); err != nil {
 			return err
 		}
+	} else if err := r.j.Backups.AssertNoOtherWriters(r.ctx, r.server, ""); err != nil {
+		return err
 	}
 	return r.j.assertStagingRoom(r.ctx, r.server, r.job, r.roots, r.item, r.staged, r.reserve, r.assertAccess)
 }

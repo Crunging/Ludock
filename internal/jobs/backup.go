@@ -192,14 +192,10 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 }
 
 // assertBackupPossible runs every check a backup can fail without the server
-// stopping. The check of the data's mounts starts a helper, so a job that
-// warns players makes it once, before the warning (warned).
-func (j *Jobs) assertBackupPossible(ctx context.Context, server *servers.Context, job *ops.Context, warned bool) error {
+// stopping.
+func (j *Jobs) assertBackupPossible(ctx context.Context, server *servers.Context, job *ops.Context) error {
 	if err := j.Backups.AssertReady(ctx, server); err != nil {
 		return err
-	}
-	if warned {
-		return nil
 	}
 	return j.Backups.AssertOwnMounts(ctx, server, job.Job.ID)
 }
@@ -221,7 +217,7 @@ func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any,
 		if err := j.assertCapability(ctx, job, authz.BackupsCreate); err != nil {
 			return nil, err
 		}
-		if err := j.assertBackupPossible(ctx, server, job, warnRequested(job)); err != nil {
+		if err := j.assertBackupPossible(ctx, server, job); err != nil {
 			return nil, err
 		}
 		defer func() {

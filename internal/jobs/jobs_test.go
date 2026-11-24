@@ -803,7 +803,7 @@ func TestImpossibleBackupNeverStopsServer(t *testing.T) {
 	has := func() bool {
 		return slices.ContainsFunc(f.jobs.Backups.Preflight(ctx, server).Issues, func(issue backups.Issue) bool { return issue.Code == "NESTED_HOST_MOUNT" })
 	}
-	if !has() || !f.jobs.Backups.HostMounted(f.serverID) {
+	if !has() || !f.jobs.Backups.HostMounted(f.serverID, server.Logical.BindingRevision) {
 		t.Fatal("readiness doesn't report the host's mount")
 	}
 	f.jobs.Backups.ForgetHostMount(f.serverID)

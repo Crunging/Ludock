@@ -92,7 +92,7 @@ type Service struct {
 
 	// deletionCursor is where the next FinishDeletions batch starts, so rows
 	// that keep failing cannot hold back the ones after them.
-	// mountedData holds, by server ID, the binding fingerprint of servers
+	// mountedData holds, by server ID, the binding revision of servers
 	// whose data a helper last found holding a mount the host added.
 	mountedData sync.Map
 
