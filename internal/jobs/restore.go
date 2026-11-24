@@ -148,7 +148,11 @@ func (j *Jobs) assertStagingRoom(ctx context.Context, server *servers.Context, j
 	if item == "" || job.Job.Input["createBackup"] == true {
 		err = j.Backups.CheckOwnMounts(ctx, server, data, "", assertAccess)
 	} else {
-		err = j.Backups.Helpers.AssertOwnMounts(ctx, server, &backups.DataHelper{Container: data.Container, Roots: roots}, item, assertAccess)
+		// A mount on the item's path is one in the data, but none there says
+		// nothing about the rest.
+		if err = j.Backups.Helpers.AssertOwnMounts(ctx, server, &backups.DataHelper{Container: data.Container, Roots: roots}, item, assertAccess); err != nil {
+			j.Backups.NoteHostMount(server, err)
+		}
 	}
 	if err != nil {
 		return err

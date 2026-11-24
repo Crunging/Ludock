@@ -102,6 +102,13 @@ func (j *Jobs) Register(queue *ops.Runner) {
 				return nil, calledOff(job, err)
 			}
 			if job.Job.Input["createBackup"] == true {
+				// Past the wait, an interruption is recovered, which removes
+				// the helper the check before the stop may leave.
+				if warnRequested(job) {
+					if err := job.Progress("validating", nil, nil); err != nil {
+						return nil, calledOff(job, err)
+					}
+				}
 				result, err := j.runBackupRestart(ctx, job)
 				return warnedResult(job, result, err)
 			}
