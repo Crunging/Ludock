@@ -342,7 +342,7 @@ func TestOneTimeSchedules(t *testing.T) {
 // Invalid saved schedules are reported not run.
 func TestInvalidSavedSchedules(t *testing.T) {
 	f := setup(t)
-	f.s.DB.Exec(`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES('33333333-3333-4333-8333-333333333333',?,?,'{"kind":"recurring","action":"explode"}',1,1)`,
+	f.s.DB.Exec(`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at,changed_at) VALUES('33333333-3333-4333-8333-333333333333',?,?,'{"kind":"recurring","action":"explode"}',1,1,1)`,
 		f.serverID, friend.ID)
 	f.s.Run(ctx, due)
 	var result string

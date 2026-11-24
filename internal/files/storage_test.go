@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -515,5 +516,60 @@ func TestFileHelperMountsOnlyTheVolumeSubpath(t *testing.T) {
 	if len(created) != 1 || created[0].Source != "shared" || created[0].VolumeOptions == nil || created[0].VolumeOptions.Subpath != "worlds/a" {
 		t.Fatalf("%+v", created)
 	}
+	f.helpersLeft(t)
+}
+
+// Docker fails a download: it ends the command without running the helper,
+// it can't say how the command ended because it stopped answering, or it
+// goes away partway through the stream. The
+// download reports Docker, not the path; a file that is really missing
+// still blames the path, and an exit Docker records late blames nothing.
+func TestDownloadBlamesDockerForItsFailures(t *testing.T) {
+	f := setup(t)
+	f.engine.FailExecStart = func(cmd []string) bool {
+		return slices.Contains(cmd, "file") && strings.Contains(strings.Join(cmd, " "), "download")
+	}
+	if _, err := f.service.Preview(ctx, f.target, f.root, "server.properties", nil); !docker.Unavailable(err) {
+		t.Fatal("a command Docker never ran:", err)
+	}
+	f.engine.FailExecStart = nil
+	download, err := f.service.OpenDownload(ctx, f.target, f.root, "server.properties", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.engine.AddFault(`^GET /[^ ]*exec/[^/]+/json$`, 500, false, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(download); !docker.Unavailable(err) {
+		t.Fatal("an outcome Docker couldn't report:", err)
+	}
+	download.Close()
+	f.engine.ClearFaults()
+	download, err = f.service.OpenDownload(ctx, f.target, f.root, "big.log", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := download.Read(make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.engine.Outage(100 * time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if rest, err := io.ReadAll(download); !docker.Unavailable(err) || int64(len(rest))+1 >= download.Size {
+		t.Fatal("a stream Docker cut:", len(rest), err)
+	}
+	download.Close()
+	if _, err := f.service.Preview(ctx, f.target, f.root, "missing.txt", nil); !apperr.Is(err, "UNSAFE_OR_CHANGED_FILE_PATH") {
+		t.Fatal("a missing file:", err)
+	}
+	// Docker closing the stream a moment before it records the exit fails
+	// nothing.
+	f.engine.ExitDelay = 300 * time.Millisecond
+	if _, err := f.service.Preview(ctx, f.target, f.root, "server.properties", nil); err != nil {
+		t.Fatal("an exit Docker recorded late:", err)
+	}
+	f.engine.ExitDelay = 0
+	// The preview that worked keeps its helper for the next read.
+	f.service.Close()
 	f.helpersLeft(t)
 }

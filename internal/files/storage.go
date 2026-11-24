@@ -651,12 +651,14 @@ type Download struct {
 	Type string
 	Size int64
 
-	reader   io.ReadCloser
-	conn     *docker.Conn
-	complete func() error
-	release  func(ok bool)
-	once     sync.Once
-	timer    *time.Timer
+	reader io.ReadCloser
+	conn   *docker.Conn
+	// exit is how the command ended (launch.FileExit), read once its
+	// stream does.
+	exit    func() (int, error)
+	release func(ok bool)
+	once    sync.Once
+	timer   *time.Timer
 	// unwatch stops closing the stream when the caller's context ends.
 	unwatch func() bool
 	done    bool
@@ -667,12 +669,16 @@ type Download struct {
 
 func (d *Download) Read(p []byte) (int, error) {
 	n, err := d.reader.Read(p)
-	if err == io.EOF && !d.done {
+	if err != nil && !d.done {
 		d.done = true
-		if completeErr := d.complete(); completeErr != nil {
-			return n, completeErr
+		code, exitErr := d.exit()
+		if exitErr != nil {
+			return n, exitErr
 		}
-		d.clean = true
+		if err == io.EOF && code != 0 {
+			return n, Error("UNSAFE_OR_CHANGED_FILE_PATH", 409)
+		}
+		d.clean = err == io.EOF
 	}
 	if err != nil && err != io.EOF {
 		if errors.Is(err, docker.ErrIncompleteStream) {
@@ -745,8 +751,14 @@ func (s *Service) openDownload(ctx context.Context, access *Access, release func
 	}
 	// The helper sends the opened file's type and size first. Until the
 	// stream is handed over, revocation or a silent helper ends the wait.
-	stdout := docker.Stdout(conn)
+	stderr := &launch.FirstBytes{Limit: 4096}
+	stdout, writer := io.Pipe()
+	demuxed := make(chan struct{})
+	go func() { writer.CloseWithError(docker.Demux(conn, writer, stderr)); close(demuxed) }()
 	stream := bufio.NewReaderSize(stdout, 64*1024)
+	// A command that fails reports Docker's failure as Docker's, and only a
+	// refusal blames the path.
+	exit := func() (int, error) { return launch.FileExit(ctx, s.Docker, execID, stderr) }
 	stopWaiting := context.AfterFunc(ctx, func() { conn.Close() })
 	waiting := time.AfterFunc(time.Minute, func() { conn.Close() })
 	line, err := stream.ReadSlice('\n')
@@ -758,20 +770,18 @@ func (s *Service) openDownload(ctx context.Context, access *Access, release func
 	}
 	if err != nil || json.Unmarshal(line, &info) != nil || (info.Type != "file" && info.Type != "directory") {
 		conn.Close()
+		stdout.Close()
+		<-demuxed
+		if _, err := exit(); err != nil {
+			return nil, err
+		}
 		return nil, Error("UNSAFE_OR_CHANGED_FILE_PATH", 409)
 	}
 	if info.Type == "directory" {
 		name += ".tar"
 	}
 	download := &Download{Name: name, Type: info.Type, Size: info.Size, reader: bufferedStream{stream, stdout}, conn: conn,
-		complete: func() error {
-			status, err := s.Docker.InspectExec(context.WithoutCancel(ctx), execID)
-			if err != nil || status.Running || status.ExitCode == nil || *status.ExitCode != 0 {
-				return Error("UNSAFE_OR_CHANGED_FILE_PATH", 409)
-			}
-			return nil
-		},
-		release: release}
+		exit: exit, release: release}
 	download.timer = time.AfterFunc(30*time.Minute, func() { conn.Close() })
 	// The started stream no longer follows ctx, so revoked access or a closed
 	// request must end it explicitly.

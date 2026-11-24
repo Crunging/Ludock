@@ -173,7 +173,7 @@ var Migrations = []Migration{
         id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES logical_servers(id),
         binding_fingerprint TEXT NOT NULL, destination TEXT NOT NULL,
         roots_json TEXT NOT NULL, size INTEGER NOT NULL, checksum TEXT NOT NULL,
-        created_at INTEGER NOT NULL, state TEXT NOT NULL,
+        created_at INTEGER NOT NULL, state TEXT NOT NULL, game_type TEXT NOT NULL,
         kept_at INTEGER CHECK (kept_at >= 0),
         note TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '' CHECK (reason IN ('', 'restore', 'update')),
@@ -182,8 +182,7 @@ var Migrations = []Migration{
         copy_attempts INTEGER NOT NULL DEFAULT 0 CHECK (copy_attempts >= 0),
         copy_next_at INTEGER NOT NULL DEFAULT 0,
         copy_error TEXT NOT NULL DEFAULT '',
-        copy_previous TEXT NOT NULL DEFAULT '',
-        game_type TEXT NOT NULL DEFAULT ''
+        copy_previous TEXT NOT NULL DEFAULT ''
       ) STRICT;
       CREATE INDEX backups_server_idx ON backups(server_id, created_at DESC, id);
       CREATE INDEX backups_deleting_idx ON backups(created_at, id) WHERE state = 'deleting';
@@ -194,10 +193,10 @@ var Migrations = []Migration{
         id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES logical_servers(id),
         owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         input_json TEXT NOT NULL, binding_revision INTEGER NOT NULL,
-        last_slot TEXT, last_result TEXT, created_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL, changed_at INTEGER NOT NULL CHECK (changed_at >= 0),
         revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
-        last_operation_id TEXT, last_run_at INTEGER CHECK (last_run_at >= 0),
-        changed_at INTEGER CHECK (changed_at >= 0)
+        last_slot TEXT, last_result TEXT,
+        last_operation_id TEXT, last_run_at INTEGER CHECK (last_run_at >= 0)
       ) STRICT;
       CREATE INDEX schedules_server_idx ON schedules(server_id, created_at, id);
       -- Claimed countdown warnings, so a restart never repeats one. Repeated
@@ -224,9 +223,9 @@ var Migrations = []Migration{
       -- message is formatted when it is sent.
       CREATE TABLE notification_deliveries (
         id TEXT PRIMARY KEY, event_key TEXT NOT NULL, destination TEXT NOT NULL, message TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('event','test')),
         attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL,
         state TEXT NOT NULL DEFAULT 'queued', created_at INTEGER NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event','test')),
         retry_attempts INTEGER NOT NULL DEFAULT 0 CHECK (retry_attempts >= 0),
         last_attempt_at INTEGER CHECK (last_attempt_at >= 0),
         delivered_at INTEGER CHECK (delivered_at >= 0),

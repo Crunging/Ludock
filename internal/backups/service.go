@@ -778,6 +778,16 @@ func (s *Service) AssertReady(ctx context.Context, server *servers.Context) erro
 	if err := s.Storage.AssertSpace(settings.Destination, settings.ReserveBytes, 0); err != nil {
 		return err
 	}
+	// Retention makes room only after a backup is written, so backups that
+	// already fill the total limit refuse the next one once the server
+	// stops. A total that can't be read is left to that check.
+	if settings.MaxBytes > 0 {
+		if used, kept, err := s.FoundBytes(ctx); err == nil {
+			if _, err := Remaining(settings, used, kept); err != nil {
+				return err
+			}
+		}
+	}
 	return s.AssertNoOtherWriters(ctx, server, "")
 }
 
@@ -1001,8 +1011,8 @@ var testHook func(point string)
 // so FinishDeletions, Prune, and Delete retry it and it never uses storage
 // unseen.
 func (s *Service) RecordDeleting(ctx context.Context, id, serverID, fingerprint, destination string) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
-    VALUES(?,?,?,?,'[]',0,'',?,'deleting')`, id, serverID, fingerprint, destination, time.Now().UnixMilli())
+	_, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,game_type)
+    VALUES(?,?,?,?,'[]',0,'',?,'deleting','')`, id, serverID, fingerprint, destination, time.Now().UnixMilli())
 	return err
 }
 

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -76,6 +77,51 @@ const (
 // HelperLabels are the labels of a helper of kind.
 func HelperLabels(kind string) map[string]string {
 	return map[string]string{"ludock.enable": "false", InternalLabel: kind}
+}
+
+// FirstBytes keeps the first Limit bytes written to it, for reading while a
+// stream may still write.
+type FirstBytes struct {
+	Limit int
+	mu    sync.Mutex
+	data  []byte
+}
+
+func (b *FirstBytes) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.data = append(b.data, p[:min(len(p), max(0, b.Limit-len(b.data)))]...)
+	return len(p), nil
+}
+
+func (b *FirstBytes) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.data)
+}
+
+// FileExit is how a file helper's command ended once its stream did: an
+// error when Docker is away, lost the command with a restart, or ended it
+// without running the helper, which reports each failure of its own on
+// stderr; otherwise its exit code, or -1 when Docker can't say.
+func FileExit(ctx context.Context, client *docker.Client, execID string, stderr *FirstBytes) (int, error) {
+	// Docker can close the stream a moment before it records the exit.
+	result, err := awaitExit(docker.Promptly(context.WithoutCancel(ctx)), context.Background(), client, execID)
+	if docker.Unavailable(err) {
+		return 0, err
+	}
+	if docker.IsNotFound(err) {
+		return 0, docker.ErrRequestFailed
+	}
+	if err != nil || result.Running || result.ExitCode == nil {
+		return -1, nil
+	}
+	// Docker never ends a command with the helper's own refusal.
+	code := *result.ExitCode
+	if code != 0 && code != helper.FileMounted && !strings.Contains(stderr.String(), helper.FileFailure) {
+		return 0, docker.ErrRequestFailed
+	}
+	return code, nil
 }
 
 // HelperHost is the hardened host configuration of a helper: no network, a

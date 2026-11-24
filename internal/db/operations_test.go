@@ -45,7 +45,7 @@ func TestPruneOperationsKeepsWhatIsStillShown(t *testing.T) {
 		insert(fmt.Sprintf("new-%d", i), "failed", Now()+int64(i))
 	}
 	for _, statement := range []string{
-		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at,last_operation_id) VALUES('a','s','u','{}',1,1,'old-003')`,
+		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at,changed_at,last_operation_id) VALUES('a','s','u','{}',1,1,1,'old-003')`,
 		`INSERT INTO availability(server_id,policy_json,recovery_json,updated_at) VALUES('s','{}','{"operationId":"old-004","pending":true}',1)`,
 		`INSERT INTO audit_log(action,target_type,target_id,details_json,created_at) VALUES('server.backup.succeeded','server','s','{"operationId":"old-005"}',1)`,
 	} {

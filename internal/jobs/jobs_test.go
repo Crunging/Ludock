@@ -552,8 +552,8 @@ func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 // finds use the limit.
 func TestBackupLimitCountsFoundArchives(t *testing.T) {
 	f := setup(t)
-	if _, err := f.jobs.DB.Exec(`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
-    VALUES(?,?,'x',?,'[]',?,'',1,'complete')`, identity.NewUUID(), f.serverID, f.backupTo, int64(1<<30)); err != nil {
+	if _, err := f.jobs.DB.Exec(`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,game_type)
+    VALUES(?,?,'x',?,'[]',?,'',1,'complete','')`, identity.NewUUID(), f.serverID, f.backupTo, int64(1<<30)); err != nil {
 		t.Fatal(err)
 	}
 	if job := f.run(t, "backup", nil); job.Status != ops.Succeeded {
@@ -757,6 +757,21 @@ func TestImpossibleBackupNeverStopsServer(t *testing.T) {
 			}
 		}
 	}
+	// Backups fill the total limit. Retention makes room only after a new
+	// backup is written, so there is none for it.
+	limit := func(bytes int64) {
+		t.Helper()
+		if _, err := f.jobs.Backups.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, MaxBytes: bytes}, f.admin, f.adminSession); err != nil {
+			t.Fatal(err)
+		}
+	}
+	found, _, err := f.jobs.Backups.FoundBytes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit(found)
+	refused("full", "Backups have reached their total size limit. Delete backups you no longer need, or raise the limit in Settings.")
+	limit(1 << 30)
 	// Docker can't change a container's mounts; a label changed with them
 	// stands in for the new container a real change makes.
 	redefine := func(change func(c *fakedocker.Container)) {

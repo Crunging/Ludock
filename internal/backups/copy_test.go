@@ -785,8 +785,8 @@ func TestCopyDueSkipsBusyServers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index := range copyLimit {
-		if _, err := f.s.DB.Exec(`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,
-      copy_destination,copy_state) VALUES(?,?,'x',?,'[]',1,'',?,'complete',?,'pending')`,
+		if _, err := f.s.DB.Exec(`INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,game_type,
+      copy_destination,copy_state) VALUES(?,?,'x',?,'[]',1,'',?,'complete','',?,'pending')`,
 			identity.NewUUID(), f.serverID, f.main, index+1, f.copies); err != nil {
 			t.Fatal(err)
 		}

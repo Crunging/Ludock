@@ -116,8 +116,8 @@ func TestCancelFindsAScheduledRunsCountdown(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := f.jobs.DB.ExecContext(ctx, `INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,last_slot,created_at,last_operation_id)
-      VALUES(?,?,'admin','{}',?,'2026-01-01T05:00',1,?)`, scheduleID, f.serverID, server.BindingRevision, job.ID); err != nil {
+		if _, err := f.jobs.DB.ExecContext(ctx, `INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,last_slot,created_at,changed_at,last_operation_id)
+      VALUES(?,?,'admin','{}',?,'2026-01-01T05:00',1,1,?)`, scheduleID, f.serverID, server.BindingRevision, job.ID); err != nil {
 			t.Fatal(err)
 		}
 		if test.announced != "" {
@@ -182,8 +182,8 @@ func TestRefusedScheduledRunCallsOffCountdown(t *testing.T) {
 				t.Fatal(err)
 			}
 			heard := sql.NullInt64{Int64: warned.BindingRevision, Valid: test.heard}
-			if _, err := f.jobs.DB.ExecContext(ctx, `INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,last_slot,created_at,last_operation_id)
-        VALUES('schedule',?,?,'{"kind":"recurring","action":"restart","enabled":true,"time":"05:00","days":[4],"timezone":"UTC"}',1,'2026-01-01T05:00',1,?)`,
+			if _, err := f.jobs.DB.ExecContext(ctx, `INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,last_slot,created_at,changed_at,last_operation_id)
+        VALUES('schedule',?,?,'{"kind":"recurring","action":"restart","enabled":true,"time":"05:00","days":[4],"timezone":"UTC"}',1,'2026-01-01T05:00',1,1,?)`,
 				serverID, test.owner, job.ID); err != nil {
 				t.Fatal(err)
 			}
