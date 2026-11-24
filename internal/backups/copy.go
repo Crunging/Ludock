@@ -718,6 +718,9 @@ func (s *Service) makeCopy(ctx context.Context, backup *Backup, reserve int64) e
 		// The previous second copy stands in for an archive missing from the
 		// backup folder; CopyFile checks it against the original's checksum.
 		folder, err := s.ArchiveFolder(backup)
+		if errors.Is(err, errArchiveMissing) {
+			return errCopySource
+		}
 		if err != nil {
 			return err
 		}
@@ -838,14 +841,15 @@ func (s *Service) look(folder string, backup *Backup, stalled error) (bool, erro
 }
 
 // errArchiveMissing is a backup whose archive is missing or the wrong size
-// in every folder it could be in.
+// in its folder, with no intact second copy found.
 var errArchiveMissing = fail("INVALID_BACKUP", "This backup’s archive is missing or damaged, so it can’t be read or restored.")
 
 // ArchiveFolder is where a backup's archive is read from: its own folder,
 // or a second copy when the archive is missing or the wrong size there,
 // preferring the one in the chosen folder. It sets FromCopy, FolderAway
 // (also when that folder isn't responding), and Missing, and fails when a
-// folder it must look into isn't, or with errArchiveMissing when Missing.
+// folder it must look into isn't, or with errArchiveMissing when its own
+// folder was looked into and nothing intact was found.
 func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 	backup.FromCopy, backup.Missing, backup.found = false, false, false
 	found, err := s.look(backup.destination, backup, errFolderStalled)
@@ -876,7 +880,8 @@ func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 		}
 		looked = looked && err == nil
 	}
-	if backup.Missing = looked; looked {
+	backup.Missing = looked
+	if !backup.FolderAway {
 		return "", errArchiveMissing
 	}
 	return backup.destination, nil

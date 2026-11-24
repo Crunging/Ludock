@@ -200,18 +200,22 @@ func TestCopyFailingFolder(t *testing.T) {
 	}
 }
 
-// A copy counts only when it matches the original: an archive changed since
-// it was made, a written copy that reads back differently, and a copy that
+// A copy counts only when it matches the original: an archive changed or
+// cut short since it was made, a written copy that reads back differently, and a copy that
 // stops making progress all leave nothing behind.
 func TestCopyVerification(t *testing.T) {
 	f := newCopyFixture(t)
 	backup := f.add(t, "world data", 1)
+	cut := f.add(t, "world data", 2)
 	os.WriteFile(filepath.Join(f.main, backup.ID+".tar"), []byte("WORLD DATA"), 0o600)
+	os.Truncate(filepath.Join(f.main, cut.ID+".tar"), 0)
 	if err := f.s.CopyDue(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if state, _, _, problem := f.row(t, backup.ID); state != "pending" || problem != errCopySource.Message {
-		t.Fatal(state, problem)
+	for _, changed := range []Backup{backup, cut} {
+		if state, _, _, problem := f.row(t, changed.ID); state != "pending" || problem != errCopySource.Message {
+			t.Fatal(state, problem)
+		}
 	}
 	if entries, _ := os.ReadDir(f.copies); len(entries) != 0 {
 		t.Fatal("left a copy of a changed archive", entries)
@@ -915,6 +919,9 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 	// Admitting a backup still counts the archive it can't look for.
 	if total, _, err := f.s.FoundBytes(ctx); err != nil || total != 50 {
 		t.Fatal(total, err)
+	}
+	if _, err := f.s.Open(ctx, f.serverID, b.ID); !errors.Is(err, errArchiveMissing) {
+		t.Fatal(err)
 	}
 	prune()
 }
