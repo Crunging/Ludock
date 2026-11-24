@@ -318,7 +318,7 @@ func (s *Storage) publishData(ctx context.Context, source io.Reader, directory, 
 	if err := s.removeDataLeftovers(directory); err != nil {
 		return errCopyFailed
 	}
-	if err := s.CopyFile(ctx, source, directory, name, size, checksum, reserve, progress); err != nil {
+	if err := s.CopyFile(ctx, source, directory, name, size, checksum, reserve, progress, time.Time{}); err != nil {
 		return err
 	}
 	names, err := s.dataSaves(directory)

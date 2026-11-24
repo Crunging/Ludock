@@ -490,11 +490,13 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	return withSave(job, result), nil
 }
 
-// Docker's rm -v, which compose down -v relies on, keeps any volume a
-// container mounts by name, and the Engine API can mount an existing volume
-// only by name.
-const unnamedVolumeGuidance = "The server kept its unnamed volume, but Docker now treats it as named, so docker compose down -v " +
-	"no longer removes it. To name it in the Compose file instead, copy its data into the named volume first."
+// Docker's rm -v, which compose down -v relies on, removes only volumes a
+// container got without naming them, and the Engine API hands a new container
+// an existing volume only by name. VolumesFrom would keep it unnamed, but
+// leaves a reference to the removed original that breaks the next recreation
+// by Portainer, Watchtower, or Ludock.
+const unnamedVolumeGuidance = "The server kept its unnamed volume. As after Compose recreates a container, docker compose down -v " +
+	"now leaves that volume behind; remove it with docker volume rm. To name it in the Compose file instead, copy its data into the named volume first."
 
 // swap replaces the stopped original with a container created from body, which
 // must run the pulled image, and returns how the replacement was checked.

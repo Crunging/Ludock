@@ -114,10 +114,10 @@ func exists(path string) bool {
 
 // Ludock restarted during a copy: the attempt was counted and a partial file
 // was left. The new process waits out the backoff, then replaces the partial
-// with a verified copy, and makes it only once.
+// with a verified copy dated as its backup, and makes it only once.
 func TestCopyResumesAfterRestart(t *testing.T) {
 	f := newCopyFixture(t)
-	backup := f.add(t, "world data", 1)
+	backup := f.add(t, "world data", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).UnixMilli())
 	partial := filepath.Join(f.copies, backup.ID+".tar.partial")
 	os.WriteFile(partial, []byte("world"), 0o600)
 	f.s.DB.Exec("UPDATE backups SET copy_attempts=1, copy_next_at=? WHERE id=?", time.Now().Add(time.Minute).UnixMilli(), backup.ID)
@@ -138,6 +138,9 @@ func TestCopyResumesAfterRestart(t *testing.T) {
 	copied, _ := os.ReadFile(filepath.Join(f.copies, backup.ID+".tar"))
 	if state != "complete" || attempts != 2 || string(copied) != "world data" || exists(partial) {
 		t.Fatal(state, attempts, string(copied), exists(partial))
+	}
+	if info, err := os.Stat(filepath.Join(f.copies, backup.ID+".tar")); err != nil || info.ModTime().UnixMilli() != backup.CreatedAt {
+		t.Fatal("the copy isn't dated as its backup", info.ModTime(), err)
 	}
 	f.due(t)
 	if err := restarted.CopyDue(ctx); err != nil {
@@ -228,7 +231,7 @@ func TestCopyVerification(t *testing.T) {
 		cancel()
 		return 0, nil
 	}), bytes.NewReader([]byte(" data")))
-	err = f.s.Storage.CopyFile(stalled, source, f.copies, backup.ID+".tar", backup.Size, backup.Checksum, 0, nil)
+	err = f.s.Storage.CopyFile(stalled, source, f.copies, backup.ID+".tar", backup.Size, backup.Checksum, 0, nil, time.Time{})
 	if !apperr.Is(err, "BACKUP_COPY_STALLED") || exists(filepath.Join(f.copies, backup.ID+".tar.partial")) {
 		t.Fatal(err)
 	}
