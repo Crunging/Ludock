@@ -354,13 +354,14 @@ func (c *Checks) active(ctx context.Context, current map[string]servers.Containe
 }
 
 // CheckNow asks the registry about one server's image right away, unless
-// it answered moments ago, and returns the result.
-func (c *Checks) CheckNow(ctx context.Context, serverID string, container servers.Container) *CheckStatus {
+// it answered moments ago, and returns the result. allowed confirms the
+// requester once the check's turn comes, since it can wait behind another.
+func (c *Checks) CheckNow(ctx context.Context, serverID string, container servers.Container, allowed func() error) *CheckStatus {
 	if !c.acquire(ctx) {
 		return nil
 	}
 	defer c.release()
-	if !c.Enabled(ctx) {
+	if !c.Enabled(ctx) || allowed() != nil {
 		return nil
 	}
 	now := db.Now()
@@ -426,12 +427,12 @@ func (c *Checks) SelfStatus(ctx context.Context) *CheckStatus {
 
 // CheckSelfNow asks the registry about Ludock's own image right away, as
 // CheckNow does for a server.
-func (c *Checks) CheckSelfNow(ctx context.Context) *CheckStatus {
+func (c *Checks) CheckSelfNow(ctx context.Context, allowed func() error) *CheckStatus {
 	self, found, err := c.self(ctx)
 	if !found || err != nil {
 		return nil
 	}
-	return c.CheckNow(ctx, selfID, self)
+	return c.CheckNow(ctx, selfID, self, allowed)
 }
 
 // observation is what Docker says about one server's container and image.

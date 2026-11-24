@@ -1,6 +1,7 @@
 package backups
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -71,7 +72,7 @@ func TestRefusedDeletionSurvivesCleanup(t *testing.T) {
 	}
 	t.Cleanup(func() { testHook = nil })
 	checks := 0
-	_, err := s.Delete(ctx, backup.ServerID, backup.ID, false, func() error {
+	_, err := s.Delete(ctx, backup.ServerID, backup.ID, false, func(*sql.Tx) error {
 		if checks++; checks > 1 {
 			go func() { cleaned <- s.FinishDeletions(ctx) }()
 			<-listed
@@ -99,7 +100,7 @@ func TestRefusedDeletionWritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	checks := 0
-	_, err := s.Delete(ctx, backup.ServerID, backup.ID, false, func() error {
+	_, err := s.Delete(ctx, backup.ServerID, backup.ID, false, func(*sql.Tx) error {
 		if checks++; checks > 1 {
 			return forbidden
 		}

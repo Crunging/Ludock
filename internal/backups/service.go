@@ -182,8 +182,9 @@ var errDeleteAway = fail("BACKUP_FOLDER_AWAY", "The folder this backup was saved
 // Delete removes a backup under the server and storage locks. It also
 // finishes an interrupted deletion. With forget, a backup whose folder can't
 // be reached is removed from Ludock with its second copies, leaving its
-// archive wherever it is; left reports that.
-func (s *Service) Delete(ctx context.Context, serverID, id string, forget bool, assertAccess func() error) (left bool, err error) {
+// archive wherever it is; left reports that. assertAccess checks the
+// requester through the transaction that marks the backup deleting.
+func (s *Service) Delete(ctx context.Context, serverID, id string, forget bool, assertAccess func(*sql.Tx) error) (left bool, err error) {
 	backup, err := scanBackup(s.DB.QueryRowContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE server_id=? AND id=? AND state IN ('complete','deleting')",
 		serverID, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -202,7 +203,7 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, forget bool, 
 		return false, cmp.Or(err, error(errNotFound))
 	}
 	if assertAccess != nil {
-		if err := assertAccess(); err != nil {
+		if err := s.DB.Tx(ctx, assertAccess); err != nil {
 			return false, err
 		}
 	}
@@ -225,10 +226,10 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, forget bool, 
 
 // remove marks a backup deleting before unlinking its archive, so an
 // interrupted removal leaves a row that is never offered and is retried by
-// Delete or Prune. If assertAccess refuses right before marking, the backup is
-// left as it was. A folder that can't be reached leaves it as it was too,
-// unless forget, which removes the row without touching the folder.
-func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func() error, forget bool) error {
+// Delete or Prune. If assertAccess refuses in the marking transaction, the
+// backup is left as it was. A folder that can't be reached leaves it as it
+// was too, unless forget, which removes the row without touching the folder.
+func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func(*sql.Tx) error, forget bool) error {
 	if !forget {
 		if err := s.reach(backup.destination, errFolderStalled, measureWait, func(func()) error {
 			return s.Storage.reachable(backup.destination)
@@ -238,21 +239,24 @@ func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func(
 	}
 	marked := false
 	mark := func() error {
-		if assertAccess != nil {
-			if err := assertAccess(); err != nil {
+		err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+			if assertAccess != nil {
+				if err := assertAccess(tx); err != nil {
+					return err
+				}
+			}
+			// Kept between listing and marking, the backup stays.
+			result, err := tx.ExecContext(ctx, "UPDATE backups SET state='deleting' WHERE id=? AND (state='deleting' OR kept_at IS NULL)", backup.ID)
+			if err != nil {
 				return err
 			}
-		}
-		// Kept between listing and marking, the backup stays.
-		result, err := s.DB.ExecContext(ctx, "UPDATE backups SET state='deleting' WHERE id=? AND (state='deleting' OR kept_at IS NULL)", backup.ID)
-		if err != nil {
-			return err
-		}
-		if changed, err := result.RowsAffected(); err != nil || changed == 0 {
-			return errKept
-		}
-		marked = true
-		return nil
+			if changed, err := result.RowsAffected(); err != nil || changed == 0 {
+				return errKept
+			}
+			return nil
+		})
+		marked = err == nil
+		return err
 	}
 	check := mark
 	if assertAccess == nil || forget {

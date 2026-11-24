@@ -115,6 +115,9 @@ type Grant struct {
 type Service struct {
 	DB      *db.DB
 	Servers *identity.Store
+	// Rechecking, when set, runs through tx as AssertIn begins. Tests use it
+	// to take access away between a request's first check and its write.
+	Rechecking func(tx *sql.Tx)
 }
 
 // CurrentActor resolves the current account state for requests, streams,
@@ -230,9 +233,13 @@ func (s *Service) Access(ctx context.Context, actor *db.SessionUser, serverID st
 	if actor == nil {
 		return nil, nil, nil
 	}
+	return access(s.DB.QueryRowContext(ctx, accessQuery, actor.ID, serverID), actor.ID)
+}
+
+func access(row *sql.Row, actorID string) ([]Capability, *identity.Server, error) {
 	var role, grant sql.NullString
 	var disabled sql.NullInt64
-	server, err := identity.ScanServer(s.DB.QueryRowContext(ctx, accessQuery, actor.ID, serverID), &role, &disabled, &grant)
+	server, err := identity.ScanServer(row, &role, &disabled, &grant)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, nil
 	}
@@ -242,7 +249,7 @@ func (s *Service) Access(ctx context.Context, actor *db.SessionUser, serverID st
 	if !role.Valid || disabled.Int64 != 0 {
 		return nil, server, nil
 	}
-	user := &db.SessionUser{ID: actor.ID, Role: db.Role(role.String)}
+	user := &db.SessionUser{ID: actorID, Role: db.Role(role.String)}
 	var assigned []Capability
 	if grant.Valid {
 		assigned = parseCapabilities(grant.String)
@@ -335,6 +342,31 @@ func (s *Service) Assert(ctx context.Context, actor *db.SessionUser, serverID st
 		return nil, errInsufficient
 	}
 	return server, nil
+}
+
+// AssertIn is Assert for a write, through its tx: the request's session is
+// still the actor's and valid, and the account holds every capability on the
+// server now. Refusals are not audited, since they roll back with tx.
+func (s *Service) AssertIn(ctx context.Context, tx *sql.Tx, actorID, tokenHash, serverID string, capabilities ...Capability) error {
+	if s.Rechecking != nil {
+		s.Rechecking(tx)
+	}
+	if err := db.AssertSession(ctx, tx, actorID, tokenHash, db.Now()); err != nil {
+		return AdminMutationError(err)
+	}
+	held, _, err := access(tx.QueryRowContext(ctx, accessQuery, actorID, serverID), actorID)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(held, ServerView) {
+		return ErrServerNotFound
+	}
+	for _, capability := range capabilities {
+		if !slices.Contains(held, capability) {
+			return errInsufficient
+		}
+	}
+	return nil
 }
 
 func (s *Service) auditDenial(ctx context.Context, actor *db.SessionUser, serverID string, capability Capability) {

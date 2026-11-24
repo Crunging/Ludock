@@ -53,8 +53,7 @@ func (s *Server) usersPage(w http.ResponseWriter, r *http.Request, request *Requ
 // Errors keep the region (and the create form's draft) in place.
 func (s *Server) usersResult(w http.ResponseWriter, r *http.Request, request *Request, err error, notice string, change func(*views.UsersView)) {
 	// An account that is no longer an administrator is shown no list.
-	if public, ok := apperr.As(err); ok && (public.Status == http.StatusUnauthorized || public.Status == http.StatusForbidden) {
-		s.fail(w, r, request, err)
+	if s.adminRefused(w, r, request, err) {
 		return
 	}
 	u := s.usersView(r, request)

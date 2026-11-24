@@ -1024,7 +1024,7 @@ func TestStalledRemovalIsGivenUp(t *testing.T) {
 		}
 	}
 	defer func() { testHook = nil }()
-	allowed := func() error { return nil }
+	allowed := func(*sql.Tx) error { return nil }
 	if _, err := f.s.Delete(ctx, f.serverID, backup.ID, false, allowed); !errors.Is(err, errFolderStalled) {
 		t.Fatal(err)
 	}

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -190,9 +191,7 @@ func (s *Server) backupPreflight(w http.ResponseWriter, r *http.Request, request
 }
 
 // enqueue queues work for a confirmed server and follows it in the
-// server's activity. Administrator-only work is queued only while the
-// requesting session is still an administrator's: the runner later checks
-// the account, not the session.
+// server's activity.
 func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, request *Request, resolved *servers.Context, user *db.SessionUser,
 	kind string, input map[string]any) {
 	job, err := s.queue(r, request, resolved, user, kind, input)
@@ -211,22 +210,30 @@ func (s *Server) queue(r *http.Request, request *Request, resolved *servers.Cont
 	}
 	options := ops.EnqueueOptions{ServerID: resolved.Logical.ID, ActorID: user.ID, Kind: kind,
 		BindingRevision: resolved.Logical.BindingRevision, Input: input, IdempotencyKey: requestKey(r)}
+	// The work is queued only while the requesting session still holds what
+	// starting it takes: the runner later checks the account, not the
+	// session.
+	capabilities := jobs.StartCapabilities(&ops.Job{Kind: kind, Input: input})
 	var job *ops.Job
+	write := func(tx *sql.Tx) error {
+		err := s.App.Authz.AssertIn(r.Context(), tx, user.ID, request.Principal.TokenHash, resolved.Logical.ID, capabilities...)
+		if err == nil {
+			job, err = s.App.Runner.Enqueue(r.Context(), tx, options)
+		}
+		return err
+	}
 	var err error
 	if kind == ops.KindRestore || kind == ops.KindUpdate || kind == ops.KindUndoRestore {
-		err = s.App.DB.AdminMutation(r.Context(), user.ID, request.Principal.TokenHash, db.Now(), func(tx *sql.Tx) error {
-			job, err = s.App.Runner.Enqueue(r.Context(), tx, options)
-			return err
-		})
-		if err == nil {
-			s.App.DB.PruneAuditIfNeeded(r.Context())
-			s.App.Runner.Wake()
-		}
-		err = authz.AdminMutationError(err)
+		err = s.App.DB.AdminMutation(r.Context(), user.ID, request.Principal.TokenHash, db.Now(), write)
 	} else {
-		job, err = s.App.Runner.Enqueue(r.Context(), nil, options)
+		err = s.App.DB.Tx(r.Context(), write)
 	}
-	return job, err
+	if err != nil {
+		return nil, authz.AdminMutationError(err)
+	}
+	s.App.DB.PruneAuditIfNeeded(r.Context())
+	s.App.Runner.Wake()
+	return job, nil
 }
 
 // followOperation shows queued work on the server's page.
@@ -325,12 +332,9 @@ func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request, request *R
 	}
 	// The page asks for this only after saying the archive may stay behind.
 	forget := r.URL.Query().Get("folderAway") == "1"
-	left, err := s.App.Backups.Delete(r.Context(), id, backupID, forget, func() error {
-		current, err := s.App.Auth.Recheck(context.WithoutCancel(r.Context()), request.Principal)
-		if err == nil {
-			_, err = s.App.Authz.Assert(context.WithoutCancel(r.Context()), &current.User, id, authz.BackupsDelete)
-		}
-		return err
+	left, err := s.App.Backups.Delete(r.Context(), id, backupID, forget, func(tx *sql.Tx) error {
+		return s.App.Authz.AssertIn(context.WithoutCancel(r.Context()), tx, request.User().ID, request.Principal.TokenHash, id,
+			authz.BackupsDelete)
 	})
 	if err != nil {
 		s.fail(w, r, request, err)
@@ -492,11 +496,17 @@ func (s *Server) checkImage(w http.ResponseWriter, r *http.Request, request *Req
 	u := views.UpdateView{ServerID: id, ChecksOff: !s.App.Checks.Enabled(r.Context()), Capability: capability}
 	if !u.ChecksOff {
 		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
-		u.Check = s.App.Checks.CheckNow(ctx, id, resolved.Container)
+		var refused error
+		u.Check = s.App.Checks.CheckNow(ctx, id, resolved.Container, func() error {
+			refused = s.App.DB.Tx(ctx, func(tx *sql.Tx) error {
+				return s.App.Authz.AssertIn(ctx, tx, request.User().ID, request.Principal.TokenHash, id, authz.ServerUpdate)
+			})
+			return refused
+		})
 		cancel()
 		// The check can wait behind another; the session may have lost the
 		// administrator role meanwhile.
-		if err := s.recheckAdmin(r.Context(), request); err != nil {
+		if err := cmp.Or(refused, s.recheckAdmin(r.Context(), request)); err != nil {
 			s.fail(w, r, request, err)
 			return
 		}

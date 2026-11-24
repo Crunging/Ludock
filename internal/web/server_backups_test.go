@@ -2,7 +2,9 @@ package web
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedules"
 )
 
@@ -344,4 +347,110 @@ func TestBackupsTabFollowsRunningWork(t *testing.T) {
 		strings.Contains(body, ">Dismiss</a>") {
 		t.Fatal(body)
 	}
+}
+
+// Access taken away after a request's first check and before its write
+// stops the write: nothing is queued, cancelled, deleted, or asked of the
+// registry, and the request gets the refusal it would have had earlier. A
+// settings form refused for its input shows nothing saved to a session that
+// ended after it was checked.
+func TestWritesRecheckAccessInside(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const backupID = "33333333-3333-4333-8333-333333333333"
+	member := func(p *pages, capabilities ...authz.Capability) *auth.Principal {
+		who := p.user("u-member", "member", db.RoleMember)
+		p.grant(who, capabilities...)
+		return who
+	}
+	queued := func(t *testing.T, p *pages) bool { kind, _ := p.queued(t); return kind != "" }
+	for _, test := range []struct {
+		name string
+		// setup returns who sends the request and where.
+		setup func(t *testing.T, p *pages) (*auth.Principal, string)
+		// revoke takes access away, given who's ID and session.
+		revoke  string
+		status  int
+		written func(t *testing.T, p *pages) bool
+	}{
+		{name: "backup", revoke: "DELETE FROM server_grants WHERE user_id=?1", status: http.StatusNotFound, written: queued,
+			setup: func(t *testing.T, p *pages) (*auth.Principal, string) {
+				return member(p, authz.ServerView, authz.BackupsCreate), "/servers/" + p.server + "/backups"
+			}},
+		{name: "restart", revoke: "UPDATE users SET disabled=1 WHERE id=?1", status: http.StatusUnauthorized, written: queued,
+			setup: func(t *testing.T, p *pages) (*auth.Principal, string) {
+				if response := p.action("/servers/"+p.server+"/start", p.admin, nil); response.StatusCode != http.StatusOK {
+					t.Fatal(response.StatusCode)
+				}
+				return member(p, authz.ServerView, authz.ServerRestart), "/servers/" + p.server + "/restart"
+			}},
+		{name: "cancel", revoke: `UPDATE server_grants SET capabilities_json='["server.view"]' WHERE user_id=?1`, status: http.StatusForbidden,
+			setup: func(t *testing.T, p *pages) (*auth.Principal, string) {
+				server, _ := p.app.Identity.Get(ctx, p.server)
+				job, err := p.app.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: p.server, ActorID: p.admin.User.ID, Kind: ops.KindRestart,
+					BindingRevision: server.BindingRevision})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return member(p, authz.ServerView, authz.ServerRestart), "/servers/" + p.server + "/operations/" + job.ID + "/cancel"
+			},
+			written: func(t *testing.T, p *pages) bool {
+				var status string
+				p.app.DB.QueryRow("SELECT status FROM operations").Scan(&status)
+				return status != ops.Queued
+			}},
+		{name: "delete backup", revoke: "DELETE FROM sessions WHERE token_hash=?2", status: http.StatusUnauthorized,
+			setup: func(t *testing.T, p *pages) (*auth.Principal, string) {
+				folder := t.TempDir()
+				p.app.Backups.Storage.Roots = folder
+				if err := os.WriteFile(filepath.Join(folder, backupID+".tar"), []byte("archive"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				p.backup(t, backupID, p.server, "")
+				p.app.DB.Exec("UPDATE backups SET destination=?, size=7 WHERE id=?", folder, backupID)
+				return p.admin, "/servers/" + p.server + "/backups/" + backupID + "/delete"
+			},
+			written: func(t *testing.T, p *pages) bool {
+				_, err := os.Stat(filepath.Join(p.app.Backups.Storage.Roots, backupID+".tar"))
+				found, _ := p.app.Backups.Exists(ctx, backupID, true)
+				return err != nil || !found
+			}},
+		{name: "image check", revoke: "DELETE FROM sessions WHERE token_hash=?2", status: http.StatusUnauthorized,
+			setup: func(t *testing.T, p *pages) (*auth.Principal, string) {
+				return p.admin, "/servers/" + p.server + "/update-check"
+			},
+			written: func(t *testing.T, p *pages) bool { return len(p.engine.RegistryAuth) != 0 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			p := newDataPages(t)
+			who, target := test.setup(t, p)
+			p.app.Authz.Rechecking = func(tx *sql.Tx) {
+				if _, err := tx.Exec(test.revoke, who.User.ID, who.TokenHash); err != nil {
+					t.Error(err)
+				}
+			}
+			response := p.action(target, who, nil)
+			if response.StatusCode != test.status || test.written(t, p) {
+				t.Fatal(response.StatusCode, test.written(t, p), readBody(t, response))
+			}
+		})
+	}
+	t.Run("settings form", func(t *testing.T) {
+		t.Parallel()
+		p := newPages(t)
+		// The administrator's form was checked; then they signed out.
+		request := &Request{Principal: p.admin, CSRF: CSRFToken(p.admin.Token)}
+		if _, err := p.app.DB.Exec("DELETE FROM sessions WHERE token_hash=?", p.admin.TokenHash); err != nil {
+			t.Fatal(err)
+		}
+		form := httptest.NewRequest("POST", "http://panel.example/settings/upload-limit", strings.NewReader("limit=lots"))
+		form.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		form.Header.Set("HX-Request", "true")
+		response := httptest.NewRecorder()
+		p.web.saveUploadLimit(response, form, request)
+		if response.Code != http.StatusUnauthorized || strings.Contains(response.Body.String(), "limit") {
+			t.Fatal(response.Code, response.Body.String())
+		}
+	})
 }
