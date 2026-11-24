@@ -273,6 +273,16 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 				input = map[string]any{"backupId": backupID, "root": rootID, "item": "world/level.dat"}
 				os.Chmod(f.data, 0o750)
 			} else {
+				// The world root and a folder in it are setgid, another folder
+				// is sticky, and a program is setuid and setgid.
+				world := filepath.Join(f.data, "world")
+				os.Chmod(world, 0o755|os.ModeSetgid)
+				os.Mkdir(filepath.Join(world, "shared"), 0)
+				os.Chmod(filepath.Join(world, "shared"), 0o775|os.ModeSetgid)
+				os.Mkdir(filepath.Join(world, "tmp"), 0)
+				os.Chmod(filepath.Join(world, "tmp"), 0o777|os.ModeSticky)
+				os.WriteFile(filepath.Join(world, "run"), nil, 0)
+				os.Chmod(filepath.Join(world, "run"), 0o755|os.ModeSetuid|os.ModeSetgid)
 				input = map[string]any{"backupId": twoRootBackup(t, f), "confirmation": "mc"}
 				for _, root := range []string{"world", "config"} {
 					os.WriteFile(filepath.Join(f.data, root, "large.dat"), []byte("changed"), 0o644)
@@ -324,17 +334,19 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 				t.Errorf("%s, %q, journal %q, restored %v, stage left %v", job.Status, job.Error, journal, restored, left)
 			}
 			// A whole restore gives each root the backup's permissions as it
-			// commits; one that didn't restore, or restored one item, leaves
-			// them as they were.
-			roots, mode := []string{"world", "config"}, os.FileMode(0o750)
+			// commits, and every folder its setgid and sticky bits, but never
+			// sets setuid or a file's setgid; one that didn't restore, or
+			// restored one item, leaves the roots as they were.
+			modes := map[string]os.FileMode{"world": 0o750, "config": 0o750}
 			if scenario.item {
-				roots = []string{""}
+				modes = map[string]os.FileMode{"": 0o750}
 			} else if scenario.restored {
-				mode = 0o755
+				modes = map[string]os.FileMode{"world": 0o755 | os.ModeSetgid, "config": 0o755, "world/shared": 0o775 | os.ModeSetgid,
+					"world/tmp": 0o777 | os.ModeSticky, "world/run": 0o755}
 			}
-			for _, root := range roots {
-				if info, err := os.Stat(filepath.Join(f.data, root)); err != nil || info.Mode().Perm() != mode {
-					t.Errorf("root %q is %v, want %v", root, info.Mode().Perm(), mode)
+			for name, mode := range modes {
+				if info, err := os.Stat(filepath.Join(f.data, name)); err != nil || info.Mode()&^os.ModeType != mode {
+					t.Errorf("%q is %v, want %v", name, info.Mode(), mode)
 				}
 			}
 			// A restore that rolled back leaves the data exactly as it was.

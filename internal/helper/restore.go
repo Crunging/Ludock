@@ -442,17 +442,11 @@ func (h *restoreHelper) moveNew(root, stage fd) error {
 	if err := h.moveContents(next, root); err != nil {
 		return err
 	}
-	// The extractor gave new the archived root's owner and permissions.
-	// Archives hold no setgid or sticky bit, so the root keeps its own.
+	// The extractor gave new the archived root's owner and mode.
 	archived, err := fstat(next)
 	if err != nil {
 		return err
 	}
-	current, err := fstat(root)
-	if err != nil {
-		return err
-	}
-	archived.Mode = archived.Mode&0o777 | current.Mode&0o7000
 	return ownRoot(root, archived)
 }
 
@@ -573,6 +567,10 @@ func ownRoot(root fd, from *unix.Stat_t) error {
 	}
 	if current.Uid != from.Uid || current.Gid != from.Gid {
 		if err := unix.Fchown(int(root), int(from.Uid), int(from.Gid)); err != nil {
+			return err
+		}
+		// chown can clear setgid, so the mode is compared after it.
+		if current, err = fstat(root); err != nil {
 			return err
 		}
 	}
@@ -1058,11 +1056,21 @@ func (x *extractor) changed(names []string) {
 	x.dirty[strings.Join(names, "/")] = names
 }
 
-func metadata(descriptor fd, uid, gid, mode int64, mtime *float64) error {
+// metadata gives an extracted entry its owner, then its mode, since chown
+// can clear setgid.
+func metadata(descriptor fd, uid, gid, mode int64, mtime *float64, directory bool) error {
 	if err := unix.Fchown(int(descriptor), int(uid), int(gid)); err != nil {
 		return err
 	}
-	if err := unix.Fchmod(int(descriptor), uint32(mode&0o777)); err != nil {
+	// The only place an archive's mode is applied. The restore runs as root
+	// and gives entries the archive's owners, so honoring setuid, or setgid
+	// on a file, would let whoever can write to the backup folder plant a
+	// privileged program in a game's data. Folders keep setgid and sticky.
+	permissions := mode & 0o777
+	if directory {
+		permissions = mode & 0o3777
+	}
+	if err := unix.Fchmod(int(descriptor), uint32(permissions)); err != nil {
 		return err
 	}
 	if mtime != nil && !math.IsInf(*mtime, 0) && !math.IsNaN(*mtime) {
@@ -1219,7 +1227,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 			if count != 1 || record.Type != "directory" || size != 0 {
 				return errUnsafe
 			}
-			rootMeta = &directoryRecord{nil, uid, gid, mode & 0o777, nil}
+			rootMeta = &directoryRecord{nil, uid, gid, mode, nil}
 			continue
 		}
 		names, err := recordParts(record.Name)
@@ -1268,7 +1276,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 				}
 				remaining -= n
 			}
-			if err := metadata(file, uid, gid, mode, record.Mtime); err != nil {
+			if err := metadata(file, uid, gid, mode, record.Mtime, false); err != nil {
 				return err
 			}
 			if err := unix.Fsync(int(file)); err != nil {
@@ -1290,7 +1298,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		if err != nil {
 			return err
 		}
-		if err := metadata(directory, record.uid, record.gid, record.mode, record.mtime); err != nil {
+		if err := metadata(directory, record.uid, record.gid, record.mode, record.mtime, true); err != nil {
 			return err
 		}
 		if err := unix.Fsync(int(directory)); err != nil {
@@ -1300,10 +1308,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		delete(x.dirty, strings.Join(record.names, "/"))
 	}
 	if rootMeta != nil {
-		if err := unix.Fchown(int(x.destination), int(rootMeta.uid), int(rootMeta.gid)); err != nil {
-			return err
-		}
-		if err := unix.Fchmod(int(x.destination), uint32(rootMeta.mode)); err != nil {
+		if err := metadata(x.destination, rootMeta.uid, rootMeta.gid, rootMeta.mode, nil, true); err != nil {
 			return err
 		}
 	}

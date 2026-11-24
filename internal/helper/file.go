@@ -255,8 +255,8 @@ func (h *fileHelper) streamFile(file fd, size int64) error {
 	return nil
 }
 
-// header writes an entry's archive header. Ownership is kept only for
-// backups.
+// header writes an entry's archive header. Ownership, and folders' setgid
+// and sticky bits, are kept only for backups.
 func (h *fileHelper) header(name string, stat *unix.Stat_t, directory bool) error {
 	if len(name) > 4096 {
 		return errors.New("an archive path is too long")
@@ -268,6 +268,9 @@ func (h *fileHelper) header(name string, stat *unix.Stat_t, directory bool) erro
 	}
 	if h.request.Operation == "backup" {
 		entry.UID, entry.GID = int64(stat.Uid), int64(stat.Gid)
+		if directory {
+			entry.Mode = int64(stat.Mode) & 0o3777
+		}
 	}
 	header, err := tarstream.EncodeHeader(entry)
 	if err != nil {

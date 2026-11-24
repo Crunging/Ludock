@@ -451,10 +451,11 @@ Recreate it without `--rm` to manage it fully.
   pick folders that qualify. Files never deletes, renames, or moves a folder
   that is, or holds, a folder mounted separately, such as `./mods:/data/mods`
   inside `./data:/data`.
-- **What a backup keeps:** permissions, owners, and modification times, and a
-  whole restore gives each data folder its own owner and permissions back.
-  Single-file mounts, links, and special files are refused; ACLs, extended
-  attributes, and sparse files aren't kept.
+- **What a backup keeps:** permissions, including folders' setgid and sticky
+  bits, owners, and modification times, and a whole restore gives each data
+  folder its own owner and permissions back. Single-file mounts, links, and
+  special files are refused; ACLs, extended attributes, sparse files, setuid,
+  and files' setgid aren't kept.
 
 ## Ludock itself
 
