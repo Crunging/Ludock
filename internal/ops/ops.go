@@ -202,12 +202,14 @@ func (c *Context) Progress(phase string, change func(*Recovery), result map[stri
 	}
 	// A cancelled job is no longer running, so it saves nothing more, and
 	// whichever of the cancel and this write commits first wins.
-	status := Running
+	// An ended job keeps the time it ended, which Activity and Needs
+	// attention show, through a later undo.
+	status, updated := Running, db.Now()
 	if c.ended != "" {
-		status, phase = c.ended, c.Job.Phase
+		status, phase, updated = c.ended, c.Job.Phase, c.Job.UpdatedAt
 	}
 	saved, err := c.runner.DB.Exec("UPDATE operations SET phase=?, recovery_json=?, result_json=?, updated_at=? WHERE id=? AND status=?",
-		phase, string(recoveryJSON), resultJSON, db.Now(), c.Job.ID, status)
+		phase, string(recoveryJSON), resultJSON, updated, c.Job.ID, status)
 	if err != nil {
 		return err
 	}

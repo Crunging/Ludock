@@ -226,7 +226,7 @@ func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *bac
 		case true:
 			live = true
 		case false:
-			state.Roots[index].Phase, missing = "rolled_back", true
+			state.Roots[index].Phase, missing, state.StageMissing = "rolled_back", true, true
 		default:
 			return false, false, errJournal
 		}

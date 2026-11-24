@@ -34,6 +34,13 @@ type restoreRecovery struct {
 	// moves anything, keeps what is live instead of removing it: a server
 	// started meanwhile may have written there.
 	SetAside bool `json:"setAside,omitempty"`
+	// StageMissing: the undo found a stage folder gone, so that root's live
+	// data was left as it was, which may not be the server's previous data.
+	StageMissing bool `json:"stageMissing,omitempty"`
+	// PutBack, on a rolled_back journal: live data had moved and the undo
+	// put all of the server's previous data back. Without it and
+	// StageMissing, live data never moved.
+	PutBack bool `json:"putBack,omitempty"`
 }
 
 var errJournal = fail("INVALID_RESTORE_JOURNAL", "Restore recovery records are invalid. Keep the server stopped and review its recovery state.")
@@ -66,7 +73,9 @@ func restoreState(job *ops.Context) (*restoreRecovery, error) {
 				}
 			}
 		}
-	case "cleaned", "rolled_back":
+	// unknown: a restored copy of Ludock's data dropped a journal that
+	// wasn't final (db.settleOperations).
+	case "cleaned", "rolled_back", "unknown":
 		if len(state.Roots) > 0 {
 			return nil, errJournal
 		}
@@ -245,11 +254,14 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 		return err
 	}
 	var entries []journal
-	setAside := false
+	setAside, missing := false, false
 	if state != nil {
-		entries, setAside = state.Roots, state.SetAside
+		entries, setAside, missing = state.Roots, state.SetAside, state.StageMissing
 	}
-	if err := saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries, SetAside: setAside}, ""); err != nil {
+	// A root past staging had live data moved, even one a restart midway
+	// through this undo already put back.
+	touched := slices.ContainsFunc(entries, func(entry journal) bool { return entry.Phase != "staging" })
+	if err := saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries, SetAside: setAside, StageMissing: missing}, ""); err != nil {
 		return err
 	}
 	// The helper's callback runs once its command exists, just before it
@@ -315,7 +327,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 	if blocked != nil {
 		return blocked
 	}
-	return saveRestore(job, restoreRecovery{Status: "rolled_back"}, "")
+	return saveRestore(job, restoreRecovery{Status: "rolled_back", StageMissing: missing, PutBack: touched && !missing}, "")
 }
 
 func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper) error {

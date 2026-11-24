@@ -46,6 +46,7 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
   await expect.poll(() => existsSync(aside) && readFileSync(marker, "utf8"), { timeout: 45_000 }).toBe("current");
   expect(readFileSync(aside, "utf8")).toBe("written meanwhile");
   await expect(item).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.locator(".needs-attention__list li", { hasText: "Restore failed, then undone" })).toBeVisible();
 
   await openServer(page, server.name);
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();

@@ -139,7 +139,7 @@ func settleOperations(ctx context.Context, path string) error {
 		return err
 	}
 	// The guidance names the restore's stage folder (helper.StageName).
-	_, err = conn.ExecContext(ctx, `UPDATE operations SET recovery_json=json_remove(recovery_json,'$.restore','$.dataUnsafe'),
+	_, err = conn.ExecContext(ctx, `UPDATE operations SET recovery_json=json_set(json_remove(recovery_json,'$.dataUnsafe'),'$.restore',json('{"status":"unknown"}')),
     result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.guidance',?||id||?)
     WHERE kind='restore' AND json_valid(recovery_json) AND json_extract(recovery_json,'$.restore.status') IN ('staging','replacing','rolling_back','committed')`,
 		"Ludock’s data was saved before this restore finished, so this copy doesn’t know how it ended, and Ludock won’t change the server’s data for it. "+
