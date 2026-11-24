@@ -120,7 +120,7 @@ type row struct {
 	createdAt                      int64
 }
 
-const columns = "id,server_id,owner_id,input_json,binding_revision,revision,last_slot,last_result,last_operation_id,last_run_at,created_at,changed_at"
+const columns = "id,server_id,COALESCE(owner_id,''),input_json,binding_revision,revision,last_slot,last_result,last_operation_id,last_run_at,created_at,changed_at"
 
 func scan(s interface{ Scan(...any) error }) (*row, error) {
 	var r row
@@ -260,7 +260,7 @@ func (s *Service) latestOperation(ctx context.Context, r *row) *ops.Job {
 	}
 	job, err := s.Runner.Get(ctx, r.lastOpID.String)
 	// Corrupt or unrelated history never exposes an operation's private state.
-	if err != nil || job == nil || job.ServerID != r.serverID || job.ActorID != r.ownerID || job.Input["scheduleId"] != r.id {
+	if err != nil || job == nil || job.ServerID != r.serverID || job.Input["scheduleId"] != r.id {
 		return nil
 	}
 	return job
@@ -567,7 +567,6 @@ func (s *Service) create(ctx context.Context, actor *db.SessionUser, tokenHash, 
 	if err := s.DB.PruneAuditIfNeeded(ctx); err != nil {
 		log.Warn("Audit retention cleanup failed after schedule creation; it will be retried")
 	}
-	// The owner's account may have been deleted since, taking the schedule.
 	r, err := s.get(ctx, s.DB, id, serverID)
 	if err == nil && r == nil {
 		err = errNotFound
@@ -576,6 +575,25 @@ func (s *Service) create(ctx context.Context, actor *db.SessionUser, tokenHash, 
 		return nil, err
 	}
 	return s.public(ctx, r, db.Now(), s.check(ctx))
+}
+
+// CountByOwner counts the schedules each account set up.
+func (s *Service) CountByOwner(ctx context.Context) (map[string]int, error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT owner_id,COUNT(*) FROM schedules WHERE owner_id IS NOT NULL GROUP BY owner_id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := map[string]int{}
+	for rows.Next() {
+		var owner string
+		var count int
+		if err := rows.Scan(&owner, &count); err != nil {
+			return nil, err
+		}
+		counts[owner] = count
+	}
+	return counts, rows.Err()
 }
 
 var errNotFound = apperr.New("NOT_FOUND", 404, "Schedule not found")
@@ -644,6 +662,12 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, tokenHash, 
 	if err != nil {
 		return nil, err
 	}
+	// An administrator who saves or resumes a schedule whose owner was
+	// deleted takes it over.
+	var adopter any
+	if !pausing && first != nil && first.ownerID == "" && current.Role == db.RoleAdmin {
+		adopter, first.ownerID = current.ID, current.ID
+	}
 	next := func(r *row) (Input, Input, error) {
 		previous, parseErr := ParseSaved(r.input)
 		if parseErr != nil && update == nil {
@@ -703,6 +727,9 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, tokenHash, 
 		if err := check(r); err != nil {
 			return err
 		}
+		if adopter != nil {
+			r.ownerID = current.ID
+		}
 		previous, data, err := next(r)
 		if err != nil {
 			return err
@@ -715,7 +742,7 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, tokenHash, 
 			}
 		}
 		result = r
-		if previous.key() == data.key() {
+		if previous.key() == data.key() && adopter == nil {
 			return nil
 		}
 		changed = true
@@ -745,7 +772,8 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, tokenHash, 
 		encoded, _ := json.Marshal(data)
 		// Keep the binding baseline, consumed slot, and history. Every change
 		// invalidates work queued from an earlier configuration.
-		if _, err := tx.ExecContext(ctx, "UPDATE schedules SET input_json=?,revision=revision+1,changed_at=? WHERE id=?", string(encoded), now, id); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE schedules SET input_json=?,revision=revision+1,changed_at=?,owner_id=COALESCE(owner_id,?) WHERE id=?",
+			string(encoded), now, adopter, id); err != nil {
 			return err
 		}
 		r.input, r.revision = string(encoded), r.revision+1

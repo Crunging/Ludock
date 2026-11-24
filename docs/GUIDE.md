@@ -561,7 +561,8 @@ can use; there you add an account without sharing a server yet, make someone
 an administrator or member, disable or delete an account, or make a **Reset
 link** for a forgotten password. Making someone an administrator drops their
 per-server sharing. Ludock always keeps at least one administrator who can
-sign in.
+sign in. Deleting an account stops the schedules it set up until an
+administrator saves each one again, which makes it theirs.
 
 **Two-factor sign-in:** in **Account**, choose **Set up two-factor sign-in**,
 scan the QR code with an authenticator app, and enter your password and a code.

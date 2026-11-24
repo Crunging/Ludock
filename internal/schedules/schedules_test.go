@@ -215,7 +215,8 @@ func TestLateRunsRespectSavesAndRetryConflicts(t *testing.T) {
 
 func schedtimeRecurringGrace() int64 { return 15 * 60_000 }
 
-// Revoked actions, disabled owners, and paused sharing stop a schedule.
+// Revoked actions, disabled or deleted owners, and paused sharing stop a
+// schedule. An administrator saving a deleted owner's schedule takes it over.
 func TestScheduleAuthorityChanges(t *testing.T) {
 	f := setup(t)
 	f.s.Create(ctx, friend, friendSession, f.serverID, base)
@@ -253,8 +254,18 @@ func TestScheduleAuthorityChanges(t *testing.T) {
 		t.Fatal(f.first(t, admin))
 	}
 	f.s.DB.DeleteUser(ctx, friend.ID)
-	if list, _ := f.s.List(ctx, admin, f.serverID); len(list) != 0 {
-		t.Fatal("schedule of a deleted owner kept")
+	f.s.Run(ctx, due+3*86400_000)
+	schedule = f.first(t, admin)
+	if f.operations(t) != 0 || schedule.NextRunUnavailableReason != OwnerMissing || schedule.OwnerName != "" ||
+		schedule.LastResult != "Suspended: the schedule owner no longer exists" {
+		t.Fatal(schedule)
+	}
+	if _, err := f.s.Update(ctx, admin, adminSession, f.serverID, schedule.ID, schedule.Revision, schedule.Input); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due+4*86400_000)
+	if schedule = f.first(t, admin); f.operations(t) != 1 || schedule.OwnerName != admin.Username {
+		t.Fatal(schedule)
 	}
 }
 
@@ -455,8 +466,7 @@ func TestInternalErrorsLeaveTheSlotToRetry(t *testing.T) {
 // Schedule removed right after creation is not found.
 func TestScheduleRemovedAfterCreate(t *testing.T) {
 	f := setup(t)
-	// The owner's account is deleted as soon as the schedule commits, which
-	// takes the schedule with it.
+	// The schedule is deleted as soon as it commits.
 	if _, err := f.s.DB.Exec(`CREATE TRIGGER gone AFTER INSERT ON schedules BEGIN DELETE FROM schedules WHERE id = NEW.id; END`); err != nil {
 		t.Fatal(err)
 	}

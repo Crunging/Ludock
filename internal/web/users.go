@@ -19,6 +19,9 @@ func (s *Server) usersView(r *http.Request, request *Request) views.UsersView {
 		u.Error = publicMessage(err)
 	}
 	u.Users = users
+	if u.Schedules, err = s.App.Schedules.CountByOwner(r.Context()); err != nil {
+		u.Error = publicMessage(err)
+	}
 	names, err := s.App.Servers.Names(r.Context(), request.User())
 	if err != nil {
 		return u

@@ -241,7 +241,7 @@ func (j *Jobs) Actor(ctx context.Context, job *ops.Context) (*db.SessionUser, er
 	}
 	var owner, input string
 	var revision int64
-	err = j.DB.QueryRowContext(ctx, "SELECT owner_id,input_json,revision FROM schedules WHERE id=? AND server_id=?",
+	err = j.DB.QueryRowContext(ctx, "SELECT COALESCE(owner_id,''),input_json,revision FROM schedules WHERE id=? AND server_id=?",
 		scheduleID, job.Job.ServerID).Scan(&owner, &input, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errScheduleRevoked
