@@ -539,6 +539,17 @@ folder that is a whole named volume, the folder is the one
 `docker volume inspect -f '{{.Mountpoint}}' <volume>` prints; for one inside a
 volume, add the rest of its container path to that.
 
+With rootless Docker
+the host's root is not the containers' root, so do the same from inside a
+container, which keeps owners as the game sees them. It needs no path on the
+host for a volume, and room on Docker's own disk to unpack the backup:
+
+```bash
+docker run --rm -v <volume or folder>:/target -v "$PWD/backup.tar:/backup.tar:ro" alpine sh -c \
+  "mkdir /restored && tar -xpf /backup.tar --numeric-owner -C /restored --strip-components=1 snapshot/$id \
+   && find /target -mindepth 1 -delete && cp -a /restored/$id/. /target/"
+```
+
 In the backup folder itself, each archive is `<id>.tar`. `ls -lt` lists the
 newest first, and `tar -tf` shows which game's files one holds, which tells
 servers of different games apart. Files starting `ludock-data-` are
