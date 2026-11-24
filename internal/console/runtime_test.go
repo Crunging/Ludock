@@ -125,6 +125,9 @@ func TestOutputLimitAndRevocationCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	chunks = 2
+	mu.Lock()
+	first := len(controls)
+	mu.Unlock()
 	calls := 0
 	err := runtime.Shell(ctx, id, "ls", Discard, func() error {
 		calls++
@@ -136,7 +139,11 @@ func TestOutputLimitAndRevocationCancel(t *testing.T) {
 	if !errors.Is(err, errCancelled) {
 		t.Fatal(err)
 	}
-	if !eventually(func() bool { mu.Lock(); defer mu.Unlock(); return cancelled[controls[len(controls)-1]] }) {
+	if !eventually(func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(controls) > first && cancelled[controls[len(controls)-1]]
+	}) {
 		t.Fatal("no in-container cancellation requested")
 	}
 }
