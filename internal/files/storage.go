@@ -82,21 +82,16 @@ type Service struct {
 	// administrator's choice; nil reads its labels and image alone.
 	Managed func(ctx context.Context, info *docker.ContainerInspect) (bool, error)
 	// ListerIdle is how long a listing helper is kept after its last use; zero
-	// means 30 seconds. An upload's helper is kept at most writerIdle.
+	// means 30 seconds.
 	ListerIdle time.Duration
 
 	mu sync.Mutex
-	// listers are idle helpers kept for the next use of the same root, by
-	// container, root path, and whether they can write.
+	// listers are idle read-only helpers kept for the next listing of the
+	// same root, by container and root path.
 	listers map[string]*lister
 }
 
-const (
-	listerIdle = 30 * time.Second
-	// writerIdle keeps an upload's writable helper only between the batches
-	// of one upload.
-	writerIdle = 10 * time.Second
-)
+const listerIdle = 30 * time.Second
 
 type lister struct {
 	access *Access
@@ -168,13 +163,7 @@ type Access struct {
 	// replacement, which a running helper's bind mount would not see.
 	signature string
 	startedAt string
-	// created is when the helper started; its idle command exits after
-	// helperLife, so it is reused only while that leaves the longest command,
-	// 30 minutes, time to finish.
-	created time.Time
 }
-
-const helperLife = 35 * time.Minute
 
 // Cleanup removes the helper and its validator. retry keeps trying until
 // Docker confirms removal, for work that may still be writing.
@@ -324,7 +313,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		capabilities = []string{"DAC_OVERRIDE"}
 	}
 	id, err := s.Docker.CreateHelper(ctx, docker.ContainerCreate{
-		Image: image, Entrypoint: []string{helper.Binary}, Cmd: []string{"helper", "idle", strconv.FormatInt(helperLife.Milliseconds(), 10)}, User: "0",
+		Image: image, Entrypoint: []string{helper.Binary}, Cmd: []string{"helper", "idle", "2100000"}, User: "0",
 		Labels: launch.HelperLabels(launch.FileHelper), Env: launch.HelperEnv,
 		HostConfig: launch.HelperHost(projections, capabilities...),
 	})
@@ -332,7 +321,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		proof.Cleanup()
 		return nil, launch.HelperFailed(err)
 	}
-	access := &Access{service: s, container: id, blocked: blocked, mounts: nested, assertAccess: assertAccess, proof: proof, created: time.Now()}
+	access := &Access{service: s, container: id, blocked: blocked, mounts: nested, assertAccess: assertAccess, proof: proof}
 	if err := s.prepare(ctx, access, root, inspection); err != nil {
 		access.Cleanup(false)
 		return nil, err
@@ -345,53 +334,30 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 // container is still exactly the one its mounts were proven for, or
 // acquires a new one. release returns it for reuse after a success.
 func (s *Service) acquireLister(ctx context.Context, target Target, root Root, assertAccess func() error) (*Access, func(ok bool), error) {
-	return s.acquireIdle(ctx, target, root, true, assertAccess)
-}
-
-// acquireIdle is acquireLister for a read-only or a writable helper. The
-// caller holds the server's locks; a writable helper is returned for reuse
-// only after commands that all ended, so nothing still runs in it.
-func (s *Service) acquireIdle(ctx context.Context, target Target, root Root, readOnly bool, assertAccess func() error) (*Access, func(ok bool), error) {
 	key := target.ContainerID + "\x00" + root.Path
-	if !readOnly {
-		key += "\x00writable"
-	}
 	s.mu.Lock()
 	idle := s.listers[key]
 	delete(s.listers, key)
 	s.mu.Unlock()
 	if idle != nil {
 		// Taken from the map, the helper is this caller's to reuse or remove.
-		if idle.timer.Stop() && time.Since(idle.access.created) < helperLife-33*time.Minute && s.reusable(ctx, target, root, idle.access, !readOnly) {
+		if idle.timer.Stop() && s.reusable(ctx, target, root, idle.access) {
 			idle.access.assertAccess = assertAccess
-			return idle.access, s.idleReleaser(key, idle.access, readOnly), nil
+			return idle.access, s.releaser(key, idle.access), nil
 		}
 		idle.access.Cleanup(false)
 	}
-	access, err := s.Acquire(ctx, target, root, readOnly, assertAccess)
+	access, err := s.Acquire(ctx, target, root, true, assertAccess)
 	if err != nil {
 		return nil, nil, err
 	}
-	return access, s.idleReleaser(key, access, readOnly), nil
+	return access, s.releaser(key, access), nil
 }
 
-func (s *Service) idleReleaser(key string, access *Access, readOnly bool) func(ok bool) {
-	if readOnly {
-		return s.releaser(key, access)
-	}
-	return s.releaserFor(key, access, writerIdle)
-}
-
-// reusable reports whether a kept helper still has the game's own mounts.
-// A host folder replaced while the game is stopped changes nothing Docker
-// shows, so a writable helper is reused only while the game runs: a running
-// game keeps the folder it started with until a restart, which changes
-// StartedAt.
-func (s *Service) reusable(ctx context.Context, target Target, root Root, access *Access, writable bool) bool {
+func (s *Service) reusable(ctx context.Context, target Target, root Root, access *Access) bool {
 	inspection, err := s.Docker.Inspect(ctx, target.ContainerID)
 	if err != nil || inspection.ID != target.ContainerID || strings.TrimPrefix(inspection.Name, "/") != target.Name ||
-		signature(inspection) != access.signature || inspection.State.StartedAt != access.startedAt ||
-		(writable && !inspection.State.Running) {
+		signature(inspection) != access.signature || inspection.State.StartedAt != access.startedAt {
 		return false
 	}
 	// A helper that can't be confirmed is replaced; Acquire reports why.
@@ -411,10 +377,6 @@ func (s *Service) reusable(ctx context.Context, target Target, root Root, access
 }
 
 func (s *Service) releaser(key string, access *Access) func(ok bool) {
-	return s.releaserFor(key, access, listerIdle)
-}
-
-func (s *Service) releaserFor(key string, access *Access, longest time.Duration) func(ok bool) {
 	return func(ok bool) {
 		access.assertAccess = nil
 		s.mu.Lock()
@@ -433,7 +395,6 @@ func (s *Service) releaserFor(key string, access *Access, longest time.Duration)
 		if idle <= 0 {
 			idle = listerIdle
 		}
-		idle = min(idle, longest)
 		entry.timer = time.AfterFunc(idle, func() {
 			s.mu.Lock()
 			current := s.listers[key] == entry

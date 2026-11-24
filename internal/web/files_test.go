@@ -173,14 +173,11 @@ func manifest(names ...string) string {
 	return `{"files":[` + strings.Join(files, ",") + "]}\n"
 }
 
-// Batches of one upload share one helper, which serves a member only while
-// they may still write: a grant removed while a batch is sent stops its next
-// file, and the helper is removed with it.
-func TestUploadHelperFollowsGrant(t *testing.T) {
+// A batch of files goes through one helper, which writes for a member only
+// while they may still write: a grant removed while a batch is sent stops its
+// next file, and the helper is removed with it.
+func TestUploadFollowsGrant(t *testing.T) {
 	p, member, root, data := uploadPages(t)
-	// A stopped game's folder could be replaced unseen, so only a running
-	// game's helper is kept.
-	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.State.Running, c.State.Status = true, "running" })
 	server := httptest.NewServer(p.handler)
 	defer server.Close()
 	send := func(body io.Reader, length int64) (int, string) {
@@ -210,15 +207,17 @@ func TestUploadHelperFollowsGrant(t *testing.T) {
 		}
 		return started, running
 	}
-	for _, batch := range [][]string{{"a.txt", "b.txt"}, {"c.txt"}} {
-		body := manifest(batch...) + strings.Repeat("hello", len(batch))
-		if code, answer := send(strings.NewReader(body), int64(len(body))); code != 200 || strings.Contains(answer, "failed") {
-			t.Fatal(code, answer)
-		}
+	var batch []string
+	for index := range 20 {
+		batch = append(batch, fmt.Sprintf("mod-%d.jar", index))
+	}
+	body := manifest(batch...) + strings.Repeat("hello", len(batch))
+	if code, answer := send(strings.NewReader(body), int64(len(body))); code != 200 || strings.Contains(answer, "failed") {
+		t.Fatal(code, answer)
 	}
 	// The helper and the validator that proved its mount.
 	if started, _ := helpers(); started != 2 {
-		t.Fatal(started, "containers started for two batches")
+		t.Fatal(started, "containers started for 20 files")
 	}
 
 	head := manifest("d.txt", "e.txt")
@@ -245,13 +244,12 @@ func TestUploadHelperFollowsGrant(t *testing.T) {
 	if _, running := helpers(); running != 0 {
 		t.Fatal(running, "helpers left")
 	}
-	body := manifest("f.txt") + "hello"
+	body = manifest("f.txt") + "hello"
 	if code, _ := send(strings.NewReader(body), int64(len(body))); code != http.StatusForbidden {
 		t.Fatal("uploaded without the grant", code)
 	}
-	entries, _ := os.ReadDir(data)
-	if len(entries) != 4 {
-		t.Fatal(entries)
+	if entries, _ := os.ReadDir(data); len(entries) != 21 {
+		t.Fatal(len(entries), "files")
 	}
 }
 

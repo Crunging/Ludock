@@ -36,8 +36,8 @@ var errNotUploaded = apperr.New("UPLOAD_STOPPED", 409, "The upload stopped befor
 // MaxBatch is the most files one upload request may carry.
 const MaxBatch = 200
 
-// UploadFiles writes entries into one folder through one helper command,
-// with a helper kept between the batches of an upload. Each file commits
+// UploadFiles writes entries into one folder through one helper command.
+// Each file commits
 // only after its trailer, which is sent after its whole body and an access
 // check. It returns each entry's result, and the error that stopped the
 // batch, after which later entries were not written.
@@ -69,18 +69,18 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	if err != nil {
 		return fail(err)
 	}
-	input := &batchInput{body: body, check: assertAccess, entries: entries, ids: make([]string, len(entries)), sent: make([]bool, len(entries))}
+	input := &batchInput{body: body, entries: entries, ids: make([]string, len(entries)), sent: make([]bool, len(entries))}
 	if !slices.Contains(results, nil) {
 		return results, nil
 	}
-	access, release, err := s.acquireIdle(ctx, target, root, false, assertAccess)
+	access, err := s.Acquire(ctx, target, root, false, assertAccess)
 	if err == nil {
 		// Uploads have no size limit by default, so a file that would fill the
 		// disk is refused before anything is written; the helper checks each
 		// file again as the batch fills the disk.
 		var space *helper.FileSpace
 		if space, err = access.space(ctx, root, normalized); err != nil {
-			release(false)
+			access.Cleanup(false)
 		} else {
 			// The rest may fit once earlier files replace larger ones.
 			if index := slices.Index(results, nil); entries[index].Size > space.Available-helper.UploadSpare(space.Total) {
@@ -101,8 +101,23 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		}
 	}
 	if len(files) == 0 {
-		release(true)
+		access.Cleanup(false)
 		return results, nil
+	}
+	// Each file is committed only while the game is still the run the
+	// helper's mounts were proven for: a restart onto a replaced folder would
+	// leave the helper writing to the old one.
+	input.check = func() error {
+		if assertAccess != nil {
+			if err := assertAccess(); err != nil {
+				return err
+			}
+		}
+		inspection, err := s.Docker.Inspect(ctx, target.ContainerID)
+		if err == nil && (signature(inspection) != access.signature || inspection.State.StartedAt != access.startedAt) {
+			err = Error("FILE_TARGET_CHANGED", 409)
+		}
+		return err
 	}
 	list, _ := json.Marshal(files)
 	input.trailer = binary.BigEndian.AppendUint64(nil, uint64(len(list)))
@@ -130,7 +145,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		}
 	}
 	if err == nil {
-		release(true)
+		access.Cleanup(false)
 		return results, nil
 	}
 	// A failed upload may still be writing, so its helper is removed before
