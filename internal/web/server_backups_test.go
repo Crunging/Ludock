@@ -87,7 +87,12 @@ func TestRestoreChecksConfirmationAndBackup(t *testing.T) {
 		t.Fatal(page)
 	}
 	p.app.DB.Exec("UPDATE operations SET status='succeeded'")
-	if page := open(); !strings.Contains(page, "Restore game data") || !strings.Contains(page, "/backups/11111111-1111-4111-8111-111111111111/download") {
+	page := open()
+	if !strings.Contains(page, "Restore game data") || !strings.Contains(page, "/backups/11111111-1111-4111-8111-111111111111/download") {
+		t.Fatal(page)
+	}
+	// Delete carries one action and nothing a template branch left behind.
+	if strings.Contains(page, `" else`) || strings.Count(page, "/backups/11111111-1111-4111-8111-111111111111/delete") != 1 {
 		t.Fatal(page)
 	}
 }

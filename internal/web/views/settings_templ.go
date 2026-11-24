@@ -3003,7 +3003,7 @@ func destinationFields(n NotificationDestinationView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		case notify.Webhook:
-			templ_7745c5c3_Err = secretField(n, "url", "Webhook URL", "https://example.com/hooks/ludock", "Ludock sends a POST with a JSON body: source (\"ludock\"), id, kind (\"event\" or \"test\"), message, and createdAt. The id stays the same when a delivery is retried.", 1024).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = secretField(n, "url", "Webhook URL", "https://example.com/hooks/ludock", "Ludock sends a POST with a JSON body: source (\"ludock\"), id, kind (\"event\" or \"test\"), alert (the alert type, on events), message, and createdAt. The id stays the same when a delivery is retried.", 1024).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

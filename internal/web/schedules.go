@@ -139,6 +139,7 @@ func (s *Server) schedulesView(r *http.Request, request *Request, d *views.Serve
 			v.Form.Missing = true
 		} else {
 			v.Form.Input, v.Form.Revision = list[index].Input, list[index].Revision
+			v.Form.TakesOver = list[index].OwnerID == "" && request.User().Role == db.RoleAdmin
 			if v.Form.Input.Announcements != nil {
 				v.Form.LeadText = views.LeadText(v.Form.Input.Announcements.LeadMinutes)
 			}
@@ -239,6 +240,8 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 		form.LeadText = views.LeadText(schedules.DefaultLeadMinutes)
 	}
 	form.Revision, _ = strconv.ParseInt(r.PostFormValue("revision"), 10, 64)
+	// Only the form's note depends on it.
+	form.TakesOver = r.PostFormValue("takesOver") == "true"
 	latest := func() (*schedules.Schedule, error) {
 		list, err := s.App.Schedules.List(ctx, request.User(), serverID)
 		for index := range list {
