@@ -40,7 +40,10 @@
   });
   var fitAddon = new window.FitAddon.FitAddon();
   terminal.loadAddon(fitAddon);
-  if (window.WebLinksAddon) terminal.loadAddon(new window.WebLinksAddon.WebLinksAddon());
+  // Nothing in output is a link: players write it, and an address that only
+  // looks trusted is one click from a phishing page. OSC 8 hyperlinks keep
+  // just their text.
+  terminal.parser.registerOscHandler(8, function () { return true; });
   terminal.open(root);
   // Resizes refit the terminal at most once per frame.
   var fitQueued = false;

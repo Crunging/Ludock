@@ -56,6 +56,6 @@ func (s *Server) consolePage(w http.ResponseWriter, r *http.Request, request *Re
 	page.Console = true
 	page.Path = "/"
 	page.Styles = []string{"vendor/xterm.css"}
-	page.Scripts = []string{"vendor/xterm.js", "vendor/xterm-addon-fit.js", "vendor/xterm-addon-web-links.js", "console.js"}
+	page.Scripts = []string{"vendor/xterm.js", "vendor/xterm-addon-fit.js", "console.js"}
 	render(w, r, http.StatusOK, views.ConsolePage(page, c))
 }
