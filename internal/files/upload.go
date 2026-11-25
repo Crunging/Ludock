@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/datasize"
@@ -193,8 +194,8 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	removeStaged := func(access *Access) error {
 		// It runs even once the uploader's access is gone.
 		access = &Access{service: s, container: access.container, blocked: access.blocked}
-		_, err := access.request(context.WithoutCancel(ctx), helper.FileRequest{Operation: "upload-files-cleanup", Root: root.Path,
-			Path: normalized}, bytes.NewReader(fileList(staged)), nil)
+		_, err := access.exec(context.WithoutCancel(ctx), helper.FileRequest{Operation: "upload-files-cleanup", Root: root.Path,
+			Path: normalized}, launch.ExecOptions{Input: bytes.NewReader(fileList(staged)), Limit: time.Minute})
 		if err != nil {
 			log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
 		}
@@ -412,7 +413,9 @@ func (a *Access) prepareUpload(ctx context.Context, target Target, root Root, fo
 	for _, name := range names {
 		files = append(files, helper.UploadFile{Name: name})
 	}
-	out, err := a.request(ctx, helper.FileRequest{Operation: "upload-prepare", Root: root.Path, Path: folder}, bytes.NewReader(fileList(files)), nil)
+	// Only a list goes in, so the bound stays a command's without input.
+	out, err := a.exec(ctx, helper.FileRequest{Operation: "upload-prepare", Root: root.Path, Path: folder},
+		launch.ExecOptions{Input: bytes.NewReader(fileList(files)), Limit: time.Minute})
 	if err != nil {
 		return nil, err
 	}

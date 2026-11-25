@@ -85,7 +85,7 @@ type ExecOptions struct {
 	// input chunks; with Limit, also every second while the command runs.
 	// A settling command checks it only after the create.
 	AssertAccess func() error
-	// Limit replaces the one-minute bound of a command without input.
+	// Limit replaces a command's bound: one minute, or 30 with input.
 	Limit time.Duration
 	// Errors replaces the file errors.
 	Errors *ExecErrors
@@ -175,10 +175,10 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	}
 	var err error
 	limit := time.Minute
-	if options.Input != nil {
-		limit = 30 * time.Minute
-	} else if options.Limit > 0 || options.Settle {
+	if options.Limit > 0 || options.Settle {
 		limit = options.Limit
+	} else if options.Input != nil {
+		limit = 30 * time.Minute
 	}
 	parent := ctx
 	if options.Settle {
