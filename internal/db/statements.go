@@ -40,8 +40,9 @@ type statementConn struct {
 	driver.Conn
 	statements map[string]*cachedStatement
 	writes     *writeGate
-	// inTx: a transaction the write gate admitted is open.
-	inTx bool
+	// inTx: a transaction the write gate admitted is open; readOnly: one
+	// it didn't, in which no write may run, since it would commit later.
+	inTx, readOnly bool
 }
 
 var (
@@ -129,8 +130,8 @@ func (c *statementConn) BeginTx(ctx context.Context, options driver.TxOptions) (
 		leave()
 		return nil, err
 	}
-	c.inTx = !options.ReadOnly
-	return &gatedTx{Tx: tx, end: func() { c.inTx = false; leave() }}, nil
+	c.inTx, c.readOnly = !options.ReadOnly, options.ReadOnly
+	return &gatedTx{Tx: tx, end: func() { c.inTx, c.readOnly = false, false; leave() }}, nil
 }
 
 type gatedTx struct {
@@ -173,8 +174,13 @@ func (s *cachedStatement) admit(ctx context.Context) (func(), error) {
 	if !s.writes || s.conn.inTx {
 		return func() {}, nil
 	}
+	if s.conn.readOnly {
+		return nil, errReadOnlyWrite
+	}
 	return s.conn.writes.enter(ctx)
 }
+
+var errReadOnlyWrite = errors.New("a read-only transaction can't write")
 
 var (
 	_ driver.StmtExecContext  = (*cachedStatement)(nil)

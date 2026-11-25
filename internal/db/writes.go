@@ -85,8 +85,13 @@ func (d *DB) CloseWrites(ctx context.Context) (reopen func(), err error) {
 	return reopen, nil
 }
 
+// readPragmas are the PRAGMAs Ludock reads; any other may write, as
+// optimize does.
+var readPragmas = map[string]bool{"application_id": true, "user_version": true, "database_list": true, "foreign_key_check": true,
+	"foreign_keys": true, "journal_mode": true, "quick_check": true, "integrity_check": true}
+
 // writes reports whether a statement may write: anything but a single
-// SELECT or EXPLAIN, or a PRAGMA that only reads.
+// SELECT or EXPLAIN, or reading one of readPragmas.
 func writes(query string) bool {
 	query = strings.TrimSuffix(strings.TrimSpace(query), ";")
 	words := strings.Fields(query)
@@ -100,7 +105,9 @@ func writes(query string) bool {
 	case "SELECT", "EXPLAIN":
 		return false
 	case "PRAGMA":
-		return strings.ContainsAny(query, "=(")
+		name := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(query, words[0])))
+		name, _, _ = strings.Cut(name, "(")
+		return strings.Contains(name, "=") || !readPragmas[strings.TrimPrefix(strings.TrimSpace(name), "main.")]
 	}
 	return true
 }

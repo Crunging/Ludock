@@ -509,7 +509,8 @@ version back would undo them. Ludock doesn't begin an update while other
 work is queued, running, or still being recovered after a restart. If the
 helper is killed or the host restarts partway, Docker runs the helper again
 and it finishes or undoes the update. One stopped on purpose with `docker
-stop` waits until Docker restarts or `docker start` starts it again. A tag moved back to an older release
+stop` is started again by a Ludock still running; with none running, it
+waits until Docker restarts or `docker start` starts it. A tag moved back to an older release
 is refused, since that release can't use the newer data.
 
 The new container keeps everything the old one had: environment, mounts,

@@ -558,17 +558,17 @@ func (h *Helper) leave(ctx context.Context, expected, name string) error {
 			return err
 		}
 	}
-	// Its readiness counts only for the run still going.
+	self, err := h.marked(ctx, HelperName(h.Operation), helperKind)
+	if err != nil || self == nil {
+		return cmpErr(err, errors.New("the helper can't find its own container"))
+	}
+	// Its readiness counts only for the run still going, checked last.
 	if err := h.sameRun(ctx, current); err != nil {
 		return err
 	}
 	log.Info("Ludock's update is settled; removing its helper")
 	// Removing itself ends this process, so the answer may never come; one
 	// that never reached Docker leaves it to retry.
-	self, err := h.marked(ctx, HelperName(h.Operation), helperKind)
-	if err != nil || self == nil {
-		return cmpErr(err, errors.New("the helper can't find its own container"))
-	}
 	if err := h.Docker.Remove(ctx, self.ID, true, true); err != nil && !docker.IsNotFound(err) {
 		if still, inspectErr := h.inspect(ctx, self.ID); inspectErr != nil || still != nil {
 			return err
