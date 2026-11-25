@@ -1576,7 +1576,7 @@ func BackupStorage(status backups.StorageStatus) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if len(status.Removed) > 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 124, "<p class=\"backup-storage__removed\">Backups of servers removed from Ludock still count here. Delete them on each server’s Backups tab when you no longer need them: ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 124, "<p class=\"backup-storage__removed\">Servers removed from Ludock still have backups here. Delete them on each server’s Backups tab when you no longer need them: ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

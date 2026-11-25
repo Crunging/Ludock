@@ -719,9 +719,9 @@ otherwise its page lets an administrator pick another server of the same game,
 and access moved to other data folders waits for **Confirm and restore
 access**. Until they move, its backups stay on its Backups tab for
 administrators to download or delete; Ludock never removes them on its own,
-and it can't be removed from Ludock while it has any. Backups of a server
-removed while its container was still there are listed in **Settings →
-Backups** once the container is gone, since they still count there.
+and it can't be removed from Ludock while it has any. Servers removed from
+Ludock that still have backups are listed in **Settings → Backups**, with a
+link to each one's Backups tab.
 Recreating it with a new password, port, label, or environment variable keeps
 its panel choices, history, sharing, and schedules. A change to its game or to
 the data folders Ludock reads and backs up pauses the access of everyone it's

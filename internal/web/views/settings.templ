@@ -513,7 +513,7 @@ templ BackupStorage(status backups.StorageStatus) {
 		</dl>
 		if len(status.Removed) > 0 {
 			<p class="backup-storage__removed">
-				Backups of servers removed from Ludock still count here. Delete them on each server’s Backups tab when you no longer need them:
+				Servers removed from Ludock still have backups here. Delete them on each server’s Backups tab when you no longer need them:
 				for index, server := range status.Removed {
 					<a class="text-link" href={ templ.SafeURL("/servers/" + server.ID + "?tab=backups") }>{ server.Name }</a> ({ counted(server.Backups, "backup", "backups") }){ map[bool]string{true: ".", false: ","}[index == len(status.Removed)-1] }
 				}
