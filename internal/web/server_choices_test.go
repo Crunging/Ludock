@@ -103,8 +103,8 @@ func TestAddServerRefusesForgedRequests(t *testing.T) {
 // same game and data folders; the move gives it everything, the old server
 // leaves Ludock, and its work shows in the new server's Activity. A new
 // server with its own schedule or grant for the same person keeps its own;
-// one whose schedule at the same time also backs up first keeps both, and
-// the result says so.
+// a moved schedule that also backs up first is kept beside the new server's
+// at the same time, and the result says so.
 // One with other data folders, or two with none, is offered only by name:
 // moved sharing waits for a confirmation that a page opened before the move
 // can't give, and the backups say the data lived elsewhere. Work on
@@ -175,11 +175,10 @@ func TestRenamedServerTakesOver(t *testing.T) {
 					t.Fatal(can, count)
 				}
 			}},
-		{name: "new server backs up at the same time", status: http.StatusOK,
+		{name: "backs up first at the same time", status: http.StatusOK,
 			before: func(t *testing.T, p *pages, member *auth.Principal, renamed string) *auth.Principal {
-				first := restart
-				first.CreateBackup = true
-				if _, err := p.app.Schedules.CreateAsAdmin(ctx, &p.admin.User, p.admin.TokenHash, renamed, first); err != nil {
+				p.app.DB.Exec("UPDATE schedules SET input_json=json_set(input_json,'$.createBackup',json('true'))")
+				if _, err := p.app.Schedules.CreateAsAdmin(ctx, &p.admin.User, p.admin.TokenHash, renamed, restart); err != nil {
 					t.Fatal(err)
 				}
 				return p.admin

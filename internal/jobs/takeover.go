@@ -345,8 +345,7 @@ func (j *Jobs) TakeOver(ctx context.Context, actor *db.SessionUser, tokenHash, f
 		}
 		return j.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: admin, Action: "server.taken-over", TargetType: "server", TargetID: to.ID,
 			IPAddress: ip, Details: map[string]any{"from": from.DisplayName, "to": to.DisplayName, "backups": done.Backups,
-				"schedules": done.Schedules, "people": done.People, "schedulesLeft": len(done.LeftSchedules), "schedulesAtSameTime": len(done.SameTime),
-				"peopleKept":    len(done.KeptPeople),
+				"schedules": done.Schedules, "people": done.People, "schedulesLeft": len(done.LeftSchedules), "peopleKept": len(done.KeptPeople),
 				"sharingPaused": done.Paused}})
 	})
 	if err != nil {
