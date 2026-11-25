@@ -349,7 +349,7 @@
     // lines has one entry per file that didn't upload; stop says why the
     // last pass's files after its first left untried weren't tried, and left
     // counts those. existing are files the server didn't replace unasked.
-    var lines = [], stop = "", left = 0, existing = [];
+    var lines = [], stop = "", left = 0, existing = [], halted = false;
     zone.setAttribute("aria-disabled", "true");
     buttons(true);
     progress.hidden = false;
@@ -361,10 +361,11 @@
       return false;
     });
     // run sends items in batches, numbering them in the status as the last
-    // of total, until a batch's results can't be relied on. It returns false
-    // once the session has ended.
+    // of total, until a batch's results can't be relied on, which sets
+    // halted. It returns false once the session has ended.
     async function run(items, total, verb) {
       var queue = batches(items), offset = 0;
+      halted = true;
       function report(index) {
         current = label(items[offset + index]);
         status.textContent = verb + " " + (total - items.length + offset + index + 1) + " of " + total + ": " + current;
@@ -422,6 +423,7 @@
           // After an unknown result, the rest waits until someone checks the folder.
           if (answer.stop || unsure) break;
         }
+        halted = position < queue.length;
       } catch (error) {
         if (!controller.signal.aborted) {
           // Files sent before the one cut off may have been written.
@@ -437,7 +439,7 @@
       if (!(await run(files, chosen.length, "Uploading"))) return;
       // The server found files the folder's listing didn't show, such as
       // ones inside a folder or made since: it asks once more for those.
-      if (existing.length > 0 && !stop && !controller.signal.aborted) {
+      if (existing.length > 0 && !halted && !controller.signal.aborted) {
         var again = existing;
         if (await askReplace((again.length === 1 ? "1 file you chose is already here: " : again.length + " files you chose are already here: ") +
           quoted(again.map(label)) + (again.length === 1 ? ". Replacing it can’t be undone; otherwise it stays as it is." :
