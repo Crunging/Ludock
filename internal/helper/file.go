@@ -442,13 +442,15 @@ func (h *fileHelper) removeEntry(parent fd, name string, depth int) error {
 // before a change that would delete or move what is inside it. A stage is
 // below the top of a data folder when another server's, or a wider
 // ludock.files, shows the folder that holds it.
-func (h *fileHelper) unmounted(parent fd, name, relative string) error {
+// unmounted checks the tree at name from depth, which a staging folder
+// starts a level up.
+func (h *fileHelper) unmounted(parent fd, name, relative string, depth int) error {
 	absolute := h.absolute(relative)
 	if slices.ContainsFunc(h.request.Mounts, func(mount string) bool { return Within(mount, absolute) }) {
 		return errMounted
 	}
 	count := 0
-	return h.oneMount(parent, name, 0, &count)
+	return h.oneMount(parent, name, depth, &count)
 }
 
 // oneMount checks files too: unlinking a mounted file fails only after
@@ -1398,7 +1400,7 @@ func (h *fileHelper) run() error {
 		}
 		return h.json(map[string]bool{"ok": true})
 	case "delete":
-		if err := h.unmounted(parent, name, relative); err != nil {
+		if err := h.unmounted(parent, name, relative, 0); err != nil {
 			return err
 		}
 		if err := h.removeEntry(parent, name, 0); err != nil {
@@ -1425,7 +1427,7 @@ func (h *fileHelper) run() error {
 		if isSymlink(info) {
 			return errors.New("symbolic links cannot be renamed")
 		}
-		if err := h.unmounted(parent, name, relative); err != nil {
+		if err := h.unmounted(parent, name, relative, 0); err != nil {
 			return err
 		}
 		if _, err := lstatAt(targetParent, targetName); err == nil {

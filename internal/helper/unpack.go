@@ -416,11 +416,15 @@ func (h *fileHelper) removeStage(parent fd, name string) error {
 	if h.checkFolder(relative, true) != nil {
 		return errUnsafe
 	}
-	if err := h.unmounted(parent, name, relative); err != nil {
+	if err := h.unmounted(parent, name, relative, stageDepth); err != nil {
 		return err
 	}
-	return h.removeEntry(parent, name, 0)
+	return h.removeEntry(parent, name, stageDepth)
 }
+
+// stageDepth starts the walks that remove a staging folder a level up: it
+// and its unpacked folder sit above the 64 levels an entry may have.
+const stageDepth = -1
 
 // unpack extracts an archive into a hidden staging folder beside it, then
 // renames the result to a name not in use: the archive's only folder when it
@@ -458,7 +462,7 @@ func (h *fileHelper) unpack(parent fd, name string) error {
 	var stageInfo *unix.Stat_t
 	defer func() {
 		if !done && stageInfo != nil && h.isStage(parent, stageName, stageInfo) {
-			h.removeEntry(parent, stageName, 0)
+			h.removeEntry(parent, stageName, stageDepth)
 		}
 	}()
 	stage, err := h.t.openAt(parent, stageName, directoryFlags, 0)

@@ -1399,7 +1399,7 @@ func TestUploadKeepsAccessACL(t *testing.T) {
 	}{
 		{"user::r-x,user:4242:rwx,group::rw-,group:4343:rw-,mask::rwx,other::rw-", "user::r--,user:4242:rwx,group::r--,group:4343:r--,mask::rw-,other::r--", 0o464},
 		{"user::r-x,group::rwx,other::---", "", 0o440},
-		{"user::r-x,user:" + future + ":rwx,group::rw-,mask::rwx,other::rw-", "user::r--,user:" + future + ":r--,group::rw-,mask::rw-,other::rw-", 0o466},
+		{"user::r-x,user:" + future + ":rwx,group::rw-,mask::rwx,other::rw-", "user::r--,user:" + future + ":r-x,group::rw-,mask::rw-,other::rw-", 0o466},
 	} {
 		unix.Setxattr(root, defaultACL, mustACL(t, test.folder), 0)
 		name := "handed-" + strconv.Itoa(index)

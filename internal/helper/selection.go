@@ -50,7 +50,7 @@ func (h *fileHelper) selection(root fd, operation string) error {
 	switch operation {
 	case "delete-paths", "move":
 		for _, item := range items {
-			if err := h.unmounted(parent, item.name, item.relative); err != nil {
+			if err := h.unmounted(parent, item.name, item.relative, 0); err != nil {
 				return err
 			}
 		}

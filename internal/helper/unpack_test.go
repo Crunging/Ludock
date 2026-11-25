@@ -321,6 +321,10 @@ func TestUnpackStagingCleanup(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(planted, "game data")); err != nil {
 		t.Fatal("an unpack removed a folder Ludock didn't record")
 	}
+	// Its unpacked folder may hold an entry as deep as an archive's may be.
+	deepest := filepath.Join(fresh, "unpacked", strings.Repeat("d/", 63)+"f")
+	os.MkdirAll(filepath.Dir(deepest), 0o755)
+	os.WriteFile(deepest, nil, 0o644)
 	if _, code := runFile(t, FileRequest{Operation: "unpack-cleanup", Root: root, Path: "other.tar", UploadID: stageID}, nil); code != 0 {
 		t.Fatal(code)
 	}
