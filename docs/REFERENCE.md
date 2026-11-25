@@ -883,15 +883,16 @@ for the undo starts again (for a restart with a backup first, once its backup
 is taken) unless the undo had begun moving data.
 
 Restores and undos move data without replacing anything a game makes at the
-same moment, where the filesystem can refuse that as part of the move.
-Restoring or undoing one file or folder needs that, as it always has, and so
-does an undo that finds something the game made in the way of the previous
-data; where it is missing, both are refused before anything moves. Any other
-restore or undo of a whole data folder on a filesystem without it, such as
-NFS, gets a plain rename, as restores always have: if someone starts the
-server outside Ludock during an undo, a file the game makes in the instant
-between Ludock checking a name and moving data there, in the data folder or
-in `ludock-set-aside-<id>`, can be replaced.
+same moment, where the filesystem can refuse that as part of the move. An
+undo checks once, before it moves anything, whether the data folder's
+filesystem can. If it can, every move of that undo is made that way, and
+something the game made in the way of the previous data moves to
+`ludock-set-aside-<id>`. If it can't, such as on NFS, the undo moves as
+restores always have: it refuses when something is in the way, as does
+restoring or undoing one file or folder, and otherwise uses a plain rename.
+Then, if someone starts the server outside Ludock during an undo, a file the
+game makes in the instant between Ludock checking a name and moving data
+there can be replaced.
 
 ### When Docker restarts
 

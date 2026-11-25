@@ -669,37 +669,20 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if err := renameNoReplace(parent, "folder", parent, "moved", stat("folder")); err == nil {
 		t.Fatal("renamed a folder without an atomic no-replace rename")
 	}
-	// A whole folder's undo sets aside as whole restores always moved there,
-	// but a numbered name, new with this, needs RENAME_NOREPLACE.
+	// With RENAME_NOREPLACE, a file made at the name between the check and
+	// the move is kept.
+	renameat2 = original
 	os.Mkdir(filepath.Join(dir, "aside"), 0o700)
 	aside, err := unix.Open(filepath.Join(dir, "aside"), unix.O_DIRECTORY|unix.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer unix.Close(aside)
-	os.Mkdir(filepath.Join(dir, "aside", "folder"), 0o700)
-	if err := setAsideEntry(parent, "folder", fd(aside), stat("folder"), false); err == nil {
-		t.Fatal("set aside under a numbered name without RENAME_NOREPLACE")
-	}
-	os.Remove(filepath.Join(dir, "aside", "folder"))
-	if err := setAsideEntry(parent, "folder", fd(aside), stat("folder"), false); err != nil {
-		t.Fatal(err)
-	}
-	renameat2 = original
-	os.Mkdir(filepath.Join(dir, "folder"), 0o755)
-	if err := setAsideEntry(parent, "folder", fd(aside), stat("folder"), false); err != nil {
-		t.Fatal(err)
-	}
-	if info, err := os.Stat(filepath.Join(dir, "aside", "folder (2)")); err != nil || !info.IsDir() {
-		t.Fatal("not set aside under a free name", err)
-	}
-	// With RENAME_NOREPLACE, a file made at the name between the check and
-	// the move is kept.
 	renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
 		os.WriteFile(filepath.Join(dir, "aside", to), []byte("made meanwhile"), 0o644)
 		return original(fromFD, from, toFD, to, flags)
 	}
-	if err := setAsideEntry(parent, "b.txt", fd(aside), stat("b.txt"), false); err == nil {
+	if err := setAsideEntry(parent, "b.txt", fd(aside), stat("b.txt"), true); err == nil {
 		t.Fatal("replaced a file made meanwhile")
 	}
 	if data, _ := os.ReadFile(filepath.Join(dir, "aside", "b.txt")); string(data) != "made meanwhile" {
@@ -709,12 +692,12 @@ func TestRenamesNeverClobber(t *testing.T) {
 	// A file with another name is never moved, even to keep it.
 	root := filepath.Join(t.TempDir(), "data")
 	stage := StageName("6f9619ff-8b86-4011-b42d-00c04fc964ff")
+	asideName := SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")
 	os.MkdirAll(filepath.Join(root, stage, "old"), 0o700)
 	os.WriteFile(filepath.Join(root, stage, "old", "ops.json"), []byte("original"), 0o644)
 	os.WriteFile(filepath.Join(root, "ops.json"), []byte("game made"), 0o644)
 	os.Link(filepath.Join(root, "ops.json"), filepath.Join(root, "linked"))
-	argument, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreRollbackOld,
-		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: root})
+	argument, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreRollbackOld, Aside: asideName, Base: root})
 	if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
 		t.Fatal("moved a hard-linked file")
 	}
@@ -731,165 +714,84 @@ func TestRenamesNeverClobber(t *testing.T) {
 		t.Fatal("set aside before refusing:", string(data))
 	}
 	os.Remove(filepath.Join(root, stage, "snapshot"))
-	// With something in the way, a whole folder's return needs
-	// RENAME_NOREPLACE too, so without it nothing moves.
-	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
-	if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
-		t.Fatal("set aside without RENAME_NOREPLACE")
+	tree := func(top string) string {
+		var all []string
+		filepath.WalkDir(top, func(path string, entry os.DirEntry, err error) error {
+			data, _ := os.ReadFile(path)
+			all = append(all, path+"="+string(data))
+			return nil
+		})
+		return strings.Join(all, "\n")
 	}
-	renameat2 = original
-	if data, _ := os.ReadFile(filepath.Join(root, "ops.json")); string(data) != "game made" {
-		t.Fatal("moved the live copy:", string(data))
+	// On a filesystem without RENAME_NOREPLACE, in any of the ways it says
+	// so, an undo moves as main does: something in the way is refused with
+	// the disk left exactly as it was, and once the owner clears it the
+	// return uses the plain rename.
+	for _, errno := range []unix.Errno{unix.EINVAL, unix.ENOSYS, unix.EOPNOTSUPP, unix.EPERM} {
+		renameat2 = func(int, string, int, string, uint) error { return errno }
+		before := tree(root)
+		if RunRestore(string(argument), io.Discard, io.Discard) == 0 || tree(root) != before {
+			t.Fatalf("%v: set aside, or changed the disk:\n%s\nwas:\n%s", errno, tree(root), before)
+		}
+		os.Rename(filepath.Join(root, "ops.json"), filepath.Join(dir, "cleared"))
+		if RunRestore(string(argument), io.Discard, io.Discard) != 0 {
+			t.Fatalf("%v: refused a return main makes", errno)
+		}
+		if data, _ := os.ReadFile(filepath.Join(root, "ops.json")); string(data) != "original" {
+			t.Fatal("didn't return the original:", string(data))
+		}
+		os.Rename(filepath.Join(root, "ops.json"), filepath.Join(root, stage, "old", "ops.json"))
+		os.Rename(filepath.Join(dir, "cleared"), filepath.Join(root, "ops.json"))
 	}
-	if data, _ := os.ReadFile(filepath.Join(root, stage, "old", "ops.json")); string(data) != "original" {
-		t.Fatal("moved the original:", string(data))
-	}
-	// Something else at the set-aside folder's name, which nothing needed,
-	// doesn't keep the originals from returning.
-	other := filepath.Join(t.TempDir(), "data")
-	os.MkdirAll(filepath.Join(other, stage, "old"), 0o700)
-	os.WriteFile(filepath.Join(other, stage, "old", "ops.json"), []byte("original"), 0o644)
-	os.WriteFile(filepath.Join(other, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")), nil, 0o644)
-	plain, _ := json.Marshal(RestoreRequest{Root: other, Stage: stage, Operation: RestoreRollbackOld,
-		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: other})
-	// What the folder holds is read apart from any step.
-	kept := func(root string, sync bool) string {
-		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreKept,
-			Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Sync: sync, Base: root})
-		var out bytes.Buffer
-		RunRestore(string(request), &out, io.Discard)
-		return out.String()
-	}
-	if RunRestore(string(plain), io.Discard, io.Discard) != 0 || kept(other, false) != `{"kept":false}` {
-		t.Fatal("returned nothing past a file at the set-aside name:", kept(other, false))
-	}
-	// An empty set-aside folder kept nothing, and a filesystem that answers
-	// the flagged rename with EOPNOTSUPP still gets the plain one.
-	os.Remove(filepath.Join(other, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")))
-	os.Mkdir(filepath.Join(other, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")), 0o700)
-	os.WriteFile(filepath.Join(other, stage, "old", "whitelist.json"), []byte("original"), 0o644)
-	renameat2 = func(int, string, int, string, uint) error { return unix.EOPNOTSUPP }
-	if RunRestore(string(plain), io.Discard, io.Discard) != 0 || kept(other, false) != `{"kept":false}` {
-		t.Fatal("returned nothing past EOPNOTSUPP, or claimed an empty folder:", kept(other, false))
-	}
-	renameat2 = original
-	// Once this undo set a copy aside, every retry returns only by
-	// RENAME_NOREPLACE, so a save the game makes in the gap is never
-	// replaced. Here the set-aside works and the return finds no
-	// RENAME_NOREPLACE; the retry, with the name free, still refuses.
-	os.WriteFile(filepath.Join(other, "ops.json"), []byte("game made"), 0o644)
-	os.WriteFile(filepath.Join(other, stage, "old", "ops.json"), []byte("original"), 0o644)
+	// On one that has it, every move of the run uses it, so a later
+	// "unsupported" answer fails the step and never becomes a plain rename.
+	calls := 0
 	renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
-		if folder, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(fromFD)); strings.HasSuffix(folder, "/old") {
+		if calls++; calls > 1 {
 			return unix.EINVAL
 		}
 		return original(fromFD, from, toFD, to, flags)
 	}
-	if RunRestore(string(plain), io.Discard, io.Discard) == 0 {
-		t.Fatal("returned without RENAME_NOREPLACE after a clash")
-	}
-	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
 	plainRename, renamed := renameat, false
 	renameat = func(fromFD int, from string, toFD int, to string) error {
 		renamed = true
 		return plainRename(fromFD, from, toFD, to)
 	}
-	if RunRestore(string(plain), io.Discard, io.Discard) == 0 || renamed {
-		t.Fatal("a retry returned by plain rename after a clash")
-	}
-	// A whole folder's set-aside, which fills the folder by design and met
-	// no clash, returns as main does.
-	whole := filepath.Join(t.TempDir(), "data")
-	os.MkdirAll(filepath.Join(whole, stage, "old"), 0o700)
-	os.WriteFile(filepath.Join(whole, stage, "old", "ops.json"), []byte("original"), 0o644)
-	os.MkdirAll(filepath.Join(whole, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")), 0o700)
-	os.WriteFile(filepath.Join(whole, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), "ops.json"), []byte("game made"), 0o644)
-	wholeReturn, _ := json.Marshal(RestoreRequest{Root: whole, Stage: stage, Operation: RestoreRollbackOld,
-		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: whole})
-	// EPERM is a seccomp profile that refuses renameat2 alone.
-	renameat2 = func(int, string, int, string, uint) error { return unix.EPERM }
-	if RunRestore(string(wholeReturn), io.Discard, io.Discard) != 0 || !renamed {
-		t.Fatal("refused the return after a whole-folder set-aside")
+	os.Remove(filepath.Join(root, "ops.json"))
+	if RunRestore(string(argument), io.Discard, io.Discard) == 0 || renamed {
+		t.Fatal("fell back to a plain rename on a filesystem with RENAME_NOREPLACE")
 	}
 	renameat2, renameat = original, plainRename
-	// A clash refused for want of RENAME_NOREPLACE moves nothing and leaves
-	// no record of it, so once the owner clears the way the return is no
-	// stricter than main's. Anything but a record the helper made at its
-	// name is none: it is ignored with nothing in the way, and refuses a
-	// clash, which main refuses too.
-	marked := filepath.Join(t.TempDir(), "data")
-	os.MkdirAll(filepath.Join(marked, stage, "old"), 0o700)
-	os.WriteFile(filepath.Join(marked, stage, "old", "ops.json"), []byte("original"), 0o644)
-	os.WriteFile(filepath.Join(marked, "ops.json"), []byte("game made"), 0o644)
-	markedReturn, _ := json.Marshal(RestoreRequest{Root: marked, Stage: stage, Operation: RestoreRollbackOld,
-		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: marked})
-	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
-	if RunRestore(string(markedReturn), io.Discard, io.Discard) == 0 {
-		t.Fatal("set aside without RENAME_NOREPLACE")
+	// What the folder holds is read apart from any step, and only a folder
+	// on the root's own mount that holds something counts.
+	kept := func(root string, sync bool) string {
+		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreKept, Aside: asideName, Sync: sync, Base: root})
+		var out bytes.Buffer
+		RunRestore(string(request), &out, io.Discard)
+		return out.String()
 	}
-	if _, err := os.Lstat(filepath.Join(marked, stage, "clash")); !os.IsNotExist(err) {
-		t.Fatal("kept a record of a clash that moved nothing")
+	os.WriteFile(filepath.Join(root, asideName), nil, 0o644)
+	if RunRestore(string(argument), io.Discard, io.Discard) != 0 || kept(root, false) != `{"kept":false}` {
+		t.Fatal("returned nothing past a file at the set-aside name:", kept(root, false))
 	}
-	os.Symlink("nowhere", filepath.Join(marked, stage, "clash"))
-	if RunRestore(string(markedReturn), io.Discard, io.Discard) == 0 {
-		t.Fatal("set aside past something else at the record's name")
+	os.Remove(filepath.Join(root, asideName))
+	os.Mkdir(filepath.Join(root, asideName), 0o700)
+	if kept(root, false) != `{"kept":false}` {
+		t.Fatal("an empty folder kept something")
 	}
-	os.Remove(filepath.Join(marked, "ops.json"))
-	if RunRestore(string(markedReturn), io.Discard, io.Discard) != 0 {
-		t.Fatal("refused a return main makes, once the way was clear")
-	}
-	renameat2 = original
-	if data, _ := os.ReadFile(filepath.Join(marked, "ops.json")); string(data) != "original" {
-		t.Fatal("didn't return the original:", string(data))
-	}
-	// A record left by an attempt cut before its first move, with no copy
-	// aside to show a clash moved, leaves main's return once the way is
-	// clear.
-	os.Rename(filepath.Join(marked, "ops.json"), filepath.Join(marked, stage, "old", "ops.json"))
-	os.Remove(filepath.Join(marked, stage, "clash"))
-	os.WriteFile(filepath.Join(marked, stage, "clash"), nil, 0o600)
-	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
-	if RunRestore(string(markedReturn), io.Discard, io.Discard) != 0 {
-		t.Fatal("a record with nothing moved refused main's return")
-	}
-	renameat2 = original
-	// A folder mounted at the set-aside name holds no copies Ludock knows.
-	os.MkdirAll(filepath.Join(marked, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), "theirs"), 0o700)
-	asidePath := filepath.Join(marked, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"))
+	os.WriteFile(filepath.Join(root, asideName, "theirs"), nil, 0o644)
+	asidePath := filepath.Join(root, asideName)
 	mountOf = func(descriptor fd) (uint64, error) {
 		if path, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(int(descriptor))); path == asidePath {
 			return 999, nil
 		}
 		return mountID(descriptor)
 	}
-	markedKept, _ := json.Marshal(RestoreRequest{Root: marked, Stage: stage, Operation: RestoreKept,
-		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: marked})
-	var mountedSaid bytes.Buffer
-	RunRestore(string(markedKept), &mountedSaid, io.Discard)
+	if said := kept(root, false); said != `{}` {
+		t.Fatal("reported a mounted folder's contents as kept:", said)
+	}
 	mountOf = mountID
-	if mountedSaid.String() != `{}` {
-		t.Fatal("reported a mounted folder's contents as kept copies:", mountedSaid.String())
-	}
-	// A record an attempt made, whose folder that attempt couldn't sync, is
-	// synced before a retry relies on it.
-	os.Remove(filepath.Join(marked, stage, "clash"))
-	os.Rename(filepath.Join(marked, "ops.json"), filepath.Join(marked, stage, "old", "ops.json"))
-	os.WriteFile(filepath.Join(marked, "ops.json"), []byte("game made"), 0o644)
-	os.WriteFile(filepath.Join(marked, stage, "clash"), nil, 0o600)
-	stageFailing := func(descriptor int) error {
-		if path, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(descriptor)); path == filepath.Join(marked, stage) {
-			return unix.EIO
-		}
-		return unix.Fsync(descriptor)
-	}
-	fsync = stageFailing
-	if RunRestore(string(markedReturn), io.Discard, io.Discard) == 0 {
-		t.Fatal("relied on a record its folder never synced")
-	}
-	fsync = unix.Fsync
-	if data, _ := os.ReadFile(filepath.Join(marked, "ops.json")); string(data) != "game made" {
-		t.Fatal("moved the live copy without a durable record:", string(data))
-	}
+	os.Remove(filepath.Join(root, asideName, "theirs"))
 	// One item's return needs RENAME_NOREPLACE, so without it nothing moves.
 	os.MkdirAll(filepath.Join(root, "world"), 0o755)
 	os.WriteFile(filepath.Join(root, "world", "level.dat"), []byte("game made"), 0o644)

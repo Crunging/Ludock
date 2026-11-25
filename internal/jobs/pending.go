@@ -124,12 +124,14 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		case missingAny && !returned:
 			note = "Ludock found nothing to put back for a restore that had stopped partway: the folder " + stageName(restore) +
 				" that held the server’s previous data is no longer there, so its data was left as it is."
-		// SetAside is only what the undo meant to do; Kept says a folder exists.
+		// SetAside is only what the undo meant to do; Kept says it moved
+		// something. Activity says what Ludock did, which stays true whatever
+		// the owner does with the folder since.
 		case state.SetAside && returned && final.Kept:
-			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place, and what the game wrote meanwhile is kept in the folder " +
+			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place, and Ludock moved what the game wrote meanwhile to the folder " +
 				aside + " beside it."
 		case returned && final.Kept:
-			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. The game had since made newer copies of some of it, which are kept in the folder " +
+			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place, and Ludock moved what was in its way to the folder " +
 				aside + " beside it."
 		case !returned:
 			note = "Ludock removed the backup’s unpacked copy that a stopped restore left in " + stageName(restore) + "."
@@ -148,7 +150,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		}
 		return note
 	}
-	finish := &restoreFinish{note: note, by: job, pending: true}
+	finish := &restoreFinish{note: note, by: job}
 	err = func() error {
 		if job != nil {
 			if err := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID = data.Container }, nil); err != nil {
@@ -194,13 +196,18 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	}()
 	data.Cleanup()
 	restore.Progress("", func(r *ops.Recovery) { r.DataHelperID = "" }, nil)
-	// An undo that failed after moving data, or that found copies kept
-	// before, says what the folders show now.
-	if err != nil && (moved || state.Kept) {
-		unknown := j.reconcileKept(ctx, server, restore)
+	// A failed attempt at a restore whose live data had moved says what the
+	// folders show now, on the restore and on the work that tried.
+	if err != nil && (moved || touchedLive(state)) {
+		guidance := endedRestoreGuidance(restore, true, j.reconcileKept(ctx, server, restore))
 		result := restore.Job.Result
-		result.Guidance = endedRestoreGuidance(restore, true, unknown)
+		result.Guidance = guidance
 		restore.Progress("", nil, &result)
+		if job != nil {
+			result := job.Job.Result
+			result.UndoNote = guidance
+			job.Progress(job.Job.Phase, nil, &result)
+		}
 	}
 	if job != nil {
 		if clearErr := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID = "" }, nil); err == nil {
@@ -210,9 +217,15 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	return err
 }
 
-// keptNote says where undoing restore kept newer copies of the data.
+// keptNote says where undoing restore moved what was in the way.
 func keptNote(restore *ops.Context) string {
-	return "Newer copies the game had made of some of the server’s data are kept in the folder " + helper.SetAsideName(restore.Job.ID) + "."
+	return "Ludock moved what was in the way of the server’s previous data to the folder " + helper.SetAsideName(restore.Job.ID) + " in its data."
+}
+
+// touchedLive says a restore's live data had moved, so an undo of it may
+// have set something aside.
+func touchedLive(state *restoreRecovery) bool {
+	return state != nil && slices.ContainsFunc(state.Roots, func(entry journal) bool { return entry.Phase != "staging" })
 }
 
 // checkUndo marks the journal's roots whose stage folder is gone as having

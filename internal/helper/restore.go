@@ -216,13 +216,11 @@ func (h *restoreHelper) moveContents(source, destination fd, strict bool, omitte
 // as NFS, gets the plain rename whole restores always used: a file the game
 // makes there between the check and the rename is replaced. Refusing instead
 // would leave the data in the stage on every such filesystem, and moving by
-// link and unlink can lose an original. One item's moves, and an undo's once
-// something is in the originals' way, use renameStrict instead.
+// link and unlink can lose an original. One item's moves, and an undo's on a
+// filesystem noReplace found to have it, use renameStrict instead.
 func renameChecked(from fd, name string, to fd, target string) error {
 	err := renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE)
-	// EPERM: a seccomp profile that refuses renameat2 but allows renameat.
-	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTSUP) ||
-		errors.Is(err, unix.EPERM) {
+	if unsupported(err) {
 		err = renameat(int(from), name, int(to), target)
 	}
 	return err
@@ -440,9 +438,8 @@ func stagedMovable(old fd, children []string) error {
 
 // setAsideEntry moves a live entry into the set-aside folder under a name
 // the folder doesn't hold yet, since an earlier attempt may have set a copy
-// aside by that name. strict, for one item, whose return requires
-// RENAME_NOREPLACE, requires it here too, so a filesystem without it refuses
-// before anything moves.
+// aside by that name. strict moves only by RENAME_NOREPLACE; without it, as
+// main does, a name already there is refused.
 func setAsideEntry(parent fd, name string, aside fd, info *unix.Stat_t, strict bool) error {
 	if info == nil {
 		return syncAll(parent, aside)
@@ -466,10 +463,11 @@ func setAsideEntry(parent fd, name string, aside fd, info *unix.Stat_t, strict b
 		}
 		target = base + suffix
 	}
-	// A numbered name is new, so it gets no fallback either.
 	rename := renameChecked
-	if strict || target != name {
+	if strict {
 		rename = renameStrict
+	} else if target != name {
+		return errUnsafe
 	}
 	if err := rename(parent, name, aside, target); err != nil {
 		return err
@@ -774,6 +772,10 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 	if err := h.ownTree(root, false); err != nil {
 		return err
 	}
+	strict, err := h.noReplace(root, stage)
+	if err != nil {
+		return err
+	}
 	aside, err := h.pinAside(root, stage)
 	if err != nil {
 		return err
@@ -797,7 +799,7 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 		if err != nil {
 			return err
 		}
-		if err := setAsideEntry(root, name, aside, info, false); err != nil {
+		if err := setAsideEntry(root, name, aside, info, strict); err != nil {
 			return err
 		}
 		h.movedAside++
@@ -829,8 +831,13 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 		return err
 	}
 	// Something in the originals' way means a game ran since the restore
-	// stopped, so from then on no move may replace what it makes: without
-	// RENAME_NOREPLACE the first move refuses, before anything else moves.
+	// stopped, so no move may replace what it makes, which only a filesystem
+	// with RENAME_NOREPLACE can promise. On one without, a clash is refused
+	// with nothing moved or made, as main refuses it.
+	strict, err := h.noReplace(root, stage)
+	if err != nil {
+		return err
+	}
 	var aside fd = -1
 	for _, name := range children {
 		if Reserved(name) {
@@ -843,36 +850,16 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 		if info == nil {
 			continue
 		}
+		if !strict {
+			return errUnsafe
+		}
 		if aside, err = h.asideFor(root, stage, root, aside, name, name, info); err != nil {
 			return err
 		}
-		created, err := markClash(stage)
-		if err != nil {
-			// Nothing moved, so a record that may not be durable is taken back.
-			if created {
-				err = errors.Join(err, unmarkClash(stage))
-			}
-			return err
-		}
 		if err := setAsideEntry(root, name, aside, info, true); err != nil {
-			if created && refused(err) {
-				return errors.Join(err, unmarkClash(stage))
-			}
 			return err
 		}
 		h.movedAside++
-	}
-	// The mark, made before the first clash moved, keeps every later
-	// attempt at this root as strict while a copy that clash moved aside is
-	// there to show one did. A mark whose move never happened, as when an
-	// attempt was cut first, leaves main's return once the way is clear.
-	strict, err := clashMarked(stage)
-	if err != nil {
-		return err
-	}
-	if strict && h.movedAside == 0 {
-		kept, known, _ := h.keptAside(root)
-		strict = kept || !known
 	}
 	if err := h.moveContents(old, root, strict); err != nil {
 		return err
@@ -884,53 +871,45 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 	return ownRoot(root, previous)
 }
 
-// clashRecord is the file in a stage that says an undo met something in the
-// originals' way, which only a game run since the restore stopped makes.
-const clashRecord = "clash"
-
-// markClash records the clash, durably, before its first move, and says
-// whether it made the record. Something else at the name is no record, and
-// with a clash met, which main refuses, the undo refuses too.
-func markClash(stage fd) (bool, error) {
-	file, err := unix.Openat(int(stage), clashRecord, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
-	if errors.Is(err, unix.EEXIST) {
-		if marked, err := clashMarked(stage); err != nil || !marked {
-			return false, errors.Join(err, errUnsafe)
+// noReplace finds out, with a flagged rename of a scratch file in the stage,
+// whether the root's filesystem has RENAME_NOREPLACE. The stage, the live
+// data and the set-aside folder share that filesystem, so the answer holds
+// for every move of this run: with it, every move uses it, and an
+// "unsupported" answer later fails the step like any other error; without
+// it, the run moves as main does. A filesystem that changes its answer
+// between runs is out of scope.
+func (h *restoreHelper) noReplace(root, stage fd) (bool, error) {
+	if same, err := sameMount(root, stage); err != nil || !same {
+		return false, errUnsafe
+	}
+	const from, to = "probe", "probe.to"
+	for _, name := range []string{from, to} {
+		if err := unix.Unlinkat(int(stage), name, 0); err != nil && !isNotExist(err) {
+			return false, err
 		}
-		return false, nil
-	} else if err != nil {
+	}
+	file, err := unix.Openat(int(stage), from, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	if err != nil {
 		return false, err
 	}
 	unix.Close(file)
-	return true, syncAll(stage)
-}
-
-// clashMarked reports a record markClash made: a regular file, whose stage
-// is synced before it is relied on, as an interrupted creation may not have.
-// Anything else at the name records nothing.
-func clashMarked(stage fd) (bool, error) {
-	info, err := lstatAt(stage, clashRecord)
-	if isNotExist(err) || (err == nil && !isRegular(info)) {
-		return false, nil
-	} else if err != nil {
+	err = renameat2(int(stage), from, int(stage), to, unix.RENAME_NOREPLACE)
+	supported := err == nil
+	if err != nil && !unsupported(err) {
 		return false, err
 	}
-	return true, syncAll(stage)
-}
-
-// unmarkClash takes back a record whose clash moved nothing, as when the
-// filesystem refuses RENAME_NOREPLACE, so that state is the one main would
-// leave, and the return is no stricter than main's once the clash is gone.
-func unmarkClash(stage fd) error {
-	if err := unix.Unlinkat(int(stage), clashRecord, 0); err != nil && !isNotExist(err) {
-		return err
+	for _, name := range []string{from, to} {
+		if err := unix.Unlinkat(int(stage), name, 0); err != nil && !isNotExist(err) {
+			return false, err
+		}
 	}
-	return syncAll(stage)
+	return supported, nil
 }
 
-// refused says a rename is known to have moved nothing.
-func refused(err error) bool {
-	for _, errno := range []unix.Errno{unix.EEXIST, unix.ENOSYS, unix.EINVAL, unix.EOPNOTSUPP, unix.ENOTSUP, unix.EPERM} {
+// unsupported is a flagged rename's answer from a filesystem or kernel
+// without RENAME_NOREPLACE, or a seccomp profile that refuses renameat2.
+func unsupported(err error) bool {
+	for _, errno := range []unix.Errno{unix.ENOSYS, unix.EINVAL, unix.EOPNOTSUPP, unix.ENOTSUP, unix.EPERM} {
 		if errors.Is(err, errno) {
 			return true
 		}
