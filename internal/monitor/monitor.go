@@ -42,6 +42,9 @@ type Policy struct {
 	Recover bool `json:"recover"`
 }
 
+// watched reports whether outages are tracked under the policy.
+func (p Policy) watched() bool { return p.Enabled && !p.Maintenance }
+
 // DefaultPolicy is a server's policy until an administrator saves one:
 // every server is watched unless an administrator turns that off.
 func DefaultPolicy() Policy {
@@ -302,9 +305,11 @@ func availabilityOf(r *row, err error) (*Availability, error) {
 		SuppressedUntil: r.suppressed, IntentionallyStopped: r.intentional == 1, LastState: r.lastState.String}}, nil
 }
 
-// Configure saves a policy and resets any outage, and any disk or memory
-// alert whose settings changed. The administrator's
-// session and role are checked again in the transaction that saves it.
+// Configure saves a policy, resetting any disk or memory alert whose settings
+// changed and any outage if watching was or is now off or paused for
+// maintenance: an outage watched on both sides of the save is the same
+// outage, timed from its start and alerted once. The administrator's session
+// and role are checked again in the transaction that saves it.
 func (s *Service) Configure(ctx context.Context, adminID, tokenHash, serverID string, policy Policy) (*Availability, error) {
 	encoded, _ := json.Marshal(policy)
 	if err := s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
@@ -315,8 +320,12 @@ func (s *Service) Configure(ctx context.Context, adminID, tokenHash, serverID st
 		}
 		previous, _ := ParsePolicy([]byte(r.policy))
 		disk, memory := resetAlerts(r.disk, r.memory, previous, policy)
+		outage := "outage_started_at=NULL,notified=0,"
+		if previous.watched() && policy.watched() {
+			outage = ""
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO availability(server_id,policy_json,updated_at) VALUES(?,?,?)
-      ON CONFLICT(server_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=excluded.updated_at, outage_started_at=NULL, notified=0,
+      ON CONFLICT(server_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=excluded.updated_at,`+outage+`
         disk_json=?,memory_json=?,recovery_json=?`,
 			serverID, string(encoded), db.Now(), disk, memory, resetRecovery(r.recovery, previous, policy))
 		return err
@@ -391,7 +400,7 @@ func (s *Service) suppress(ctx context.Context, serverID, outage string, allowed
 }
 
 func (s *Service) suppressed(serverID string, policy Policy, until, now int64, active bool) bool {
-	return !policy.Enabled || policy.Maintenance || until > now || active || (s.Locks != nil && s.Locks.ServerBusy(serverID))
+	return !policy.watched() || until > now || active || (s.Locks != nil && s.Locks.ServerBusy(serverID))
 }
 
 // Monitored lists the servers whose monitoring is on and not paused for
@@ -403,7 +412,7 @@ func (s *Service) Monitored(ctx context.Context) (map[string]bool, error) {
 	}
 	monitored := map[string]bool{}
 	for serverID, r := range rows {
-		if policy, err := ParsePolicy([]byte(r.policy)); err == nil && policy.Enabled && !policy.Maintenance {
+		if policy, err := ParsePolicy([]byte(r.policy)); err == nil && policy.watched() {
 			monitored[serverID] = true
 		}
 	}
@@ -446,8 +455,9 @@ func (s *Service) Problems(ctx context.Context, now int64) (map[string]*Problem,
 		if waiting && r.notified == 1 {
 			s.announceAt(serverID, r.suppressed+unchecked.Milliseconds())
 		}
+		// An alerted outage shows even if its grace was raised since.
 		if s.suppressed(serverID, policy, r.suppressed, now, active[serverID]) || r.intentional == 1 ||
-			!r.outage.Valid || r.outage.Int64 == 0 || now-r.outage.Int64 < int64(policy.GraceSeconds)*1000 {
+			!r.outage.Valid || r.outage.Int64 == 0 || (r.notified == 0 && now-r.outage.Int64 < int64(policy.GraceSeconds)*1000) {
 			continue
 		}
 		if waiting {
@@ -728,8 +738,8 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		}
 		if changed && raise {
 			s.changed(server.ID)
-		} else if changed && pastGrace && r.lastState.String != lastState {
-			// Pages show the reason of an outage past its grace.
+		} else if changed && notified == 1 && r.lastState.String != lastState {
+			// Pages show the reason of an outage past its grace or alerted.
 			s.changed(server.ID)
 		}
 	}

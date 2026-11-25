@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"slices"
@@ -83,26 +84,56 @@ func TestClearedOutageUpdatesPagesWithoutAnAlert(t *testing.T) {
 	}
 }
 
+// An outage alerts once after its grace and once when it ends. A policy saved
+// during it that keeps the server watched keeps it, timed from its start;
+// turning watching off, or pausing it for maintenance, ends it, so it is
+// alerted again once watched.
 func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
-	s, events, server := setup(t)
-	s.Check(ctx, state("exited", ""), 1000)
-	s.Check(ctx, state("exited", ""), 30_000)
-	if len(events.events) != 0 {
-		t.Fatal("notified before grace")
-	}
-	if found, _ := problem(s, server.ID, 30_000); found != nil {
-		t.Fatal("problem before grace")
-	}
-	s.Check(ctx, state("exited", ""), 61_000)
-	s.Check(ctx, state("exited", ""), 90_000)
-	if found, _ := problem(s, server.ID, 90_000); found == nil || found.State != "exited" || found.OutageStartedAt != 1000 {
-		t.Fatal(found)
-	}
-	s.Check(ctx, state("running", "starting"), 100_000)
-	s.Check(ctx, state("running", ""), 110_000)
-	s.Check(ctx, state("running", ""), 120_000)
-	if len(events.events) != 2 || events.events[0] != "Minecraft: the server is down." || events.events[1] != "Minecraft: the server is back up." {
-		t.Fatal(events.events)
+	const down, back = "Minecraft: the server is down.", "Minecraft: the server is back up."
+	for _, c := range []struct {
+		name string
+		// saved are policies saved after the check at savedAt. Nothing shows
+		// or alerts through the check at quiet, 30 s if unset.
+		saved          []Policy
+		savedAt, quiet int64
+		want           []string
+		start          int64
+	}{
+		{name: "no change", want: []string{down, back}, start: 1000},
+		{name: "disk threshold after the alert", saved: []Policy{testPolicy(func(p *Policy) { p.DiskPercent = 80 })}, savedAt: 61_000,
+			want: []string{down, back}, start: 1000},
+		{name: "longer grace after the alert", saved: []Policy{testPolicy(func(p *Policy) { p.GraceSeconds = 600 })}, savedAt: 61_000,
+			want: []string{down, back}, start: 1000},
+		{name: "longer grace before the alert", saved: []Policy{testPolicy(func(p *Policy) { p.GraceSeconds = 120 })}, savedAt: 30_000,
+			quiet: 62_000, want: []string{down, back}, start: 1000},
+		{name: "watching off and on", saved: []Policy{testPolicy(func(p *Policy) { p.Enabled = false }), testPolicy(nil)}, savedAt: 61_000,
+			want: []string{down, down, back}, start: 62_000},
+		{name: "maintenance and back", saved: []Policy{testPolicy(func(p *Policy) { p.Maintenance = true }), testPolicy(nil)}, savedAt: 61_000,
+			want: []string{down, down, back}, start: 62_000},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, events, server, configure := setupWith(t, nil)
+			for _, at := range []int64{1000, 30_000, 61_000, 62_000, 130_000} {
+				s.Check(ctx, state("exited", ""), at)
+				if found, _ := problem(s, server.ID, at); at <= cmp.Or(c.quiet, 30_000) && (found != nil || len(events.events) != 0) {
+					t.Fatal("outage before grace:", found, events.events)
+				}
+				if at == c.savedAt {
+					for _, policy := range c.saved {
+						configure(policy)
+					}
+				}
+			}
+			if found, _ := problem(s, server.ID, 130_000); found == nil || found.State != "exited" || found.OutageStartedAt != c.start {
+				t.Fatal(found)
+			}
+			s.Check(ctx, state("running", "starting"), 135_000)
+			s.Check(ctx, state("running", ""), 140_000)
+			s.Check(ctx, state("running", ""), 150_000)
+			if !slices.Equal(events.events, c.want) {
+				t.Fatal(events.events)
+			}
+		})
 	}
 }
 
@@ -456,9 +487,10 @@ func TestSilentOutageSurvivesDockerOutage(t *testing.T) {
 }
 
 // An outage already shown on pages that turns out to be a silent game tells
-// open pages its new reason, though no new alert goes out.
+// open pages its new reason, though no new alert goes out, even after its
+// wait before alerting was raised past how long it has lasted.
 func TestOutageReasonChangeUpdatesPages(t *testing.T) {
-	s, events, _ := setup(t)
+	s, events, _, configure := setupWith(t, nil)
 	var changes int
 	s.Changed = func(string) { changes++ }
 	game := GameAnswering
@@ -468,6 +500,7 @@ func TestOutageReasonChangeUpdatesPages(t *testing.T) {
 	if len(events.events) != 1 || changes != 1 {
 		t.Fatal(events.events, changes)
 	}
+	configure(testPolicy(func(p *Policy) { p.GraceSeconds = 600 }))
 	game = GameNotAnswering
 	s.Check(ctx, state("running", "unhealthy"), 70_000)
 	if len(events.events) != 1 || changes != 2 {
