@@ -102,9 +102,17 @@ type Delivery struct {
 	Retryable bool
 }
 
+// defaultClient connects anew for each delivery. A kept connection the other
+// end has closed since fails the next alert sent on it, and alerts are rare.
+var defaultClient = func() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableKeepAlives = true
+	return &http.Client{Transport: transport}
+}()
+
 type Service struct {
 	DB *db.DB
-	// Client sends HTTP requests; nil uses a default client.
+	// Client sends HTTP requests; nil uses defaultClient.
 	Client *http.Client
 	// TLS is the base TLS configuration for mail servers; nil uses the
 	// system roots.
@@ -579,7 +587,7 @@ func (s *Service) Deliver(ctx context.Context) error {
 	}
 	client := s.Client
 	if client == nil {
-		client = &http.Client{}
+		client = defaultClient
 	}
 	// Redirects could forward the payload elsewhere.
 	noRedirects := *client
