@@ -738,8 +738,8 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		}
 		if changed && raise {
 			s.changed(server.ID)
-		} else if changed && pastGrace && r.lastState.String != lastState {
-			// Pages show the reason of an outage past its grace.
+		} else if changed && notified == 1 && r.lastState.String != lastState {
+			// Pages show the reason of an outage past its grace or alerted.
 			s.changed(server.ID)
 		}
 	}
