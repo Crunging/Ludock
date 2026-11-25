@@ -170,6 +170,10 @@ func minecraftServer(engine *fakedocker.Engine, dir, name, image string, labels 
 		game.publish = func(files map[string]string) {
 			engine.Update(id, func(c *fakedocker.Container) { maps.Copy(c.Files, files) })
 		}
+		game.looping = func() bool {
+			c := engine.Container(id)
+			return c != nil && c.RestartCount > 0
+		}
 		c.Logs = append(append([]string{"[Server thread/INFO]: Starting minecraft server version 1.21"}, logs...),
 			"[Server thread/INFO]: Done (3.2s)! For help, type \"help\"")
 	})

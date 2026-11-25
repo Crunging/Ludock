@@ -123,8 +123,10 @@ func (s *serverTrace) lines() []string {
 // save. The server is stopped, the work done, and the server started again
 // as it was, under its restart policy, which Activity says goes on
 // restarting it unless the work fixed the cause. Docker keeps the game's
-// last exit, a kill here, which isn't taken for a forced stop. A running
-// server is warned and saved first, as the first row shows.
+// last exit, a kill here, which isn't taken for a forced stop. Work that
+// starts during one of the loop's brief runs, before the game has answered,
+// is the same. A running server is warned and saved first, as the first row
+// shows.
 func TestWorkOnARestartingServer(t *testing.T) {
 	warned := map[string]any{WarnInput: true}
 	withWarning := func(input map[string]any) map[string]any {
@@ -134,12 +136,16 @@ func TestWorkOnARestartingServer(t *testing.T) {
 	for _, c := range []struct {
 		name, kind string
 		input      func(*testing.T, *fixture) map[string]any
-		running    bool
-		trace      []string
+		// running: a server that runs normally; brief: one caught in a run
+		// between restarts.
+		running, brief bool
+		trace          []string
 	}{
 		{name: "running backup", kind: ops.KindBackup, running: true, trace: []string{"console say", "console save-all", "stop", "work", "start"}},
 		{name: "stop", kind: ops.KindStop, trace: []string{"stop"}},
 		{name: "backup", kind: ops.KindBackup, trace: []string{"stop", "work", "start"}},
+		{name: "backup in a brief run", kind: ops.KindBackup, brief: true, trace: []string{"stop", "work", "start"}},
+		{name: "stop in a brief run", kind: ops.KindStop, brief: true, trace: []string{"stop"}},
 		{name: "restart with a backup", kind: ops.KindRestart, input: func(*testing.T, *fixture) map[string]any {
 			return withWarning(map[string]any{"createBackup": true})
 		}, trace: []string{"stop", "work", "start"}},
@@ -164,8 +170,11 @@ func TestWorkOnARestartingServer(t *testing.T) {
 				input = c.input(t, f)
 			}
 			if !c.running {
-				f.engine.CrashLoop(f.game)
+				f.engine.CrashLoop(f.game, false)
 				f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.ExitCode = 137 })
+			}
+			if c.brief {
+				f.engine.CrashLoop(f.game, true)
 			}
 			trace.start()
 			job := f.run(t, c.kind, input)
@@ -197,7 +206,7 @@ func TestWorkOnARestartingServer(t *testing.T) {
 	// backup goes no further.
 	for _, kind := range []string{ops.KindStop, ops.KindBackup} {
 		f := setup(t)
-		f.engine.CrashLoop(f.game)
+		f.engine.CrashLoop(f.game, false)
 		f.engine.OnStop = func(c *fakedocker.Container) {
 			if c.ID == f.game {
 				f.engine.Update(c.ID, func(c *fakedocker.Container) {

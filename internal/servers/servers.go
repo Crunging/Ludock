@@ -26,6 +26,9 @@ type Service struct {
 	Observer *Observer
 	// Now returns the current time; tests replace it.
 	Now func() time.Time
+	// Looping reports a running container in one of a crash loop's brief
+	// runs, which pages and work treat as restarting. It may be nil.
+	Looping func(ctx context.Context, serverID string, container Container) bool
 
 	mu      sync.Mutex
 	running *refresh
@@ -292,6 +295,7 @@ func (s *Service) view(ctx context.Context, d *details, logical identity.Server,
 		SharingPaused: d.admin && logical.SharingPaused}
 	if container != nil {
 		view.Container = *container
+		s.Present(ctx, logical.ID, &view.Container)
 	} else {
 		view.Container = Container{Name: logical.DisplayName, DisplayName: logical.DisplayName, State: string(logical.Status),
 			Status: strings.ReplaceAll(string(logical.Status), "_", " "), GameType: logical.GameType,
@@ -533,8 +537,17 @@ func (s *Service) verify(ctx context.Context, id string, expectedRevision int64,
 	if _, err := s.Identity.AssertObservedBinding(ctx, id, observed.Observation, logical.BindingRevision); err != nil {
 		return nil, err
 	}
+	s.Present(ctx, id, &observed.Container)
 	return &Context{Logical: logical, Container: observed.Container, Observation: observed.Observation,
 		LockKeys: LockKeys(id, observed.Observation)}, nil
+}
+
+// Present shows a run between a crash loop's restarts as restarting, so
+// pages and work treat the loop the same whenever they look.
+func (s *Service) Present(ctx context.Context, serverID string, container *Container) {
+	if s.Looping != nil && container.State == "running" && container.RestartCount > 0 && s.Looping(ctx, serverID, *container) {
+		container.State, container.Health, container.StateSince = "restarting", "", 0
+	}
 }
 
 // Observe confirms a saved server against its own container for background

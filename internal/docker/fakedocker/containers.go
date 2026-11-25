@@ -27,7 +27,12 @@ func (e *Engine) list(w http.ResponseWriter, r *http.Request) {
 		if !all && !c.State.Running {
 			continue
 		}
-		state, status := c.State.Status, c.State.Status
+		// Docker's status, such as "Up 5 seconds (health: starting)", changes
+		// with each run and health check.
+		state, status := c.State.Status, c.State.Status+" "+c.State.StartedAt
+		if c.State.Health != nil {
+			status += " (health: " + c.State.Health.Status + ")"
+		}
 		// Like Docker, a container whose tag now points to another image, such
 		// as after a pull, is listed by its own image's ID.
 		image := c.Config.Image
@@ -249,7 +254,8 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 			w.WriteHeader(304)
 			return
 		}
-		c.State.Status, c.State.Running, c.State.StartedAt = "running", true, now
+		// A start by hand resets the restart policy's count.
+		c.State.Status, c.State.Running, c.State.StartedAt, c.RestartCount = "running", true, now, 0
 		// Healthchecks pass at once.
 		if check, _ := c.ExtraConfig["Healthcheck"].(map[string]any); check != nil {
 			if test, _ := check["Test"].([]any); len(test) > 0 && test[0] != "NONE" {

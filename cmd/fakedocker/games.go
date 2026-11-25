@@ -30,12 +30,15 @@ type fakeGame struct {
 	publish func(files map[string]string)
 	// zeroIDs answers every console command with ID 0.
 	zeroIDs bool
+	// looping, when set, keeps the status query silent while the game's
+	// container is in a crash loop.
+	looping func() bool
 }
 
 func (g *fakeGame) status() (int, int, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return len(g.online), 10, !time.Now().Before(g.hungUntil)
+	return len(g.online), 10, !time.Now().Before(g.hungUntil) && (g.looping == nil || !g.looping())
 }
 
 // sample is the status with Minecraft's player sample, which a console

@@ -284,7 +284,9 @@ shows **Down** once its alert is due, as the alert says.
 
 A server shows **Keeps restarting** when its game exits soon after starting,
 such as after a bad mod or setting, and Docker's restart policy starts it
-again and again. **Stop** ends that; then read its **Logs**, fix the file in
+again and again. It reads that way through the moments the game runs between
+restarts, until the game answers or it stays up for **Wait before alerting**.
+**Stop** ends that; then read its **Logs**, fix the file in
 **Files**, or restore a backup, and start it. A backup or restore works on it
 too: it stops the server, does the work, and starts it again, which brings it
 up if the work fixed the cause and leaves it restarting if not. An update must
@@ -552,13 +554,16 @@ Each alert is sent once, with another when it recovers. A server that stopped
 by itself shows in **Needs attention** with **Start**, which is also the
 highlighted button on a stopped server's row and page. Stops and work started
 through Ludock don't alert, and a server that was already stopped when Ludock
-found it stays quiet until it runs. A game still starting, or whose status
+found it stays quiet until it runs. A stop through Ludock after a server was
+reported down doesn't end that outage: once the server runs again, you hear
+that it's back up. A game still starting, or whose status
 check is off or wrong, never counts as not answering. Ludock remembers that a
 game answered, so one that hangs while Ludock itself restarts is still caught;
 the wait starts again when Ludock is back, unless the alert was already sent.
-A server that keeps restarting is one outage: a run between restarts ends it
-only once the game answers, or after it has stayed up for **Wait before
-alerting**.
+A server that keeps restarting is one outage, timed from when Ludock first
+sees it restarting, even if it was stopped through Ludock before: a run
+between restarts ends it only once the game answers, or after it has stayed up
+for **Wait before alerting**.
 Disks are measured about every 10 minutes while someone has Ludock open and
 every 30 otherwise.
 

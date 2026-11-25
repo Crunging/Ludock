@@ -163,8 +163,10 @@ func TestMonitorSuppression(t *testing.T) {
 
 // Ludock acting on a server pauses its outage tracking. An outage already
 // alerted still ends with one recovery alert, sent as soon as the server is
-// back even within the pause, and never alerts again, unless a stop or an
-// automatic restart, which announces its own outcome, ends it. Work queued
+// back even within the pause, and never alerts again, unless an automatic
+// restart, which announces its own outcome, ends it. A stop through Ludock
+// leaves it owed that recovery alert, sent once the server runs and answers
+// again; a stop before the alert ends the outage silently. Work queued
 // while a check runs holds that alert. Once the pause ends, the outage shows,
 // and pages hear of it, only after a check has looked at the server again,
 // not one that skipped it as busy, or a minute later if none has.
@@ -175,6 +177,11 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 		s.Suppress(ctx, id, nil)
 		s.SetIntentionalStop(ctx, id, false)
 		s.SetIntentionalStop(ctx, id, false)
+		s.Suppress(ctx, id, nil)
+	}
+	stop := func(s *Service, id string) {
+		s.Suppress(ctx, id, nil)
+		s.SetIntentionalStop(ctx, id, true)
 		s.Suppress(ctx, id, nil)
 	}
 	for _, c := range []struct {
@@ -189,6 +196,8 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 		want          []string
 		stillDown     bool
 		answersBack   bool
+		// startsBack: the stopped server is then started and answers.
+		startsBack bool
 		// late: the server stays stopped within the pause. queued: other work
 		// is queued while the first check that can end the outage runs, within
 		// the pause or, if late, after it.
@@ -201,11 +210,8 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 		{name: "restarted and answering", silent: true, alerted: true, act: restart, after: "running", game: GameAnswering, want: []string{silent, back}},
 		{name: "left stopped by other work", alerted: true, act: func(s *Service, id string) { s.Suppress(ctx, id, nil); s.Suppress(ctx, id, nil) },
 			after: "exited", want: []string{down}, stillDown: true},
-		{name: "stopped", silent: true, alerted: true, after: "exited", want: []string{silent}, act: func(s *Service, id string) {
-			s.Suppress(ctx, id, nil)
-			s.SetIntentionalStop(ctx, id, true)
-			s.Suppress(ctx, id, nil)
-		}},
+		{name: "stopped", silent: true, alerted: true, after: "exited", want: []string{silent}, startsBack: true, act: stop},
+		{name: "stopped within grace", silent: true, after: "exited", startsBack: true, act: stop},
 		{name: "started within grace", act: start, after: "running"},
 		{name: "started after the pause as other work is queued", alerted: true, act: start, after: "running", health: "healthy", want: []string{down},
 			late: true, queued: true},
@@ -318,6 +324,14 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 				s.Check(ctx, state(c.after, ""), now+210_000)
 				s.Check(ctx, state(c.after, ""), now+220_000)
 				c.want = append(c.want, back)
+			}
+			if c.startsBack {
+				game = GameAnswering
+				s.Check(ctx, state("running", ""), now+210_000)
+				s.Check(ctx, state("running", ""), now+220_000)
+				if c.alerted {
+					c.want = append(c.want, back)
+				}
 			}
 			if !slices.Equal(events.events, c.want) {
 				t.Fatal(events.events)
@@ -435,43 +449,61 @@ func problem(s *Service, serverID string, now int64) (*Problem, error) {
 
 // A game that keeps exiting under its restart policy shows restarting, with
 // runs too short for anyone to join between restarts. That is one outage,
-// alerted once its grace ends even during such a run: a run counts as the
-// server back only once the game answers or it has stayed up for the grace
-// period.
+// timed from the first check that sees it, even on a server stopped through
+// Ludock before, and alerted once its grace ends even during such a run: a
+// run counts as the server back only once the game answers or it has stayed
+// up for the grace period. A stop through Ludock after the alert keeps the
+// outage owed its recovery alert, sent once the server runs again.
 func TestCrashLoopIsOneOutage(t *testing.T) {
 	const down, back = "Minecraft: the server is down.", "Minecraft: the server is back up."
-	s, events, server := setup(t)
-	game := GameWaiting
-	s.Game = func(string, servers.Container) GameAnswer { return game }
-	runSince := func(started int64) map[string]servers.Container {
-		return map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: started}}
-	}
-	s.Check(ctx, state("restarting", ""), 1000)
-	s.Check(ctx, runSince(58_000), 61_000)
-	if !slices.Equal(events.events, []string{down}) {
-		t.Fatal(events.events)
-	}
-	s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "running", Health: "starting", StateSince: 78_000}}, 80_000)
-	s.Check(ctx, runSince(78_000), 85_000)
-	s.Check(ctx, state("restarting", ""), 90_000)
-	s.Check(ctx, state("restarting", ""), 151_000)
-	if found, _ := problem(s, server.ID, 151_000); found == nil || found.State != "restarting" || found.OutageStartedAt != 1000 {
-		t.Fatal(found)
-	}
-	s.Check(ctx, runSince(155_000), 160_000)
-	game = GameAnswering
-	s.Check(ctx, runSince(155_000), 165_000)
-	if !slices.Equal(events.events, []string{down, back}) {
-		t.Fatal(events.events)
-	}
-	// Without a status check, staying up as long as the grace period does.
-	s.Game = nil
-	s.Check(ctx, state("restarting", ""), 200_000)
-	s.Check(ctx, state("restarting", ""), 261_000)
-	s.Check(ctx, runSince(270_000), 300_000)
-	s.Check(ctx, runSince(270_000), 330_000)
-	if !slices.Equal(events.events, []string{down, back, down, back}) {
-		t.Fatal(events.events)
+	for _, stoppedFirst := range []bool{false, true} {
+		s, events, server := setup(t)
+		game := GameWaiting
+		s.Game = func(string, servers.Container) GameAnswer { return game }
+		runSince := func(started int64) map[string]servers.Container {
+			return map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: started, RestartCount: 3}}
+		}
+		if stoppedFirst {
+			s.SetIntentionalStop(ctx, server.ID, true)
+			s.Check(ctx, state("exited", ""), 500)
+		}
+		s.Check(ctx, state("restarting", ""), 1000)
+		s.Check(ctx, runSince(58_000), 61_000)
+		if !slices.Equal(events.events, []string{down}) {
+			t.Fatal(stoppedFirst, events.events)
+		}
+		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "running", Health: "starting", StateSince: 78_000, RestartCount: 4}}, 80_000)
+		s.Check(ctx, runSince(78_000), 85_000)
+		s.Check(ctx, state("restarting", ""), 90_000)
+		s.Check(ctx, state("restarting", ""), 151_000)
+		if found, _ := problem(s, server.ID, 151_000); found == nil || found.State != "restarting" || found.OutageStartedAt != 1000 {
+			t.Fatal(found)
+		}
+		s.Check(ctx, runSince(155_000), 160_000)
+		game = GameAnswering
+		s.Check(ctx, runSince(155_000), 165_000)
+		if !slices.Equal(events.events, []string{down, back}) {
+			t.Fatal(events.events)
+		}
+		// Without a status check, staying up as long as the grace period does.
+		s.Game = nil
+		s.Check(ctx, state("restarting", ""), 200_000)
+		s.Check(ctx, state("restarting", ""), 261_000)
+		s.Check(ctx, runSince(270_000), 300_000)
+		s.Check(ctx, runSince(270_000), 330_000)
+		// Stopped through Ludock once alerted, then started by hand.
+		s.Check(ctx, state("restarting", ""), 400_000)
+		s.Check(ctx, state("restarting", ""), 461_000)
+		s.SetIntentionalStop(ctx, server.ID, true)
+		s.Check(ctx, state("exited", ""), 470_000)
+		s.Check(ctx, state("exited", ""), 600_000)
+		if found, _ := problem(s, server.ID, 600_000); found != nil {
+			t.Fatal("a server stopped through Ludock shown down:", found)
+		}
+		s.Check(ctx, state("running", ""), 700_000)
+		if !slices.Equal(events.events, []string{down, back, down, back, down, back}) {
+			t.Fatal(events.events)
+		}
 	}
 }
 

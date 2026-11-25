@@ -11,7 +11,8 @@ asAdmin();
 // being restarted by Docker: its page says so and offers Stop. Needs
 // attention offers to undo the restore, which stops the server without
 // warning anyone, puts the data back, keeps what the game wrote meanwhile,
-// and starts the server again. Stop works on a server that keeps restarting.
+// and starts the server again. Stop works on a server that keeps restarting,
+// even caught in one of the loop's brief runs.
 test("undoing a restore that was stopped partway", async ({ page, ownServer: server }) => {
   const marker = join(server.data, "stopped-restore.txt");
   writeFileSync(marker, "from the backup");
@@ -87,9 +88,14 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
 
   await openServer(page, server.name);
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
-  await fake("/fake/crashloop", { container: server.container });
+  // Caught in one of the loop's brief runs, it still reads as the loop, and
+  // Stop doesn't offer to warn players nobody can join.
+  await fake("/fake/crashloop", { container: server.container, run: "1" });
   await expect(page.locator(".detail-header__identity")).toContainText("Keeps restarting");
+  await expect(page.locator(".detail-actions").getByRole("button", { name: "Restart" })).toHaveCount(0);
   await page.locator(".detail-actions").getByRole("button", { name: "Stop" }).click();
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Stop server" })).toBeVisible();
+  await expect(page.getByRole("dialog")).not.toContainText("Warn players");
   await page.getByRole("dialog").getByRole("button", { name: "Stop server" }).click();
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Start" })).toBeVisible({ timeout: 15_000 });
   await page.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();

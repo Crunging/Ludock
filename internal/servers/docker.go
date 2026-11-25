@@ -62,9 +62,12 @@ type Container struct {
 	Status      string
 	Health      string // "", starting, healthy, unhealthy
 	StateSince  int64  // 0 when unknown
-	Exit        *Exit
-	GameType    string
-	GameName    string
+	// RestartCount counts the restart policy's starts since the last start
+	// by hand.
+	RestartCount int
+	Exit         *Exit
+	GameType     string
+	GameName     string
 	// AddressLabel is the owner's ludock.address, which replaces port
 	// detection when valid.
 	AddressLabel *games.Address
@@ -543,6 +546,7 @@ func toContainer(info *docker.ContainerInspect, own self.Info) (*Container, erro
 	if info.State.Health != nil {
 		container.Status += " (" + info.State.Health.Status + ")"
 	}
+	container.RestartCount = info.RestartCount
 	switch info.State.Status {
 	case "running":
 		container.StateSince = dockerTime(info.State.StartedAt)

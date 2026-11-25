@@ -624,6 +624,8 @@ func describeAvailability(a *monitor.Availability, paused bool, now int64) avail
 		result.Status = "Alerts are paused for maintenance."
 	case paused:
 		result.Status = "Monitoring is paused while other work on the server runs."
+	case state.IntentionallyStopped && state.Notified:
+		result.Status = "Stopped. Once it’s running again, Ludock alerts that it’s back up."
 	case state.IntentionallyStopped:
 		result.Status = "Stopped. Alerts resume once the server is running again."
 	case suppressed:
