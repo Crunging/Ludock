@@ -883,12 +883,11 @@ for the undo starts again (for a restart with a backup first, once its backup
 is taken) unless the undo had begun moving data.
 
 Restores and undos move data without replacing anything a game makes at the
-same moment. Where the filesystem can't refuse that in one step, as on NFS, a
-file going back into the data gets its new name as a second link before
-Ludock removes its name in the `.ludock-restore-<id>` folder, and a folder
-can replace only an empty one. On a filesystem with neither that refusal nor
-hard links, a file moves by a plain rename, as before; a game started outside
-Ludock in that instant could have a file it just made replaced.
+same moment, where the filesystem can refuse that as part of the move. One
+that can't, such as NFS, gets a plain rename, as restores always have: if
+someone starts the server outside Ludock during an undo, a file the game makes
+in the instant between Ludock checking a name and moving data there, in the
+data folder or in `ludock-set-aside-<id>`, can be replaced.
 
 ### When Docker restarts
 

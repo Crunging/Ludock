@@ -137,9 +137,8 @@ func (h *restoreHelper) unchanged(parent fd, name string, handle fd) error {
 
 // moveContents moves entries one at a time. rename never follows its final
 // component: a racing symlink can be moved, but cannot turn this into a
-// write through that symlink to outside data. toLive says source is the
-// stage and destination the live data, as renameChecked takes it.
-func (h *restoreHelper) moveContents(source, destination fd, toLive bool, omitted ...string) error {
+// write through that symlink to outside data.
+func (h *restoreHelper) moveContents(source, destination fd, omitted ...string) error {
 	children, err := names(source)
 	if err != nil {
 		return err
@@ -156,24 +155,15 @@ func (h *restoreHelper) moveContents(source, destination fd, toLive bool, omitte
 		if err != nil {
 			return err
 		}
-		if toLive && cutMoveIn(sourceInfo) {
-			if err := unix.Unlinkat(int(source), name, 0); err != nil {
-				return err
-			}
-			if err := syncAll(source, destination); err != nil {
-				return err
-			}
-			continue
+		if !isDir(sourceInfo) && (!isRegular(sourceInfo) || sourceInfo.Nlink != 1) {
+			return errUnsafe
 		}
 		if _, err := lstatAt(destination, name); err == nil {
 			return errUnsafe
 		} else if !isNotExist(err) {
 			return err
 		}
-		if !isDir(sourceInfo) && (!isRegular(sourceInfo) || sourceInfo.Nlink != 1) {
-			return errUnsafe
-		}
-		if err := renameChecked(source, name, destination, name, sourceInfo, toLive); err != nil {
+		if err := renameChecked(source, name, destination, name); err != nil {
 			return err
 		}
 		moved, err := lstatAt(destination, name)
@@ -190,81 +180,18 @@ func (h *restoreHelper) moveContents(source, destination fd, toLive bool, omitte
 	return nil
 }
 
-// renameChecked renames to a name the caller found free, never replacing
-// what a game started meanwhile makes there after that check. Without
-// RENAME_NOREPLACE, only Ludock makes names in its own folders, so a plain
-// rename goes there. Into live data, from the stage, a file is linked at the
-// target, which fails if anything is there, then its stage name unlinked;
-// cut between the two, it has both names, which cutMoveIn finds on a retry.
-// Only the stage name is ever unlinked: a live one may be a save the game
-// just replaced. A folder is renamed, which can replace only an empty
-// folder. A filesystem with neither feature gets the plain rename whole
-// restores always used, rather than leaving the data in the stage.
-func renameChecked(from fd, name string, to fd, target string, info *unix.Stat_t, toLive bool) error {
+// renameChecked renames to a name the caller found free. A game started
+// meanwhile may make it after that check, which RENAME_NOREPLACE refuses. A
+// filesystem without it, such as NFS, gets the plain rename whole restores
+// always used: a file the game makes there between the check and the rename
+// is replaced. Refusing instead would leave the data in the stage on every
+// such filesystem, and moving by link and unlink can lose an original.
+func renameChecked(from fd, name string, to fd, target string) error {
 	err := renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE)
-	if !errors.Is(err, unix.ENOSYS) && !errors.Is(err, unix.EINVAL) {
-		return err
+	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) {
+		err = renameat(int(from), name, int(to), target)
 	}
-	if toLive && isRegular(info) {
-		err := linkat(int(from), name, int(to), target, 0)
-		if err == nil {
-			return unix.Unlinkat(int(from), name, 0)
-		}
-		if !errors.Is(err, unix.EPERM) && !errors.Is(err, unix.EOPNOTSUPP) {
-			return err
-		}
-	}
-	return renameat(int(from), name, int(to), target)
-}
-
-// cutMoveIn says a file in the stage has a second name, which only a move
-// into the live data cut between its link and unlink gives it: files enter
-// the stage with one. The live name, which the game may have renamed since,
-// holds the data, so the move finishes by unlinking the stage name.
-func cutMoveIn(info *unix.Stat_t) bool { return isRegular(info) && info.Nlink == 2 }
-
-// finishMovesIn finishes, before live data is set aside, the moves of the
-// backup's files in that were cut between link and unlink.
-func (h *restoreHelper) finishMovesIn(stage fd) error {
-	next, err := h.t.openAt(stage, "new", directoryFlags, 0)
-	if isNotExist(err) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	children, err := names(next)
-	if err != nil {
-		return err
-	}
-	for _, name := range children {
-		info, err := lstatAt(next, name)
-		if err != nil {
-			return err
-		}
-		if cutMoveIn(info) {
-			if err := unix.Unlinkat(int(next), name, 0); err != nil {
-				return err
-			}
-		}
-	}
-	return syncAll(next)
-}
-
-// asideEntry is movable for an entry that may be set aside, also passing a
-// file with a second name so rollbackOld can tell the original itself after a
-// cut return; setAsideEntry refuses any other.
-func asideEntry(parent fd, name string, device uint64) (*unix.Stat_t, error) {
-	info, err := lstatAt(parent, name)
-	if isNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if info.Dev != device || (!isDir(info) && (!isRegular(info) || info.Nlink > 2)) {
-		return nil, errUnsafe
-	}
-	return info, nil
+	return err
 }
 
 func (h *restoreHelper) removeEntry(parent fd, name string, depth int) error {
@@ -417,10 +344,7 @@ func setAsideEntry(parent fd, name string, aside fd, info *unix.Stat_t) error {
 		}
 		target = base + suffix
 	}
-	if !isDir(info) && (!isRegular(info) || info.Nlink != 1) {
-		return errUnsafe
-	}
-	if err := renameChecked(parent, name, aside, target, info, false); err != nil {
+	if err := renameChecked(parent, name, aside, target); err != nil {
 		return err
 	}
 	moved, err := lstatAt(aside, target)
@@ -606,7 +530,7 @@ func (h *restoreHelper) moveOld(root, stage fd) error {
 	if err := h.recordRoot(root, stage); err != nil {
 		return err
 	}
-	return h.moveContents(root, old, false, h.request.Stage)
+	return h.moveContents(root, old, h.request.Stage)
 }
 
 func (h *restoreHelper) moveNew(root, stage fd) error {
@@ -614,7 +538,7 @@ func (h *restoreHelper) moveNew(root, stage fd) error {
 	if err != nil {
 		return err
 	}
-	if err := h.moveContents(next, root, true); err != nil {
+	if err := h.moveContents(next, root); err != nil {
 		return err
 	}
 	// The extractor gave new the archived root's owner, mode, and ACL. The
@@ -676,9 +600,6 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 	if err := h.ownTree(root, false); err != nil {
 		return err
 	}
-	if err := h.finishMovesIn(stage); err != nil {
-		return err
-	}
 	aside, err := h.pinAside(root, stage)
 	if err != nil {
 		return err
@@ -698,7 +619,7 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 		if name == h.request.Stage || name == h.request.Aside || Reserved(name) {
 			continue
 		}
-		info, err := asideEntry(root, name, rootInfo.Dev)
+		info, err := movable(root, name, rootInfo.Dev)
 		if err != nil {
 			return err
 		}
@@ -733,19 +654,11 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 		if Reserved(name) {
 			continue
 		}
-		info, err := asideEntry(root, name, rootInfo.Dev)
+		info, err := movable(root, name, rootInfo.Dev)
 		if err != nil {
 			return err
 		}
 		if info == nil {
-			continue
-		}
-		// The original itself, under both names after a cut return.
-		original, err := lstatAt(old, name)
-		if err != nil {
-			return err
-		}
-		if cutMoveIn(original) && sameInode(original, info) {
 			continue
 		}
 		if aside, err = h.asideFor(root, stage, root, aside, name, name, info); err != nil {
@@ -755,7 +668,7 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 			return err
 		}
 	}
-	if err := h.moveContents(old, root, true); err != nil {
+	if err := h.moveContents(old, root); err != nil {
 		return err
 	}
 	previous, err := rootBefore(root, stage)
@@ -1151,7 +1064,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		if err != nil {
 			return err
 		}
-		info, err := asideEntry(parent, name, rootInfo.Dev)
+		info, err := movable(parent, name, rootInfo.Dev)
 		if err != nil || info == nil {
 			return err
 		}
@@ -1179,7 +1092,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		if info != nil {
-			live, err := asideEntry(parent, name, rootInfo.Dev)
+			live, err := movable(parent, name, rootInfo.Dev)
 			if err != nil {
 				return err
 			}
