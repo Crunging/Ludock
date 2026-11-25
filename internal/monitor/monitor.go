@@ -8,7 +8,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -89,6 +91,11 @@ type Service struct {
 	// since is the time of this process's first check. A silence seen before
 	// it went unwatched while Ludock was down.
 	since atomic.Int64
+	// looked is, for each server, when the latest completed check that
+	// judged it, rather than skipping it as paused or busy, began. It is
+	// saved once that check's writes are done.
+	lookMu sync.Mutex
+	looked map[string]int64
 }
 
 // answerSaveInterval is how often a game that keeps answering has that
@@ -405,10 +412,17 @@ type Problem struct {
 	OutageStartedAt int64
 }
 
+// unchecked is how long after a pause ends an outage kept across it stays
+// hidden while no check has begun, in case checks have stopped.
+const unchecked = time.Minute
+
 // Problems reads the persisted outages of every server without running
 // checks. Policy and operation suppression are current even between monitor
 // ticks.
 func (s *Service) Problems(ctx context.Context, now int64) (map[string]*Problem, error) {
+	s.lookMu.Lock()
+	looked := maps.Clone(s.looked)
+	s.lookMu.Unlock()
 	rows, err := s.rows(ctx)
 	if err != nil {
 		return nil, err
@@ -425,6 +439,11 @@ func (s *Service) Problems(ctx context.Context, now int64) (map[string]*Problem,
 		}
 		if s.suppressed(serverID, policy, r.suppressed, now, active[serverID]) || r.intentional == 1 ||
 			!r.outage.Valid || r.outage.Int64 == 0 || now-r.outage.Int64 < int64(policy.GraceSeconds)*1000 {
+			continue
+		}
+		// An outage kept across a pause may have ended in it unseen: it shows
+		// again once a check has looked at the server since the pause ended.
+		if r.suppressed > looked[serverID] && now-r.suppressed < unchecked.Milliseconds() {
 			continue
 		}
 		last := r.lastState.String
@@ -491,6 +510,12 @@ func (s *Service) changed(serverID string) {
 func (s *Service) Check(ctx context.Context, current map[string]servers.Container, now int64) error {
 	s.since.CompareAndSwap(0, now)
 	since := s.since.Load()
+	s.lookMu.Lock()
+	previous := maps.Clone(s.looked)
+	s.lookMu.Unlock()
+	// judged are the servers this check doesn't skip; shown, those with an
+	// outage kept across a pause, which pages show again once it is saved.
+	var judged, shown []string
 	unavailable := current == nil
 	logical, err := s.Store.List(ctx, "")
 	if err != nil {
@@ -542,13 +567,17 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 				up = game != GameNotAnswering && !((game == GameUnknown || game == GameWaiting) && r.lastState.String == NotAnswering)
 			}
 			if up {
-				if changed, err := s.recovered(ctx, server, r, now); err != nil {
+				if changed, err := s.recovered(ctx, server, r, whileIdle, now); err != nil {
 					log.Warn("Could not save a server's availability; it will be checked again")
 				} else if changed {
 					s.changed(server.ID)
 				}
 			}
 			continue
+		}
+		judged = append(judged, server.ID)
+		if r.notified == 1 && r.suppressed > previous[server.ID] {
+			shown = append(shown, server.ID)
 		}
 		// Ludock vouches only for silence it watched: a silent game's outage
 		// from before it restarted, not yet alerted, waits its grace again
@@ -609,7 +638,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			if !r.outage.Valid && r.notified == 0 && r.intentional == 0 && r.lastState.String == "running" {
 				continue
 			}
-			changed, err := s.recovered(ctx, server, r, now)
+			changed, err := s.recovered(ctx, server, r, "", now)
 			if err != nil {
 				log.Warn("Could not save a server's availability; it will be checked again")
 				continue
@@ -677,6 +706,17 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			s.changed(server.ID)
 		}
 	}
+	s.lookMu.Lock()
+	if s.looked == nil {
+		s.looked = map[string]int64{}
+	}
+	for _, serverID := range judged {
+		s.looked[serverID] = now
+	}
+	s.lookMu.Unlock()
+	for _, serverID := range shown {
+		s.changed(serverID)
+	}
 	return nil
 }
 
@@ -712,17 +752,28 @@ func (s *Service) adopt(ctx context.Context, logical []identity.Server, rows map
 // meanwhile is never overwritten and raises no alert from the old state.
 // alerts are queued with the change.
 func (s *Service) transition(ctx context.Context, serverID string, r *row, alerts []alert, set string, args ...any) (bool, error) {
-	return s.apply(ctx, alerts, "UPDATE availability SET "+set+" WHERE server_id=? AND policy_json=? AND "+asRead,
+	return s.transitionIf(ctx, serverID, r, alerts, "", set, args...)
+}
+
+// transitionIf is transition that also needs the condition where.
+func (s *Service) transitionIf(ctx context.Context, serverID string, r *row, alerts []alert, where, set string, args ...any) (bool, error) {
+	return s.apply(ctx, alerts, "UPDATE availability SET "+set+" WHERE server_id=? AND policy_json=? AND "+asRead+where,
 		append(append(args, serverID, r.policy), r.asRead()...)...)
 }
 
-// recovered ends an outage, with its recovery alert if it was alerted.
-func (s *Service) recovered(ctx context.Context, server identity.Server, r *row, now int64) (bool, error) {
+// whileIdle holds a transition while any operation is queued or running for
+// the server, including one queued after Check read them: it may be about to
+// stop the server.
+const whileIdle = " AND NOT EXISTS(SELECT 1 FROM operations WHERE operations.server_id=availability.server_id AND operations.status IN ('queued','running'))"
+
+// recovered ends an outage, with its recovery alert if it was alerted, if
+// where also holds.
+func (s *Service) recovered(ctx context.Context, server identity.Server, r *row, where string, now int64) (bool, error) {
 	var back []alert
 	if r.notified == 1 {
 		back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), server.DisplayName + ": the server is back up."}}
 	}
-	return s.transition(ctx, server.ID, r, back, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
+	return s.transitionIf(ctx, server.ID, r, back, where, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
 }
 
 // asRead matches a row whose outage, alert, pause and stop are still as r

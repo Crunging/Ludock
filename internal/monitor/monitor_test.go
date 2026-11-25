@@ -11,6 +11,7 @@ import (
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/notify"
+	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -131,7 +132,10 @@ func TestMonitorSuppression(t *testing.T) {
 // Ludock acting on a server pauses its outage tracking. An outage already
 // alerted still ends with one recovery alert, sent as soon as the server is
 // back even within the pause, and never alerts again, unless a stop or an
-// automatic restart, which announces its own outcome, ends it.
+// automatic restart, which announces its own outcome, ends it. Work queued
+// while a check runs holds that alert. Once the pause ends, the outage shows,
+// and pages hear of it, only after a check has looked at the server again,
+// not one that skipped it as busy, or a minute later if none has.
 func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 	const down, silent, back = "Minecraft: the server is down.", "Minecraft: running, but the game stopped answering.", "Minecraft: the server is back up."
 	start := func(s *Service, id string) { s.Suppress(ctx, id, nil); s.SetIntentionalStop(ctx, id, false) }
@@ -153,6 +157,8 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 		want          []string
 		stillDown     bool
 		answersBack   bool
+		// queued: other work is queued while the check within the pause runs.
+		queued bool
 	}{
 		{name: "started", alerted: true, act: start, after: "running", health: "healthy", want: []string{down, back}},
 		{name: "started but unhealthy", alerted: true, act: start, after: "running", health: "unhealthy", want: []string{down}, stillDown: true},
@@ -167,6 +173,7 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 			s.Suppress(ctx, id, nil)
 		}},
 		{name: "started within grace", act: start, after: "running"},
+		{name: "started as other work is queued", alerted: true, act: start, after: "running", health: "healthy", want: []string{down}, queued: true},
 		{name: "restarted automatically", silent: true, alerted: true, after: "running", game: GameAnswering, want: []string{silent},
 			act: func(s *Service, id string) {
 				s.Suppress(ctx, id, nil)
@@ -192,15 +199,43 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 			c.act(s, server.ID)
 			game = c.game
 			s.Check(ctx, state("exited", ""), now+5_000)
+			if c.queued {
+				hookAt(t, "active", func() {
+					if _, err := (&ops.Runner{DB: s.DB}).Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: server.ID, ActorID: "admin", Kind: "backup"}); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
 			s.Check(ctx, state(c.after, c.health), now+10_000)
 			if !slices.Equal(events.events, c.want) {
 				t.Fatal("within the pause:", events.events)
 			}
+			// Other work holds the server through the first check after the
+			// pause, which skips it.
+			release, _ := s.Locks.Acquire([]string{locks.ServerKey(server.ID)}, nil)
+			s.Check(ctx, state(c.after, c.health), now+80_000)
+			release()
+			if found, _ := problem(s, server.ID, now+90_000); found != nil {
+				t.Fatal("outage shown before a check after the pause:", found)
+			}
+			if found, _ := problem(s, server.ID, now+130_000); (found != nil) != c.stillDown {
+				t.Fatal("outage shown with no check:", found)
+			}
+			hookAt(t, "read", func() {
+				if found, _ := problem(s, server.ID, now+90_000); found != nil {
+					t.Error("outage shown while the check after the pause runs:", found)
+				}
+			})
+			changes := 0
+			s.Changed = func(string) { changes++ }
 			for _, at := range []int64{now + 90_000, now + 100_000, now + 200_000} {
+				s.Check(ctx, state(c.after, c.health), at)
 				if found, _ := problem(s, server.ID, at); (found != nil) != c.stillDown {
 					t.Fatal("outage shown:", found)
 				}
-				s.Check(ctx, state(c.after, c.health), at)
+				if c.stillDown && changes == 0 {
+					t.Fatal("pages weren't told the outage shows again")
+				}
 			}
 			if c.answersBack {
 				game = GameAnswering
