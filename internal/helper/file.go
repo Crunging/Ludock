@@ -733,14 +733,17 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// mode without FOWNER, which would also let a publish override a sticky
 	// folder; the owner bits meanwhile grant root nothing DAC_OVERRIDE
 	// doesn't. Until the owner changes, the future owner gets the group or
-	// other bits, so neither may grant more than the owner bits will: a mode
-	// that does, such as 0460, is narrowed to the owner's.
+	// other bits, so when it will change, neither may grant more than the
+	// owner bits will: a mode that does, such as 0460, is narrowed to the
+	// owner's.
 	mode := uint32(0o666 &^ currentUmask())
 	if original != nil {
 		mode = original.Mode & 0o777
 	}
-	owned := mode >> 6 & 7
-	mode = mode&0o700 | mode&0o070&(owned<<3) | mode&0o007&owned
+	if int(owner.Uid) != helperUID() {
+		owned := mode >> 6 & 7
+		mode = mode&0o700 | mode&0o070&(owned<<3) | mode&0o007&owned
+	}
 	if err := fchown(int(file), -1, int(owner.Gid)); err != nil {
 		return err
 	}
@@ -1517,9 +1520,11 @@ var (
 	renameat2 = unix.Renameat2
 	renameat  = unix.Renameat
 	linkat    = unix.Linkat
-	// fchown and fchmod let tests see the order an upload hands over in.
-	fchown = unix.Fchown
-	fchmod = unix.Fchmod
+	// fchown and fchmod let tests see the order an upload hands over in,
+	// and helperUID stand in for a helper that isn't the files' owner.
+	fchown    = unix.Fchown
+	fchmod    = unix.Fchmod
+	helperUID = os.Geteuid
 )
 
 // renameNoReplace moves an entry without ever replacing what is at the

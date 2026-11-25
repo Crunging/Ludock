@@ -121,6 +121,13 @@ func TestUploadChecks(t *testing.T) {
 	if body := deep.Body.String(); deep.Code != http.StatusOK || !strings.Contains(body, "Invalid file path") || !strings.Contains(body, "Cancel") {
 		t.Fatal("move dialog lost its controls", deep.Code, body)
 	}
+	// One that isn't a valid path shows the folder instead, so its breadcrumbs
+	// stay small.
+	invalid := p.do("GET", "/fragments/files/"+p.server+"/move?root=0&name=selected&to="+strings.Repeat("d/", 5000), p.admin, nil,
+		map[string]string{"HX-Request": "true", "HX-Target": "file-action"})
+	if body := invalid.Body.String(); invalid.Code != http.StatusOK || !strings.Contains(body, "Invalid file path") || len(body) > 64<<10 {
+		t.Fatal("move dialog for an invalid destination", invalid.Code, len(body))
+	}
 	// Dialogs refuse a path past the bound, composed as the change would.
 	folder := strings.Repeat("d", 4090)
 	for _, dialog := range []string{"/dialog?action=delete&root=0&path=" + strings.Repeat("d", 4097),

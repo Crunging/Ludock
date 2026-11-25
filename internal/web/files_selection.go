@@ -48,7 +48,15 @@ func (s *Server) fileMoveDialog(w http.ResponseWriter, r *http.Request, request 
 		s.fail(w, r, request, err)
 		return
 	}
-	destination := files.CheckSelection(m.To, m.Names)
+	// Both are shown as their canonical paths, which are bounded; a
+	// destination that isn't a valid path shows the folder instead.
+	m.Path, _ = files.NormalizeRelativePath(m.Path)
+	to, destination := files.NormalizeRelativePath(m.To)
+	if destination == nil {
+		m.To, destination = to, files.CheckSelection(to, m.Names)
+	} else {
+		m.To = m.Path
+	}
 	action, err := s.startAction(r, request, m.ServerID, authz.FilesWrite)
 	if err != nil {
 		s.fail(w, r, request, err)
