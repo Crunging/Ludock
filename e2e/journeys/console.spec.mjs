@@ -21,6 +21,16 @@ test("sending game commands, reading logs, and using the shell", async ({ page }
   // command starts on its own.
   await page.getByRole("button", { name: "Send" }).click();
   await expect(output.locator(":scope > div").filter({ hasText: /^> list\s*$/ })).toHaveCount(2);
+  // An address a player wrote, made to look like a trusted one, isn't a link.
+  const address = "https://xn--mnecraft-k4a.net/claim";
+  await page.getByLabel("Game command").fill(`say Free diamonds at ${address} today`);
+  await page.getByRole("button", { name: "Send" }).click();
+  const said = output.locator(":scope > div", { hasText: "[Server] Free diamonds" }).locator("span").first();
+  const box = await said.boundingBox();
+  const text = await said.innerText();
+  await page.mouse.move(box.x + (text.indexOf(address) + 12) * (box.width / text.length), box.y + box.height / 2);
+  await page.waitForTimeout(300);
+  await expect(page.locator(".xterm-screen")).not.toHaveClass(/xterm-cursor-pointer/);
 
   await page.getByRole("navigation", { name: "Console mode" }).getByRole("link", { name: "Logs", exact: true }).click();
   await expect(status).toHaveText("Connected");

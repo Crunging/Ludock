@@ -4,7 +4,6 @@
   "description": "Browser libraries copied into internal/web/assets/vendor. scripts/check-vendor.sh compares each copy with its published file; the security scan audits these versions.",
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
-    "@xterm/addon-web-links": "0.12.0",
     "@xterm/xterm": "6.0.0",
     "htmx.org": "4.0.2"
   },
@@ -14,7 +13,6 @@
     "htmx-preload.min.js": "htmx.org/dist/ext/hx-preload.min.js",
     "xterm.js": "@xterm/xterm/lib/xterm.js",
     "xterm.css": "@xterm/xterm/css/xterm.css",
-    "xterm-addon-fit.js": "@xterm/addon-fit/lib/addon-fit.js",
-    "xterm-addon-web-links.js": "@xterm/addon-web-links/lib/addon-web-links.js"
+    "xterm-addon-fit.js": "@xterm/addon-fit/lib/addon-fit.js"
   }
 }
