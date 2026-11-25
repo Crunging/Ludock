@@ -3,6 +3,7 @@ package helper
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1061,5 +1062,114 @@ func TestChangesNeverCrossAMount(t *testing.T) {
 	}
 	if _, code := runFile(t, requests["back up"], nil); code != 0 {
 		t.Fatal("refused a backup on one mount", code)
+	}
+}
+
+// An excluded mount's entry stays out of reach under any spelling. A
+// case-insensitive share can't be mounted here, so the test makes the other
+// spelling the same way that storage would, with a rename right after the
+// helper resolves its exclusions: it proves that once resolved, every
+// operation refuses the entry by identity, whatever spelling reaches it; it
+// doesn't prove how a particular filesystem folds the destination's own
+// spelling when it is resolved.
+func TestExclusionsHoldByIdentity(t *testing.T) {
+	root, _ := dataRoot(t)
+	for _, folder := range []string{"mods", "a/deep"} {
+		os.MkdirAll(filepath.Join(root, folder), 0o755)
+		os.WriteFile(filepath.Join(root, folder, "hidden.txt"), []byte("hidden"), 0o644)
+	}
+	blocked := []string{root + "/mods", root + "/a/deep"}
+	swap := func(from, to string) {
+		os.Rename(filepath.Join(root, from[:4]), filepath.Join(root, to[:4]))
+		os.Rename(filepath.Join(root, from[5:]), filepath.Join(root, to[5:]))
+	}
+	exclusionsResolved = func() { swap("mods a", "MODS A") }
+	defer func() { exclusionsResolved = func() {} }()
+	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
+	size := int64(5)
+	for _, request := range []FileRequest{
+		{Operation: "list", Path: "MODS"},
+		{Operation: "download", Path: "MODS/hidden.txt"},
+		{Operation: "upload", Path: "MODS/new.txt", Size: &size, UploadID: id},
+		{Operation: "upload-prepare", Path: "MODS"},
+		{Operation: "mkdir", Path: "MODS/new"},
+		{Operation: "delete", Path: "MODS"},
+		{Operation: "rename", Path: "MODS", Destination: "other"},
+		// A folder that holds one can't be taken as a whole either.
+		{Operation: "delete", Path: "A"},
+		{Operation: "download", Path: "A"},
+		{Operation: "move", Paths: []string{"A"}, Destination: "world"},
+		{Operation: "delete-paths", Paths: []string{"A"}},
+	} {
+		swap("MODS A", "mods a")
+		request.Root, request.Blocked = root, blocked
+		if _, code := runFile(t, request, []byte("12345"+id)); code == 0 {
+			t.Error(request.Operation, request.Path, request.Paths, "reached an excluded entry")
+		}
+	}
+	swap("MODS A", "mods a")
+	listing, code := runFile(t, FileRequest{Operation: "list", Root: root, Blocked: blocked}, nil)
+	if code != 0 || strings.Contains(listing, "MODS") || !strings.Contains(listing, `"A"`) {
+		t.Fatal("listing", code, listing)
+	}
+	if got := listTree(t, filepath.Join(root, "MODS")); !slices.Equal(got, []string{"hidden.txt"}) {
+		t.Fatal(got)
+	}
+	if got := listTree(t, filepath.Join(root, "A")); !slices.Equal(got, []string{"deep", "deep/hidden.txt"}) {
+		t.Fatal(got)
+	}
+	// Everything else still works.
+	swap("MODS A", "mods a")
+	if _, code := runFile(t, FileRequest{Operation: "upload", Root: root, Path: "fine.txt", Size: &size, UploadID: id, Blocked: blocked},
+		[]byte("12345"+id)); code != 0 {
+		t.Fatal("refused an upload away from the exclusions", code)
+	}
+	// An exclusion that can't be resolved stops writes beside it, not reads.
+	exclusionsResolved = func() {}
+	missing := []string{root + "/missing"}
+	if _, code := runFile(t, FileRequest{Operation: "mkdir", Root: root, Path: "new", Blocked: missing}, nil); code == 0 {
+		t.Fatal("wrote beside an exclusion it couldn't find")
+	}
+	if _, code := runFile(t, FileRequest{Operation: "list", Root: root, Blocked: missing}, nil); code != 0 {
+		t.Fatal("couldn't list beside an exclusion it couldn't find", code)
+	}
+}
+
+// A replaced file keeps its access ACL, whose mask the mode bits only show,
+// and if the ACL can't be kept the file isn't replaced. A filesystem without
+// ACLs skips the test.
+func TestUploadKeepsAccessACL(t *testing.T) {
+	root, _ := dataRoot(t)
+	target := filepath.Join(root, "server.properties")
+	// Owner rw-, user 4242 rw-, owning group r--, mask rw-, others ---: the
+	// mode shows 0660, but the owning group may only read.
+	entry := func(tag, perm uint16, id uint32) []byte {
+		return binary.LittleEndian.AppendUint32(binary.LittleEndian.AppendUint16(binary.LittleEndian.AppendUint16(nil, tag), perm), id)
+	}
+	acl := binary.LittleEndian.AppendUint32(nil, 2)
+	for _, part := range [][]byte{entry(0x01, 6, 0xffffffff), entry(0x02, 6, 4242), entry(0x04, 4, 0xffffffff), entry(0x10, 6, 0xffffffff),
+		entry(0x20, 0, 0xffffffff)} {
+		acl = append(acl, part...)
+	}
+	if err := unix.Setxattr(target, accessACL, acl, 0); err != nil {
+		t.Skip("no ACLs here:", err)
+	}
+	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
+	size := int64(5)
+	upload := FileRequest{Operation: "upload", Root: root, Path: "server.properties", Size: &size, UploadID: id}
+	if _, code := runFile(t, upload, []byte("hello"+id)); code != 0 {
+		t.Fatal("replace", code)
+	}
+	kept := make([]byte, 64)
+	if n, err := unix.Getxattr(target, accessACL, kept); err != nil || !bytes.Equal(kept[:n], acl) {
+		t.Fatal("ACL not kept", err)
+	}
+	fsetxattr = func(int, string, []byte, int) error { return unix.EIO }
+	defer func() { fsetxattr = unix.Fsetxattr }()
+	if _, code := runFile(t, upload, []byte("other"+id)); code != FileACLNotKept {
+		t.Fatal("replaced a file whose ACL couldn't be kept", code)
+	}
+	if data, _ := os.ReadFile(target); string(data) != "hello" {
+		t.Fatal(string(data))
 	}
 }

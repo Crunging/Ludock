@@ -33,8 +33,12 @@ const (
 
 type fd int
 
-// tracker closes every descriptor still open when a helper exits.
-type tracker struct{ open []fd }
+// tracker closes every descriptor still open when a helper exits. refuse,
+// when set, refuses to open an entry it reports.
+type tracker struct {
+	open   []fd
+	refuse func(*unix.Stat_t) bool
+}
 
 func (t *tracker) add(descriptor fd) fd {
 	t.open = append(t.open, descriptor)
@@ -70,6 +74,16 @@ func (t *tracker) openAt(parent fd, name string, flags int, mode uint32) (fd, er
 	descriptor, err := unix.Openat(int(parent), name, flags, mode)
 	if err != nil {
 		return -1, err
+	}
+	if t.refuse != nil {
+		var info unix.Stat_t
+		if err := unix.Fstat(descriptor, &info); err != nil || t.refuse(&info) {
+			unix.Close(descriptor)
+			if err == nil {
+				err = errExcluded
+			}
+			return -1, err
+		}
 	}
 	return t.add(fd(descriptor)), nil
 }
