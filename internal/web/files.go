@@ -147,6 +147,9 @@ func (s *Server) filesView(r *http.Request, request *Request) views.FilesView {
 	}
 	f.Path = listing.Path
 	f.Total = len(listing.Entries)
+	for _, entry := range listing.Entries {
+		f.Names = append(f.Names, entry.Name)
+	}
 	search := strings.ToLower(strings.TrimSpace(f.Filter))
 	for _, entry := range listing.Entries {
 		if strings.Contains(strings.ToLower(entry.Name), search) {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"path"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/files"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/launch"
 )
 
 // uploadStall is how long an upload may go without a byte arriving before
@@ -34,13 +36,15 @@ type manifestFile struct {
 
 type uploadResult struct {
 	Name string `json:"name"`
-	// Status is "uploaded", "failed", or "unconfirmed": the file may have
-	// been written.
+	// Status is "uploaded", "failed", "exists": the name is taken and the
+	// upload wasn't confirmed to replace it, or "unconfirmed": the file may
+	// have been written.
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
 }
 
-// fileUpload stores a batch of files in one folder. The body
+// fileUpload stores a batch of files in one folder, path or its subfolder
+// into, which it creates as needed; replace=1 lets it replace files. The body
 // (application/octet-stream) is a JSON line listing each file's name and
 // size, then each file's bytes in that order, with the exact
 // Content-Length; the CSRF token comes in the X-CSRF-Token header. It
@@ -56,6 +60,10 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 	query := r.URL.Query()
 	root := query.Get("root")
 	folder, err := files.NormalizeRelativePath(query.Get("path"))
+	var into string
+	if err == nil {
+		into, err = files.NormalizeRelativePath(query.Get("into"))
+	}
 	if err == nil && root == "" {
 		err = invalid
 	}
@@ -126,15 +134,18 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 		return
 	}
 	defer action.Done()
-	results, err := s.App.Files.UploadFiles(action.Ctx, fileTarget(action), root, folder, entries, reader, action.Assert)
+	results, err := s.App.Files.UploadFiles(action.Ctx, fileTarget(action), root, folder, into, query.Get("replace") == "1", entries, reader,
+		action.Assert)
 	answer := struct {
 		Results []uploadResult `json:"results"`
 		Stop    bool           `json:"stop"`
 	}{Results: make([]uploadResult, len(entries)), Stop: err != nil}
 	for index, entry := range entries {
 		result := uploadResult{Name: entry.Name, Status: "uploaded"}
-		details := map[string]any{"root": root, "path": folder, "name": entry.Name, "size": entry.Size}
+		details := map[string]any{"root": root, "path": path.Join(folder, into), "name": entry.Name, "size": entry.Size}
 		switch failure := results[index]; {
+		case errors.Is(failure, launch.ErrNameTaken):
+			result.Status = "exists"
 		case errors.Is(failure, files.ErrUploadUnconfirmed):
 			result.Status, result.Message = "unconfirmed", "The result for “"+entry.Name+"” could not be confirmed. The upload may have completed. Review the folder before uploading again."
 			details["confirmed"] = false

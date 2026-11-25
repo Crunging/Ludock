@@ -1793,3 +1793,64 @@ func sameAsCreated(t *testing.T, got, reference, want string, mode os.FileMode) 
 		}
 	}
 }
+
+// Without a default ACL, a new file or folder, uploaded, made, or unpacked,
+// gets what the kernel gives one the game creates there with the umask the
+// folder shows: group write when the folder's owning group has it, and no
+// more than the folder gives group and others. A folder without group write,
+// including one whose ACL mask alone shows it, keeps the helper's umask,
+// Docker's 0022.
+func TestNewEntriesFollowFolderMode(t *testing.T) {
+	root, _ := dataRoot(t)
+	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
+	size := int64(5)
+	defer syscall.Umask(syscall.Umask(0o022))
+	for index, test := range []struct {
+		folder    uint32
+		gameUmask int
+		acl       string
+	}{{0o755, 0o022, ""}, {0o700, 0o022, ""}, {0o775, 0o002, ""}, {0o770, 0o007, ""}, {0o2775, 0o002, ""},
+		{0o755, 0o022, "user::rwx,user:4242:rwx,group::r-x,mask::rwx,other::r-x"},
+		{0o755, 0o022, "user::rwx,user:4242:rwx,group::rwx,mask::r-x,other::r-x"}} {
+		name := fmt.Sprintf("%d-%o-%o", index, test.folder, test.gameUmask)
+		folder := filepath.Join(root, name)
+		os.Mkdir(folder, 0o700)
+		unix.Chmod(folder, test.folder)
+		if test.acl != "" {
+			if err := unix.Setxattr(folder, accessACL, mustACL(t, test.acl), 0); err != nil {
+				t.Log("no ACLs here:", err)
+				continue
+			}
+		}
+		syscall.Umask(test.gameUmask)
+		reference, _ := os.OpenFile(filepath.Join(folder, "game.txt"), os.O_CREATE|os.O_WRONLY, 0o666)
+		reference.Close()
+		os.Mkdir(filepath.Join(folder, "game"), 0o777)
+		syscall.Umask(0o022)
+		if _, code := runFile(t, FileRequest{Operation: "upload", Root: root, Path: name + "/new.txt", Size: &size, UploadID: id}, []byte("12345"+id)); code != 0 {
+			t.Fatal(name, "upload", code)
+		}
+		if _, code := runFile(t, FileRequest{Operation: "mkdir", Root: root, Path: name + "/made"}, nil); code != 0 {
+			t.Fatal(name, "mkdir", code)
+		}
+		unpacked, code := unpackFile(t, root, name+"/pack.tar", tarArchive(t, []archived{{name: "a.jar", body: "a"}, {name: "cfg/b.yml", body: "b"}}))
+		if code != 0 {
+			t.Fatal(name, "unpack", code)
+		}
+		mode := func(path string) os.FileMode {
+			info, err := os.Stat(filepath.Join(folder, path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return info.Mode() & (os.ModePerm | os.ModeSetgid)
+		}
+		file, directory := mode("game.txt"), mode("game")
+		pack := unpacked.Name
+		for path, want := range map[string]os.FileMode{"new.txt": file, "made": directory, pack: directory, pack + "/cfg": directory,
+			pack + "/cfg/b.yml": file} {
+			if got := mode(path); got != want {
+				t.Errorf("%s: %s is %v, the game's would be %v", name, path, got, want)
+			}
+		}
+	}
+}

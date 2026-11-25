@@ -1,6 +1,7 @@
 // File uploads: raw PUTs of up to 100 files or 16 MiB each, one after
-// another, into the folder shown; a larger file goes alone. The server
-// checks the size limit, each name, and access while it writes.
+// another, into the folder shown or, for a chosen or dropped folder, its
+// subfolders; a larger file goes alone. The server checks the size limit,
+// each name, and access while it writes.
 "use strict";
 // The file editor saves raw text with a PUT, since form bodies are capped
 // far below the preview limit; the response replaces the dialog's content.
@@ -84,6 +85,8 @@
   if (!page || !zone) return;
   var input = document.querySelector("[data-upload-input]");
   var choose = document.querySelector("[data-choose-files]");
+  var folderInput = document.querySelector("[data-upload-folder-input]");
+  var chooseFolder = document.querySelector("[data-choose-folder]");
   var progress = document.querySelector("[data-upload-progress]");
   var status = document.querySelector("[data-upload-status]");
   var cancel = document.querySelector("[data-upload-cancel]");
@@ -91,9 +94,15 @@
   var csrf = document.querySelector('meta[name="csrf-token"]');
   var maxUpload = Number(page.getAttribute("data-max-upload")) || 0;
   var batchFiles = 100, batchBytes = 16 * 1024 * 1024;
-  var controller = null;
+  // busy holds the uploader from reading what was chosen to the end of the
+  // upload; controller cancels the upload.
+  var busy = false, controller = null;
+  if (chooseFolder && folderInput && "webkitdirectory" in folderInput) chooseFolder.hidden = false;
 
-  function disabled() { return zone.getAttribute("aria-disabled") === "true" || controller !== null; }
+  function disabled() { return zone.getAttribute("aria-disabled") === "true" || busy; }
+  function buttons(off) {
+    [choose, chooseFolder].forEach(function (button) { if (button) button.disabled = off; });
+  }
   // A notice is a sentence and, for files that didn't upload, one line each.
   function showNotice(kind, message, lines) {
     if (!feedback) return;
@@ -137,28 +146,143 @@
     }
   }
 
-  function batches(files) {
+  // An upload is a list of items: a file and the subfolder of the shown
+  // folder it goes in, "" for the folder itself.
+  function label(item) { return item.folder ? item.folder + "/" + item.file.name : item.file.name; }
+  function inside(folder, name) { return folder ? folder + "/" + name : name; }
+  // top is the name an item has in the shown folder: its own, or its folder's.
+  function top(item) { return item.folder ? item.folder.split("/")[0] : item.file.name; }
+  var collator = new Intl.Collator(undefined, { numeric: true });
+  // Folders go outermost first and each folder's files together, those to
+  // replace first, since they can free space, by name, so a batch is one
+  // folder's and its files read in order.
+  function ordered(items) {
+    return items.slice().sort(function (a, b) {
+      if (a.folder !== b.folder) return a.folder < b.folder ? -1 : 1;
+      if (!a.replace !== !b.replace) return a.replace ? -1 : 1;
+      return collator.compare(a.file.name, b.file.name);
+    });
+  }
+  function picked(list, folders) {
+    return Array.from(list || []).map(function (file) {
+      var path = folders ? file.webkitRelativePath || "" : "";
+      return { file: file, folder: path.split("/").slice(0, -1).join("/") };
+    });
+  }
+  function promised(call) { return new Promise(call); }
+  // dropped reads what was dropped, walking into folders. A directory reader
+  // returns its entries a chunk at a time until one comes back empty.
+  async function dropped(entries) {
+    var items = [];
+    async function walk(entry, folder) {
+      if (entry instanceof File) {
+        items.push({ file: entry, folder: folder });
+        return;
+      }
+      try {
+        if (entry.isFile) {
+          items.push({ file: await promised(function (resolve, reject) { entry.file(resolve, reject); }), folder: folder });
+          return;
+        }
+        if (!entry.isDirectory) return;
+        var reader = entry.createReader(), children = [];
+        for (;;) {
+          var chunk = await promised(function (resolve, reject) { reader.readEntries(resolve, reject); });
+          if (chunk.length === 0) break;
+          children = children.concat(chunk);
+        }
+        for (var index = 0; index < children.length; index++) await walk(children[index], inside(folder, entry.name));
+      } catch (error) {
+        throw new Error("Nothing was uploaded: the browser couldn’t read “" + inside(folder, entry.name) + "” from what you dropped.");
+      }
+    }
+    for (var index = 0; index < entries.length; index++) await walk(entries[index], "");
+    return items;
+  }
+  // Without entries a dropped folder looks like a file that can't be read,
+  // so a drop with one uploads nothing rather than part of it.
+  async function droppedFiles(list) {
+    var files = Array.from(list || []);
+    for (var index = 0; index < files.length; index++) {
+      try {
+        await files[index].slice(0, 1).arrayBuffer();
+      } catch (error) {
+        throw new Error("Nothing was uploaded: this browser can’t upload a dropped folder. Use Choose folder, or drop the files inside it.");
+      }
+    }
+    return picked(files, false);
+  }
+
+  function quoted(names) {
+    var shown = names.slice(0, 3).map(function (name) { return "“" + name + "”"; });
+    if (names.length > 3) return shown.join(", ") + ", and " + (names.length - 3) + " more";
+    if (shown.length < 3) return shown.join(" and ");
+    return shown[0] + ", " + shown[1] + ", and " + shown[2];
+  }
+  // listedClashes are the names of chosen files or folders that the shown
+  // folder had when last listed. The server refuses to replace a file unless
+  // asked to, so this only lets the page ask before sending.
+  function listedClashes(items) {
+    var list = document.getElementById("file-list"), names = [];
+    try {
+      names = JSON.parse((list && list.getAttribute("data-names")) || "[]");
+    } catch (error) {
+      names = [];
+    }
+    var present = new Set(names), clashes = [];
+    items.forEach(function (item) {
+      if (present.has(top(item)) && clashes.indexOf(top(item)) < 0) clashes.push(top(item));
+    });
+    return clashes;
+  }
+  // askReplace asks once whether to replace what detail names.
+  function askReplace(detail) {
+    var dialog = document.getElementById("confirm-dialog");
+    if (!dialog || !dialog.showModal) return Promise.resolve(window.confirm(detail));
+    dialog.querySelector("h2").textContent = "Replace what’s already here?";
+    dialog.querySelector("#confirm-dialog-detail").textContent = detail;
+    dialog.querySelector("#confirm-dialog-detail").hidden = false;
+    var options = dialog.querySelector("[data-confirm-options]");
+    options.replaceChildren();
+    options.hidden = true;
+    var button = dialog.querySelector("[data-confirm-button]");
+    button.textContent = "Upload and replace";
+    button.className = "secondary-btn secondary-btn--danger";
+    dialog.returnValue = "";
+    return new Promise(function (resolve) {
+      dialog.addEventListener("close", function () { resolve(dialog.returnValue === "confirm"); }, { once: true });
+      dialog.showModal();
+    });
+  }
+
+  function batches(items) {
     var all = [], batch = [], bytes = 0;
-    files.forEach(function (file) {
-      if (batch.length > 0 && (batch.length >= batchFiles || bytes + file.size > batchBytes)) {
+    items.forEach(function (item) {
+      if (batch.length > 0 && (batch.length >= batchFiles || bytes + item.file.size > batchBytes || item.folder !== batch[0].folder ||
+        item.replace !== batch[0].replace)) {
         all.push(batch);
         batch = [];
         bytes = 0;
       }
-      batch.push(file);
-      bytes += file.size;
+      batch.push(item);
+      bytes += item.file.size;
     });
     if (batch.length > 0) all.push(batch);
     return all;
   }
 
-  // send uploads one batch, calling progress with the file being sent.
-  // fetch can't report upload progress, so this uses XMLHttpRequest.
-  function send(batch, progress) {
+  // send uploads one batch, calling progress with the file being sent. A
+  // folder not yet made in this upload is sent as into, which the server
+  // creates; a batch of items confirmed to replace says so. fetch can't
+  // report upload progress, so this uses XMLHttpRequest.
+  function send(batch, made, progress) {
     return new Promise(function (resolve, reject) {
-      var manifest = JSON.stringify({ files: batch.map(function (file) { return { name: file.name, size: file.size }; }) }) + "\n";
+      var manifest = JSON.stringify({ files: batch.map(function (item) { return { name: item.file.name, size: item.file.size }; }) }) + "\n";
       var head = new Blob([manifest]).size;
-      var query = new URLSearchParams({ root: page.getAttribute("data-files-root"), path: page.getAttribute("data-files-path") });
+      var shown = page.getAttribute("data-files-path"), folder = batch[0].folder;
+      var query = new URLSearchParams({ root: page.getAttribute("data-files-root"), path: made.has(folder) ? inside(shown, folder) : shown });
+      if (folder && !made.has(folder)) query.set("into", folder);
+      if (batch[0].replace) query.set("replace", "1");
       var request = new XMLHttpRequest();
       request.open("PUT", "/files/" + encodeURIComponent(page.getAttribute("data-files")) + "/upload?" + query);
       request.setRequestHeader("Content-Type", "application/octet-stream");
@@ -166,8 +290,8 @@
       request.setRequestHeader("HX-Request", "true");
       request.upload.addEventListener("progress", function (event) {
         var sent = event.loaded - head, index = 0;
-        while (index < batch.length - 1 && sent >= batch[index].size) {
-          sent -= batch[index].size;
+        while (index < batch.length - 1 && sent >= batch[index].file.size) {
+          sent -= batch[index].file.size;
           index++;
         }
         progress(index);
@@ -176,105 +300,184 @@
       request.addEventListener("error", function () { reject(new TypeError("The connection was lost.")); });
       request.addEventListener("abort", function () { reject(new DOMException("Aborted", "AbortError")); });
       controller.signal.addEventListener("abort", function () { request.abort(); }, { once: true });
-      request.send(new Blob([manifest].concat(batch), { type: "application/octet-stream" }));
+      request.send(new Blob([manifest].concat(batch.map(function (item) { return item.file; })), { type: "application/octet-stream" }));
     });
   }
 
-  async function upload(chosen) {
-    if (disabled() || chosen.length === 0) return;
+  // cancelled says what a cancelled upload left: the files confirmed, and
+  // the batch in flight, any of which the server may have written.
+  function cancelled(completed, total, inflight, current) {
+    if (total === 1 && inflight) {
+      return "Upload cancelled. “" + current + "” may have been written, and cancelling doesn’t undo it. Check the folder before trying again.";
+    }
+    var message = "Upload cancelled. " + completed + " of " + total + " files are confirmed uploaded";
+    if (inflight && inflight.length === 1) {
+      message += ", and “" + label(inflight[0]) + "”, which was being sent, may have been written too.";
+    } else if (inflight) {
+      message += ", and any of the " + inflight.length + " being sent, “" + label(inflight[0]) + "” to “" + label(inflight[inflight.length - 1]) +
+        "”, may have been written too.";
+    } else {
+      message += ".";
+    }
+    return message + " Cancelling doesn’t undo them; check the folder before trying again.";
+  }
+
+  // upload takes a function that reads what was chosen, so nothing else
+  // starts while it does.
+  async function upload(read) {
+    if (disabled()) return;
+    busy = true;
+    buttons(true);
+    var chosen = [], message = "", replace = false;
+    try {
+      chosen = ordered(await read());
+      if (chosen.length === 0) message = "Nothing was uploaded: there were no files in what you chose.";
+    } catch (error) {
+      message = error.message;
+    }
+    var clashes = message ? [] : listedClashes(chosen);
+    if (clashes.length > 0) {
+      replace = await askReplace((clashes.length === 1 ? "1 name you chose is already in this folder: " :
+        clashes.length + " names you chose are already in this folder: ") + quoted(clashes) +
+        ". Files with the same names are replaced, including inside folders, and that can’t be undone.");
+    }
+    if (message || (clashes.length > 0 && !replace)) {
+      if (message) showNotice("error", message);
+      if (input) input.value = "";
+      if (folderInput) folderInput.value = "";
+      busy = false;
+      buttons(false);
+      return;
+    }
+    // Only what the question named may be replaced; the server reports any
+    // other clash.
+    chosen.forEach(function (item) { item.replace = replace && clashes.indexOf(top(item)) >= 0; });
+    chosen = ordered(chosen);
     controller = new AbortController();
-    var completed = 0, offset = 0, current = chosen[0].name;
+    var completed = 0, current = label(chosen[0]), inflight = null, made = new Set();
     // lines has one entry per file that didn't upload; stop says why the
-    // files after offset weren't tried.
-    var lines = [], stop = "";
+    // last pass's files after its first left untried weren't tried, and left
+    // counts those. existing are files the server didn't replace unasked.
+    var lines = [], stop = "", left = 0, existing = [], halted = false;
     zone.setAttribute("aria-disabled", "true");
-    if (choose) choose.disabled = true;
+    buttons(true);
     progress.hidden = false;
     cancel.disabled = false;
     if (feedback) feedback.replaceChildren();
-    var files = chosen.filter(function (file) {
-      if (!maxUpload || file.size <= maxUpload) return true;
-      lines.push("Could not upload “" + file.name + "”: File exceeds the upload size limit of " + page.getAttribute("data-max-upload-text"));
+    var files = chosen.filter(function (item) {
+      if (!maxUpload || item.file.size <= maxUpload) return true;
+      lines.push("Could not upload “" + label(item) + "”: File exceeds the upload size limit of " + page.getAttribute("data-max-upload-text"));
       return false;
     });
-    function report(index) {
-      current = files[offset + index].name;
-      status.textContent = "Uploading " + (chosen.length - files.length + offset + index + 1) + " of " + chosen.length + ": " + current;
+    // run sends items in batches, numbering them in the status as the last
+    // of total, until a batch's results can't be relied on, which sets
+    // halted. It returns false once the session has ended.
+    async function run(items, total, verb) {
+      var queue = batches(items), offset = 0;
+      halted = true;
+      function report(index) {
+        current = label(items[offset + index]);
+        status.textContent = verb + " " + (total - items.length + offset + index + 1) + " of " + total + ": " + current;
+      }
+      try {
+        for (var position = 0; position < queue.length; position++) {
+          var batch = queue[position];
+          if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+          report(0);
+          inflight = batch;
+          var response = await send(batch, made, report);
+          inflight = null;
+          if (response.status === 401) {
+            window.location.assign("/login");
+            return false;
+          }
+          // A bare 413 is a body limit, a proxy's or a batch's, not a refused
+          // file, which comes in the results: its files go again one at a time.
+          if (response.status === 413) {
+            if (batch.length > 1) {
+              queue.splice(position + 1, 0, ...batch.map(function (item) { return [item]; }));
+            } else {
+              lines.push("Could not upload “" + label(batch[0]) + "”: " + errorText(response.status, response.body));
+              offset += 1;
+            }
+            continue;
+          }
+          // A proxy's error or timeout can come after the server wrote some of
+          // the batch.
+          if (response.status >= 500 || response.status === 408) {
+            stop = "The results for " + (batch.length === 1 ? "“" + label(batch[0]) + "”" : batch.length + " files from “" + label(batch[0]) + "”") +
+              " could not be confirmed: " + errorText(response.status, response.body) + " Review the folder before uploading again.";
+            offset += batch.length;
+            break;
+          }
+          if (response.status !== 200) {
+            stop = "Could not upload “" + label(batch[0]) + "”: " + errorText(response.status, response.body);
+            offset += 1;
+            break;
+          }
+          var answer = JSON.parse(response.body), unsure = false;
+          answer.results.forEach(function (result, index) {
+            if (result.status === "uploaded") {
+              completed += 1;
+              // A file landed, so its folders exist.
+              for (var folder = batch[0].folder; folder; folder = folder.split("/").slice(0, -1).join("/")) made.add(folder);
+            } else if (result.status === "exists") {
+              existing.push(batch[index]);
+            } else {
+              unsure = unsure || result.status === "unconfirmed";
+              lines.push(result.status === "unconfirmed" ? result.message : "Could not upload “" + label(batch[index]) + "”: " + result.message);
+            }
+          });
+          offset += batch.length;
+          // After an unknown result, the rest waits until someone checks the folder.
+          if (answer.stop || unsure) break;
+        }
+        halted = position < queue.length;
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          // Files sent before the one cut off may have been written.
+          stop = "The upload stopped at “" + current + "”: " + (error && error.message ? error.message : "Upload failed.") +
+            " Review the folder before uploading again.";
+          offset = items.length;
+        }
+      }
+      left = items.length - offset;
+      return true;
     }
     try {
-      var queue = batches(files);
-      for (var position = 0; position < queue.length; position++) {
-        var batch = queue[position];
-        if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
-        report(0);
-        var response = await send(batch, report);
-        if (response.status === 401) {
-          window.location.assign("/login");
-          return;
+      if (!(await run(files, chosen.length, "Uploading"))) return;
+      // The server found files the folder's listing didn't show, such as
+      // ones inside a folder or made since: it asks once more for those.
+      if (existing.length > 0 && !halted && !controller.signal.aborted) {
+        var again = existing;
+        if (await askReplace((again.length === 1 ? "1 file you chose is already here: " : again.length + " files you chose are already here: ") +
+          quoted(again.map(label)) + (again.length === 1 ? ". Replacing it can’t be undone; otherwise it stays as it is." :
+          ". Replacing them can’t be undone; otherwise they stay as they are."))) {
+          existing = [];
+          again.forEach(function (item) { item.replace = true; });
+          if (!(await run(again, again.length, "Replacing"))) return;
         }
-        // A bare 413 is a body limit, a proxy's or a batch's, not a refused
-        // file, which comes in the results: its files go again one at a time.
-        if (response.status === 413) {
-          if (batch.length > 1) {
-            queue.splice(position + 1, 0, ...batch.map(function (file) { return [file]; }));
-          } else {
-            lines.push("Could not upload “" + batch[0].name + "”: " + errorText(response.status, response.body));
-            offset += 1;
-          }
-          continue;
-        }
-        // A proxy's error or timeout can come after the server wrote some of
-        // the batch.
-        if (response.status >= 500 || response.status === 408) {
-          stop = "The results for " + (batch.length === 1 ? "“" + batch[0].name + "”" : batch.length + " files from “" + batch[0].name + "”") +
-            " could not be confirmed: " + errorText(response.status, response.body) + " Review the folder before uploading again.";
-          offset += batch.length;
-          break;
-        }
-        if (response.status !== 200) {
-          stop = "Could not upload “" + batch[0].name + "”: " + errorText(response.status, response.body);
-          offset += 1;
-          break;
-        }
-        var answer = JSON.parse(response.body), unsure = false;
-        answer.results.forEach(function (result) {
-          if (result.status === "uploaded") {
-            completed += 1;
-          } else {
-            unsure = unsure || result.status === "unconfirmed";
-            lines.push(result.status === "unconfirmed" ? result.message : "Could not upload “" + result.name + "”: " + result.message);
-          }
-        });
-        offset += batch.length;
-        // After an unknown result, the rest waits until someone checks the folder.
-        if (answer.stop || unsure) break;
-      }
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        // Files sent before the one cut off may have been written.
-        stop = "The upload stopped at “" + current + "”: " + (error && error.message ? error.message : "Upload failed.") +
-          " Review the folder before uploading again.";
-        offset = files.length;
       }
     } finally {
       var noun = chosen.length === 1 ? " file" : " files";
       var kind = "error", message = "Uploaded " + completed + " of " + chosen.length + noun + ".";
-      if (stop) lines.push(stop);
-      var left = files.length - offset;
-      if (left > 0) lines.push(left === 1 ? "The remaining file wasn’t uploaded." : "The remaining " + left + " files weren’t uploaded.");
+      if (existing.length > 0) {
+        lines.push(existing.length === 1 ? "“" + label(existing[0]) + "” wasn’t uploaded: a file with that name is already here." :
+          existing.length + " files weren’t uploaded: files with the same names are already here.");
+      }
       if (controller.signal.aborted) {
-        kind = "success";
-        message = chosen.length === 1
-          ? "Upload cancelled. “" + current + "” may have been written, and cancelling doesn’t undo it. Check the folder before trying again."
-          : "Upload cancelled. " + completed + " of " + chosen.length + " files finished. Check the folder before trying again; " +
-            "files sent with “" + current + "” may have been written, and cancelling doesn’t undo them.";
-        lines = [];
-      } else if (completed === chosen.length) {
-        kind = "success";
-        message = completed + " file" + (completed === 1 ? "" : "s") + " uploaded.";
-      } else if (lines.length === 1) {
-        // One line reads as one sentence.
-        message += " " + lines.pop();
+        message = cancelled(completed, chosen.length, inflight, current);
+        kind = lines.length > 0 ? "error" : "success";
+      } else {
+        if (stop) lines.push(stop);
+        if (left > 0) lines.push(left === 1 ? "The remaining file wasn’t uploaded." : "The remaining " + left + " files weren’t uploaded.");
+        if (completed === chosen.length) {
+          kind = "success";
+          message = completed + " file" + (completed === 1 ? "" : "s") + " uploaded.";
+        } else if (lines.length === 1) {
+          // One line reads as one sentence.
+          message += " " + lines.pop();
+        }
       }
       status.textContent = "Refreshing folder…";
       cancel.disabled = true;
@@ -282,16 +485,22 @@
       showNotice(kind, message, lines);
       document.dispatchEvent(new CustomEvent("files-updated"));
       controller = null;
+      busy = false;
       progress.hidden = true;
       zone.setAttribute("aria-disabled", "false");
-      if (choose) choose.disabled = false;
+      buttons(false);
       if (input) input.value = "";
+      if (folderInput) folderInput.value = "";
     }
   }
 
   if (choose && input) {
     choose.addEventListener("click", function () { if (!disabled()) input.click(); });
-    input.addEventListener("change", function () { upload(Array.from(input.files || [])); });
+    input.addEventListener("change", function () { upload(function () { return picked(input.files, false); }); });
+  }
+  if (chooseFolder && folderInput) {
+    chooseFolder.addEventListener("click", function () { if (!disabled()) folderInput.click(); });
+    folderInput.addEventListener("change", function () { upload(function () { return picked(folderInput.files, true); }); });
   }
   cancel.addEventListener("click", function () {
     if (!controller) return;
@@ -310,7 +519,21 @@
   zone.addEventListener("drop", function (event) {
     event.preventDefault();
     zone.classList.remove("file-dropzone--active");
-    upload(Array.from(event.dataTransfer.files || []));
+    if (disabled()) return;
+    // Entries can only be taken while the drop event runs. An item without
+    // one, such as a file another app offers, goes as its file.
+    var transfer = event.dataTransfer, items = Array.from(transfer.items || []);
+    if (items.length > 0 && typeof items[0].webkitGetAsEntry === "function") {
+      var entries = items.filter(function (item) { return item.kind === "file"; }).map(function (item) {
+        return item.webkitGetAsEntry() || (item.getAsFile && item.getAsFile());
+      });
+      upload(function () {
+        if (entries.some(function (entry) { return !entry; })) throw new Error("Nothing was uploaded: the browser couldn’t read everything you dropped.");
+        return dropped(entries);
+      });
+    } else {
+      upload(function () { return droppedFiles(transfer.files); });
+    }
   });
   // Leaving mid-upload would cancel it silently.
   window.addEventListener("beforeunload", function (event) {

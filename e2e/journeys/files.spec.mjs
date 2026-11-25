@@ -20,6 +20,23 @@ function row(page, name) {
   return page.locator(".file-row", { has: page.locator(".file-row__name").getByText(name, { exact: true }) });
 }
 
+/** Drops tree on the upload area as a browser would: names map to file
+ * contents or to subtrees, and each folder's reader returns one entry a call. */
+async function dropTree(page, tree) {
+  await page.evaluate((tree) => {
+    const entry = (name, value) => typeof value === "string"
+      ? { isFile: true, isDirectory: false, name, file: (done) => done(new File([value], name)) }
+      : { isFile: false, isDirectory: true, name, createReader() {
+        const children = Object.entries(value).map(([child, inner]) => entry(child, inner));
+        return { readEntries: (done) => setTimeout(() => done(children.splice(0, 1))) };
+      } };
+    const event = new Event("drop", { bubbles: true, cancelable: true });
+    const items = Object.entries(tree).map(([name, value]) => ({ kind: "file", webkitGetAsEntry: () => entry(name, value) }));
+    Object.defineProperty(event, "dataTransfer", { value: { items, files: [] } });
+    document.querySelector("[data-dropzone]").dispatchEvent(event);
+  }, tree);
+}
+
 async function setUploadLimit(page, limit, notice) {
   await page.goto("/settings");
   if ((await page.locator("#advanced-settings").getAttribute("open")) === null) {
@@ -110,6 +127,60 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   await expect(names).toHaveCount(40);
   for (const mod of mods) expect(readFileSync(join(ownServer.data, "mods", mod.name))).toEqual(mod.buffer);
   expect(readdirSync(join(ownServer.data, "mods"))).toHaveLength(40);
+
+  // A chosen folder goes up with its folders.
+  const picked = test.info().outputPath("pack");
+  mkdirSync(join(picked, "config"), { recursive: true });
+  writeFileSync(join(picked, "a.toml"), "a\n");
+  writeFileSync(join(picked, "config", "b.toml"), "b\n");
+  await page.locator("[data-upload-folder-input]").setInputFiles(picked);
+  await expect(page.locator("#file-feedback")).toHaveText("2 files uploaded.");
+  expect(readFileSync(join(ownServer.data, "mods", "pack", "config", "b.toml"), "utf8")).toBe("b\n");
+
+  // So do dropped folders and files together. Names already in the folder
+  // are asked about once, and cancelling uploads nothing.
+  const drop = { "mod-1.jar": "new mod\n", pack: { "c.toml": "c\n", config: { "b.toml": "new b\n" } },
+    shaders: { "one.glsl": "1", "two.glsl": "2", deep: { "three.glsl": "3" } } };
+  await dropTree(page, drop);
+  const question = page.locator("#confirm-dialog");
+  await expect(question.locator("h2")).toHaveText("Replace what’s already here?");
+  await expect(question.locator("#confirm-dialog-detail")).toHaveText("2 names you chose are already in this folder: “mod-1.jar” and “pack”. " +
+    "Files with the same names are replaced, including inside folders, and that can’t be undone.");
+  await question.getByRole("button", { name: "Cancel" }).click();
+  expect(readFileSync(join(ownServer.data, "mods", "mod-1.jar"))).toEqual(mods[0].buffer);
+  expect(existsSync(join(ownServer.data, "mods", "shaders"))).toBe(false);
+  await dropTree(page, drop);
+  await question.getByRole("button", { name: "Upload and replace" }).click();
+  await expect(page.locator("#file-feedback")).toHaveText("6 files uploaded.");
+  expect(readFileSync(join(ownServer.data, "mods", "mod-1.jar"), "utf8")).toBe("new mod\n");
+  expect(readFileSync(join(ownServer.data, "mods", "pack", "config", "b.toml"), "utf8")).toBe("new b\n");
+  expect(readFileSync(join(ownServer.data, "mods", "pack", "a.toml"), "utf8")).toBe("a\n");
+  expect(readFileSync(join(ownServer.data, "mods", "shaders", "deep", "three.glsl"), "utf8")).toBe("3");
+
+  // The server never replaces a file unasked: one made since the folder was
+  // listed isn't covered by the question about listed ones, is asked about
+  // after the server answers, once for all such files, and declining leaves
+  // it.
+  writeFileSync(join(ownServer.data, "mods", "behind.txt"), "game\n");
+  await page.locator("[data-upload-input]").setInputFiles([{ name: "behind.txt", mimeType: "text/plain", buffer: Buffer.from("mine\n") },
+    { name: "mod-2.jar", mimeType: "application/java-archive", buffer: Buffer.from("new mod 2\n") }]);
+  await expect(question.locator("#confirm-dialog-detail")).toContainText("1 name you chose is already in this folder: “mod-2.jar”.");
+  await question.getByRole("button", { name: "Upload and replace" }).click();
+  await expect(question.locator("#confirm-dialog-detail")).toHaveText("1 file you chose is already here: “behind.txt”. " +
+    "Replacing it can’t be undone; otherwise it stays as it is.");
+  await question.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.locator("#file-feedback")).toHaveText("Uploaded 1 of 2 files. “behind.txt” wasn’t uploaded: a file with that name is already here.");
+  expect(readFileSync(join(ownServer.data, "mods", "mod-2.jar"), "utf8")).toBe("new mod 2\n");
+  expect(readFileSync(join(ownServer.data, "mods", "behind.txt"), "utf8")).toBe("game\n");
+  mkdirSync(join(ownServer.data, "mods", "late"));
+  writeFileSync(join(ownServer.data, "mods", "late", "x.toml"), "game\n");
+  writeFileSync(join(ownServer.data, "mods", "late", "y.toml"), "game\n");
+  await dropTree(page, { late: { "x.toml": "mine x\n", "y.toml": "mine y\n", "z.toml": "mine z\n" } });
+  await expect(question.locator("#confirm-dialog-detail")).toHaveText("2 files you chose are already here: “late/x.toml” and “late/y.toml”. " +
+    "Replacing them can’t be undone; otherwise they stay as they are.");
+  await question.getByRole("button", { name: "Upload and replace" }).click();
+  await expect(page.locator("#file-feedback")).toHaveText("3 files uploaded.");
+  expect(readFileSync(join(ownServer.data, "mods", "late", "y.toml"), "utf8")).toBe("mine y\n");
   await page.locator(".file-breadcrumbs").getByRole("link", { name: ownServer.container }).click();
 
   await page.locator(".file-row", { hasText: "mods" }).getByRole("button", { name: "Actions for mods" }).click();
@@ -293,6 +364,26 @@ test("a save or upload whose result is lost is reported as unconfirmed, not fail
     "The remaining file wasn’t uploaded."]);
   await expect(page.locator(".file-row__name")).toContainText(["lost.bin"]);
   await expect(page.locator(".file-row__name", { hasText: "never.txt" })).toHaveCount(0);
+
+  // A cancelled upload counts the files confirmed and names the batch being
+  // sent, any of which may have been written.
+  let held;
+  const uploads = (url) => url.pathname.endsWith("/upload");
+  await page.route(uploads, (route) => {
+    if (held === undefined) {
+      held = null;
+      return route.continue();
+    }
+    held = route;
+  });
+  await page.locator("[data-upload-input]").setInputFiles(Array.from({ length: 150 }, (_, index) =>
+    ({ name: `c-${String(index + 1).padStart(3, "0")}.txt`, mimeType: "text/plain", buffer: Buffer.from("c\n") })));
+  await expect.poll(() => Boolean(held)).toBe(true);
+  await page.getByRole("button", { name: "Cancel upload" }).click();
+  await expect(page.locator("#file-feedback")).toHaveText("Upload cancelled. 100 of 150 files are confirmed uploaded, and any of the 50 being sent, " +
+    "“c-101.txt” to “c-150.txt”, may have been written too. Cancelling doesn’t undo them; check the folder before trying again.");
+  await held.abort().catch(() => {});
+  await page.unroute(uploads);
 
   // Both are in the audit log, since either may have happened.
   for (const [action, label] of [["server.file.edited", "Edited a file"], ["server.file.uploaded", "Uploaded a file"]]) {

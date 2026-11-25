@@ -429,7 +429,7 @@ func TestFailedChangeRemovesHelper(t *testing.T) {
 			return f.service.Rename(ctx, f.target, f.root, "missing.txt", "other.txt", nil)
 		},
 		"upload": func() error {
-			_, err := f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "short.txt", Size: 10}}, strings.NewReader("short"), nil)
+			_, err := f.service.UploadFiles(ctx, f.target, f.root, "", "", false, []UploadEntry{{Name: "short.txt", Size: 10}}, strings.NewReader("short"), nil)
 			return err
 		},
 	} {
@@ -481,7 +481,7 @@ func TestUploadNeedsFreeSpace(t *testing.T) {
 	// Within the free space, but not with the spare kept; the margin covers
 	// other writers freeing space meanwhile.
 	size := space.Available - helper.UploadSpare(space.Total) + 256<<20
-	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "huge.bin", Size: size}}, zeroFree{}, nil)
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", "", false, []UploadEntry{{Name: "huge.bin", Size: size}}, zeroFree{}, nil)
 	if public, ok := apperr.As(results[0]); err != nil || !ok || public.Code != "NOT_ENOUGH_SPACE" || public.Status != 507 {
 		t.Fatal(results, err)
 	}
@@ -585,4 +585,48 @@ func TestDownloadBlamesDockerForItsFailures(t *testing.T) {
 	// The preview that worked keeps its helper for the next read.
 	f.service.Close()
 	f.helpersLeft(t)
+}
+
+// raceReader creates path with "game" once the first n bytes are read, as a
+// game saving a file while its upload streams.
+type raceReader struct {
+	body string
+	n    int
+	path string
+}
+
+func (r *raceReader) Read(p []byte) (int, error) {
+	if r.body == "" {
+		return 0, io.EOF
+	}
+	count := copy(p, r.body[:min(len(r.body), max(r.n, 1))])
+	r.body, r.n = r.body[count:], r.n-count
+	if r.n <= 0 && r.path != "" {
+		os.WriteFile(r.path, []byte("game"), 0o644)
+		r.path = ""
+	}
+	return count, nil
+}
+
+// A batch not confirmed to replace writes its new files and refuses each
+// name already taken, whether at the start or while the file streamed,
+// leaving what is there; confirmed, it replaces.
+func TestUploadReplacesOnlyWhenConfirmed(t *testing.T) {
+	f := setup(t)
+	os.WriteFile(filepath.Join(f.data, "taken.txt"), []byte("old"), 0o644)
+	entries := []UploadEntry{{Name: "taken.txt", Size: 3}, {Name: "new.txt", Size: 3}, {Name: "raced.txt", Size: 3}}
+	body := &raceReader{body: "abcdefghi", n: 7, path: filepath.Join(f.data, "raced.txt")}
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", "", false, entries, body, nil)
+	if err != nil || !errors.Is(results[0], launch.ErrNameTaken) || results[1] != nil || !errors.Is(results[2], launch.ErrNameTaken) {
+		t.Fatal(results, err)
+	}
+	for name, want := range map[string]string{"taken.txt": "old", "new.txt": "def", "raced.txt": "game"} {
+		if data, _ := os.ReadFile(filepath.Join(f.data, name)); string(data) != want {
+			t.Errorf("%s: %q", name, data)
+		}
+	}
+	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", "", true, entries[:1], strings.NewReader("abc"), nil)
+	if data, _ := os.ReadFile(filepath.Join(f.data, "taken.txt")); err != nil || results[0] != nil || string(data) != "abc" {
+		t.Fatal(results, err, string(data))
+	}
 }

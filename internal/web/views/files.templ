@@ -1,6 +1,7 @@
 package views
 
 import (
+	"encoding/json"
 	"net/url"
 	"strconv"
 	"strings"
@@ -21,7 +22,10 @@ type FilesView struct {
 	// Filter and Sort apply to the current folder only.
 	Filter, Sort string
 	Entries      []helper.FileEntry
-	Total        int
+	// Names are all the folder's entries, which an upload asks before
+	// replacing.
+	Names []string
+	Total int
 	// Matched counts the entries the filter keeps; Entries holds the first
 	// Limit of them.
 	Matched, Limit int
@@ -171,9 +175,13 @@ templ FilesPage(page Page, f FilesView) {
 					}
 					if f.CanManage {
 						<div class="file-dropzone" data-dropzone aria-disabled={ boolText(f.Blocked) }>
-							<span>Drop files here to upload them to this folder</span>
-							<button class="primary-btn" type="button" data-choose-files disabled?={ f.Blocked }>Choose files</button>
+							<span>Drop files or folders here to upload them to this folder</span>
+							<div class="file-dropzone__actions">
+								<button class="secondary-btn" type="button" data-choose-folder hidden disabled?={ f.Blocked }>Choose folder</button>
+								<button class="primary-btn" type="button" data-choose-files disabled?={ f.Blocked }>Choose files</button>
+							</div>
 							<input type="file" aria-label="Upload files" multiple hidden data-upload-input disabled?={ f.Blocked }/>
+							<input type="file" aria-label="Upload a folder" webkitdirectory hidden data-upload-folder-input disabled?={ f.Blocked }/>
 						</div>
 						<div class="file-upload-progress" data-upload-progress hidden>
 							<span role="status" data-upload-status></span>
@@ -223,6 +231,14 @@ templ FilesPage(page Page, f FilesView) {
 	}
 }
 
+func namesJSON(names []string) string {
+	if names == nil {
+		names = []string{}
+	}
+	encoded, _ := json.Marshal(names)
+	return string(encoded)
+}
+
 func boolText(value bool) string {
 	if value {
 		return "true"
@@ -235,7 +251,7 @@ func boolText(value bool) string {
 // filter requests, so the newest filters win; every swap into it morphs, since
 // a queued request keeps the element it targets.
 templ FileList(f FilesView) {
-	<div id="file-list" hx-get={ "/fragments/files/" + f.ServerID + "?" + f.listQuery() } hx-include=".file-filters" hx-trigger="files-changed from:document" hx-swap="outerMorph">
+	<div id="file-list" hx-get={ "/fragments/files/" + f.ServerID + "?" + f.listQuery() } hx-include=".file-filters" hx-trigger="files-changed from:document" hx-swap="outerMorph" data-names={ namesJSON(f.Names) }>
 		// File changes send this back, so their response shows this folder.
 		<input type="hidden" id="file-list-state" name="list" value={ f.listQuery() }/>
 		<div class="file-filter-summary">

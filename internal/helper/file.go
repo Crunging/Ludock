@@ -35,6 +35,9 @@ type FileRequest struct {
 	UploadID    string   `json:"uploadId,omitempty"`
 	// Expected makes an upload replace only this exact existing file.
 	Expected *FileVersion `json:"expected,omitempty"`
+	// Replace lets a batch upload replace existing files; without it, a file
+	// whose name is taken is refused with FileNameTaken.
+	Replace bool `json:"replace,omitempty"`
 	// Paths are the entries of one folder that a selection acts on.
 	Paths []string `json:"paths,omitempty"`
 	// Mounts are the nested mounts the helper has, which a move can't cross.
@@ -648,6 +651,12 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	if err != nil {
 		return err
 	}
+	// A batch upload not confirmed to replace refuses a name taken now, or
+	// by the time the file would be published, having written nothing to it.
+	keep := h.request.Operation == "upload-files" && !h.request.Replace
+	if keep && original != nil {
+		return errNameTaken
+	}
 	owner := original
 	if owner == nil {
 		if owner, err = fstat(parent); err != nil {
@@ -747,6 +756,9 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 		if err != nil {
 			return err
 		}
+		if keep && original == nil && current != nil {
+			return errNameTaken
+		}
 		if (current == nil) != (original == nil) || (original != nil && (original.Dev != current.Dev || original.Ino != current.Ino ||
 			original.Mode != current.Mode || original.Uid != current.Uid || original.Gid != current.Gid ||
 			original.Size != current.Size || mtimeMs(original) != mtimeMs(current) || ctimeMs(original) != ctimeMs(current))) {
@@ -776,9 +788,11 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// other bits, so when it will change, neither may grant more than the
 	// owner bits will: a mode that does, such as 0460, is narrowed to the
 	// owner's.
-	mode := uint32(0o666 &^ currentUmask())
+	var mode uint32
 	if original != nil {
 		mode = original.Mode & 0o777
+	} else if mode, err = followMode(parent, 0o666, currentUmask()); err != nil {
+		return err
 	}
 	// A replaced file keeps its access ACL: its group bits are the ACL's
 	// mask, which would otherwise become the owning group's own rights. A new
@@ -1206,6 +1220,84 @@ func (h *fileHelper) expectVersion(parent fd, name string, original *unix.Stat_t
 	return nil
 }
 
+// followMode is the mode a create with mode gets, without a default ACL, in
+// folder like. A folder its owning group may write to is the evidence of a
+// game whose umask leaves group write, such as 0002, so the entry gets group
+// write and no more for group and others than the folder gives; any other
+// folder keeps the helper's umask. With an access ACL the mode's group bits
+// are its mask, so the owning group's entry, as the mask limits it, stands in
+// for them.
+func followMode(like fd, mode uint32, umask int) (uint32, error) {
+	info, err := fstat(like)
+	if err != nil {
+		return 0, err
+	}
+	entries, err := readACL(like, accessACL)
+	if err != nil {
+		return 0, err
+	}
+	folder := info.Mode
+	if group, ok := aclPerm(entries, aclGroupObj); ok {
+		if mask, masked := aclPerm(entries, aclMask); masked {
+			group &= mask
+		}
+		folder = folder&^0o070 | group<<3
+	}
+	created := mode &^ uint32(umask)
+	if folder&0o020 == 0 {
+		return created, nil
+	}
+	return (created | mode&0o020) & (0o700 | folder&0o077), nil
+}
+
+// makeFolder creates name in folder, owned by owner's user and group, as a
+// new folder there would be made: with folder's default ACL if it has one,
+// and otherwise with followMode of like. Where the kernel passes on folder's
+// setgid bit and group, the mode is set at creation, since a chmod by a
+// helper outside that group drops the bit; elsewhere group and other access
+// wait until the group is set, since until then the future group's members
+// hold the other bits.
+func (h *fileHelper) makeFolder(folder, like fd, name string, owner *unix.Stat_t) (fd, error) {
+	inherited, err := readACL(folder, defaultACL)
+	if err != nil {
+		return -1, err
+	}
+	mode, final := uint32(0o777), uint32(0)
+	if inherited == nil {
+		info, err := fstat(folder)
+		if err != nil {
+			return -1, err
+		}
+		if final, err = followMode(like, 0o777, currentUmask()); err != nil {
+			return -1, err
+		}
+		if mode = final; info.Mode&unix.S_ISGID == 0 {
+			mode &^= 0o077
+		}
+	}
+	// The helper does one operation at a time, so nothing else creates an
+	// entry while the umask is cleared; with a default ACL it doesn't apply.
+	umask := syscall.Umask(0)
+	err = unix.Mkdirat(int(folder), name, mode)
+	syscall.Umask(umask)
+	if err != nil {
+		return -1, err
+	}
+	directory, err := h.t.openAt(folder, name, directoryFlags, 0)
+	if err != nil {
+		return -1, err
+	}
+	if inherited == nil && mode != final {
+		if err := unix.Fchown(int(directory), -1, int(owner.Gid)); err != nil {
+			return -1, err
+		}
+		if err := unix.Fchmod(int(directory), final); err != nil {
+			return -1, err
+		}
+	}
+	return directory, unix.Fchown(int(directory), int(owner.Uid), int(owner.Gid))
+}
+
 func currentUmask() int {
 	old := syscall.Umask(0)
 	syscall.Umask(old)
@@ -1388,15 +1480,8 @@ func (h *fileHelper) run() error {
 		if err != nil {
 			return err
 		}
-		if err := unix.Mkdirat(int(parent), name, 0o777); err != nil {
+		if _, err := h.makeFolder(parent, parent, name, owner); err != nil {
 			return nameTaken(err)
-		}
-		directory, err := h.t.openAt(parent, name, directoryFlags, 0)
-		if err != nil {
-			return err
-		}
-		if err := unix.Fchown(int(directory), int(owner.Uid), int(owner.Gid)); err != nil {
-			return err
 		}
 		return h.json(map[string]bool{"ok": true})
 	case "delete":
