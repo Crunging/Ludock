@@ -1,0 +1,177 @@
+[
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb5115516f3f0d",
+    "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "Name": "/mc",
+    "Created": "2026-11-25T14:47:08.439689067Z",
+    "Config": {
+      "Image": "itzg/minecraft-server",
+      "Labels": {},
+      "Env": null,
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "exited",
+      "Running": false,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "2026-11-25T14:47:08.439689067Z",
+      "FinishedAt": "2026-11-25T14:47:08.496308044Z"
+    },
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-interrupted/update-started/data/mc",
+        "Destination": "/data",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": ""
+    },
+    "ExtraConfig": null,
+    "HostConfig": {
+      "Binds": [
+        "/var/tmp/ludock-1.0-interrupted/update-started/data/mc:/data"
+      ],
+      "NetworkMode": "bridge",
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "no"
+      }
+    },
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  },
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb511555410e79",
+    "Image": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "Name": "/mc-ludock-update-613bc211",
+    "Created": "2026-11-25T14:47:08.503767928Z",
+    "Config": {
+      "Image": "itzg/minecraft-server",
+      "Labels": {
+        "ludock.update": "c95059ca-721f-4c93-a9a7-c374e055d1fb"
+      },
+      "Env": null,
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "2026-11-25T14:47:08.508152192Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-interrupted/update-started/data/mc",
+        "Destination": "/data",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": "itzg/minecraft-server",
+      "Labels": {
+        "ludock.update": "c95059ca-721f-4c93-a9a7-c374e055d1fb"
+      },
+      "HostConfig": {
+        "Binds": [
+          "/var/tmp/ludock-1.0-interrupted/update-started/data/mc:/data"
+        ],
+        "NetworkMode": "bridge"
+      }
+    },
+    "ExtraConfig": {
+      "Cmd": null,
+      "Env": null,
+      "ExposedPorts": {},
+      "Image": "itzg/minecraft-server",
+      "Labels": {
+        "ludock.update": "c95059ca-721f-4c93-a9a7-c374e055d1fb"
+      },
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false,
+      "Volumes": {}
+    },
+    "HostConfig": {
+      "Binds": [
+        "/var/tmp/ludock-1.0-interrupted/update-started/data/mc:/data"
+      ],
+      "NetworkMode": "bridge",
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "no"
+      }
+    },
+    "Networks": {},
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  }
+]

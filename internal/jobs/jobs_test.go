@@ -103,22 +103,8 @@ func setup(t *testing.T) *fixture {
 		Mounts: []docker.MountPoint{{Type: "bind", Source: f.backupTo, Destination: f.backupTo, RW: true}}})
 	d := dbtest.Open(t)
 	d.CreateUser(ctx, db.UserRecord{User: db.User{ID: "admin", Username: "admin", Role: db.RoleAdmin, CreatedAt: 1}, PasswordHash: "x"})
-	client := docker.New(engine.Socket)
-	client.OutageLimit = 6 * time.Second
-	table := locks.New()
-	store := &identity.Store{DB: d}
-	authorization := &authz.Service{DB: d, Servers: store}
-	observer := &servers.Observer{Docker: client, Own: self.New(nil, "")}
-	service := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: observer}
-	images := &launch.Images{Configured: image}
-	storage := &backups.Storage{Roots: []string{f.backupTo}, Own: self.New(client, "ludock")}
-	backupService := &backups.Service{DB: d, Storage: storage, Docker: client, Observer: observer, Locks: table,
-		Helpers: &backups.Helpers{Docker: client, Images: images, Storage: storage}}
-	f.runner = &ops.Runner{DB: d, Locks: table}
-	f.jobs = &Jobs{DB: d, Authz: authorization, Identity: store, Servers: service, Docker: client, Locks: table,
-		Monitor: &monitor.Service{DB: d, Locks: table, Store: store}, Console: &console.Runtime{Docker: client},
-		Backups: backupService, Updates: &update.Service{Docker: client}, SaveSettle: time.Millisecond, ReplacementSettle: 100 * time.Millisecond,
-		Poll: 20 * time.Millisecond}
+	f.jobs = wire(engine, d, f.backupTo)
+	f.runner = &ops.Runner{DB: d, Locks: f.jobs.Locks}
 	f.jobs.Notify = func(_ notify.Alert, _, message string) {
 		f.mu.Lock()
 		f.alerts = append(f.alerts, message)
@@ -127,6 +113,7 @@ func setup(t *testing.T) *fixture {
 	service.Looping = f.jobs.Monitor.Looping
 	f.jobs.Register(f.runner)
 	f.adminSession = dbtest.Session(t, d, f.admin.ID)
+	service, backupService := f.jobs.Servers, f.jobs.Backups
 	views, err := service.List(ctx, f.admin)
 	if err != nil {
 		t.Fatal(err)
@@ -145,6 +132,26 @@ func setup(t *testing.T) *fixture {
 	}
 	t.Cleanup(f.runner.Stop)
 	return f
+}
+
+// wire builds Ludock's services on engine and d, as Ludock does, with
+// backupTo its backup folder and short waits.
+func wire(engine *fakedocker.Engine, d *db.DB, backupTo string) *Jobs {
+	client := docker.New(engine.Socket)
+	client.OutageLimit = 6 * time.Second
+	table := locks.New()
+	store := &identity.Store{DB: d}
+	authorization := &authz.Service{DB: d, Servers: store}
+	observer := &servers.Observer{Docker: client, Own: self.New(nil, "")}
+	service := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: observer}
+	images := &launch.Images{Configured: image}
+	storage := &backups.Storage{Roots: []string{backupTo}, Own: self.New(client, "ludock")}
+	backupService := &backups.Service{DB: d, Storage: storage, Docker: client, Observer: observer, Locks: table,
+		Helpers: &backups.Helpers{Docker: client, Images: images, Storage: storage}}
+	return &Jobs{DB: d, Authz: authorization, Identity: store, Servers: service, Docker: client, Locks: table,
+		Monitor: &monitor.Service{DB: d, Locks: table, Store: store}, Console: &console.Runtime{Docker: client},
+		Backups: backupService, Updates: &update.Service{Docker: client}, SaveSettle: time.Millisecond, ReplacementSettle: 100 * time.Millisecond,
+		Poll: 20 * time.Millisecond}
 }
 
 func (f *fixture) run(t *testing.T, kind string, input map[string]any) *ops.Job {

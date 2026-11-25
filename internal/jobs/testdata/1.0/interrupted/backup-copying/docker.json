@@ -1,0 +1,440 @@
+[
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb5126af009194",
+    "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "Name": "/mc",
+    "Created": "2026-11-25T14:48:23.023932744Z",
+    "Config": {
+      "Image": "itzg/minecraft-server",
+      "Labels": {},
+      "Env": null,
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "exited",
+      "Running": false,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "2026-11-25T14:48:23.023932744Z",
+      "FinishedAt": "2026-11-25T14:48:23.104044207Z"
+    },
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-interrupted/backup-copying/data/mc",
+        "Destination": "/data",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": ""
+    },
+    "ExtraConfig": null,
+    "HostConfig": {
+      "Binds": [
+        "/var/tmp/ludock-1.0-interrupted/backup-copying/data/mc:/data"
+      ],
+      "NetworkMode": "bridge",
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      }
+    },
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  },
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb5126b4444787",
+    "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "Name": "/ludock-validator-17723e7270a4915a",
+    "Created": "2026-11-25T14:48:23.112257241Z",
+    "Config": {
+      "Image": "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab",
+      "Labels": {
+        "ludock.enable": "false",
+        "ludock.internal": "mount-validator",
+        "ludock.operation": "f43f6da7-92b4-42d6-b7f0-627cd38fee92"
+      },
+      "Env": [
+        "GOMAXPROCS=1",
+        "GOMEMLIMIT=96MiB"
+      ],
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "2026-11-25T14:48:23.112611586Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/",
+        "Destination": "/",
+        "RW": false,
+        "Name": "/"
+      }
+    ],
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab",
+      "Healthcheck": {
+        "Test": [
+          "NONE"
+        ]
+      },
+      "Entrypoint": [
+        "/usr/local/bin/ludock"
+      ],
+      "Cmd": [
+        "helper",
+        "mount-proof",
+        "[{\"source\":\"/var/tmp/ludock-1.0-interrupted/backup-copying/data/mc\",\"destination\":\"/mounts/root-bd47413b5c03\"}]",
+        "0"
+      ],
+      "Env": [
+        "GOMAXPROCS=1",
+        "GOMEMLIMIT=96MiB"
+      ],
+      "User": "0",
+      "Labels": {
+        "ludock.enable": "false",
+        "ludock.internal": "mount-validator",
+        "ludock.operation": "f43f6da7-92b4-42d6-b7f0-627cd38fee92"
+      },
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "bind",
+            "Source": "/",
+            "Target": "/",
+            "ReadOnly": true,
+            "BindOptions": {
+              "ReadOnlyForceRecursive": true
+            }
+          }
+        ],
+        "NetworkMode": "none",
+        "ReadonlyRootfs": true,
+        "AutoRemove": true,
+        "CapDrop": [
+          "ALL"
+        ],
+        "CapAdd": [
+          "DAC_READ_SEARCH"
+        ],
+        "SecurityOpt": [
+          "no-new-privileges"
+        ],
+        "PidsLimit": 64,
+        "Memory": 134217728,
+        "NanoCpus": 1000000000
+      }
+    },
+    "ExtraConfig": {
+      "Cmd": [
+        "helper",
+        "mount-proof",
+        "[{\"source\":\"/var/tmp/ludock-1.0-interrupted/backup-copying/data/mc\",\"destination\":\"/mounts/root-bd47413b5c03\"}]",
+        "0"
+      ],
+      "Entrypoint": [
+        "/usr/local/bin/ludock"
+      ],
+      "Env": [
+        "GOMAXPROCS=1",
+        "GOMEMLIMIT=96MiB"
+      ],
+      "ExposedPorts": {},
+      "Healthcheck": {
+        "Test": [
+          "NONE"
+        ]
+      },
+      "Image": "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab",
+      "Labels": {
+        "ludock.enable": "false",
+        "ludock.internal": "mount-validator",
+        "ludock.operation": "f43f6da7-92b4-42d6-b7f0-627cd38fee92"
+      },
+      "User": "0",
+      "Volumes": {}
+    },
+    "HostConfig": {
+      "AutoRemove": true,
+      "CapAdd": [
+        "DAC_READ_SEARCH"
+      ],
+      "CapDrop": [
+        "ALL"
+      ],
+      "Memory": 134217728,
+      "Mounts": [
+        {
+          "BindOptions": {
+            "ReadOnlyForceRecursive": true
+          },
+          "ReadOnly": true,
+          "Source": "/",
+          "Target": "/",
+          "Type": "bind"
+        }
+      ],
+      "NanoCpus": 1000000000,
+      "NetworkMode": "none",
+      "PidsLimit": 64,
+      "ReadonlyRootfs": true,
+      "SecurityOpt": [
+        "no-new-privileges"
+      ]
+    },
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": [
+      "{\"identities\":{\"/mounts/root-bd47413b5c03\":{\"dev\":\"64512\",\"ino\":\"2271614\"}}}"
+    ],
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  },
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb5126b4706d56",
+    "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "Name": "/",
+    "Created": "2026-11-25T14:48:23.115150641Z",
+    "Config": {
+      "Image": "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab",
+      "Labels": {
+        "ludock.enable": "false",
+        "ludock.internal": "backup-helper",
+        "ludock.operation": "f43f6da7-92b4-42d6-b7f0-627cd38fee92"
+      },
+      "Env": [
+        "GOMAXPROCS=1",
+        "GOMEMLIMIT=96MiB"
+      ],
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "2026-11-25T14:48:23.115504165Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-interrupted/backup-copying/data/mc",
+        "Destination": "/mounts/root-bd47413b5c03",
+        "RW": false,
+        "Name": "/var/tmp/ludock-1.0-interrupted/backup-copying/data/mc"
+      }
+    ],
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab",
+      "Healthcheck": {
+        "Test": [
+          "NONE"
+        ]
+      },
+      "Entrypoint": [
+        "/usr/local/bin/ludock"
+      ],
+      "Cmd": [
+        "helper",
+        "idle",
+        "0"
+      ],
+      "Env": [
+        "GOMAXPROCS=1",
+        "GOMEMLIMIT=96MiB"
+      ],
+      "User": "0",
+      "Labels": {
+        "ludock.enable": "false",
+        "ludock.internal": "backup-helper",
+        "ludock.operation": "f43f6da7-92b4-42d6-b7f0-627cd38fee92"
+      },
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "bind",
+            "Source": "/var/tmp/ludock-1.0-interrupted/backup-copying/data/mc",
+            "Target": "/mounts/root-bd47413b5c03",
+            "ReadOnly": true
+          }
+        ],
+        "NetworkMode": "none",
+        "ReadonlyRootfs": true,
+        "CapDrop": [
+          "ALL"
+        ],
+        "CapAdd": [
+          "DAC_OVERRIDE"
+        ],
+        "SecurityOpt": [
+          "no-new-privileges"
+        ],
+        "PidsLimit": 64,
+        "Memory": 268435456,
+        "NanoCpus": 1000000000,
+        "LogConfig": {
+          "Type": "none"
+        }
+      }
+    },
+    "ExtraConfig": {
+      "Cmd": [
+        "helper",
+        "idle",
+        "0"
+      ],
+      "Entrypoint": [
+        "/usr/local/bin/ludock"
+      ],
+      "Env": [
+        "GOMAXPROCS=1",
+        "GOMEMLIMIT=96MiB"
+      ],
+      "ExposedPorts": {},
+      "Healthcheck": {
+        "Test": [
+          "NONE"
+        ]
+      },
+      "Image": "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab",
+      "Labels": {
+        "ludock.enable": "false",
+        "ludock.internal": "backup-helper",
+        "ludock.operation": "f43f6da7-92b4-42d6-b7f0-627cd38fee92"
+      },
+      "User": "0",
+      "Volumes": {}
+    },
+    "HostConfig": {
+      "CapAdd": [
+        "DAC_OVERRIDE"
+      ],
+      "CapDrop": [
+        "ALL"
+      ],
+      "LogConfig": {
+        "Type": "none"
+      },
+      "Memory": 268435456,
+      "Mounts": [
+        {
+          "ReadOnly": true,
+          "Source": "/var/tmp/ludock-1.0-interrupted/backup-copying/data/mc",
+          "Target": "/mounts/root-bd47413b5c03",
+          "Type": "bind"
+        }
+      ],
+      "NanoCpus": 1000000000,
+      "NetworkMode": "none",
+      "PidsLimit": 64,
+      "ReadonlyRootfs": true,
+      "SecurityOpt": [
+        "no-new-privileges"
+      ]
+    },
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  }
+]

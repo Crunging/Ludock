@@ -1,0 +1,83 @@
+[
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb511537d0827a",
+    "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "Name": "/mc",
+    "Created": "2026-11-25T14:47:08.009855933Z",
+    "Config": {
+      "Image": "itzg/minecraft-server",
+      "Labels": {
+        "ludock.console.host": "127.0.0.1",
+        "ludock.console.port": "37589"
+      },
+      "Env": [
+        "RCON_PASSWORD=fixture-rcon"
+      ],
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "2026-11-25T14:47:08.009855933Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-interrupted/backup-warning/data/mc",
+        "Destination": "/data",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": ""
+    },
+    "ExtraConfig": null,
+    "HostConfig": {
+      "Binds": [
+        "/var/tmp/ludock-1.0-interrupted/backup-warning/data/mc:/data"
+      ],
+      "NetworkMode": "bridge",
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      }
+    },
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  }
+]
