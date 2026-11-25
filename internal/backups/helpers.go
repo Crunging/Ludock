@@ -495,7 +495,7 @@ func (s *snapshotFile) writeTop() error {
 // helper's stream starts with and the names it has sent.
 type rootCopy struct {
 	root   Root
-	roots  []Root
+	data   *DataHelper
 	prefix string
 	names  map[string]bool
 }
@@ -511,7 +511,7 @@ func (h *Helpers) copyRoot(ctx context.Context, snapshot *snapshotFile, context 
 	if err != nil {
 		return err
 	}
-	copied := &rootCopy{root: root, roots: data.Roots, names: map[string]bool{}}
+	copied := &rootCopy{root: root, data: data, names: map[string]bool{}}
 	err = tarstream.Walk(input, func(header *tarstream.Header, body io.Reader) error {
 		return snapshot.copyEntry(copied, header, body)
 	}, nil)
@@ -540,7 +540,7 @@ func (s *snapshotFile) copyEntry(copied *rootCopy, header *tarstream.Header, bod
 	if err != nil {
 		return err
 	}
-	if err := ValidateEntry(mapped, copied.roots); err != nil {
+	if err := ValidateEntry(mapped, copied.data.Roots); err != nil {
 		return err
 	}
 	if copied.names[name] || s.entries >= maxEntries {
