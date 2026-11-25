@@ -446,15 +446,20 @@ func TestSelfUpdateOrder(t *testing.T) {
 				c.ImageManifestDescriptor = &docker.ManifestDescriptor{Digest: "sha256:" + strings.Repeat("7", 64), Platform: &amd64}
 			})
 		}, trace: join(begin, swap, []string{"start new"}, forward, forwardDone), image: newImage, state: selfupdate.StateSucceeded},
-		{name: "the new container fails to start", arrange: func(g *rig) { g.fail["start new"] = 500 },
-			trace: join(begin, swap, []string{"start new"}, putBack, backDone), image: oldImage, state: selfupdate.StatePutBack,
+		{name: "the new container fails to start", arrange: func(g *rig) {
+			g.fail["start new"] = 500
+			g.engine.Update(g.old, func(c *fakedocker.Container) {
+				c.HostConfig["Mounts"] = []map[string]any{{"Type": "bind", "Source": g.dataDir, "Target": g.dataDir, "BindOptions": map[string]any{"NonRecursive": true}}}
+			})
+		}, trace: join(begin, swap, []string{"start new"}, putBack, backDone), image: oldImage, state: selfupdate.StatePutBack,
 			reason: "Docker couldn’t start the new container, for example because its port was still in use",
 			check: func(t *testing.T, g *rig, _ *process) {
 				// The data steps reach the data exactly as Ludock does, with its groups.
 				for _, create := range g.engine.Creates {
 					if create.Labels["ludock.internal"] == "self-update-data" {
 						mounts := create.HostConfig.Mounts
-						if len(mounts) != 1 || mounts[0].Type != "bind" || mounts[0].Source != g.dataDir || mounts[0].Target != g.dataDir || mounts[0].ReadOnly {
+						if len(mounts) != 1 || mounts[0].Type != "bind" || mounts[0].Source != g.dataDir || mounts[0].Target != g.dataDir || mounts[0].ReadOnly ||
+							mounts[0].BindOptions == nil || !mounts[0].BindOptions.NonRecursive {
 							t.Errorf("data step mounts %+v", mounts)
 						}
 					}
@@ -718,6 +723,11 @@ func TestSelfUpdateOrder(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, refused: "OPERATION_CONFLICT"},
+		{name: "a data folder with another mount inside it, such as the key folder", arrange: func(g *rig) {
+			g.engine.Update(g.old, func(c *fakedocker.Container) {
+				c.Mounts = append(c.Mounts, docker.MountPoint{Type: "volume", Name: "key", Destination: g.dataDir + "/ludock.db.identity-key", RW: true})
+			})
+		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
 		{name: "startup recovery hasn't finished", before: func(g *rig, p *process) { p.svc.Locks.Fence() }, refused: "RECOVERY_PENDING"},
 		{name: "a container that can't show it is Ludock's own", self: func(g *rig) string { return "?" }, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
 		{name: "LUDOCK_SELF_CONTAINER naming the container", self: func(g *rig) string { return "ludock" },

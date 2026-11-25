@@ -696,7 +696,9 @@ func dataDirOf(old *docker.ContainerSpec) string {
 var errDataMount = errors.New("ludock's data mount can't be reproduced")
 
 // DataMount is the mount settings that reproduce the container's mount
-// holding dataDir: the same volume and subpath, or the same folder.
+// holding dataDir: the same volume and subpath, or the same folder with the
+// same bind options. Another mount inside the data folder, such as of the
+// key folder or the database alone, can't be reproduced by one mount.
 func DataMount(info *docker.ContainerInspect, dataDir string) (map[string]any, error) {
 	var found *identity.Mount
 	mounts := identity.DockerMounts(info)
@@ -709,7 +711,17 @@ func DataMount(info *docker.ContainerInspect, dataDir string) (map[string]any, e
 	if found == nil || found.Unresolved {
 		return nil, errDataMount
 	}
+	for _, mount := range mounts {
+		if path.Clean(mount.Destination) != path.Clean(found.Destination) && helper.Within(mount.Destination, dataDir) {
+			return nil, errDataMount
+		}
+	}
 	settings := map[string]any{"Type": found.Type, "Source": found.Source, "Target": found.Destination, "ReadOnly": !found.Writable}
+	for _, declared := range info.Host.Mounts {
+		if declared.Type == "bind" && found.Type == "bind" && path.Clean(declared.Target) == path.Clean(found.Destination) && declared.BindOptions != nil {
+			settings["BindOptions"] = declared.BindOptions
+		}
+	}
 	if found.Type == "volume" {
 		if found.Name == "" || strings.Contains(found.Name, "/") {
 			return nil, errDataMount
