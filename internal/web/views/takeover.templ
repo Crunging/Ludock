@@ -1,0 +1,150 @@
+package views
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/Crunging/Ludock/internal/schedules"
+)
+
+// TakeOver offers to move a missing server's backups, schedules, and
+// sharing to the server it most likely became (Likely), or else to one of
+// Others, active servers of the same game. The counts are the missing
+// server's.
+type TakeOver struct {
+	From, FromName             string
+	Likely                     *TakeOverTarget
+	Others                     []TakeOverTarget
+	Backups, Schedules, People int
+}
+
+type TakeOverTarget struct{ ID, Name string }
+
+// TakeOverDone is what moved, and what stayed behind because the new server
+// already had its own.
+type TakeOverDone struct {
+	FromName, ToID, ToName     string
+	Backups, Schedules, People int
+	// SameData: the same game and data folders, kept in the same place.
+	SameData                   bool
+	Monitoring, KeptMonitoring bool
+	LeftSchedules              []schedules.Input
+	KeptPeople                 []string
+	// Paused: the moved sharing waits for an administrator to confirm.
+	Paused bool
+}
+
+func counted(count int, one, many string) string {
+	if count == 1 {
+		return "1 " + one
+	}
+	return strconv.Itoa(count) + " " + many
+}
+
+func joinWords(words []string) string {
+	switch len(words) {
+	case 0:
+		return ""
+	case 1:
+		return words[0]
+	case 2:
+		return words[0] + " and " + words[1]
+	}
+	return strings.Join(words[:len(words)-1], ", ") + ", and " + words[len(words)-1]
+}
+
+// takeOverDetail says in the confirmation what will move.
+func takeOverDetail(o TakeOver, to string) string {
+	var moving []string
+	if o.Backups > 0 {
+		moving = append(moving, counted(o.Backups, "backup", "backups"))
+	}
+	if o.Schedules > 0 {
+		moving = append(moving, counted(o.Schedules, "schedule", "schedules"))
+	}
+	if o.People > 0 {
+		moving = append(moving, "sharing with "+counted(o.People, "person", "people"))
+	}
+	text := "It has no backups, schedules, or sharing to move."
+	if len(moving) > 0 {
+		text = "Its " + joinWords(moving) + " move to " + to + "."
+	}
+	return text + " Its activity goes too, and its monitoring settings unless " + to + " has its own. Then " + o.FromName +
+		" leaves the server list. Nothing changes in Docker."
+}
+
+func takeOverConfirm(o TakeOver, to string) templ.Attributes {
+	return templ.Attributes{"hx-confirm": "Move " + o.FromName + " to " + to + "?", "data-confirm-detail": takeOverDetail(o, to),
+		"data-confirm-action": "Move to " + to}
+}
+
+// TakeOverNotice is on a missing server's page for administrators.
+templ TakeOverNotice(o TakeOver) {
+	if o.Likely != nil {
+		<form class="notice-panel stack-form" id="take-over" hx-post={ "/servers/" + o.From + "/take-over" } hx-target="#detail-status" { takeOverConfirm(o, o.Likely.Name)... }>
+			<h3>Looks like it was renamed to { o.Likely.Name }</h3>
+			<p>{ o.Likely.Name } has the same game and data folders, and Ludock found it after this server went missing. Move this server’s backups, schedules, and sharing there?</p>
+			<input type="hidden" name="to" value={ o.Likely.ID }/>
+			<button class="primary-btn" type="submit" data-busy-label="Moving…">Move to { o.Likely.Name }</button>
+		</form>
+	} else {
+		<details class="disclosure" id="take-over">
+			<summary>Running under another name?</summary>
+			<form class="stack-form" hx-post={ "/servers/" + o.From + "/take-over" } hx-target="#detail-status" hx-confirm={ "Move " + o.FromName + "?" } data-confirm-detail={ takeOverDetail(o, "the server you picked") } data-confirm-action="Move">
+				<p class="muted">If this server now runs as another container, for example after a rename, pick it. Its backups, schedules, and sharing move there, and this server leaves the list.</p>
+				<label class="narrow-field">
+					The server it is now
+					<select name="to">
+						for _, target := range o.Others {
+							<option value={ target.ID }>{ target.Name }</option>
+						}
+					</select>
+				</label>
+				<button class="secondary-btn" type="submit" data-busy-label="Moving…">Move</button>
+			</form>
+		</details>
+	}
+}
+
+// TakeOverResult says what moved, and what stayed because the new server
+// had its own.
+templ TakeOverResult(d TakeOverDone) {
+	<div class="alert alert--success stack-form" role="status" id="take-over-result">
+		<p>
+			Moved { d.FromName } to { d.ToName }: { counted(d.Backups, "backup", "backups") }, { counted(d.Schedules, "schedule", "schedules") }, and sharing with { counted(d.People, "person", "people") }.
+			if d.Monitoring {
+				Its monitoring settings moved too.
+			}
+		</p>
+		if d.KeptMonitoring {
+			<p>{ d.ToName } kept its own monitoring settings.</p>
+		}
+		if len(d.LeftSchedules) > 0 {
+			<p>Not moved, because { d.ToName } already has the same schedule:</p>
+			<ul>
+				for _, input := range d.LeftSchedules {
+					<li>{ Capitalize(input.Action) }, { ScheduleWhen(input) }</li>
+				}
+			</ul>
+		}
+		if len(d.KeptPeople) > 0 {
+			<p>{ joinWords(d.KeptPeople) } kept the access they already had on { d.ToName }.</p>
+		}
+		if d.Paused {
+			<p>The people it was shared with can use { d.ToName } once you confirm the change on its page.</p>
+		}
+		if !d.SameData && d.Backups > 0 {
+			<p>Its backups were taken from data kept somewhere else, so a restore asks you to confirm or says why it can’t.</p>
+		}
+		<div>
+			<a class="primary-btn" href={ templ.SafeURL("/servers/" + d.ToID) }>Open { d.ToName }</a>
+		</div>
+	</div>
+}
+
+// TakeOverOnPage puts the result in place of the missing server's page.
+templ TakeOverOnPage(d TakeOverDone) {
+	@Partial("#detail-body", "innerHTML") {
+		@TakeOverResult(d)
+	}
+}

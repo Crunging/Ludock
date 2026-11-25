@@ -310,6 +310,7 @@ var auditLabels = map[string]string{
 	"server.command":                     "Sent a command",
 	"server.player-action":               "Acted on a player",
 	"server.removed":                     "Removed a server",
+	"server.taken-over":                  "Moved a missing server’s backups, schedules, and sharing here",
 	"server.change.confirmed":            "Confirmed a changed server",
 	"server.sharing.updated":             "Changed who can use a server",
 	"server.update.confirmed":            "Confirmed an update",
@@ -399,6 +400,9 @@ func entryLabel(entry history.AuditEntry) string {
 		if label := playerActionLabels[action]; label != "" && player != "" {
 			return label + " " + player
 		}
+	}
+	if from, _ := details["from"].(string); entry.Action == "server.taken-over" && from != "" {
+		return "Moved " + from + "’s backups, schedules, and sharing here"
 	}
 	return AuditLabel(entry.Action)
 }

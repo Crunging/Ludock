@@ -54,6 +54,8 @@ type ServerDetail struct {
 	Sharing  SharingView
 	// Operation is the operation the page shows, if any.
 	Operation string
+	// TakeOver is offered on a missing server's page to administrators.
+	TakeOver *TakeOver
 }
 
 type ActivityView struct {
@@ -149,6 +151,9 @@ templ detailBody(d ServerDetail) {
 	@DetailLive(d)
 	if server.SharingPaused {
 		@ConfirmChange(server.ID, server.BindingRevision)
+	}
+	if d.TakeOver != nil {
+		@TakeOverNotice(*d.TakeOver)
 	}
 	<div id="detail-status" aria-live="polite"></div>
 	<nav class="section-tabs" aria-label="Server management">

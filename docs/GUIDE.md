@@ -55,6 +55,10 @@ backups come back if you add it again. A server labeled
 `ludock.enable: "true"` can't be removed from the panel: set the label to
 `"false"` where the container is defined and recreate it.
 
+Renaming a container or its Compose service makes it a new server, and the old
+one shows as missing. Open the missing one and choose **Move to** the new one to
+bring its backups, schedules, and sharing along.
+
 Ludock never offers itself, its helpers, or Compose one-off containers.
 
 #### Servers that can control the host

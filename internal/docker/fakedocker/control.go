@@ -99,7 +99,7 @@ func (e *Engine) control(w http.ResponseWriter, r *http.Request) {
 		// with any number of env=KEY=VALUE and label=KEY=VALUE; a KEY alone
 		// removes it. image=REF changes the image reference it was created
 		// from, keeping the image it runs. mount=DESTINATION=SOURCE moves the
-		// bind mount at DESTINATION to another host folder.
+		// bind mount at DESTINATION to another host folder. name=NAME renames it.
 		query := r.URL.Query()
 		e.Recreate(query.Get("container"), query)
 		w.WriteHeader(204)
