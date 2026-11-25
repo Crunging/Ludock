@@ -1020,7 +1020,11 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 		}
 		started := job.Recovery.StateRestored && job.Recovery.StartRequested && !startedBefore
 		if result != nil && result.Finished {
-			if _, err := r.finish(ctx, job, Succeeded, result, "", false); err != nil {
+			status := Succeeded
+			if result.Skipped {
+				status = Skipped
+			}
+			if _, err := r.finish(ctx, job, status, result, "", false); err != nil {
 				return err
 			}
 			logRecovered(rw, map[bool]string{false: "finished", true: "finished, server started again"}[started])

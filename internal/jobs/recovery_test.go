@@ -158,8 +158,9 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 	for _, c := range []struct {
 		name, kind, phase string
 		// settled: the stop's end was saved before Ludock restarted;
-		// requested: so was an earlier recovery's start, unconfirmed.
-		settled, requested bool
+		// requested: so was an earlier recovery's start, unconfirmed;
+		// wasStopped: the server was stopped when the stop was sent.
+		settled, requested, wasStopped bool
 		// meanwhile is what happened while Ludock was down; run is the start
 		// time of the run the work stopped.
 		meanwhile func(f *fixture, run string)
@@ -185,7 +186,7 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 			meanwhile: startedElsewhere, running: true, done: true, guidance: runningAgain},
 		{name: "restart, run elsewhere and stopped", kind: "restart", phase: "verifying_stop", settled: true,
 			meanwhile: func(f *fixture, _ string) { stopped(f, later()) },
-			guidance:  "Something outside Ludock started the server meanwhile, so Ludock left it as it is."},
+			guidance:  "Something outside Ludock ran the server meanwhile, so Ludock left it stopped."},
 		{name: "restart, replaced", kind: "restart", phase: "stopping", meanwhile: func(f *fixture, run string) {
 			stopped(f, run)
 			f.game = f.engine.Recreate(f.game, nil)
@@ -193,6 +194,11 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 		}, err: "Recovery requires administrator attention. The server has been left stopped where possible."},
 		{name: "stop", kind: "stop", phase: "stopping", meanwhile: stopped, done: true,
 			guidance: "Ludock restarted while this ran, and confirmed the server stopped."},
+		{name: "stop, server already stopped", kind: "stop", phase: "verifying_stop", settled: true, wasStopped: true,
+			meanwhile: func(f *fixture, run string) {
+				stopped(f, run)
+				f.jobs.Monitor.SetIntentionalStop(ctx, f.serverID, true)
+			}, done: true, guidance: "Ludock restarted while this ran. The server was already stopped."},
 		{name: "stop, started again elsewhere", kind: "stop", phase: "stopping", meanwhile: startedElsewhere, running: true,
 			guidance: "Something outside Ludock started the server again before it stopped, so it is running."},
 		{name: "restart, stop not sent", kind: "restart", phase: "saving_world", running: true,
@@ -213,11 +219,11 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 				actor, input = ops.RecoveryActor, map[string]any{"run": started, "answered": 42}
 			}
 			recovery := ops.Recovery{ContainerID: f.game, LockKeys: []string{locks.ServerKey(f.serverID)}}
-			if c.phase != "saving_world" {
+			if c.phase != "saving_world" && !c.wasStopped {
 				recovery.StopStarted, recovery.StopInitialStartedAt = true, &started
 				recovery.StopRecoveryDeadlineAt = time.Now().UnixMilli()
-				recovery.StopSettled, recovery.StartRequested = c.settled, c.requested
 			}
+			recovery.StopSettled, recovery.StartRequested = c.settled, c.requested
 			if c.meanwhile != nil {
 				c.meanwhile(f, run)
 			}

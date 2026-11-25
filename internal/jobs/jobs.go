@@ -177,13 +177,18 @@ func (j *Jobs) Register(queue *ops.Runner) {
 			return nil, err
 		}
 		result := job.Job.Result
-		// Finished only once no restore of the server is left to undo.
-		if pending, err := j.pendingRestores(ctx, job.Job.ServerID); err == nil && len(pending) == 0 {
-			result.Guidance, result.Finished = "Ludock restarted while this ran, and finished undoing the restore.", true
-		} else {
+		// Finished once no restore of the server is left to undo; its note
+		// says what this undo did, and without one it did nothing, as when
+		// other work finished the restore first.
+		switch pending, err := j.pendingRestores(ctx, job.Job.ServerID); {
+		case err != nil || len(pending) > 0:
 			result.Guidance = "Ludock restarted before the undo finished. Undo the restore again from Needs attention."
+		case job.Job.Recovery.Undone == "":
+			result.Guidance, result.Skipped, result.Finished = "Ludock restarted while this ran. There was nothing left to undo.", true, true
+		default:
+			result.Guidance, result.Finished = "Ludock restarted while this ran, and finished it.", true
 		}
-		return withServerAfterRecovery(job, &result), nil
+		return withServerAfterRecovery(job, withSave(job, &result)), nil
 	}})
 	runner.Register(ops.KindUpdate, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		result, err := j.runUpdate(ctx, job)
@@ -440,8 +445,11 @@ func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission a
 	if server.Container.State == "running" && server.Container.StateSince != *stopped {
 		return runningAgain, record(job, "state_restored", func(r *ops.Recovery) { r.StateRestored, r.StartRequested = true, false })
 	}
-	if server.Container.Exit == nil || server.Container.Exit.Started != *stopped {
-		return "Something outside Ludock started the server meanwhile, so Ludock left it as it is.", nil
+	if server.Container.Exit == nil {
+		return "", nil
+	}
+	if server.Container.Exit.Started != *stopped {
+		return "Something outside Ludock ran the server meanwhile, so Ludock left it stopped.", nil
 	}
 	if err := j.suppressFor(job)(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.allowedIn(ctx, tx, job, permission) }); err != nil {
 		return "", err
@@ -889,10 +897,15 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (*ops.Res
 		done = job.Job.Recovery.StateRestored
 	case job.Job.Kind == ops.KindStop && job.Job.Recovery.StopSettled && !job.Job.Recovery.StopRecoveryTimedOut:
 		said, done = "Ludock restarted while this ran, and confirmed the server stopped.", true
+		if !recovery.StopStarted {
+			said = "Ludock restarted while this ran. The server was already stopped."
+		}
 	case job.Job.Kind == ops.KindStop && recovery.StopStarted && recovery.ContainerID == server.Container.ID && !job.Job.Recovery.StopRecoveryTimedOut:
 		said = "Something outside Ludock started the server again before it stopped, so it is running."
-	case job.Job.Kind != ops.KindStart && !recovery.StopStarted && job.Job.Phase != "starting":
+	case job.Job.Kind != ops.KindStart && !recovery.StopStarted && job.Job.Phase != "starting" && !recovery.StopSettled:
 		said = "Ludock restarted before it stopped the server, so the server is as it was."
+	case job.Job.Kind == ops.KindRestart && !recovery.StopStarted && job.Job.Phase != "starting":
+		said = "The server was already stopped, and Ludock restarted before it started it."
 	}
 	result := lifecycleResult(job.Job.Recovery)
 	result.Guidance, result.Finished = strings.TrimSpace(said+" "+result.Guidance), done

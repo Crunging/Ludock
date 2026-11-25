@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"encoding/json"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/mountinfo"
 	"github.com/Crunging/Ludock/internal/ops"
 )
@@ -289,5 +291,51 @@ func TestFailedUndoReturnsServerToRunning(t *testing.T) {
 	backup := f.run(t, "backup", nil)
 	if backup.Status != ops.Failed || !f.running() || f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" {
 		t.Fatalf("%+v, running %v, journal %s", backup, f.running(), f.savedJournal(restore.ID))
+	}
+}
+
+// Ludock restarts while an Undo runs. It ends as what it did: finished, with
+// its note, once no restore is left to undo; skipped when it undid nothing,
+// as when other work finished the restore first; and interrupted, saying to
+// undo again, while a restore is still left.
+func TestUndoRecoveryEndsAsWhatItDid(t *testing.T) {
+	for _, c := range []struct {
+		name, undone, status, guidance string
+		pending                        bool
+	}{
+		{name: "finished", undone: "Ludock finished undoing a restore that was stopped partway.", status: ops.Succeeded,
+			guidance: "Ludock restarted while this ran, and finished it."},
+		{name: "nothing to undo", status: ops.Skipped, guidance: "Ludock restarted while this ran. There was nothing left to undo."},
+		{name: "restore still left", pending: true, status: ops.Interrupted,
+			guidance: "Ludock restarted before the undo finished. Undo the restore again from Needs attention."},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			f.runner.Stop()
+			logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
+			if c.pending {
+				if _, err := f.jobs.DB.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at)
+					VALUES (?,?,'admin','restore','failed','failed','{}',?,?,1,1)`, identity.NewUUID(), f.serverID,
+					`{"restore":{"status":"replacing","roots":[{"root":{"id":"root-1","path":"/data"},"phase":"old_moved"}]}}`, logical.BindingRevision); err != nil {
+					t.Fatal(err)
+				}
+			}
+			recovery, _ := json.Marshal(ops.Recovery{Undone: c.undone})
+			id := identity.NewUUID()
+			if _, err := f.jobs.DB.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at)
+				VALUES (?,?,'admin','undo_restore','running','stopping','{}',?,?,2,2)`, id, f.serverID, string(recovery), logical.BindingRevision); err != nil {
+				t.Fatal(err)
+			}
+			runner := &ops.Runner{DB: f.jobs.DB, Locks: f.jobs.Locks}
+			f.jobs.Register(runner)
+			if err := runner.Start(ctx, nil); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(runner.Stop)
+			job, _ := runner.Get(ctx, id)
+			if job.Status != c.status || job.Result.Guidance != c.guidance || job.Result.UndoNote != c.undone {
+				t.Fatalf("%s %q %q, undo %q", job.Status, job.Error, job.Result.Guidance, job.Result.UndoNote)
+			}
+		})
 	}
 }

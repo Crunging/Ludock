@@ -149,13 +149,15 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (*ops
 	// Cut before the stop, such as while the world saved: nothing changed,
 	// but a check before the stop may have left its helper.
 	if job.Job.Recovery.InitialRunning == nil {
-		return nil, j.removeOperationHelpers(ctx, job)
+		return &ops.Result{Guidance: "Ludock restarted before this stopped the server, so nothing changed and there’s no new backup."},
+			j.removeOperationHelpers(ctx, job)
 	}
 	if err := j.recoverBackup(ctx, job); err != nil {
 		return nil, err
 	}
-	result := &ops.Result{Finished: completed}
 	running := wasRunning(job)
+	// The restart is done once the server is back as it was.
+	result := &ops.Result{Finished: completed && (!running || job.Job.Recovery.StateRestored)}
 	switch {
 	case completed && running:
 		result.Guidance = restartedAfter + "the backup had finished."
