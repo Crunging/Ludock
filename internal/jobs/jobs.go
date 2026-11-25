@@ -12,6 +12,7 @@ import (
 	"errors"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -399,6 +400,60 @@ func lifecycleResult(recovery ops.Recovery) *ops.Result {
 	return result
 }
 
+var errRestartTakenOver = errors.New("the server changed before its restart's start")
+
+// finishRestart starts, once, the server a restart had stopped when Ludock
+// restarted, as the restart would have: only while it is still the run the
+// restart stopped. One started, run, or replaced since by anything else is
+// left as it is. It says what it did, or "".
+func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission authz.Capability) (string, error) {
+	stopped := job.Job.Recovery.StopInitialStartedAt
+	if job.Job.Recovery.StopRecoveryTimedOut || stopped == nil {
+		return "", nil
+	}
+	server, err := j.resolve(ctx, job, permission, true)
+	if err != nil {
+		return "", err
+	}
+	if server.Container.ID != job.Job.Recovery.ContainerID {
+		return "", nil
+	}
+	restored := func(r *ops.Recovery) { r.StateRestored = true }
+	if server.Container.State == "running" && server.Container.StateSince != *stopped {
+		return "The server was running again, so Ludock left it as it was.", record(job, "state_restored", restored)
+	}
+	if server.Container.Exit == nil || server.Container.Exit.Started != *stopped {
+		return "", nil
+	}
+	if err := j.suppressFor(job)(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.allowedIn(ctx, tx, job, permission) }); err != nil {
+		return "", err
+	}
+	if err := record(job, "starting", func(r *ops.Recovery) { r.StartRequested = true }); err != nil {
+		return "", err
+	}
+	err = j.Servers.Observer.ChangeStateExact(ctx, server.Container.ID, servers.Start, func(observation identity.Observation, info *docker.ContainerInspect) error {
+		if err := j.assertCapability(ctx, job, permission); err != nil {
+			return err
+		}
+		if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observation, job.Job.BindingRevision); err != nil {
+			return err
+		}
+		started, err := time.Parse(time.RFC3339Nano, info.State.StartedAt)
+		if servers.IsRunning(info) || err != nil || started.UnixMilli() != *stopped {
+			return errRestartTakenOver
+		}
+		return nil
+	})
+	if errors.Is(err, errRestartTakenOver) || errors.Is(err, servers.ErrUnchanged) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
+	return "Ludock started the server again.", record(job, "state_restored", restored)
+}
+
 // noteAvailability logs a monitoring state that could not be saved after Docker
 // already changed.
 func (j *Jobs) noteAvailability(err error) {
@@ -714,9 +769,9 @@ func forcedExit(r *ops.Recovery, exit *servers.Exit) bool {
 	return !r.Restarting || r.StopInitialStartedAt == nil || exit.Started != *r.StopInitialStartedAt
 }
 
-// recoverLifecycle only observes: Docker may still be handling the
-// original stop, so the lock is kept until it settles, without starting or
-// stopping again.
+// recoverLifecycle waits for a stop Docker may still be handling, holding
+// the lock until it settles, without sending it again. A restart whose stop
+// was sent is then finished (finishRestart).
 func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 	permission := capabilityFor(servers.Action(job.Job.Kind))
 	if job.Job.Kind != ops.KindStart && job.Job.Kind != ops.KindStop && job.Job.Kind != ops.KindRestart {
@@ -798,5 +853,13 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (*ops.Res
 			}
 		}
 	}
-	return lifecycleResult(job.Job.Recovery), nil
+	said := ""
+	if job.Job.Kind == ops.KindRestart && recovery.StopStarted {
+		if said, err = j.finishRestart(ctx, job, permission); err != nil {
+			return nil, err
+		}
+	}
+	result := lifecycleResult(job.Job.Recovery)
+	result.Guidance = strings.TrimSpace(result.Guidance + " " + said)
+	return result, nil
 }

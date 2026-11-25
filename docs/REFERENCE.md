@@ -820,7 +820,11 @@ Work is recorded before it runs. When Ludock starts after a crash or restart,
 it removes helpers left behind before anything else runs, then reconciles
 anything that was in progress:
 
-- **Stops:** waits for a stop that was in progress instead of sending it again.
+- **Stops and restarts:** waits for a stop that was in progress instead of
+  sending it again. A restart whose stop Ludock had sent then starts the
+  server once, as the restart would have, if it is still the run Ludock
+  stopped: one that something outside Ludock started, ran, or replaced
+  meanwhile is left as it is. A stop stays stopped.
 - **Backups and restarts with a backup first:** starts a server that was
   stopped for a backup, without taking the backup again.
 - **Restores and unpacking:** finishes or rolls back an interrupted restore
