@@ -155,15 +155,24 @@ func (h *restoreHelper) moveContents(source, destination fd, omitted ...string) 
 		if err != nil {
 			return err
 		}
-		if !isDir(sourceInfo) && (!isRegular(sourceInfo) || sourceInfo.Nlink != 1) {
-			return errUnsafe
-		}
-		if _, err := lstatAt(destination, name); err == nil {
-			return errUnsafe
+		if at, err := lstatAt(destination, name); err == nil {
+			if !linkedPair(sourceInfo, at) {
+				return errUnsafe
+			}
+			if err := unix.Unlinkat(int(source), name, 0); err != nil {
+				return err
+			}
+			if err := syncAll(source, destination); err != nil {
+				return err
+			}
+			continue
 		} else if !isNotExist(err) {
 			return err
 		}
-		if err := renameChecked(source, name, destination, name); err != nil {
+		if !isDir(sourceInfo) && (!isRegular(sourceInfo) || sourceInfo.Nlink != 1) {
+			return errUnsafe
+		}
+		if err := renameChecked(source, name, destination, name, sourceInfo); err != nil {
 			return err
 		}
 		moved, err := lstatAt(destination, name)
@@ -180,15 +189,52 @@ func (h *restoreHelper) moveContents(source, destination fd, omitted ...string) 
 	return nil
 }
 
-// renameChecked renames to a name the caller found free. A game started
-// meanwhile may make it after that check, which RENAME_NOREPLACE refuses; a
-// filesystem without it gets the plain rename whole restores always used.
-func renameChecked(from fd, name string, to fd, target string) error {
+// renameChecked renames to a name the caller found free, never replacing
+// what a game started meanwhile makes there after that check. Without
+// RENAME_NOREPLACE, a file is linked at the target, which fails if anything
+// is there, then unlinked; cut between the two, it has both names, which
+// linkedPair finds on a retry. A folder is renamed, which can replace only an
+// empty folder. A filesystem with neither feature gets the plain rename whole
+// restores always used, rather than leaving the data in the stage.
+func renameChecked(from fd, name string, to fd, target string, info *unix.Stat_t) error {
 	err := renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE)
-	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) {
-		err = renameat(int(from), name, int(to), target)
+	if !errors.Is(err, unix.ENOSYS) && !errors.Is(err, unix.EINVAL) {
+		return err
 	}
-	return err
+	if isRegular(info) {
+		err := linkat(int(from), name, int(to), target, 0)
+		if err == nil {
+			return unix.Unlinkat(int(from), name, 0)
+		}
+		if !errors.Is(err, unix.EPERM) && !errors.Is(err, unix.EOPNOTSUPP) {
+			return err
+		}
+	}
+	return renameat(int(from), name, int(to), target)
+}
+
+// linkedPair says at is the file info under a second name, as a move by
+// link and unlink cut between them leaves it; the move finishes by
+// unlinking info's name.
+func linkedPair(info, at *unix.Stat_t) bool {
+	return isRegular(info) && info.Nlink == 2 && sameInode(info, at)
+}
+
+// asideEntry is movable for an entry that may be set aside, also passing a
+// file with a second name, which setAsideEntry finishes only as its own
+// interrupted move.
+func asideEntry(parent fd, name string, device uint64) (*unix.Stat_t, error) {
+	info, err := lstatAt(parent, name)
+	if isNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if info.Dev != device || (!isDir(info) && (!isRegular(info) || info.Nlink > 2)) {
+		return nil, errUnsafe
+	}
+	return info, nil
 }
 
 func (h *restoreHelper) removeEntry(parent fd, name string, depth int) error {
@@ -324,10 +370,16 @@ func setAsideEntry(parent fd, name string, aside fd, info *unix.Stat_t) error {
 	}
 	target := name
 	for count := 2; ; count++ {
-		if _, err := lstatAt(aside, target); isNotExist(err) {
+		at, err := lstatAt(aside, target)
+		if isNotExist(err) {
 			break
 		} else if err != nil {
 			return err
+		} else if linkedPair(info, at) {
+			if err := unix.Unlinkat(int(parent), name, 0); err != nil {
+				return err
+			}
+			return syncAll(parent, aside)
 		} else if count > 1000 {
 			return errUnsafe
 		}
@@ -341,7 +393,10 @@ func setAsideEntry(parent fd, name string, aside fd, info *unix.Stat_t) error {
 		}
 		target = base + suffix
 	}
-	if err := renameChecked(parent, name, aside, target); err != nil {
+	if !isDir(info) && (!isRegular(info) || info.Nlink != 1) {
+		return errUnsafe
+	}
+	if err := renameChecked(parent, name, aside, target, info); err != nil {
 		return err
 	}
 	moved, err := lstatAt(aside, target)
@@ -616,7 +671,7 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 		if name == h.request.Stage || name == h.request.Aside || Reserved(name) {
 			continue
 		}
-		info, err := movable(root, name, rootInfo.Dev)
+		info, err := asideEntry(root, name, rootInfo.Dev)
 		if err != nil {
 			return err
 		}
@@ -651,11 +706,19 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 		if Reserved(name) {
 			continue
 		}
-		info, err := movable(root, name, rootInfo.Dev)
+		info, err := asideEntry(root, name, rootInfo.Dev)
 		if err != nil {
 			return err
 		}
 		if info == nil {
+			continue
+		}
+		// The original itself, under both names after a cut return.
+		original, err := lstatAt(old, name)
+		if err != nil {
+			return err
+		}
+		if linkedPair(original, info) {
 			continue
 		}
 		if aside, err = h.asideFor(root, stage, root, aside, name, name, info); err != nil {
@@ -1061,7 +1124,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		if err != nil {
 			return err
 		}
-		info, err := movable(parent, name, rootInfo.Dev)
+		info, err := asideEntry(parent, name, rootInfo.Dev)
 		if err != nil || info == nil {
 			return err
 		}
@@ -1089,7 +1152,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		if info != nil {
-			live, err := movable(parent, name, rootInfo.Dev)
+			live, err := asideEntry(parent, name, rootInfo.Dev)
 			if err != nil {
 				return err
 			}

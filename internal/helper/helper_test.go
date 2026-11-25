@@ -684,6 +684,68 @@ func TestRenameWithoutNoReplaceNeverClobbers(t *testing.T) {
 	if info, err := os.Stat(filepath.Join(dir, "aside", "folder (2)")); err != nil || !info.IsDir() {
 		t.Fatal("not set aside under a free name", err)
 	}
+
+	// Returning a restore's originals there moves a file by link and unlink,
+	// so a file the game makes in the gap is kept, not overwritten.
+	root := filepath.Join(t.TempDir(), "data")
+	stage := StageName("6f9619ff-8b86-4011-b42d-00c04fc964ff")
+	asideName := SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")
+	old := filepath.Join(root, stage, "old")
+	os.MkdirAll(old, 0o700)
+	write := func(path, data string) {
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		os.WriteFile(path, []byte(data), 0o644)
+	}
+	read := func(path string) string { data, _ := os.ReadFile(path); return string(data) }
+	returnOld := func() int {
+		argument, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreRollbackOld, Aside: asideName, Base: root})
+		return RunRestore(string(argument), io.Discard, io.Discard)
+	}
+	write(filepath.Join(old, "level.dat"), "original")
+	link := linkat
+	linkat = func(fromFD int, from string, toFD int, to string, flags int) error {
+		write(filepath.Join(root, "level.dat"), "game made")
+		return link(fromFD, from, toFD, to, flags)
+	}
+	if returnOld() == 0 || read(filepath.Join(root, "level.dat")) != "game made" || read(filepath.Join(old, "level.dat")) != "original" {
+		t.Fatal("overwrote a file made while returning")
+	}
+	linkat = link
+	// Cut between link and unlink: a returned original, and a newer copy
+	// being set aside, each have both names; the retry finishes each.
+	write(filepath.Join(old, "server.properties"), "original")
+	os.Link(filepath.Join(old, "server.properties"), filepath.Join(root, "server.properties"))
+	write(filepath.Join(old, "ops.json"), "original")
+	write(filepath.Join(root, "ops.json"), "game made")
+	os.Link(filepath.Join(root, "ops.json"), filepath.Join(root, asideName, "ops.json"))
+	// A file with another name of its own is never moved.
+	write(filepath.Join(old, "whitelist.json"), "original")
+	write(filepath.Join(root, "whitelist.json"), "game made")
+	os.Link(filepath.Join(root, "whitelist.json"), filepath.Join(root, "linked"))
+	if returnOld() == 0 {
+		t.Fatal("set aside a hard-linked file")
+	}
+	os.Remove(filepath.Join(root, "linked"))
+	if returnOld() != 0 {
+		t.Fatal("retry failed")
+	}
+	for name, want := range map[string]string{"level.dat": "original", asideName + "/level.dat": "game made", "server.properties": "original",
+		"ops.json": "original", asideName + "/ops.json": "game made", "whitelist.json": "original", asideName + "/whitelist.json": "game made"} {
+		info, err := os.Stat(filepath.Join(root, name))
+		if got := read(filepath.Join(root, name)); got != want || err != nil || info.Sys().(*syscall.Stat_t).Nlink != 1 {
+			t.Errorf("%s holds %q, want %q", name, got, want)
+		}
+	}
+	if entries, _ := os.ReadDir(old); len(entries) != 0 {
+		t.Errorf("left %d in the stage", len(entries))
+	}
+	// Without hard links either, the plain rename is used.
+	write(filepath.Join(old, "usercache.json"), "original")
+	linkat = func(int, string, int, string, int) error { return unix.EPERM }
+	t.Cleanup(func() { linkat = link })
+	if returnOld() != 0 || read(filepath.Join(root, "usercache.json")) != "original" {
+		t.Fatal("returned nothing without hard links")
+	}
 }
 
 func TestFreeBytesCountsFundamentalBlocks(t *testing.T) {

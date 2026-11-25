@@ -882,6 +882,13 @@ data, makes that work refuse instead, and a running server it stopped
 for the undo starts again (for a restart with a backup first, once its backup
 is taken) unless the undo had begun moving data.
 
+Restores and undos move data without replacing anything a game makes at the
+same moment. Where the filesystem can't refuse that in one step, as on NFS,
+a file moves by a second name that is then removed, and a folder can replace
+only an empty one. On a filesystem with neither that refusal nor hard links,
+a file moves by a plain rename, as before; a game started outside Ludock in
+that instant could have a file it just made replaced.
+
 ### When Docker restarts
 
 If Docker itself restarts while work runs, such as for an upgrade, Ludock's
