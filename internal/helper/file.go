@@ -1084,7 +1084,7 @@ const (
 
 // UploadVersion is the batch upload protocol this helper speaks, which
 // upload-version reports, so a backend never drives an older helper.
-const UploadVersion = 2
+const UploadVersion = 3
 
 // UploadPrepared is the free space a batch upload starts with, after its
 // folder's sweep, and how many staging files the sweep could not remove.
