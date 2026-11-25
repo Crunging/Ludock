@@ -611,7 +611,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			}
 			if err := record(job, "verifying_stop", func(r *ops.Recovery) {
 				r.StopSettled = true
-				r.ForceStopped = server.Container.Exit != nil && forcedStop(r, server.Container.Exit.Code, false)
+				r.ForceStopped = r.StopStarted && !r.Restarting && server.Container.Exit != nil && server.Container.Exit.Code == 137
 			}); err != nil {
 				return nil, err
 			}
@@ -695,9 +695,15 @@ func recordStop(r *ops.Recovery, info *docker.ContainerInspect) {
 	r.Restarting = info.State.Restarting
 }
 
-// forcedStop reports whether a stop Ludock sent ended in Docker's kill.
-func forcedStop(r *ops.Recovery, exitCode int, oomKilled bool) bool {
-	return r.StopStarted && !r.Restarting && (exitCode == 137 || oomKilled)
+// forcedStop reports whether a stop Ludock sent ended in Docker's kill. A
+// container restarting when the stop was sent keeps its game's own exit,
+// unless Docker started another run before the stop reached it.
+func forcedStop(r *ops.Recovery, stopped *docker.ContainerInspect) bool {
+	if !r.StopStarted || (stopped.State.ExitCode != 137 && !stopped.State.OOMKilled) {
+		return false
+	}
+	started, err := time.Parse(time.RFC3339Nano, stopped.State.StartedAt)
+	return !r.Restarting || r.StopInitialStartedAt == nil || err != nil || started.UnixMilli() != *r.StopInitialStartedAt
 }
 
 // recoverLifecycle only observes: Docker may still be handling the

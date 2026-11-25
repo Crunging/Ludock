@@ -20,7 +20,7 @@ import (
 
 func fail(code, message string) error { return apperr.New(code, 409, message) }
 
-const restartingGuidance = "The server kept stopping and starting again before this, so Ludock started it again as it was: it stays up if this fixed the cause, and otherwise goes on restarting."
+const restartingGuidance = "The server kept stopping and starting again before this. Running again, it stays up if this fixed the cause, and otherwise goes on restarting."
 
 var stoppedStates = []string{"exited", "dead", "created"}
 
@@ -205,7 +205,7 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 	}
 	// Only a stop this work made is judged: a server killed earlier, such as
 	// one Docker had to kill when stopped outside Ludock, is copied as it is.
-	if forcedStop(&job.Job.Recovery, stopped.State.ExitCode, stopped.State.OOMKilled) {
+	if forcedStop(&job.Job.Recovery, stopped) {
 		return fail("UNCLEAN_SHUTDOWN", "The server didn’t shut down by itself and had to be forced to stop, so Ludock went no further: its last save may be incomplete. Give it more time to stop where it is defined (its stop timeout), then try again.")
 	}
 	return nil

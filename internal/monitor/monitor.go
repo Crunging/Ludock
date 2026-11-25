@@ -710,8 +710,11 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			lastState = DockerUnavailable
 		} else if unavailable || silent {
 			lastState = NotAnswering
-		} else if found && server.ContainerID != "" {
+		} else if found && server.ContainerID != "" && (container.State != "running" || r.lastState.String != "restarting") {
+			// A run between restarts, still starting, stays part of them.
 			lastState = container.State
+		} else if found && server.ContainerID != "" {
+			lastState = r.lastState.String
 		}
 		// A recovery restart, or giving up on one, is announced instead of
 		// the outage. It saves only the recovery state, which the outage

@@ -448,6 +448,8 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 	s.Check(ctx, state("restarting", ""), 1000)
 	s.Check(ctx, state("restarting", ""), 61_000)
 	s.Check(ctx, runSince(70_000), 75_000)
+	s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "running", Health: "starting", StateSince: 78_000}}, 80_000)
+	s.Check(ctx, runSince(78_000), 85_000)
 	s.Check(ctx, state("restarting", ""), 90_000)
 	s.Check(ctx, state("restarting", ""), 151_000)
 	if found, _ := problem(s, server.ID, 151_000); found == nil || found.State != "restarting" || found.OutageStartedAt != 1000 {

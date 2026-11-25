@@ -191,4 +191,19 @@ func TestWorkOnARestartingServer(t *testing.T) {
 			}
 		})
 	}
+
+	// Docker started another run just before the stop reached it, and had to
+	// kill that one: a forced stop, after which a backup goes no further.
+	f := setup(t)
+	f.engine.CrashLoop(f.game)
+	f.engine.OnStop = func(c *fakedocker.Container) {
+		if c.ID == f.game {
+			f.engine.Update(c.ID, func(c *fakedocker.Container) {
+				c.State.StartedAt, c.State.ExitCode = time.Now().UTC().Format(time.RFC3339Nano), 137
+			})
+		}
+	}
+	if job := f.run(t, ops.KindBackup, nil); job.Status != ops.Failed || !strings.Contains(job.Error, "forced to stop") {
+		t.Fatalf("%s %q", job.Status, job.Error)
+	}
 }
