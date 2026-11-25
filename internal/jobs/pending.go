@@ -143,6 +143,8 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		// a stage gone.
 		if final.Kept && !strings.Contains(note, aside) {
 			note += " " + keptNote(restore)
+		} else if !final.Kept && final.keptUnknown {
+			note += " " + unknownKeptNote(restore)
 		}
 		return note
 	}
@@ -192,13 +194,12 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	}()
 	data.Cleanup()
 	restore.Progress("", func(r *ops.Recovery) { r.DataHelperID = "" }, nil)
-	// An undo that failed after keeping newer copies says where they are.
-	if err != nil && moved {
-		j.reconcileKept(ctx, server, restore)
-	}
-	if partial, _ := restoreState(restore); err != nil && partial != nil && partial.Kept {
+	// An undo that failed after moving data, or that found copies kept
+	// before, says what the folders show now.
+	if err != nil && (moved || state.Kept) {
+		unknown := j.reconcileKept(ctx, server, restore)
 		result := restore.Job.Result
-		result.Guidance = endedRestoreGuidance(restore, true)
+		result.Guidance = endedRestoreGuidance(restore, true, unknown)
 		restore.Progress("", nil, &result)
 	}
 	if job != nil {

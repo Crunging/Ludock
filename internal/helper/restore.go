@@ -507,8 +507,10 @@ func (h *restoreHelper) run() (any, error) {
 		stage, err := h.pinStage(root, true)
 		return map[string]bool{"exists": stage >= 0}, err
 	case RestoreKept:
-		kept, _, err := h.keptAside(root)
-		return map[string]bool{"kept": kept}, err
+		if kept, known, _ := h.keptAside(root); known {
+			return map[string]bool{"kept": kept}, nil
+		}
+		return map[string]bool{}, nil
 	case RestoreStage:
 		return ok, h.makeStage(root)
 	}
@@ -563,9 +565,10 @@ func (h *restoreHelper) done(root fd) (any, error) {
 	if (h.request.Operation != RestoreRollbackOld && h.request.Operation != RestoreSetAside) || h.request.Aside == "" {
 		return map[string]bool{"ok": true}, nil
 	}
-	kept, aside, err := h.keptAside(root)
-	if err != nil {
-		return nil, err
+	kept, known, aside := h.keptAside(root)
+	if !known {
+		// The step is done; only what Activity says is unknown.
+		return map[string]bool{"ok": true}, nil
 	}
 	// What an earlier attempt moved in is durable before it is reported
 	// kept, even if that attempt's sync failed.
@@ -579,22 +582,23 @@ func (h *restoreHelper) done(root fd) (any, error) {
 
 // keptAside says whether copies were kept: the set-aside folder exists and
 // holds at least one entry. Something else at its name holds none; pinAside
-// refuses it whenever one must be set aside.
-func (h *restoreHelper) keptAside(root fd) (bool, fd, error) {
+// refuses it whenever one must be set aside. known is false when the folder
+// can't be read.
+func (h *restoreHelper) keptAside(root fd) (kept, known bool, aside fd) {
 	if h.request.Aside == "" {
-		return false, -1, nil
+		return false, true, -1
 	}
 	aside, err := h.t.openAt(root, h.request.Aside, directoryFlags, 0)
 	if isNotExist(err) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) {
-		return false, -1, nil
+		return false, true, -1
 	} else if err != nil {
-		return false, -1, err
+		return false, false, -1
 	}
 	children, err := names(aside)
 	if err != nil {
-		return false, -1, err
+		return false, false, -1
 	}
-	return len(children) > 0, aside, nil
+	return len(children) > 0, true, aside
 }
 
 func (h *restoreHelper) space(root fd) (any, error) {
@@ -823,10 +827,18 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 		if aside, err = h.asideFor(root, stage, root, aside, name, name, info); err != nil {
 			return err
 		}
-		if err := markClash(stage); err != nil {
+		created, err := markClash(stage)
+		if err != nil {
+			// Nothing moved, so a record that may not be durable is taken back.
+			if created {
+				err = errors.Join(err, unmarkClash(stage))
+			}
 			return err
 		}
 		if err := setAsideEntry(root, name, aside, info, true); err != nil {
+			if created && refused(err) {
+				return errors.Join(err, unmarkClash(stage))
+			}
 			return err
 		}
 	}
@@ -850,23 +862,54 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 // originals' way, which only a game run since the restore stopped makes.
 const clashRecord = "clash"
 
-func markClash(stage fd) error {
+// markClash records the clash, durably, before its first move, and says
+// whether it made the record. Something else at the name is no record, and
+// with a clash met, which main refuses, the undo refuses too.
+func markClash(stage fd) (bool, error) {
 	file, err := unix.Openat(int(stage), clashRecord, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if errors.Is(err, unix.EEXIST) {
-		return nil
+		if marked, err := clashMarked(stage); err != nil || !marked {
+			return false, errors.Join(err, errUnsafe)
+		}
+		return false, nil
 	} else if err != nil {
-		return err
+		return false, err
 	}
 	unix.Close(file)
+	return true, syncAll(stage)
+}
+
+// clashMarked reports a record markClash made: a regular file, whose stage
+// is synced before it is relied on, as an interrupted creation may not have.
+// Anything else at the name records nothing.
+func clashMarked(stage fd) (bool, error) {
+	info, err := lstatAt(stage, clashRecord)
+	if isNotExist(err) || (err == nil && !isRegular(info)) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return true, syncAll(stage)
+}
+
+// unmarkClash takes back a record whose clash moved nothing, as when the
+// filesystem refuses RENAME_NOREPLACE, so that state is the one main would
+// leave, and the return is no stricter than main's once the clash is gone.
+func unmarkClash(stage fd) error {
+	if err := unix.Unlinkat(int(stage), clashRecord, 0); err != nil && !isNotExist(err) {
+		return err
+	}
 	return syncAll(stage)
 }
 
-func clashMarked(stage fd) (bool, error) {
-	_, err := lstatAt(stage, clashRecord)
-	if isNotExist(err) {
-		return false, nil
+// refused says a rename is known to have moved nothing.
+func refused(err error) bool {
+	for _, errno := range []unix.Errno{unix.EEXIST, unix.ENOSYS, unix.EINVAL, unix.EOPNOTSUPP, unix.ENOTSUP, unix.EPERM} {
+		if errors.Is(err, errno) {
+			return true
+		}
 	}
-	return err == nil, err
+	return false
 }
 
 // rootBefore returns the root's owner and mode from before the restore.
