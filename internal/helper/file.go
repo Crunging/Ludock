@@ -789,13 +789,13 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 			return err
 		}
 	} else if acl, err = createdACL(parent, 0o666); err != nil {
-		return errACLNotKept
+		return err
 	}
 	if int(owner.Uid) != helperUID() {
 		owned := mode >> 6 & 7
 		mode = mode&0o700 | mode&0o070&(owned<<3) | mode&0o007&owned
 		if acl != nil {
-			if acl = narrowACL(acl); acl == nil {
+			if acl = narrowACL(acl, owner.Uid); acl == nil {
 				return errACLNotKept
 			}
 		}
@@ -804,21 +804,22 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 		return err
 	}
 	// Setting an ACL sets the mode bits too, so a file with one never has
-	// its mask as group bits on their own. A replacement whose original had
-	// none drops any its folder's default ACL gave it, which the mode would
-	// otherwise switch on.
-	switch {
-	case acl != nil:
-		if err := fsetxattr(int(file), accessACL, acl, 0); err != nil {
-			return errACLNotKept
-		}
-	case original != nil:
-		if err := unix.Fremovexattr(int(file), accessACL); err != nil && !errors.Is(err, unix.ENODATA) &&
-			!errors.Is(err, unix.ENOTSUP) && !errors.Is(err, unix.EOPNOTSUPP) {
-			return errACLNotKept
-		}
-		fallthrough
-	default:
+	// its mask as group bits on their own. A file that gets none drops any
+	// the folder's default ACL gave the staged file, which the mode would
+	// otherwise switch on: a replacement whose original had none, or a new
+	// file whose folder lost its default ACL meanwhile.
+	var aclErr error
+	if acl != nil {
+		aclErr = fsetxattr(int(file), accessACL, acl, 0)
+	} else if err := unix.Fremovexattr(int(file), accessACL); err != nil && !unsupportedXattr(err) {
+		aclErr = err
+	}
+	if aclErr != nil && original != nil {
+		return errACLNotKept
+	} else if aclErr != nil {
+		return aclErr
+	}
+	if acl == nil {
 		if err := fchmod(int(file), mode); err != nil {
 			return err
 		}

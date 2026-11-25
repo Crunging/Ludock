@@ -267,7 +267,8 @@ func (u *unpacker) file(parts []string, body io.Reader) error {
 }
 
 // createMode gives entry, made in folder, the mode or ACL a create with mode
-// there would have given it.
+// there would have given it, and without one, none the entry inherited
+// from a default ACL the folder has lost since.
 func createMode(entry, folder fd, mode uint32, umask int) error {
 	acl, err := createdACL(folder, mode)
 	if err != nil {
@@ -275,6 +276,9 @@ func createMode(entry, folder fd, mode uint32, umask int) error {
 	}
 	if acl != nil {
 		return fsetxattr(int(entry), accessACL, acl, 0)
+	}
+	if err := unix.Fremovexattr(int(entry), accessACL); err != nil && !unsupportedXattr(err) {
+		return err
 	}
 	return unix.Fchmod(int(entry), mode&^uint32(umask))
 }

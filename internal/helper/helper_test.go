@@ -1386,6 +1386,30 @@ func TestUploadKeepsAccessACL(t *testing.T) {
 	reference.Close()
 	sameAsCreated(t, filepath.Join(root, "new.txt"), filepath.Join(root, "reference.txt"),
 		"user::r--,user:4242:rwx,group::rwx,group:4343:rw-,mask::r--,other::---", 0o440)
+	// When the owner changes, what the future owner may hold until then, as
+	// the owning group, a named group, or others, is capped at the owner's
+	// rights; other named users keep what the folder's ACL gives them.
+	helperUID = func() int { return -2 }
+	defer func() { helperUID = os.Geteuid }()
+	for index, test := range []struct {
+		folder, want string
+		mode         os.FileMode
+	}{
+		{"user::r-x,user:4242:rwx,group::rw-,group:4343:rw-,mask::rwx,other::rw-", "user::r--,user:4242:rwx,group::r--,group:4343:r--,mask::rw-,other::r--", 0o464},
+		{"user::r-x,group::rwx,other::---", "", 0o440},
+	} {
+		unix.Setxattr(root, defaultACL, mustACL(t, test.folder), 0)
+		name := "handed-" + strconv.Itoa(index)
+		if _, code := runFile(t, FileRequest{Operation: "upload", Root: root, Path: name, Size: &size, UploadID: id}, []byte("hello"+id)); code != 0 {
+			t.Fatal("create", code)
+		}
+		value := make([]byte, 256)
+		n, _ := unix.Getxattr(filepath.Join(root, name), accessACL, value)
+		text, _ := ACLText(value[:max(n, 0)])
+		if info, _ := os.Stat(filepath.Join(root, name)); text != test.want || info.Mode() != test.mode {
+			t.Errorf("%s: %s %v", test.folder, text, info.Mode())
+		}
+	}
 }
 
 // sameAsCreated fails unless got has the mode and ACLs of reference, which

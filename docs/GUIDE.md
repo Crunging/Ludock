@@ -397,7 +397,8 @@ such as Valheim's `/opt/valheim`. It shows container paths, never host paths.
 - New files and folders, uploaded or unpacked, belong to the folder's owner
   and get the permissions a new file there would get, including what the
   folder's default ACL gives. A replaced file keeps its owner, permissions,
-  and ACL.
+  and ACL. Unless its owner is root, its group and others never get more
+  than its owner.
 - A folder mounted separately inside another, such as a mods folder, can't
   be deleted, renamed, or moved with what holds it; change what's inside it.
   Neither can a folder holding a restore's hidden `.ludock-restore-*` folder,
