@@ -114,7 +114,7 @@ func (h *fileHelper) move(root, parent fd, items []selected) error {
 		return err
 	}
 	destination := strings.Join(parts, "/")
-	if err := h.check(destination, false); err != nil {
+	if err := h.checkFolder(destination, false); err != nil {
 		return err
 	}
 	if err := h.checkInto(destination); err != nil {

@@ -1139,7 +1139,8 @@ func TestExclusionsHoldByIdentity(t *testing.T) {
 			t.Error(request.Operation, "wrote where an exclusion it couldn't find could appear")
 		}
 	}
-	for _, request := range []FileRequest{{Operation: "list"}, {Operation: "mkdir", Path: "world/new"}} {
+	for _, request := range []FileRequest{{Operation: "list"}, {Operation: "mkdir", Path: "world/new"}, {Operation: "upload-prepare", Path: "world"},
+		{Operation: "move", Path: "world", Paths: []string{"level.dat"}, Destination: "private"}} {
 		request.Root, request.Blocked = root, missing
 		if _, code := runFile(t, request, nil); code != 0 {
 			t.Error(request.Operation, "refused away from an exclusion it couldn't find", code)

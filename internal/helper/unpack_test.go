@@ -317,6 +317,14 @@ func TestUnpackStagingCleanup(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(fresh, "hidden")); err != nil {
 		t.Fatal(err)
 	}
+	// One elsewhere doesn't stop the cleanup.
+	if _, code := runFile(t, FileRequest{Operation: "unpack-cleanup", Root: root, Path: "other.tar", UploadID: stageID,
+		Blocked: []string{root + "/elsewhere"}}, nil); code != 0 {
+		t.Fatal("an exclusion elsewhere stopped a cleanup", code)
+	}
+	if _, err := os.Stat(fresh); !os.IsNotExist(err) {
+		t.Fatal("cleanup kept the staging folder")
+	}
 }
 
 // Selections act on entries of one folder; a move never replaces a name,

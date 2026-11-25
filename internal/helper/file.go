@@ -1186,7 +1186,11 @@ func (h *fileHelper) run() error {
 	}
 	relative := strings.Join(parts, "/")
 	operation := h.request.Operation
-	if err := h.check(relative, operation == "download" || operation == "delete" || operation == "rename"); err != nil {
+	check := h.check
+	if folderOperations[operation] {
+		check = h.checkFolder
+	}
+	if err := check(relative, operation == "download" || operation == "delete" || operation == "rename"); err != nil {
 		return err
 	}
 	switch operation {

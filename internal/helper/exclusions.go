@@ -37,6 +37,12 @@ var errExcluded = errors.New("this path overlaps an excluded mount")
 // move an excluded entry to another spelling.
 var exclusionsResolved = func() {}
 
+// folderOperations don't change the entry their path names in its folder:
+// they write inside the folder it names, or only remove Ludock's own
+// staging beside it, which can't become an exclusion.
+var folderOperations = map[string]bool{"upload-files": true, "upload-prepare": true, "upload-files-cleanup": true, "delete-paths": true,
+	"move": true, "upload-cleanup": true, "unpack-cleanup": true}
+
 // readOnlyOperations are the file operations that write nothing.
 var readOnlyOperations = map[string]bool{"list": true, "stat": true, "download": true, "download-paths": true, "check": true,
 	"space": true, "mounts": true, "backup": true}
@@ -101,10 +107,18 @@ func (h *fileHelper) isExcluded(info *unix.Stat_t) bool {
 // below the parent folder of an exclusion that couldn't be resolved. Folders
 // on the way are refused as they open.
 func (h *fileHelper) checkIdentity(relative string, recursive bool) (err error) {
+	return h.checkIdentityOf(relative, recursive, true)
+}
+
+// checkIdentityOf is checkIdentity; entry says relative names an entry that
+// is changed in its folder, rather than a folder written inside.
+func (h *fileHelper) checkIdentityOf(relative string, recursive, entry bool) (err error) {
 	if len(h.request.Blocked) == 0 {
 		return nil
 	}
-	parts, err := ownParts(relative)
+	// Ludock's own names, such as a staging folder, are checked here too;
+	// requests can't name them, which callers check.
+	parts, err := components(relative)
 	if err != nil {
 		return err
 	}
@@ -114,14 +128,14 @@ func (h *fileHelper) checkIdentity(relative string, recursive bool) (err error) 
 	if err != nil {
 		return err
 	}
-	var entry *unix.Stat_t
+	var target *unix.Stat_t
 	if len(parts) == 0 {
-		if entry, err = fstat(folder); err != nil {
+		if target, err = fstat(folder); err != nil {
 			return err
 		}
 	} else {
 		defer func() {
-			if parent, statErr := fstat(folder); err == nil && statErr == nil && h.writesInto(parent) {
+			if parent, statErr := fstat(folder); entry && err == nil && statErr == nil && h.writesInto(parent) {
 				err = errExcluded
 			}
 		}()
@@ -134,14 +148,22 @@ func (h *fileHelper) checkIdentity(relative string, recursive bool) (err error) 
 				return nil
 			}
 		}
-		if entry, err = lstatAt(folder, parts[len(parts)-1]); err != nil {
+		if target, err = lstatAt(folder, parts[len(parts)-1]); err != nil {
 			return nil
 		}
 	}
-	if h.isExcluded(entry) || (recursive && (h.excluded.ancestors[identityOf(entry)] || h.excluded.unresolved[identityOf(entry)])) {
+	if h.isExcluded(target) || (recursive && (h.excluded.ancestors[identityOf(target)] || h.excluded.unresolved[identityOf(target)])) {
 		return errExcluded
 	}
 	return nil
+}
+
+// checkFolder is check for a folder written inside, not changed itself.
+func (h *fileHelper) checkFolder(relative string, recursive bool) error {
+	if h.blocked(h.absolute(relative), recursive) {
+		return errExcluded
+	}
+	return h.checkIdentityOf(relative, recursive, false)
 }
 
 // writesInto reports a write into a folder an unresolved exclusion stopped
@@ -156,7 +178,7 @@ func (h *fileHelper) checkInto(folder string) error {
 	if len(h.request.Blocked) == 0 {
 		return nil
 	}
-	parts, err := ownParts(folder)
+	parts, err := components(folder)
 	if err != nil {
 		return err
 	}
