@@ -841,26 +841,36 @@ const (
 )
 
 // endedRestoreGuidance says what a restore that ended without finishing left
-// the data as; touched says live data had moved before it was undone.
+// the data as; touched says live data had moved before it was undone. Kept
+// alone decides whether the set-aside folder is named.
 func endedRestoreGuidance(job *ops.Context, touched bool) string {
 	state, err := restoreState(job)
 	if err != nil || state == nil {
 		return ""
 	}
+	// A root an earlier attempt finished was put back, unless a stage was
+	// found gone.
+	returned := touched || state.PutBack || (!state.StageMissing && slices.ContainsFunc(state.Roots, func(entry journal) bool { return entry.Phase == "rolled_back" }))
+	var guidance string
 	switch {
-	case state.Status == "rolled_back" && touched && state.Kept:
-		return restoreUndone + " " + keptNote(job)
-	case state.Status == "rolled_back" && touched:
-		return restoreUndone
+	case state.Status == "rolled_back" && returned:
+		guidance = restoreUndone
 	case state.Status == "rolled_back" || state.Status == "cleaned":
-		return restoreNothing
+		guidance = restoreNothing
 	case state.Status == "committed":
 		return ""
 	case slices.ContainsFunc(state.Roots, holdsLive):
-		return "The restore was stopped partway. The server’s previous data is safe in the folder " + stageName(job) +
+		guidance = "The restore was stopped partway. The server’s previous data is safe in the folder " + stageName(job) +
 			" in its data, but not in place. An administrator can undo the restore from Needs attention; otherwise Ludock undoes it " + pendingLater + "."
+	case returned:
+		guidance = restoreUndone + " Its folder " + stageName(job) + " is still in the data; Ludock removes it " + pendingLater + "."
+	default:
+		guidance = "Nothing was restored, but the backup’s unpacked copy is still in the folder " + stageName(job) + ". Ludock removes it " + pendingLater + "."
 	}
-	return "Nothing was restored, but the backup’s unpacked copy is still in the folder " + stageName(job) + ". Ludock removes it " + pendingLater + "."
+	if state.Kept {
+		guidance += " " + keptNote(job)
+	}
+	return guidance
 }
 
 // rollbackAfterFailure rolls back through a fresh helper when the command

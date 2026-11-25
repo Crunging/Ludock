@@ -124,10 +124,11 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		case missingAny && !returned:
 			note = "Ludock found nothing to put back for a restore that had stopped partway: the folder " + stageName(restore) +
 				" that held the server’s previous data is no longer there, so its data was left as it is."
-		case state.SetAside && returned:
+		// SetAside is only what the undo meant to do; Kept says a folder exists.
+		case state.SetAside && returned && final.Kept:
 			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place, and what the game wrote meanwhile is kept in the folder " +
 				aside + " beside it."
-		case final.Kept:
+		case returned && final.Kept:
 			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. The game had since made newer copies of some of it, which are kept in the folder " +
 				aside + " beside it."
 		case !returned:
@@ -190,6 +191,12 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	}()
 	data.Cleanup()
 	restore.Progress("", func(r *ops.Recovery) { r.DataHelperID = "" }, nil)
+	// An undo that failed after keeping newer copies says where they are.
+	if partial, _ := restoreState(restore); err != nil && partial != nil && partial.Kept {
+		result := restore.Job.Result
+		result.Guidance = endedRestoreGuidance(restore, true)
+		restore.Progress("", nil, &result)
+	}
 	if job != nil {
 		if clearErr := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID = "" }, nil); err == nil {
 			err = clearErr
@@ -290,7 +297,7 @@ func (j *Jobs) assertPendingUndoable(ctx context.Context, server *servers.Contex
 			}
 		}
 		if _, _, err := j.checkUndo(ctx, server, data, restore, state, assertAccess); err != nil {
-			if apperr.Is(err, backups.StageInside("").Code) || apperr.Is(err, backups.ErrHostMount.Code) {
+			if apperr.Is(err, backups.StageInside("").Code) || apperr.Is(err, backups.ErrHostMount.Code) || apperr.Is(err, backups.ErrUndoEntryUnsafe.Code) {
 				return err
 			}
 			return nil

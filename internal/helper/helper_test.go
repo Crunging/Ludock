@@ -678,7 +678,7 @@ func TestRenamesNeverClobber(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unix.Close(aside)
-	if err := setAsideEntry(parent, "folder", fd(aside), stat("folder")); err != nil {
+	if err := setAsideEntry(parent, "folder", fd(aside), stat("folder"), false); err != nil {
 		t.Fatal(err)
 	}
 	if info, err := os.Stat(filepath.Join(dir, "aside", "folder (2)")); err != nil || !info.IsDir() {
@@ -690,7 +690,7 @@ func TestRenamesNeverClobber(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "aside", to), []byte("made meanwhile"), 0o644)
 		return original(fromFD, from, toFD, to, flags)
 	}
-	if err := setAsideEntry(parent, "b.txt", fd(aside), stat("b.txt")); err == nil {
+	if err := setAsideEntry(parent, "b.txt", fd(aside), stat("b.txt"), false); err == nil {
 		t.Fatal("replaced a file made meanwhile")
 	}
 	if data, _ := os.ReadFile(filepath.Join(dir, "aside", "b.txt")); string(data) != "made meanwhile" {
@@ -711,6 +711,47 @@ func TestRenamesNeverClobber(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(root, "ops.json")); string(data) != "game made" {
 		t.Fatal("live copy changed:", string(data))
+	}
+	os.Remove(filepath.Join(root, "linked"))
+	// Nor is an original with another name, and what is in its way stays put.
+	os.Link(filepath.Join(root, stage, "old", "ops.json"), filepath.Join(root, stage, "snapshot"))
+	if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
+		t.Fatal("returned a hard-linked original")
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "ops.json")); string(data) != "game made" {
+		t.Fatal("set aside before refusing:", string(data))
+	}
+	os.Remove(filepath.Join(root, stage, "snapshot"))
+	// One item's return needs RENAME_NOREPLACE, so without it nothing moves.
+	os.MkdirAll(filepath.Join(root, "world"), 0o755)
+	os.WriteFile(filepath.Join(root, "world", "level.dat"), []byte("game made"), 0o644)
+	os.WriteFile(filepath.Join(root, stage, "old", "item"), []byte("original"), 0o644)
+	item, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreRollbackOld, Item: "world/level.dat",
+		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: root})
+	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
+	if RunRestore(string(item), io.Discard, io.Discard) == 0 {
+		t.Fatal("returned one item without RENAME_NOREPLACE")
+	}
+	renameat2 = original
+	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "game made" {
+		t.Fatal("moved the live copy:", string(data))
+	}
+	// A retry makes the set-aside folder durable before saying it holds a
+	// copy, though nothing is left in the way.
+	if RunRestore(string(item), io.Discard, io.Discard) != 0 {
+		t.Fatal("returned nothing")
+	}
+	var synced []string
+	fsync = func(descriptor int) error {
+		path, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(descriptor))
+		synced = append(synced, path)
+		return unix.Fsync(descriptor)
+	}
+	t.Cleanup(func() { fsync = unix.Fsync })
+	var out bytes.Buffer
+	if RunRestore(string(item), &out, io.Discard) != 0 || !strings.Contains(out.String(), `"kept":true`) ||
+		!slices.Contains(synced, filepath.Join(root, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"))) {
+		t.Fatalf("retry said %s, synced %q", out.String(), synced)
 	}
 }
 

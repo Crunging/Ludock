@@ -3,6 +3,7 @@ package jobs
 import (
 	"bufio"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -565,8 +566,9 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 // folder holds afterwards. Undo checks the stage and what is in the
 // originals' way before the stop and again once stopped, and the restore's
 // final journal is saved with what both Activity entries say. A mount the
-// host added on or inside the newer copy, or on a restored file's folder,
-// refuses the undo before the stop. A
+// host added on or inside the newer copy, or on a restored file's folder, or
+// a file with a second name in the way or among the originals, refuses the
+// undo before the stop, with nothing moved. A
 // newer copy found by startup's recovery of the cut restore, with the server
 // still stopped, is set aside too, and its Activity says where.
 func TestUndoAfterInterruptedMove(t *testing.T) {
@@ -576,8 +578,13 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 		arrange func(t *testing.T, f *fixture, stage, aside string)
 		aside   map[string]string
 		trace   []string
-		// mounted is where the host mounted something, below the data.
-		mounted string
+		// mounted is where the host mounted something, below the data;
+		// refusal, the error that refuses the undo before the stop.
+		mounted, refusal string
+		// failCleanup: removing the stage fails once the originals are back,
+		// so the undo fails; noGame: the started game recreates nothing;
+		// startFails: starting the recovered server fails.
+		failCleanup, noGame, startFails bool
 		// plain: nothing was set aside, so Activity says only that the
 		// previous data is back.
 		plain bool
@@ -629,15 +636,46 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 		{name: "mount in the newer copy", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
-			}, mounted: "world/mods"},
+			}, mounted: "world/mods", refusal: backups.ErrHostMount.Message},
 		{name: "mount on the newer copy", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
-			}, mounted: "world"},
+			}, mounted: "world", refusal: backups.ErrHostMount.Message},
 		{name: "mount on the file's folder", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Item: "world/level.dat", Phase: "moving_old"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				relocate(t, filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
-			}, mounted: "world"},
+			}, mounted: "world", refusal: backups.ErrHostMount.Message},
+		{name: "hard-linked newer copy", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
+				os.WriteFile(filepath.Join(f.data, "server.properties"), []byte("new run"), 0o644)
+				os.Link(filepath.Join(f.data, "server.properties"), filepath.Join(f.data, "linked"))
+			}, refusal: backups.ErrUndoEntryUnsafe.Message},
+		{name: "hard-linked original", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
+				os.Link(filepath.Join(stage, "old", "server.properties"), filepath.Join(f.data, "snapshot"))
+			}, refusal: backups.ErrUndoEntryUnsafe.Message},
+		{name: "cleanup fails", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, aside: map[string]string{"world/level.dat": "new run"}, failCleanup: true},
+		{name: "one file, nothing in its way", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Item: "world/level.dat", Phase: "old_moved"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
+				os.MkdirAll(filepath.Join(stage, "new"), 0o700)
+			}, noGame: true, plain: true, trace: []string{"stageExists game: replacing old_moved unsafe", "stageExists game: replacing old_moved unsafe",
+				"setAside game: rolling_back old_moved unsafe", "rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe"}},
+		// Startup finishes a restore an earlier attempt had already returned,
+		// then can't start the server.
+		{name: "recovered, start fails", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}, Kept: true},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+				os.MkdirAll(filepath.Join(f.data, aside, "world"), 0o755)
+				os.WriteFile(filepath.Join(f.data, aside, "world", "level.dat"), []byte("first run"), 0o644)
+				f.engine.AddFault(`^POST .*/containers/`+f.game+`/start`, 500, false, 0)
+			}, aside: map[string]string{"world/level.dat": "first run"}, recovered: true, startFails: true},
 		{name: "recovered at startup", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
@@ -662,7 +700,7 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 					}
 				}
 				// The game makes a new world where it finds none.
-				if _, err := os.Stat(filepath.Join(f.data, "world", "level.dat")); os.IsNotExist(err) {
+				if _, err := os.Stat(filepath.Join(f.data, "world", "level.dat")); os.IsNotExist(err) && !c.noGame {
 					os.MkdirAll(filepath.Join(f.data, "world"), 0o755)
 					os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("new run"), 0o644)
 				}
@@ -688,8 +726,8 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				}
 			}
 			if c.recovered {
-				if guidance := job.Result.Guidance; f.savedJournal(job.ID) != "rolled_back put back kept" || !f.running() ||
-					!strings.Contains(guidance, "Newer copies") || !strings.Contains(guidance, aside) {
+				if guidance := job.Result.Guidance; f.savedJournal(job.ID) != "rolled_back put back kept" || f.running() == c.startFails ||
+					!strings.Contains(guidance, "undone") || !strings.Contains(guidance, "Newer copies") || !strings.Contains(guidance, aside) {
 					t.Errorf("journal %s, running %v, Activity says %q", f.savedJournal(job.ID), f.running(), guidance)
 				}
 				checkKept()
@@ -708,18 +746,32 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				BEGIN SELECT RAISE(ABORT, 'final journal without its notes'); END`); err != nil {
 				t.Fatal(err)
 			}
-			if c.mounted != "" {
-				previous := mountinfo.Table
-				t.Cleanup(func() { mountinfo.Table = previous })
-				mount := filepath.Join(f.data, c.mounted)
-				mountinfo.Table = func() ([]byte, error) { return []byte("40 22 0:45 / " + mount + " rw - nfs4 server:/share rw\n"), nil }
-				before, journal := len(f.engine.Requests), f.savedJournal(job.ID)
+			if c.refusal != "" {
+				if c.mounted != "" {
+					previous := mountinfo.Table
+					t.Cleanup(func() { mountinfo.Table = previous })
+					mount := filepath.Join(f.data, c.mounted)
+					mountinfo.Table = func() ([]byte, error) { return []byte("40 22 0:45 / " + mount + " rw - nfs4 server:/share rw\n"), nil }
+				}
+				before, journal, live := len(f.engine.Requests), f.savedJournal(job.ID), liveFiles(t, f.data)
 				undo := f.run(t, ops.KindUndoRestore, nil)
 				stopped := slices.ContainsFunc(f.engine.Requests[before:], func(request string) bool { return strings.Contains(request, f.game+"/stop") })
-				if undo.Status != ops.Failed || undo.Error != backups.ErrHostMount.Message || stopped || !f.running() ||
-					f.savedJournal(job.ID) != journal || read(t, filepath.Join(f.data, "world", "level.dat")) != "new run" {
-					t.Errorf("%s %q, stopped %v, running %v", undo.Status, undo.Error, stopped, f.running())
+				if undo.Status != ops.Failed || undo.Error != c.refusal || stopped || !f.running() ||
+					f.savedJournal(job.ID) != journal || !maps.Equal(liveFiles(t, f.data), live) {
+					t.Errorf("%s %q, stopped %v, running %v, journal %s", undo.Status, undo.Error, stopped, f.running(), f.savedJournal(job.ID))
 				}
+				return
+			}
+			if c.failCleanup {
+				f.mu.Lock()
+				f.failStep = helper.RestoreCleanup
+				f.mu.Unlock()
+				undo := f.run(t, ops.KindUndoRestore, nil)
+				restore, _ := f.runner.Get(ctx, job.ID)
+				if guidance := restore.Result.Guidance; undo.Status != ops.Failed || !strings.Contains(guidance, "undone") || !strings.Contains(guidance, aside) {
+					t.Errorf("%s %q, Activity says %q", undo.Status, undo.Error, guidance)
+				}
+				checkKept()
 				return
 			}
 			undo := f.run(t, ops.KindUndoRestore, nil)
@@ -733,7 +785,8 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 			checkKept()
 			restore, _ := f.runner.Get(ctx, job.ID)
 			for _, note := range []string{undo.Result.UndoNote, restore.Result.Guidance} {
-				if (strings.Contains(note, "newer copies") && strings.Contains(note, aside)) == c.plain || !strings.Contains(note, "back in place") {
+				// A folder is named exactly when copies were kept in it.
+				if strings.Contains(note, aside) == c.plain || strings.Contains(note, "newer copies") == c.plain || !strings.Contains(note, "back in place") {
 					t.Errorf("Activity says %q", note)
 				}
 			}
@@ -742,6 +795,20 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 			}
 		})
 	}
+}
+
+// liveFiles reads every file in the data, by path, with its contents.
+func liveFiles(t *testing.T, root string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && entry.Type().IsRegular() {
+			name, _ := filepath.Rel(root, path)
+			files[name] = read(t, path)
+		}
+		return nil
+	})
+	return files
 }
 
 func lastRestore(f *fixture) string {
