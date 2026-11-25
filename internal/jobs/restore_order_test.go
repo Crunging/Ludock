@@ -16,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/mountinfo"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -562,7 +563,8 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 // starts the server again, saying where the newer copies are. Each case is a
 // point between steps where the work was cut; aside is what the set-aside
 // folder holds afterwards. Undo checks the stage before the stop and again
-// once stopped.
+// once stopped. A mount the host added inside the newer world refuses the
+// undo before anything moves, keeping both copies.
 func TestUndoAfterInterruptedMove(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -570,6 +572,7 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 		arrange func(t *testing.T, f *fixture, stage, aside string)
 		aside   map[string]string
 		trace   []string
+		mounted bool
 	}{
 		{name: "moving out", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
@@ -604,6 +607,10 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				os.WriteFile(filepath.Join(f.data, aside, "world", "level.dat"), []byte("first run"), 0o644)
 			}, aside: map[string]string{"world/level.dat": "first run"},
 			trace: []string{"cleanup game: rolling_back rolled_back kept unsafe"}},
+		{name: "mount in the newer copy", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, mounted: true},
 		{name: "one file moving out", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Item: "world/level.dat", Phase: "moving_old"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				relocate(t, filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
@@ -630,6 +637,19 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				t.Fatalf("recovered before the undo: %s", f.savedJournal(job.ID))
 			}
 			trace := f.traceRestore(nil)
+			if c.mounted {
+				previous := mountinfo.Table
+				t.Cleanup(func() { mountinfo.Table = previous })
+				mods := filepath.Join(f.data, "world", "mods")
+				mountinfo.Table = func() ([]byte, error) { return []byte("40 22 0:45 / " + mods + " rw - nfs4 server:/share rw\n"), nil }
+				undo := f.run(t, ops.KindUndoRestore, nil)
+				stage := filepath.Join(f.data, helper.StageName(job.ID))
+				if undo.Status != ops.Failed || undo.Error != backups.ErrHostMount.Message || read(t, filepath.Join(stage, "old", "world", "level.dat")) != "newer" ||
+					read(t, filepath.Join(f.data, "world", "level.dat")) != "new run" {
+					t.Errorf("%s %q", undo.Status, undo.Error)
+				}
+				return
+			}
 			undo := f.run(t, ops.KindUndoRestore, nil)
 			if undo.Status != ops.Succeeded || !f.running() || f.staged() || f.savedJournal(job.ID) != "rolled_back put back kept" {
 				t.Fatalf("%s %q, running %v, journal %s", undo.Status, undo.Error, f.running(), f.savedJournal(job.ID))

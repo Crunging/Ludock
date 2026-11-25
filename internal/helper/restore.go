@@ -291,15 +291,19 @@ func (h *restoreHelper) pinAside(root, stage fd) (fd, error) {
 	return aside, nil
 }
 
-// asideFor checks that a live entry in parent, in the way of an original,
-// can move, and pins the set-aside folder once one must: a server started
-// since the restore stopped may have made a newer copy by that name.
-func (h *restoreHelper) asideFor(root, stage, parent, aside fd, name string, info *unix.Stat_t) (fd, error) {
+// asideFor checks that a live entry in parent, at rel below the root and in
+// the way of an original, can move, and pins the set-aside folder once one
+// must: a server started since the restore stopped may have made a newer
+// copy by that name.
+func (h *restoreHelper) asideFor(root, stage, parent, aside fd, rel, name string, info *unix.Stat_t) (fd, error) {
 	if h.request.Aside == "" {
 		return -1, errUnsafe
 	}
-	// Held to moveOld's standard for moving live data: no other mount or
-	// special file inside, and no other restore's stage.
+	// Held to moveOld's standard for moving live data: no other mount on or
+	// inside it, no special file, and no other restore's stage.
+	if err := ownMount(h.request.Base, h.request.Root+"/"+rel); err != nil {
+		return -1, err
+	}
 	if isDir(info) {
 		if err := h.safeToMove(parent, name, 0, true); err != nil {
 			return -1, err
@@ -654,7 +658,7 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 		if info == nil {
 			continue
 		}
-		if aside, err = h.asideFor(root, stage, root, aside, name, info); err != nil {
+		if aside, err = h.asideFor(root, stage, root, aside, name, name, info); err != nil {
 			return err
 		}
 		if err := setAsideEntry(root, name, aside, info); err != nil {
@@ -1090,7 +1094,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 				return err
 			}
 			if live != nil {
-				aside, err := h.asideFor(root, stage, parent, -1, name, live)
+				aside, err := h.asideFor(root, stage, parent, -1, strings.Join(parts, "/"), name, live)
 				if err != nil {
 					return err
 				}
