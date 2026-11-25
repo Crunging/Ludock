@@ -299,6 +299,17 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 			nested = append(nested, destination)
 		}
 	}
+	// Every other mount in the owner's is left out of the helper too, which
+	// then sees the owner's own entry at its destination. On storage that
+	// matches names case-insensitively, the root's spelling can lead there,
+	// so the helper excludes those by identity as well.
+	ownerPath := normalizedMountPath(owner.Destination)
+	for _, mount := range mounts {
+		destination := normalizedMountPath(mount.Destination)
+		if mount != *owner && Within(destination, ownerPath) && !slices.Contains(nested, destination) && !slices.Contains(blocked, destination) {
+			blocked = append(blocked, destination)
+		}
+	}
 	var projections []docker.MountSettings
 	var proofMounts []identity.Mount
 	for _, mount := range selected {

@@ -621,14 +621,6 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 			return err
 		}
 	}
-	// A replaced file keeps its access ACL: its group bits are the ACL's
-	// mask, which would otherwise become the owning group's own rights.
-	var acl []byte
-	if original != nil {
-		if acl, err = h.readAccessACL(parent, name, original); err != nil {
-			return err
-		}
-	}
 	if h.request.Operation == "upload-files" {
 		var stat unix.Statfs_t
 		if err := unix.Fstatfs(int(parent), &stat); err != nil {
@@ -755,6 +747,15 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	if original != nil {
 		mode = original.Mode & 0o777
 	}
+	// A replaced file keeps its access ACL: its group bits are the ACL's
+	// mask, which would otherwise become the owning group's own rights. It is
+	// read once the input is in, so a refusal is the command's result.
+	var acl []byte
+	if original != nil {
+		if acl, err = h.readAccessACL(parent, name, original); err != nil {
+			return err
+		}
+	}
 	if int(owner.Uid) != helperUID() {
 		owned := mode >> 6 & 7
 		mode = mode&0o700 | mode&0o070&(owned<<3) | mode&0o007&owned
@@ -767,12 +768,24 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	if err := fchown(int(file), -1, int(owner.Gid)); err != nil {
 		return err
 	}
-	if err := fchmod(int(file), mode); err != nil {
-		return err
-	}
-	if acl != nil {
+	// Setting an ACL sets the mode bits too, so a file with one never has
+	// its mask as group bits on their own. A replacement whose original had
+	// none drops any its folder's default ACL gave it, which the mode would
+	// otherwise switch on.
+	switch {
+	case acl != nil:
 		if err := fsetxattr(int(file), accessACL, acl, 0); err != nil {
 			return errACLNotKept
+		}
+	case original != nil:
+		if err := unix.Fremovexattr(int(file), accessACL); err != nil && !errors.Is(err, unix.ENODATA) &&
+			!errors.Is(err, unix.ENOTSUP) && !errors.Is(err, unix.EOPNOTSUPP) {
+			return errACLNotKept
+		}
+		fallthrough
+	default:
+		if err := fchmod(int(file), mode); err != nil {
+			return err
 		}
 	}
 	if err := fchown(int(file), int(owner.Uid), -1); err != nil {

@@ -117,6 +117,9 @@ func (h *fileHelper) move(root, parent fd, items []selected) error {
 	if err := h.check(destination, false); err != nil {
 		return err
 	}
+	if err := h.checkInto(destination); err != nil {
+		return err
+	}
 	target, err := h.pinDirectory(root, destination)
 	if err != nil {
 		return err

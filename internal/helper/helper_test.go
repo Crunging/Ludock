@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -1124,20 +1125,32 @@ func TestExclusionsHoldByIdentity(t *testing.T) {
 		[]byte("12345"+id)); code != 0 {
 		t.Fatal("refused an upload away from the exclusions", code)
 	}
-	// An exclusion that can't be resolved stops writes beside it, not reads.
+	// An exclusion that can't be resolved stops writes into the deepest
+	// folder found on its way, under any spelling, where an entry could
+	// become it; not reads, and not writes elsewhere.
 	exclusionsResolved = func() {}
 	missing := []string{root + "/missing"}
-	if _, code := runFile(t, FileRequest{Operation: "mkdir", Root: root, Path: "new", Blocked: missing}, nil); code == 0 {
-		t.Fatal("wrote beside an exclusion it couldn't find")
+	for _, request := range []FileRequest{
+		{Operation: "mkdir", Path: "MISSING"},
+		{Operation: "move", Path: "world", Paths: []string{"level.dat"}},
+	} {
+		request.Root, request.Blocked = root, missing
+		if _, code := runFile(t, request, nil); code == 0 {
+			t.Error(request.Operation, "wrote where an exclusion it couldn't find could appear")
+		}
 	}
-	if _, code := runFile(t, FileRequest{Operation: "list", Root: root, Blocked: missing}, nil); code != 0 {
-		t.Fatal("couldn't list beside an exclusion it couldn't find", code)
+	for _, request := range []FileRequest{{Operation: "list"}, {Operation: "mkdir", Path: "world/new"}} {
+		request.Root, request.Blocked = root, missing
+		if _, code := runFile(t, request, nil); code != 0 {
+			t.Error(request.Operation, "refused away from an exclusion it couldn't find", code)
+		}
 	}
 }
 
 // A replaced file keeps its access ACL, whose mask the mode bits only show,
-// and if the ACL can't be kept the file isn't replaced. A filesystem without
-// ACLs skips the test.
+// set as the ACL rather than as mode bits; if the ACL can't be kept the file
+// isn't replaced; and a replacement whose original had none takes none from
+// its folder. A filesystem without ACLs skips the test.
 func TestUploadKeepsAccessACL(t *testing.T) {
 	root, _ := dataRoot(t)
 	target := filepath.Join(root, "server.properties")
@@ -1171,5 +1184,25 @@ func TestUploadKeepsAccessACL(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(target); string(data) != "hello" {
 		t.Fatal(string(data))
+	}
+	fsetxattr = unix.Fsetxattr
+	// The ACL sets the mode itself: the mask is never the group's on its own.
+	fchmod = func(int, uint32) error { return errors.New("set the mode bits of a file with an ACL") }
+	defer func() { fchmod = unix.Fchmod }()
+	if _, code := runFile(t, upload, []byte("third"+id)); code != 0 {
+		t.Fatal("replace", code)
+	}
+	fchmod = unix.Fchmod
+	// A replacement whose original had no ACL keeps none from its folder's
+	// default ACL.
+	plain := filepath.Join(root, "plain.txt")
+	os.WriteFile(plain, []byte("plain"), 0o640)
+	unix.Setxattr(root, "system.posix_acl_default", acl, 0)
+	replace := FileRequest{Operation: "upload", Root: root, Path: "plain.txt", Size: &size, UploadID: id}
+	if _, code := runFile(t, replace, []byte("hello"+id)); code != 0 {
+		t.Fatal("replace", code)
+	}
+	if _, err := unix.Getxattr(plain, accessACL, kept); !errors.Is(err, unix.ENODATA) {
+		t.Fatal("a replacement took its folder's default ACL", err)
 	}
 }
