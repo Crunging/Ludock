@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -241,6 +244,34 @@ func TestPausedDestinationDoesNotBlockOthers(t *testing.T) {
 	// The first pass sends ten; the late event waits behind the earlier ones.
 	if paused != 12 || gotify != 10 || calls != 10 {
 		t.Fatalf("paused=%d gotify=%d calls=%d", paused, gotify, calls)
+	}
+}
+
+// Two alerts go to a receiver that keeps connections open. Each is sent on
+// its own connection, so one the receiver closed since can't fail the next.
+func TestDeliveriesConnectAnew(t *testing.T) {
+	var connections atomic.Int32
+	receiver := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	receiver.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	receiver.Start()
+	defer receiver.Close()
+	s := &Service{DB: adminDB(t)}
+	if err := s.Configure(ctx, "admin", adminSession, Webhook, Config{Enabled: true, URL: receiver.URL}, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"event-1", "event-2"} {
+		s.Notify(ServerProblems, key, "Server is unavailable.")
+		if err := s.Deliver(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deliveries, _ := s.Deliveries(ctx)
+	if len(deliveries) != 2 || deliveries[0].State != "delivered" || deliveries[1].State != "delivered" || connections.Load() != 2 {
+		t.Fatalf("%+v connections=%d", deliveries, connections.Load())
 	}
 }
 
