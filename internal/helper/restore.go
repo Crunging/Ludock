@@ -3,6 +3,8 @@ package helper
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,8 +14,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 	"unsafe"
 
+	"github.com/Crunging/Ludock/internal/mountinfo"
 	"golang.org/x/sys/unix"
 )
 
@@ -25,8 +29,11 @@ type RestoreRequest struct {
 	// replaced copy waits in the stage as old/item, a rolled-back one as
 	// returned.
 	Item string `json:"item,omitempty"`
-	// Aside names the folder below Root that setAside moves live data into.
+	// Aside names the folder below Root that setAside moves live data into,
+	// and rollbackOld any live entry in an original's way.
 	Aside string `json:"aside,omitempty"`
+	// Sync, for kept, makes a set-aside folder that holds copies durable.
+	Sync bool `json:"sync,omitempty"`
 	// Base is the helper's mount that holds Root. Moving live data out
 	// refuses any other mount on its way or inside it.
 	Base string `json:"base,omitempty"`
@@ -44,6 +51,12 @@ const (
 	RestoreRollbackClean = "rollbackClean"
 	RestoreSetAside      = "setAside"
 	RestoreRollbackOld   = "rollbackOld"
+	// RestoreCheckReturn refuses, before the server stops, what rollbackOld
+	// would refuse to set aside, reading only.
+	RestoreCheckReturn = "checkReturn"
+	// RestoreKept reports, reading only, whether the set-aside folder holds
+	// anything, as after a step whose outcome is unknown.
+	RestoreKept = "kept"
 )
 
 // RestoreFailure is the only error text the restore helper prints.
@@ -58,6 +71,19 @@ const RestoreMounted = FileMounted
 // another restore's stage folder below its top, which a restore never moves
 // or removes. It matches FileHoldsRestore.
 const RestoreHoldsStage = FileHoldsRestore
+
+// RestoreUnsafeEntry is the exit code for a staged original that returning
+// it would refuse to move: a link, a special file, or a file with a second
+// name. It is apart from the file helper's codes, which share one table.
+const RestoreUnsafeEntry = 20
+
+// RestoreClashUnsafe is checkReturn's exit code for anything else returning
+// the originals would refuse: what the check found, not a failure to look.
+const RestoreClashUnsafe = 21
+
+var errClashUnsafe = errors.New("an undo would refuse to move an entry")
+
+var errUnsafeEntry = errors.New("an entry an undo would move can't be moved")
 
 // StagePrefix starts the name of a restore's stage folder, which sits in the
 // root it restores; no restored path may start with it.
@@ -88,7 +114,24 @@ type restoreHelper struct {
 	request RestoreRequest
 	t       tracker
 	removed int
+	// movedAside counts what this run moved into the set-aside folder.
+	movedAside int
+	// noReplace is what this run found the root's filesystem does with
+	// RENAME_NOREPLACE: unknown until the run's first flagged rename.
+	noReplace noReplaceMode
+	// mounts is the mount table, read once per step for its staged
+	// originals however many there are.
+	mounts     []mountinfo.Mount
+	mountsRead bool
 }
+
+type noReplaceMode int
+
+const (
+	noReplaceUnknown noReplaceMode = iota
+	noReplaceWorks
+	noReplaceMissing
+)
 
 func (h *restoreHelper) pinRoot() (fd, error) {
 	root := h.request.Root
@@ -111,12 +154,15 @@ func syncAll(descriptors ...fd) error {
 			continue
 		}
 		seen[descriptor] = true
-		if err := unix.Fsync(int(descriptor)); err != nil {
+		if err := fsync(int(descriptor)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
+
+// fsync lets tests see which folders a step makes durable.
+var fsync = unix.Fsync
 
 func (h *restoreHelper) unchanged(parent fd, name string, handle fd) error {
 	current, err := lstatAt(parent, name)
@@ -136,7 +182,7 @@ func (h *restoreHelper) unchanged(parent fd, name string, handle fd) error {
 // moveContents moves entries one at a time. rename never follows its final
 // component: a racing symlink can be moved, but cannot turn this into a
 // write through that symlink to outside data.
-func (h *restoreHelper) moveContents(source, destination fd, omitted ...string) error {
+func (h *restoreHelper) moveContents(source, destination fd, rename func(from fd, name string, to fd, target string) error, omitted ...string) error {
 	children, err := names(source)
 	if err != nil {
 		return err
@@ -149,31 +195,131 @@ func (h *restoreHelper) moveContents(source, destination fd, omitted ...string) 
 		if slices.Contains(omitted, name) || Reserved(name) {
 			continue
 		}
-		sourceInfo, err := lstatAt(source, name)
-		if err != nil {
+		if err := moveEntry(source, destination, name, rename); err != nil {
 			return err
 		}
-		if !isDir(sourceInfo) && (!isRegular(sourceInfo) || sourceInfo.Nlink != 1) {
-			return errUnsafe
+	}
+	return nil
+}
+
+// moveEntry moves one entry of moveContents.
+func moveEntry(source, destination fd, name string, rename func(from fd, name string, to fd, target string) error) error {
+	sourceInfo, err := lstatAt(source, name)
+	if err != nil {
+		return err
+	}
+	if !isDir(sourceInfo) && (!isRegular(sourceInfo) || sourceInfo.Nlink != 1) {
+		return errUnsafe
+	}
+	if _, err := lstatAt(destination, name); err == nil {
+		return errUnsafe
+	} else if !isNotExist(err) {
+		return err
+	}
+	if err := rename(source, name, destination, name); err != nil {
+		return err
+	}
+	moved, err := lstatAt(destination, name)
+	if err != nil {
+		return err
+	}
+	if !sameInode(sourceInfo, moved) {
+		return errUnsafe
+	}
+	return syncAll(source, destination)
+}
+
+// renameChecked renames, for a whole data folder's restore or undo, to a
+// name the caller found free. A game started meanwhile may make it after
+// that check, which RENAME_NOREPLACE refuses. A filesystem without it, such
+// as NFS, gets the plain rename whole restores always used: a file the game
+// makes there between the check and the rename is replaced. Refusing instead
+// would leave the data in the stage on every such filesystem, and moving by
+// link and unlink can lose an original. One item's moves use renameStrict
+// instead, and an undo's go through renameRun.
+func renameChecked(from fd, name string, to fd, target string) error {
+	err := renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE)
+	if unsupported(err) {
+		err = renameat(int(from), name, int(to), target)
+	}
+	return err
+}
+
+// renameStrict is a rename that never replaces anything, on a filesystem
+// that can refuse that as part of the move, and fails on any other.
+func renameStrict(from fd, name string, to fd, target string) error {
+	return renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE)
+}
+
+// renameRun is an undo's rename to a name the caller found free. The run's
+// first flagged rename tells whether the root's filesystem has
+// RENAME_NOREPLACE, a fact the run holds to: the stage, the live data and
+// the set-aside folder share that filesystem. With it, every move uses it,
+// and an "unsupported" answer later fails the step like any other error.
+// Without it, the run moves as main does: the plain rename, except where
+// required says only RENAME_NOREPLACE will do, which is then refused with
+// nothing moved. A filesystem that changes its answer between runs is out
+// of scope.
+func (h *restoreHelper) renameRun(from fd, name string, to fd, target string, required bool) error {
+	if h.noReplace != noReplaceMissing {
+		err := renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE)
+		if err == nil {
+			h.noReplace = noReplaceWorks
 		}
-		if _, err := lstatAt(destination, name); err == nil {
-			return errUnsafe
-		} else if !isNotExist(err) {
+		if !unsupported(err) || h.noReplace == noReplaceWorks {
 			return err
 		}
-		if err := unix.Renameat(int(source), name, int(destination), name); err != nil {
-			return err
+		h.noReplace = noReplaceMissing
+	}
+	if required {
+		return errUnsafe
+	}
+	return renameat(int(from), name, int(to), target)
+}
+
+// knowNoReplace finds out, before the first clash is set aside and its
+// folder made, whether the filesystem has RENAME_NOREPLACE, by a flagged
+// rename of an empty scratch folder in the stage. A probe that can't run, as on a
+// full disk, is no answer, so the clash is refused, as main refuses it.
+func (h *restoreHelper) knowNoReplace(root, stage fd) error {
+	if h.noReplace != noReplaceUnknown {
+		return nil
+	}
+	if same, err := sameMount(root, stage); err != nil || !same {
+		return errUnsafe
+	}
+	// A folder only this run makes holds the probe, so nothing else in the
+	// stage is touched. One a cut run leaves goes with the stage.
+	random := make([]byte, 8)
+	if _, err := rand.Read(random); err != nil {
+		return errUnsafe
+	}
+	scratch := "probe-" + hex.EncodeToString(random)
+	if err := unix.Mkdirat(int(stage), scratch, 0o700); err != nil {
+		return errUnsafe
+	}
+	defer unix.Unlinkat(int(stage), scratch, unix.AT_REMOVEDIR)
+	dir, err := h.t.openAt(stage, scratch, directoryFlags, 0)
+	if err != nil {
+		return errUnsafe
+	}
+	err = unix.Mkdirat(int(dir), "from", 0o700)
+	if err == nil {
+		err = renameat2(int(dir), "from", int(dir), "to", unix.RENAME_NOREPLACE)
+		switch {
+		case err == nil:
+			h.noReplace = noReplaceWorks
+		case unsupported(err):
+			h.noReplace, err = noReplaceMissing, nil
 		}
-		moved, err := lstatAt(destination, name)
-		if err != nil {
-			return err
-		}
-		if !sameInode(sourceInfo, moved) {
-			return errUnsafe
-		}
-		if err := syncAll(source, destination); err != nil {
-			return err
-		}
+		// Removing only empty folders can't take anything another writer
+		// put at either name; whatever stays goes with the stage.
+		unix.Unlinkat(int(dir), "from", unix.AT_REMOVEDIR)
+		unix.Unlinkat(int(dir), "to", unix.AT_REMOVEDIR)
+	}
+	if err != nil {
+		h.noReplace = noReplaceUnknown
+		return errUnsafe
 	}
 	return nil
 }
@@ -261,6 +407,11 @@ func (h *restoreHelper) pinAside(root, stage fd) (fd, error) {
 	if err := unix.Mkdirat(int(root), h.request.Aside, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
 		return -1, err
 	}
+	// The undo journals that the folder exists only after this, also when
+	// an attempt cut before syncing made it.
+	if err := syncAll(root); err != nil {
+		return -1, err
+	}
 	aside, err := h.t.openAt(root, h.request.Aside, directoryFlags, 0)
 	if err != nil {
 		return -1, err
@@ -278,13 +429,185 @@ func (h *restoreHelper) pinAside(root, stage fd) (fd, error) {
 	return aside, nil
 }
 
+// asideFor checks that a live entry in parent, at rel below the root and in
+// the way of an original, can move, and pins the set-aside folder once one
+// must: a server started since the restore stopped may have made a newer
+// copy by that name.
+func (h *restoreHelper) asideFor(root, stage, parent, aside fd, rel, name string, info *unix.Stat_t) (fd, error) {
+	if h.request.Aside == "" {
+		return -1, errUnsafe
+	}
+	if err := h.clashMovable(parent, rel, name, info); err != nil {
+		return -1, err
+	}
+	if aside >= 0 {
+		return aside, nil
+	}
+	return h.pinAside(root, stage)
+}
+
+// clashMovable holds a live entry in an original's way to moveOld's
+// standard for moving live data: no other mount on or inside it, no special
+// file, and no other restore's stage. movable already found it a folder or
+// a file with one name on the root's device.
+func (h *restoreHelper) clashMovable(parent fd, rel, name string, info *unix.Stat_t) error {
+	if err := ownMount(h.request.Base, h.request.Root+"/"+rel); err != nil {
+		return err
+	}
+	if isDir(info) {
+		return h.safeToMove(parent, name, 0, true)
+	}
+	return nil
+}
+
+// checkReturn runs rollbackOld's checks of the live entries in the
+// originals' way without moving anything.
+func (h *restoreHelper) checkReturn(root, stage fd) error {
+	old, err := h.t.openAt(stage, "old", directoryFlags, 0)
+	if err != nil {
+		return err
+	}
+	rootInfo, err := fstat(root)
+	if err != nil {
+		return err
+	}
+	children, err := names(old)
+	if err != nil {
+		return err
+	}
+	// Every original first, so one the undo can't return is refused before
+	// the stop whatever is in another's way.
+	var deferred error
+	for _, name := range children {
+		// A second name, refused only once stopped, mustn't hide a link
+		// refused before the stop.
+		if _, err := h.stagedEntry(old, name); errors.Is(err, errUnsafeEntry) {
+			return err
+		} else if err != nil && deferred == nil {
+			deferred = err
+		}
+	}
+	if deferred != nil {
+		return deferred
+	}
+	for _, name := range children {
+		if Reserved(name) {
+			continue
+		}
+		if _, _, err := h.checkEntry(old, root, rootInfo.Dev, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// stagedEntry checks, and returns, one staged original that moveContents
+// would return: also that no mount is on or inside it, since renaming it
+// back would fail after what is in its way moved. Only Ludock writes the
+// stage, so a link or special file there is told apart, to refuse before
+// the stop. A second name for a staged file can be the game's, which it may
+// drop as it stops, so that is refused only once the server is stopped, as
+// main does.
+func (h *restoreHelper) stagedEntry(old fd, name string) (*unix.Stat_t, error) {
+	if Reserved(name) {
+		return nil, nil
+	}
+	info, err := lstatAt(old, name)
+	if err != nil {
+		return nil, err
+	}
+	if !isDir(info) && !isRegular(info) {
+		return nil, errUnsafeEntry
+	}
+	if isRegular(info) && info.Nlink != 1 {
+		return nil, errUnsafe
+	}
+	if !h.mountsRead {
+		if h.mounts, err = mountinfo.Read(); err != nil {
+			return nil, err
+		}
+		h.mountsRead = true
+	}
+	return info, mountFree(h.mounts, h.request.Base, h.request.Root+"/"+h.request.Stage+"/old/"+name)
+}
+
+// checkEntry checks one staged original and, if something is in its way,
+// that it can be set aside, and returns what is in the way.
+func (h *restoreHelper) checkEntry(old, root fd, device uint64, name string) (source, live *unix.Stat_t, err error) {
+	if source, err = h.stagedEntry(old, name); err != nil {
+		return nil, nil, err
+	}
+	if _, err := lstatAt(root, name); isNotExist(err) {
+		return source, nil, nil
+	} else if err != nil {
+		return nil, nil, err
+	}
+	// A mount on the entry itself is reported as one, not by movable.
+	if err := ownMount(h.request.Base, h.request.Root+"/"+name); err != nil {
+		return nil, nil, err
+	}
+	live, err = movable(root, name, device)
+	if err != nil || live == nil {
+		return source, nil, err
+	}
+	return source, live, h.clashMovable(root, name, name, live)
+}
+
+// setAsideEntry moves a live entry into the set-aside folder under a name
+// the folder doesn't hold yet, since an earlier attempt may have set a copy
+// aside by that name. A numbered name, new with this, is moved only by
+// RENAME_NOREPLACE.
+func setAsideEntry(parent fd, name string, aside fd, info *unix.Stat_t, rename func(from fd, name string, to fd, target string, required bool) error) error {
+	if info == nil {
+		return syncAll(parent, aside)
+	}
+	target := name
+	for count := 2; ; count++ {
+		if _, err := lstatAt(aside, target); isNotExist(err) {
+			break
+		} else if err != nil {
+			return err
+		} else if count > 1000 {
+			return errUnsafe
+		}
+		// The numbered name still fits the filesystem's 255-byte limit.
+		suffix, base := " ("+strconv.Itoa(count)+")", name
+		for len(base)+len(suffix) > 255 {
+			base = base[:len(base)-1]
+		}
+		for utf8.ValidString(name) && !utf8.ValidString(base) {
+			base = base[:len(base)-1]
+		}
+		target = base + suffix
+	}
+	if err := rename(parent, name, aside, target, target != name); err != nil {
+		return err
+	}
+	moved, err := lstatAt(aside, target)
+	if err != nil {
+		return err
+	}
+	if !sameInode(info, moved) {
+		return errUnsafe
+	}
+	return syncAll(parent, aside)
+}
+
 func (h *restoreHelper) run() (any, error) {
+	result, err := h.step()
+	if h.request.Operation == RestoreCheckReturn && errors.Is(err, errUnsafe) && !errors.Is(err, errUnsafeEntry) {
+		err = errClashUnsafe
+	}
+	return result, err
+}
+
+func (h *restoreHelper) step() (any, error) {
 	if !validStage(h.request.Stage) {
 		return nil, errUnsafe
 	}
 	if h.request.Aside != "" {
 		id, ok := strings.CutPrefix(h.request.Aside, SetAsidePrefix)
-		if !ok || !ValidID(id) || h.request.Operation != RestoreSetAside {
+		if !ok || !ValidID(id) || (h.request.Operation != RestoreSetAside && h.request.Operation != RestoreRollbackOld && h.request.Operation != RestoreKept) {
 			return nil, errUnsafe
 		}
 	} else if h.request.Operation == RestoreSetAside {
@@ -310,6 +633,17 @@ func (h *restoreHelper) run() (any, error) {
 	case RestoreStageExists:
 		stage, err := h.pinStage(root, true)
 		return map[string]bool{"exists": stage >= 0}, err
+	case RestoreKept:
+		kept, known, aside := h.keptAside(root)
+		// A copy an attempt moved aside whose sync then failed is durable
+		// before it is reported kept; one that can't be made so is unknown.
+		if known && kept && h.request.Sync && syncAll(aside) != nil {
+			known = false
+		}
+		if known {
+			return map[string]bool{"kept": kept}, nil
+		}
+		return map[string]bool{}, nil
 	case RestoreStage:
 		return ok, h.makeStage(root)
 	}
@@ -322,7 +656,10 @@ func (h *restoreHelper) run() (any, error) {
 		return ok, syncAll(root)
 	}
 	if item != nil && h.request.Operation != RestoreCleanup {
-		return ok, h.runItem(root, stage, item)
+		if err := h.runItem(root, stage, item); err != nil {
+			return nil, err
+		}
+		return h.done(root)
 	}
 	switch h.request.Operation {
 	case RestoreCleanup:
@@ -334,16 +671,61 @@ func (h *restoreHelper) run() (any, error) {
 	case RestoreRollbackClean:
 		err = h.rollbackClean(root, stage)
 	case RestoreSetAside:
-		return ok, h.setAside(root, stage)
+		if err := h.setAside(root, stage); err != nil {
+			return nil, err
+		}
+		return h.done(root)
 	case RestoreRollbackOld:
 		err = h.rollbackOld(root, stage)
+	case RestoreCheckReturn:
+		return map[string]bool{"ok": true}, h.checkReturn(root, stage)
 	default:
 		return nil, errUnsafe
 	}
 	if err != nil {
 		return nil, err
 	}
-	return ok, syncAll(stage, root)
+	if err := syncAll(stage, root); err != nil {
+		return nil, err
+	}
+	return h.done(root)
+}
+
+// done answers a step that ran. setAside and rollbackOld also report
+// whether the root holds the set-aside folder, which a retry after an
+// interruption still finds.
+func (h *restoreHelper) done(root fd) (any, error) {
+	if h.request.Operation != RestoreRollbackOld && h.request.Operation != RestoreSetAside {
+		return map[string]bool{"ok": true}, nil
+	}
+	// Each move aside was synced as it ran; what earlier attempts kept is
+	// read apart from this step, so reading it never fails the step.
+	return map[string]bool{"ok": true, "setAside": h.movedAside > 0}, nil
+}
+
+// keptAside says whether copies were kept: the set-aside folder exists and
+// holds at least one entry. Something else at its name holds none; pinAside
+// refuses it whenever one must be set aside. known is false when the folder
+// can't be read.
+func (h *restoreHelper) keptAside(root fd) (kept, known bool, aside fd) {
+	if h.request.Aside == "" {
+		return false, true, -1
+	}
+	aside, err := h.t.openAt(root, h.request.Aside, directoryFlags, 0)
+	if isNotExist(err) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) {
+		return false, true, -1
+	} else if err != nil {
+		return false, false, -1
+	}
+	// A folder mounted there holds what its owner put there, not copies.
+	if same, err := sameMount(root, aside); err != nil || !same {
+		return false, false, -1
+	}
+	children, err := names(aside)
+	if err != nil {
+		return false, false, -1
+	}
+	return len(children) > 0, true, aside
 }
 
 func (h *restoreHelper) space(root fd) (any, error) {
@@ -431,7 +813,7 @@ func (h *restoreHelper) moveOld(root, stage fd) error {
 	if err := h.recordRoot(root, stage); err != nil {
 		return err
 	}
-	return h.moveContents(root, old, h.request.Stage)
+	return h.moveContents(root, old, renameChecked, h.request.Stage)
 }
 
 func (h *restoreHelper) moveNew(root, stage fd) error {
@@ -439,7 +821,7 @@ func (h *restoreHelper) moveNew(root, stage fd) error {
 	if err != nil {
 		return err
 	}
-	if err := h.moveContents(next, root); err != nil {
+	if err := h.moveContents(next, root, renameChecked); err != nil {
 		return err
 	}
 	// The extractor gave new the archived root's owner, mode, and ACL. The
@@ -505,25 +887,134 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 	if err != nil {
 		return err
 	}
-	if err := h.moveContents(root, aside, h.request.Stage, h.request.Aside); err != nil {
+	rootInfo, err := fstat(root)
+	if err != nil {
 		return err
+	}
+	children, err := names(root)
+	if err != nil {
+		return err
+	}
+	if len(children) > 1000000 {
+		return errUnsafe
+	}
+	for _, name := range children {
+		if name == h.request.Stage || name == h.request.Aside || Reserved(name) {
+			continue
+		}
+		info, err := movable(root, name, rootInfo.Dev)
+		if err != nil {
+			return err
+		}
+		if err := setAsideEntry(root, name, aside, info, h.renameRun); err != nil {
+			return err
+		}
+		h.movedAside++
 	}
 	return syncAll(aside, stage, root)
 }
 
+// rollbackOld returns the originals. A live entry holding an original's
+// name moves aside first; every move is one rename, so a retry after any
+// interruption finds both copies and goes on from there.
 func (h *restoreHelper) rollbackOld(root, stage fd) error {
 	old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 	if err != nil {
 		return err
 	}
-	if err := h.moveContents(old, root); err != nil {
+	rootInfo, err := fstat(root)
+	if err != nil {
 		return err
+	}
+	children, err := names(old)
+	if err != nil {
+		return err
+	}
+	if len(children) > 1000000 {
+		return errUnsafe
+	}
+	// Each original is checked, with what is in its way, and returned in
+	// turn, so a run cut short keeps what it returned and a live copy moves
+	// aside only once its own original is known to be returnable. Something
+	// in an original's way means a game ran since the restore stopped, so no
+	// move may replace what it makes, which only a filesystem with
+	// RENAME_NOREPLACE can promise. On one without, a clash is refused with
+	// nothing of it moved or made, as main refuses it.
+	returnOld := func(from fd, name string, to fd, target string) error {
+		return h.renameRun(from, name, to, target, false)
+	}
+	var aside fd = -1
+	for _, name := range children {
+		if Reserved(name) {
+			continue
+		}
+		source, info, err := h.checkEntry(old, root, rootInfo.Dev, name)
+		if err != nil {
+			return err
+		}
+		if info != nil {
+			if err := h.knowNoReplace(root, stage); err != nil {
+				return err
+			}
+			if h.noReplace != noReplaceWorks {
+				return errUnsafe
+			}
+			if aside, err = h.asideFor(root, stage, root, aside, name, name, info); err != nil {
+				return err
+			}
+			if err := setAsideEntry(root, name, aside, info, required(h.renameRun)); err != nil {
+				return err
+			}
+			h.movedAside++
+			// It may have gained a second name while that moved.
+			if source, err = h.stagedEntry(old, name); err != nil {
+				return err
+			}
+		}
+		// The checks above looked the original and its name up; the rename
+		// itself refuses a name taken since where it can.
+		if err := returnOld(old, name, root, name); err != nil {
+			return err
+		}
+		moved, err := lstatAt(root, name)
+		if err != nil {
+			return err
+		}
+		if !sameInode(source, moved) {
+			return errUnsafe
+		}
+		if err := syncAll(old, root); err != nil {
+			return err
+		}
 	}
 	previous, err := rootBefore(root, stage)
 	if err != nil {
 		return err
 	}
 	return ownRoot(root, previous)
+}
+
+// strictRename is renameStrict for setAsideEntry.
+func strictRename(from fd, name string, to fd, target string, _ bool) error {
+	return renameStrict(from, name, to, target)
+}
+
+// required makes every rename of a set-aside need RENAME_NOREPLACE.
+func required(rename func(from fd, name string, to fd, target string, required bool) error) func(fd, string, fd, string, bool) error {
+	return func(from fd, name string, to fd, target string, _ bool) error {
+		return rename(from, name, to, target, true)
+	}
+}
+
+// unsupported is a flagged rename's answer from a filesystem or kernel
+// without RENAME_NOREPLACE, or a seccomp profile that refuses renameat2.
+func unsupported(err error) bool {
+	for _, errno := range []unix.Errno{unix.ENOSYS, unix.EINVAL, unix.EOPNOTSUPP, unix.ENOTSUP, unix.EPERM} {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
 }
 
 // rootBefore returns the root's owner and mode from before the restore.
@@ -774,7 +1265,7 @@ func move(from fd, name string, to fd, target string, info *unix.Stat_t) error {
 	if info == nil {
 		return syncAll(from, to)
 	}
-	if err := unix.Renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE); err != nil {
+	if err := renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE); err != nil {
 		return err
 	}
 	moved, err := lstatAt(to, target)
@@ -905,7 +1396,12 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		}
 		return move(parent, name, stage, "returned", info)
 	case RestoreSetAside:
-		if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
+		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
+		if err != nil {
+			return err
+		}
+		// The original's return would fail with a mount on it.
+		if _, err := h.stagedEntry(old, "item"); err != nil && !isNotExist(err) {
 			return err
 		}
 		parent, err := h.itemParent(root, parts)
@@ -925,7 +1421,11 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		if err != nil {
 			return err
 		}
-		return move(parent, name, aside, name, info)
+		if err := setAsideEntry(parent, name, aside, info, strictRename); err != nil {
+			return err
+		}
+		h.movedAside++
+		return nil
 	case RestoreRollbackOld:
 		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 		if err != nil {
@@ -939,7 +1439,58 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		if err != nil {
 			return err
 		}
+		if info != nil {
+			if _, err := h.stagedEntry(old, "item"); err != nil {
+				return err
+			}
+			live, err := movable(parent, name, rootInfo.Dev)
+			if err != nil {
+				return err
+			}
+			if live != nil {
+				// One item moves only by RENAME_NOREPLACE, as on main, so without
+				// it the clash is refused before its folder is made.
+				if err := h.knowNoReplace(root, stage); err != nil {
+					return err
+				}
+				if h.noReplace != noReplaceWorks {
+					return errUnsafe
+				}
+				aside, err := h.asideFor(root, stage, parent, -1, strings.Join(parts, "/"), name, live)
+				if err != nil {
+					return err
+				}
+				if err := setAsideEntry(parent, name, aside, live, strictRename); err != nil {
+					return err
+				}
+				h.movedAside++
+			}
+		}
 		return move(old, "item", parent, name, info)
+	case RestoreCheckReturn:
+		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
+		if err != nil {
+			return err
+		}
+		if info, err := movable(old, "item", rootInfo.Dev); err != nil || info == nil {
+			return err
+		}
+		if _, err := h.stagedEntry(old, "item"); err != nil {
+			return err
+		}
+		// A mount on the item or a folder on its way is reported as one.
+		if err := ownMount(h.request.Base, h.request.Root+"/"+strings.Join(parts, "/")); err != nil {
+			return err
+		}
+		parent, err := h.itemParent(root, parts)
+		if err != nil {
+			return err
+		}
+		live, err := movable(parent, name, rootInfo.Dev)
+		if err != nil || live == nil {
+			return err
+		}
+		return h.clashMovable(parent, strings.Join(parts, "/"), name, live)
 	}
 	return errUnsafe
 }
@@ -959,6 +1510,10 @@ func RunRestore(argument string, stdout, stderr io.Writer) int {
 			return RestoreMounted
 		case errors.Is(err, errHoldsRestore):
 			return RestoreHoldsStage
+		case errors.Is(err, errUnsafeEntry):
+			return RestoreUnsafeEntry
+		case errors.Is(err, errClashUnsafe):
+			return RestoreClashUnsafe
 		}
 		return 1
 	}

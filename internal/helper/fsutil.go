@@ -119,7 +119,8 @@ func fstat(descriptor fd) (*unix.Stat_t, error) {
 	return &info, unix.Fstat(int(descriptor), &info)
 }
 
-func lstatAt(parent fd, name string) (*unix.Stat_t, error) {
+// lstatAt is swapped in tests to make metadata lookups slow.
+var lstatAt = func(parent fd, name string) (*unix.Stat_t, error) {
 	var info unix.Stat_t
 	return &info, unix.Fstatat(int(parent), name, &info, unix.AT_SYMLINK_NOFOLLOW)
 }

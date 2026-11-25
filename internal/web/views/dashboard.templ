@@ -550,8 +550,9 @@ func OnlineNote(online int) string {
 // It is the one data operation that stops a server another manager started.
 func UndoRestoreDetail(operationID string) string {
 	return "Ludock stops the server, even though it was started outside Ludock, warning players a minute ahead if anyone is online and the game can. " +
-		"It puts the server’s previous data back and starts the server again if it was running. Anything the game wrote since the restore stopped is kept in the folder " +
-		helper.SetAsideName(operationID) + " in its data folder, not deleted."
+		"It puts the server’s previous data back and starts the server again if it was running. Nothing the game wrote since the restore stopped is deleted. " +
+		"What is in the way moves to the folder " + helper.SetAsideName(operationID) + " in the data folder: everything now in a data folder the restore had emptied or filled, " +
+		"including files the game made since, or for a restore of one file or folder, just that one; otherwise, only what has the same name as something being put back."
 }
 
 // DisconnectNote says taking a running server down disconnects whoever is

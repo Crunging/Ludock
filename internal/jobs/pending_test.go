@@ -44,8 +44,9 @@ func (f *fixture) stoppedRestore(t *testing.T) (*ops.Job, *restoreTrace) {
 // data is set aside before its previous data returns.
 var undoneLines = []string{"stageExists world: rolling_back old_moved,staging unsafe", "cleanup config: rolling_back old_moved,staging unsafe",
 	"setAside world: rolling_back old_moved,staging unsafe",
-	"rollbackOld world: rolling_back rolling_back,staging unsafe",
-	"cleanup world: rolling_back rolled_back,staging unsafe"}
+	"rollbackOld world: rolling_back rolling_back,staging kept unsafe",
+	"cleanup world: rolling_back rolled_back,staging kept unsafe",
+	"kept world: rolling_back rolled_back,staging kept unsafe", "kept config: rolling_back rolled_back,staging kept unsafe"}
 
 // checkUndone confirms stoppedRestore was finished: previous data in place,
 // what the game wrote kept beside it, no stage folder, and both Activity
@@ -65,7 +66,7 @@ func (f *fixture) checkUndone(t *testing.T, failed *ops.Job, later *ops.Job) {
 	}
 	restore, _ := f.runner.Get(ctx, restoreID)
 	if guidance := restore.Result.Guidance; restore.Status != ops.Failed || restore.UpdatedAt != failed.UpdatedAt ||
-		f.savedJournal(restoreID) != "rolled_back put back" ||
+		f.savedJournal(restoreID) != "rolled_back put back kept" ||
 		!strings.Contains(guidance, "back in place") || !strings.Contains(guidance, aside) {
 		t.Errorf("%+v, journal %s", restore, f.savedJournal(restoreID))
 	}
@@ -122,7 +123,7 @@ func TestStartupFinishesStoppedRestoreOnStoppedServer(t *testing.T) {
 	if err := f.runner.Start(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
-	if f.savedJournal(restore.ID) != "rolled_back put back" || f.running() {
+	if f.savedJournal(restore.ID) != "rolled_back put back kept" || f.running() {
 		t.Fatal(f.savedJournal(restore.ID))
 	}
 	if read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" ||
@@ -158,7 +159,7 @@ func TestTakeOverFinishesStoppedRestore(t *testing.T) {
 				if err := f.runner.Start(ctx, nil); err != nil {
 					t.Fatal(err)
 				}
-				if f.savedJournal(restore.ID) != "rolled_back put back" || f.running() ||
+				if f.savedJournal(restore.ID) != "rolled_back put back kept" || f.running() ||
 					read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" ||
 					read(t, filepath.Join(f.data, "world", helper.SetAsideName(restore.ID), "generated.dat")) != "generated" {
 					t.Fatal(f.savedJournal(restore.ID))

@@ -68,5 +68,5 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
   await page.locator("#activity-list").getByRole("link", { name: /Undo restore/ }).first().click();
   await expect(page.locator("main")).toContainText("Succeeded");
   await expect(page.locator("main")).toContainText(
-    `Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place, and what the game wrote meanwhile is kept in the folder ludock-set-aside-${restoreID} beside it.`);
+    `Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. Anything Ludock moved out of its way went to the folder ludock-set-aside-${restoreID} beside it.`);
 });

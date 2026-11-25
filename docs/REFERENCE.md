@@ -868,7 +868,10 @@ attention** for administrators. **Undo the restore** stops the server, the one
 case where a data operation stops a server another manager started; it warns
 players first when anyone is online and the game can be messaged. Ludock moves
 whatever is in the data folder now into `ludock-set-aside-<id>` beside it,
-returns the previous data, and starts the server again if it was running. If
+returns the previous data, and starts the server again if it was running. A
+restore stopped while it was still moving data out left some of the previous
+data in place, so only what the game made in place of the rest moves there; a
+name already in that folder gets a number, such as `world (2)`. If
 no one does that, the next backup, restore, update, or restart with a backup
 first finishes the undo the same way before its own work, and so does Ludock's
 next start if the server is stopped then. If the `.ludock-restore-<id>` folder
@@ -878,6 +881,21 @@ changed since or another restore's `.ludock-restore-<id>` folder inside the
 data, makes that work refuse instead, and a running server it stopped
 for the undo starts again (for a restart with a backup first, once its backup
 is taken) unless the undo had begun moving data.
+
+Restores and undos move data without replacing anything a game makes at the
+same moment, where the filesystem can refuse that as part of the move. Each
+undo step finds out once, from its first such move or, when something is in
+the way, from an empty scratch folder in the restore's folder, whether the data
+folder's filesystem can. It counts as unable when the kernel answers with
+`ENOSYS`, `EINVAL`, `EOPNOTSUPP` or `EPERM`; any other answer stops the
+step, to be tried again. If it can, every move of that step is made that
+way, and something the game made in the way of the previous data moves to
+`ludock-set-aside-<id>`. If it can't, such as on NFS, the undo moves as
+restores always have: it refuses when something is in the way, as does
+restoring or undoing one file or folder, and otherwise uses a plain rename.
+Then, if someone starts the server outside Ludock during an undo, a file the
+game makes in the instant between Ludock checking a name and moving data
+there can be replaced.
 
 ### When Docker restarts
 

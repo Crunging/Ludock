@@ -3,6 +3,7 @@ package jobs
 import (
 	"bufio"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/mountinfo"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -91,6 +93,9 @@ func (f *fixture) savedJournal(id string) string {
 	if state.PutBack {
 		out += " put back"
 	}
+	if state.Kept {
+		out += " kept"
+	}
 	if recovery.DataUnsafe {
 		out += " unsafe"
 	}
@@ -149,8 +154,12 @@ type restoreScenario struct {
 	// which never starts it again.
 	left, restored, elsewhere bool
 	trace                     []string
-	// guidance starts what Activity says the data was left as.
+	// guidance starts what Activity says the data was left as; kept, that
+	// it also names the set-aside folder.
 	guidance string
+	kept     bool
+	// down: the data isn't safe, so the server stays stopped.
+	down bool
 }
 
 type afterHook = func(*fakedocker.Container, string, string, int) int
@@ -197,12 +206,14 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 			"cleanup config: rolling_back replaced,rolled_back unsafe",
 			"rollbackClean world: rolling_back replaced,rolled_back unsafe",
 			"rollbackOld world: rolling_back rolling_back,rolled_back unsafe",
-			"cleanup world: rolling_back rolled_back,rolled_back unsafe"}
+			"cleanup world: rolling_back rolled_back,rolled_back unsafe",
+			"kept world: rolling_back rolled_back,rolled_back unsafe", "kept config: rolling_back rolled_back,rolled_back unsafe"}
 	}
 	worldRolledBack := []string{"cleanup config: rolling_back old_moved,staging unsafe",
 		"rollbackClean world: rolling_back old_moved,staging unsafe",
 		"rollbackOld world: rolling_back rolling_back,staging unsafe",
-		"cleanup world: rolling_back rolled_back,staging unsafe"}
+		"cleanup world: rolling_back rolled_back,staging unsafe",
+		"kept world: rolling_back rolled_back,staging unsafe", "kept config: rolling_back rolled_back,staging unsafe"}
 	itemSwapped := []string{"space game: none", "check game: none", "space game: staging staging", "stage game: staging staging",
 		"extract game: staging staging", "moveOld game: replacing moving_old unsafe", "moveNew game: replacing old_moved unsafe"}
 	scenarios := []restoreScenario{
@@ -211,7 +222,7 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 			trace: slices.Concat(itemSwapped, []string{"cleanup game: committed replaced"})},
 		{name: "item swap fails", item: true, after: failedAt(helper.RestoreMoveNew, "game"), status: ops.Failed, journal: "rolled_back put back",
 			trace: slices.Concat(itemSwapped, []string{"rollbackClean game: rolling_back old_moved unsafe",
-				"rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe"})},
+				"rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe", "kept game: rolling_back rolled_back unsafe"})},
 		// Without a helper nothing was staged, so there is nothing to roll back.
 		{name: "item helper not created", item: true, status: ops.Failed, journal: "rolled_back",
 			after: func(t *testing.T, f *fixture) afterHook {
@@ -227,9 +238,27 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 		{name: "move out fails", after: failedAt(helper.RestoreMoveOld, "world"), status: ops.Failed, journal: "rolled_back put back",
 			trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe",
 				"cleanup config: rolling_back moving_old,staging unsafe", "rollbackOld world: rolling_back rolling_back,staging unsafe",
-				"cleanup world: rolling_back rolled_back,staging unsafe"})},
+				"cleanup world: rolling_back rolled_back,staging unsafe", "kept world: rolling_back rolled_back,staging unsafe",
+				"kept config: rolling_back rolled_back,staging unsafe"})},
 		{name: "first move in fails", after: failedAt(helper.RestoreMoveNew, "world"), status: ops.Failed, journal: "rolled_back put back",
 			trace: slices.Concat(worldSwapped, worldRolledBack)},
+		// Something makes a file in the emptied world folder during the
+		// rollback, which sets it aside, but the rollback's result is lost.
+		{name: "rollback's result lost", status: ops.Failed, journal: "rolling_back rolling_back,staging kept unsafe", left: true, kept: true, down: true,
+			guidance: "The restore was stopped partway while its previous data was being put back", trace: slices.Concat(worldSwapped, []string{"cleanup config: rolling_back old_moved,staging unsafe",
+				"rollbackClean world: rolling_back old_moved,staging unsafe", "rollbackOld world: rolling_back rolling_back,staging unsafe",
+				"kept world: rolling_back rolling_back,staging unsafe", "kept config: rolling_back rolling_back,staging unsafe"}),
+			after: func(t *testing.T, f *fixture) afterHook {
+				fail := once(helper.RestoreMoveNew, "world", func(*fakedocker.Container, int) int { return 1 })
+				write := once(helper.RestoreRollbackClean, "world", func(_ *fakedocker.Container, code int) int {
+					os.WriteFile(filepath.Join(f.data, "world", "large.dat"), []byte("made meanwhile"), 0o644)
+					return code
+				})
+				lose := once(helper.RestoreRollbackOld, "world", func(*fakedocker.Container, int) int { return 1 })
+				return func(c *fakedocker.Container, op, root string, code int) int {
+					return lose(c, op, root, write(c, op, root, fail(c, op, root, code)))
+				}
+			}},
 		{name: "last move in fails", after: failedAt(helper.RestoreMoveNew, "config"), status: ops.Failed, journal: "rolled_back put back",
 			trace: slices.Concat(swapped, rolledBack("old_moved"))},
 		// A failed command that took its helper with it rolls back through a
@@ -251,9 +280,11 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 		// out and the backup's in.
 		{name: "started after a move out", after: startedAfter(helper.RestoreMoveOld, "world"), status: ops.Failed, journal: "rolling_back old_moved,staging unsafe",
 			left: true, elsewhere: true, guidance: "The restore was stopped partway.", trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe",
-				"cleanup config: rolling_back old_moved,staging unsafe"})},
+				"cleanup config: rolling_back old_moved,staging unsafe", "kept world: rolling_back old_moved,staging unsafe",
+				"kept config: rolling_back old_moved,staging unsafe"})},
 		{name: "started before commit", after: startedAfter(helper.RestoreMoveNew, "config"), status: ops.Failed, journal: "rolling_back replaced,replaced unsafe",
-			left: true, elsewhere: true, restored: true, guidance: "The restore was stopped partway.", trace: swapped},
+			left: true, elsewhere: true, restored: true, guidance: "The restore was stopped partway.", trace: slices.Concat(swapped,
+				[]string{"kept world: rolling_back replaced,replaced unsafe", "kept config: rolling_back replaced,replaced unsafe"})},
 		{name: "revoked after staging", after: revokedAfter(helper.RestoreStage, "config"), status: ops.Failed, journal: "rolled_back", trace: slices.Concat(checked, unstaged)},
 		{name: "revoked after a move out", after: revokedAfter(helper.RestoreMoveOld, "world"), status: ops.Failed, journal: "rolled_back put back",
 			trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe"}, worldRolledBack)},
@@ -316,7 +347,7 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 			job := f.run(t, "restore", input)
 			f.mu.Lock()
 			want := []string{scenario.journal}
-			if scenario.elsewhere {
+			if scenario.elsewhere || scenario.down {
 				want = nil
 			}
 			if !slices.Equal(startedWith, want) {
@@ -335,7 +366,7 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 			}
 			// A server started elsewhere is left running; every other restore
 			// returns it to running once its data is safe.
-			if journal := f.savedJournal(job.ID); job.Status != scenario.status || journal != scenario.journal || !f.running() ||
+			if journal := f.savedJournal(job.ID); job.Status != scenario.status || journal != scenario.journal || f.running() == scenario.down ||
 				restored != scenario.restored || left != scenario.left {
 				t.Errorf("%s, %q, journal %q, restored %v, stage left %v", job.Status, job.Error, journal, restored, left)
 			}
@@ -367,7 +398,8 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 					}
 				}
 			}
-			if guidance := job.Result.Guidance; !strings.HasPrefix(guidance, scenario.guidance) {
+			if guidance := job.Result.Guidance; !strings.HasPrefix(guidance, scenario.guidance) ||
+				strings.Contains(guidance, helper.SetAsideName(job.ID)) != scenario.kept {
 				t.Errorf("guidance %q", guidance)
 			}
 			if got := sortedExtracts(trace.lines()); !slices.Equal(got, scenario.trace) {
@@ -408,7 +440,7 @@ func (f *fixture) interruptedRestore(t *testing.T, state *restoreRecovery, arran
 	phase := "stopped"
 	if state != nil {
 		for index := range state.Roots {
-			state.Roots[index].Root = row.Roots[0]
+			state.Roots[index].Root = row.Roots[min(index, len(row.Roots)-1)]
 		}
 		recovery.Restore, _ = json.Marshal(state)
 		recovery.DataUnsafe = state.Status == "replacing" || state.Status == "rolling_back"
@@ -445,7 +477,8 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 		nothing  = "Nothing was restored: the server’s data is as it was."
 		undone   = "The restore was undone: the server’s data is as it was."
 		finished = "The restore had finished: what it restored is in place."
-		pending  = "The restore was stopped partway. The server’s previous data is safe in the folder " + helper.StagePrefix + "%s in its data, but not in place. An administrator can undo the restore from Needs attention; otherwise Ludock undoes it the next time it stops the server for a backup, a restore or an update."
+		// A return under way may have finished unheard.
+		pending = "The restore was stopped partway while its previous data was being put back, so Ludock can’t confirm where all of it is: look in the server’s data and in the folder " + helper.StagePrefix + "%s. An administrator can undo the restore from Needs attention; otherwise Ludock undoes it the next time it stops the server for a backup, a restore or an update."
 	)
 	unpacked := func(t *testing.T, f *fixture, stage string) {
 		os.MkdirAll(filepath.Join(stage, "new", "world"), 0o700)
@@ -475,7 +508,8 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 				unpacked(t, f, stage)
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
 			}, want: "newer", guidance: undone, journal: "rolled_back put back", running: true,
-			trace: []string{"rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe"}},
+			trace: []string{"rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe",
+				"kept game: rolling_back rolled_back unsafe"}},
 		{name: "moving in", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "old_moved"}}},
 			arrange: func(t *testing.T, f *fixture, stage string) {
 				unpacked(t, f, stage)
@@ -484,13 +518,14 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 				relocate(t, filepath.Join(stage, "new", "world"), filepath.Join(f.data, "world"))
 			}, want: "newer", guidance: undone, journal: "rolled_back put back", running: true,
 			trace: []string{"rollbackClean game: rolling_back old_moved unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
-				"cleanup game: rolling_back rolled_back unsafe"}},
+				"cleanup game: rolling_back rolled_back unsafe", "kept game: rolling_back rolled_back unsafe"}},
 		{name: "returning", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolling_back"}}},
 			arrange: func(t *testing.T, f *fixture, stage string) {
 				os.MkdirAll(filepath.Join(stage, "new"), 0o700)
 				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
 			}, want: "newer", guidance: undone, journal: "rolled_back put back", running: true,
-			trace: []string{"rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe"}},
+			trace: []string{"rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe",
+				"kept game: rolling_back rolled_back unsafe"}},
 		{name: "committed", state: &restoreRecovery{Status: "committed", Roots: []journal{{Phase: "replaced"}}},
 			arrange: func(t *testing.T, f *fixture, stage string) {
 				os.MkdirAll(filepath.Join(stage, "new"), 0o700)
@@ -504,7 +539,8 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 			arrange: func(t *testing.T, f *fixture, stage string) {
 				os.MkdirAll(filepath.Join(stage, "new"), 0o700)
 				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
-			}, want: "newer", guidance: undone, journal: "rolled_back put back", running: true, trace: []string{"cleanup game: rolling_back rolled_back unsafe"}},
+			}, want: "newer", guidance: undone, journal: "rolled_back put back", running: true, trace: []string{"cleanup game: rolling_back rolled_back unsafe",
+				"kept game: rolling_back rolled_back unsafe"}},
 		{name: "rolled back", state: &restoreRecovery{Status: "rolled_back"}, arrange: func(*testing.T, *fixture, string) {},
 			want: "newer", guidance: undone, running: true},
 		// The server stays stopped, so the pass for restores that ended
@@ -515,8 +551,9 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
 				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
 			}, journal: "rolling_back rolling_back unsafe", guidance: pending,
-			trace: []string{"rollbackClean game: rolling_back old_moved unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
-				"stageExists game: rolling_back rolling_back unsafe", "rollbackOld game: rolling_back rolling_back unsafe"}},
+			trace: []string{"rollbackClean game: rolling_back old_moved unsafe", "rollbackOld game: rolling_back rolling_back unsafe", "kept game: rolling_back rolling_back unsafe",
+				"stageExists game: rolling_back rolling_back unsafe", "checkReturn game: rolling_back rolling_back unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
+				"kept game: rolling_back rolling_back unsafe"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := setup(t)
@@ -550,6 +587,594 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Ludock is killed while a restore moves the server's data out, or while a
+// later undo returns it, and then something outside Ludock starts the server,
+// whose game writes a new world. Undo stops the server, sets aside each newer
+// copy in the way of what it returns, without overwriting an earlier one, and
+// starts the server again, saying where the newer copies are. Each case is a
+// point between steps where the work was cut; aside is what the set-aside
+// folder holds afterwards. Undo checks the stage and what is in the
+// originals' way before the stop and again once stopped, and the restore's
+// final journal is saved with what both Activity entries say. A mount the
+// host added on or inside the newer copy, or on a restored file's folder, or
+// an original with a second name, refuses the undo with nothing moved, once
+// the server has stopped, since a stopping game can drop either, and the
+// server starts again. A
+// newer copy found by startup's recovery of the cut restore, with the server
+// still stopped, is set aside too, and its Activity says where.
+func TestUndoAfterInterruptedMove(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		state   *restoreRecovery
+		arrange func(t *testing.T, f *fixture, stage, aside string)
+		aside   map[string]string
+		trace   []string
+		// mounted is where the host mounted something, below the data;
+		// refusal, the error that refuses the undo before the stop.
+		mounted, refusal string
+		// afterStop: a live entry in the way, which the running game may
+		// still change, is refused once the server stops, as main does, and
+		// the server starts again.
+		afterStop bool
+		// failStep fails the undo at that step, and guidance is part of what
+		// the restore's Activity then says.
+		failStep, guidance string
+		// noGame: the started game recreates nothing; startFails: starting
+		// the recovered server fails.
+		noGame, startFails bool
+		// unlinkOnStop is a file the game removes as it stops.
+		unlinkOnStop string
+		// lostStep runs, but its helper reports failure, as when it is
+		// removed before its result is read, which lostHelper does.
+		lostStep   string
+		lostHelper bool
+		// unreadable: the set-aside folder can't be read, so Activity says
+		// where to look; checkFails: the checks of what is in the way can't
+		// run, which refuses nothing; checkCut: the one after the stop is cut
+		// with its helper.
+		unreadable, checkFails, checkCut bool
+		// finalFails: the final journal's write fails; helperFails: no
+		// helper can start once the server stops; cutAfterFinal: startup is
+		// cut right after its final journal and runs again; rereadUnsaved:
+		// what a failed attempt reads can't be saved.
+		finalFails, helperFails, cutAfterFinal, rereadUnsaved bool
+		// plain: nothing was set aside, so Activity says only that the
+		// previous data is back.
+		plain bool
+		// recovered: the server stays stopped and startup recovers the cut
+		// restore, with no undo.
+		recovered bool
+	}{
+		{name: "moving out", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, aside: map[string]string{"world/level.dat": "new run"},
+			trace: []string{"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
+				"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
+				"cleanup game: rolling_back rolled_back kept unsafe",
+				"kept game: rolling_back rolled_back kept unsafe"}},
+		// An earlier undo set the first run's world aside, then was cut
+		// before returning the original; the game ran again since.
+		{name: "set aside, not returned", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolling_back"}}},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+				os.MkdirAll(filepath.Join(f.data, aside, "world"), 0o755)
+				os.WriteFile(filepath.Join(f.data, aside, "world", "level.dat"), []byte("first run"), 0o644)
+			}, aside: map[string]string{"world/level.dat": "first run", "world (2)/level.dat": "new run"},
+			trace: []string{"stageExists game: rolling_back rolling_back kept unsafe", "checkReturn game: rolling_back rolling_back kept unsafe",
+				"stageExists game: rolling_back rolling_back kept unsafe", "checkReturn game: rolling_back rolling_back kept unsafe", "rollbackOld game: rolling_back rolling_back kept unsafe",
+				"cleanup game: rolling_back rolled_back kept unsafe",
+				"kept game: rolling_back rolled_back kept unsafe"}},
+		// Cut once the original was back, before the journal said so.
+		{name: "returned", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolling_back"}}},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+				os.MkdirAll(filepath.Join(f.data, aside, "world"), 0o755)
+				os.WriteFile(filepath.Join(f.data, aside, "world", "level.dat"), []byte("first run"), 0o644)
+			}, aside: map[string]string{"world/level.dat": "first run"},
+			trace: []string{"stageExists game: rolling_back rolling_back kept unsafe", "checkReturn game: rolling_back rolling_back kept unsafe",
+				"stageExists game: rolling_back rolling_back kept unsafe", "checkReturn game: rolling_back rolling_back kept unsafe", "rollbackOld game: rolling_back rolling_back kept unsafe",
+				"cleanup game: rolling_back rolled_back kept unsafe",
+				"kept game: rolling_back rolled_back kept unsafe"}},
+		// Cut once the journal said so, before the stage was removed.
+		{name: "returned and saved", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}, Kept: true},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+				os.MkdirAll(filepath.Join(f.data, aside, "world"), 0o755)
+				os.WriteFile(filepath.Join(f.data, aside, "world", "level.dat"), []byte("first run"), 0o644)
+			}, aside: map[string]string{"world/level.dat": "first run"},
+			trace: []string{"cleanup game: rolling_back rolled_back kept unsafe",
+				"kept game: rolling_back rolled_back kept unsafe"}},
+		// Cut likewise, and the owner has since moved the kept copies away.
+		{name: "kept copies moved away", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}, Kept: true},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+			}, plain: true, trace: []string{"cleanup game: rolling_back rolled_back unsafe", "kept game: rolling_back rolled_back unsafe"}},
+		// Likewise, and an earlier start couldn't read the folder: startup reads
+		// it now and doesn't repeat that.
+		{name: "kept copies moved away, earlier read failed", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}, Kept: true},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+				encoded, _ := json.Marshal(ops.Result{Guidance: "The restore was undone. Ludock couldn’t check the folder " + aside +
+					" in the server’s data, where it moves anything in the way of the previous data."})
+				f.jobs.DB.Exec(`UPDATE operations SET result_json=? WHERE id=?`, string(encoded), strings.TrimPrefix(filepath.Base(stage), helper.StagePrefix))
+			}, plain: true, trace: []string{"cleanup game: rolling_back rolled_back unsafe", "kept game: rolling_back rolled_back unsafe"}},
+		// The check after the stop is cut by its time limit, which takes its
+		// helper with it: the return still runs.
+		{name: "check after the stop cut", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, checkCut: true, aside: map[string]string{"world/level.dat": "new run"},
+			trace: []string{"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
+				"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
+				"cleanup game: rolling_back rolled_back kept unsafe", "kept game: rolling_back rolled_back kept unsafe"}},
+		// Likewise, and the owner left a note in its place: Activity says what
+		// Ludock moved, not what the folder holds now.
+		{name: "owner left a note", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}, Kept: true},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+				os.MkdirAll(filepath.Join(f.data, aside), 0o755)
+				os.WriteFile(filepath.Join(f.data, aside, "README.txt"), []byte("moved the save"), 0o644)
+			}, aside: map[string]string{"README.txt": "moved the save"},
+			trace: []string{"cleanup game: rolling_back rolled_back kept unsafe", "kept game: rolling_back rolled_back kept unsafe"}},
+		// Likewise, and the retry fails before moving anything: what the
+		// folders show now, not what an earlier attempt saw, is what Activity
+		// says.
+		{name: "kept copies moved away, cleanup fails", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}, Kept: true},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+			}, failStep: helper.RestoreCleanup, plain: true, guidance: "undone"},
+		// Likewise, and what that attempt reads can't be saved: Activity says
+		// where to look, not what the earlier read found.
+		{name: "kept copies moved away, read unsaved", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}, Kept: true},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+			}, failStep: helper.RestoreCleanup, rereadUnsaved: true, guidance: "couldn’t check the folder"},
+		// Likewise, with copies back in the folder after an earlier read found
+		// none.
+		{name: "copies back, read unsaved", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+				os.MkdirAll(filepath.Join(f.data, aside), 0o755)
+				os.WriteFile(filepath.Join(f.data, aside, "level.dat"), []byte("new run"), 0o644)
+			}, failStep: helper.RestoreCleanup, rereadUnsaved: true, guidance: "couldn’t check the folder"},
+		// Cut likewise, with nothing set aside.
+		{name: "returned and saved, nothing kept", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+			}, plain: true, trace: []string{"cleanup game: rolling_back rolled_back unsafe", "kept game: rolling_back rolled_back unsafe"}},
+		{name: "mount in the newer copy", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, mounted: "world/mods", refusal: backups.ErrHostMount.Message, afterStop: true},
+		{name: "mount on the newer copy", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, mounted: "world", refusal: backups.ErrHostMount.Message, afterStop: true},
+		{name: "mount on the file's folder", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Item: "world/level.dat", Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
+			}, mounted: "world", refusal: backups.ErrHostMount.Message, afterStop: true},
+		{name: "hard-linked newer copy", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
+				os.WriteFile(filepath.Join(f.data, "server.properties"), []byte("new run"), 0o644)
+				os.Link(filepath.Join(f.data, "server.properties"), filepath.Join(f.data, "linked"))
+			}, refusal: backups.ErrUndoClashUnsafe.Message, afterStop: true},
+		{name: "hard-linked until the game stops", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
+				os.WriteFile(filepath.Join(f.data, "server.properties"), []byte("new run"), 0o644)
+				os.Link(filepath.Join(f.data, "server.properties"), filepath.Join(f.data, "linked"))
+			}, unlinkOnStop: "linked", aside: map[string]string{"server.properties": "new run"},
+			trace: []string{"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
+				"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
+				"rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back kept unsafe",
+				"kept game: rolling_back rolled_back kept unsafe"}},
+		// The whole folder's live data is set aside, then returning the
+		// previous data fails.
+		{name: "set aside, then the return fails", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "old_moved"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
+				os.MkdirAll(filepath.Join(stage, "new"), 0o700)
+			}, failStep: helper.RestoreRollbackOld, guidance: "stopped partway"},
+		{name: "hard-linked original", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
+				os.Link(filepath.Join(stage, "old", "server.properties"), filepath.Join(f.data, "snapshot"))
+			}, refusal: backups.ErrUndoClashUnsafe.Message, afterStop: true},
+		// The game holds a second name for a staged original and drops it as
+		// it stops.
+		{name: "original's second name dropped as the game stops", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
+				os.Link(filepath.Join(stage, "old", "server.properties"), filepath.Join(f.data, "snapshot"))
+			}, unlinkOnStop: "snapshot", plain: true,
+			trace: []string{"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
+				"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
+				"rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe",
+				"kept game: rolling_back rolled_back unsafe"}},
+		// The set-aside's outcome is lost with its helper: the folder shows
+		// what was kept.
+		{name: "set aside, outcome unknown", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "old_moved"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
+				os.MkdirAll(filepath.Join(stage, "new"), 0o700)
+			}, lostStep: helper.RestoreSetAside, guidance: "stopped partway"},
+		// Nothing is in the way, and the set-aside folder can't be read: the
+		// return still finishes.
+		{name: "set-aside folder unreadable", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
+				os.Mkdir(filepath.Join(f.data, aside), 0)
+				t.Cleanup(func() { os.Chmod(filepath.Join(f.data, aside), 0o700) })
+			}, unreadable: true,
+			trace: []string{"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
+				"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
+				"rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe",
+				"kept game: rolling_back rolled_back unsafe"}},
+		// The return happens, but its helper is removed before Ludock hears:
+		// Activity doesn't claim the previous data is out of place.
+		{name: "return's helper lost", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, lostStep: helper.RestoreRollbackOld, lostHelper: true, guidance: "can’t confirm", aside: map[string]string{"world/level.dat": "new run"}},
+		// No helper starts: the undo fails, and both Activity entries say
+		// where to look.
+		{name: "helper can't start", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, helperFails: true},
+		// The final journal's write fails: neither Activity note is saved.
+		{name: "final write fails", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, finalFails: true},
+		{name: "cleanup fails", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, aside: map[string]string{"world/level.dat": "new run"}, failStep: helper.RestoreCleanup, guidance: "undone"},
+		{name: "one file, nothing in its way", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Item: "world/level.dat", Phase: "old_moved"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
+				os.MkdirAll(filepath.Join(stage, "new"), 0o700)
+			}, noGame: true, plain: true, trace: []string{"stageExists game: replacing old_moved unsafe", "stageExists game: replacing old_moved unsafe",
+				"setAside game: rolling_back old_moved unsafe", "rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe",
+				"kept game: rolling_back rolled_back unsafe"}},
+		// Startup finishes a restore an earlier attempt had already returned,
+		// then can't start the server.
+		{name: "recovered, start fails", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}, Kept: true},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+				os.MkdirAll(filepath.Join(f.data, aside, "world"), 0o755)
+				os.WriteFile(filepath.Join(f.data, aside, "world", "level.dat"), []byte("first run"), 0o644)
+				f.engine.AddFault(`^POST .*/containers/`+f.game+`/start`, 500, false, 0)
+			}, aside: map[string]string{"world/level.dat": "first run"}, recovered: true, startFails: true},
+		// Startup's recovery sets a copy aside, then can't read the folder.
+		{name: "recovered, folder unread", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+				f.traceRestore(func(_ *fakedocker.Container, op, _ string, code int) int {
+					if op == helper.RestoreKept {
+						return 1
+					}
+					return code
+				})
+			}, recovered: true, unreadable: true, aside: map[string]string{"world/level.dat": "new run"}},
+		// Likewise, and startup is cut right after its final journal: the
+		// next start still says where to look.
+		{name: "recovered, folder unread, cut", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+				f.traceRestore(func(_ *fakedocker.Container, op, _ string, code int) int {
+					if op == helper.RestoreKept {
+						return 1
+					}
+					return code
+				})
+				// What the final journal's write leaves, before anything after it.
+				f.jobs.DB.Exec(`CREATE TABLE final_row (result_json TEXT)`)
+				f.jobs.DB.Exec(`CREATE TRIGGER final_seen AFTER UPDATE OF recovery_json ON operations
+					WHEN NEW.kind='restore' AND json_extract(NEW.recovery_json,'$.restore.status')='rolled_back'
+					AND coalesce(json_extract(OLD.recovery_json,'$.restore.status'),'')<>'rolled_back'
+					BEGIN INSERT INTO final_row VALUES (NEW.result_json); END`)
+			}, recovered: true, unreadable: true, cutAfterFinal: true, aside: map[string]string{"world/level.dat": "new run"}},
+		{name: "checks can't run", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, checkFails: true, aside: map[string]string{"world/level.dat": "new run"},
+			trace: []string{"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
+				"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
+				"cleanup game: rolling_back rolled_back kept unsafe", "kept game: rolling_back rolled_back kept unsafe"}},
+		// Ludock stopped after a return that moved a copy aside, before it
+		// heard: startup has nothing left to move, and still names the folder.
+		{name: "recovered after its result was lost", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolling_back"}}},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+				os.MkdirAll(filepath.Join(f.data, aside, "world"), 0o755)
+				os.WriteFile(filepath.Join(f.data, aside, "world", "level.dat"), []byte("first run"), 0o644)
+			}, aside: map[string]string{"world/level.dat": "first run"}, recovered: true},
+		{name: "recovered at startup", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, aside: map[string]string{"world/level.dat": "new run"}, recovered: true},
+		{name: "one file moving out", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Item: "world/level.dat", Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
+			}, aside: map[string]string{"level.dat": "new run"},
+			trace: []string{"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
+				"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
+				"cleanup game: rolling_back rolled_back kept unsafe",
+				"kept game: rolling_back rolled_back kept unsafe"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			var aside string
+			job, _ := f.interruptedRestore(t, c.state, func(stage string) {
+				aside = helper.SetAsideName(strings.TrimPrefix(filepath.Base(stage), helper.StagePrefix))
+				c.arrange(t, f, stage, aside)
+				if !c.recovered {
+					if err := f.jobs.Docker.Start(ctx, f.game); err != nil {
+						t.Fatal(err)
+					}
+				}
+				// The game makes a new world where it finds none.
+				if _, err := os.Stat(filepath.Join(f.data, "world", "level.dat")); os.IsNotExist(err) && !c.noGame {
+					os.MkdirAll(filepath.Join(f.data, "world"), 0o755)
+					os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("new run"), 0o644)
+				}
+			})
+			checkKept := func() {
+				t.Helper()
+				if data := read(t, filepath.Join(f.data, "world", "level.dat")) + "," + read(t, filepath.Join(f.data, "server.properties")); data != "newer,newer" {
+					t.Errorf("previous data %s", data)
+				}
+				var kept []string
+				filepath.WalkDir(filepath.Join(f.data, aside), func(path string, entry os.DirEntry, err error) error {
+					if err == nil && !entry.IsDir() {
+						name, _ := filepath.Rel(filepath.Join(f.data, aside), path)
+						kept = append(kept, name)
+						if read(t, path) != c.aside[name] {
+							t.Errorf("%s holds %q, want %q", name, read(t, path), c.aside[name])
+						}
+					}
+					return nil
+				})
+				if len(kept) != len(c.aside) {
+					t.Errorf("set aside %q, want %v", kept, c.aside)
+				}
+			}
+			if c.cutAfterFinal {
+				f.runner.Stop()
+				if _, err := f.jobs.DB.Exec(`UPDATE operations SET status='running', result_json=(SELECT result_json FROM final_row) WHERE id=?`, job.ID); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.runner.Start(ctx, nil); err != nil {
+					t.Fatal(err)
+				}
+				job, _ = f.runner.Get(ctx, job.ID)
+			}
+			if c.recovered {
+				journal, says := "rolled_back put back kept", "Anything Ludock moved"
+				if c.unreadable {
+					journal, says = "rolled_back put back", "couldn’t check the folder"
+				}
+				if guidance := job.Result.Guidance; f.savedJournal(job.ID) != journal || f.running() == c.startFails ||
+					!strings.Contains(guidance, "undone") || !strings.Contains(guidance, says) || !strings.Contains(guidance, aside) {
+					t.Errorf("journal %s, running %v, Activity says %q", f.savedJournal(job.ID), f.running(), guidance)
+				}
+				checkKept()
+				return
+			}
+			// Startup, finding the server running, reads the folders for what
+			// it says: a copy saved as kept and moved away since isn't named,
+			// nor is an earlier read's failure.
+			if c.state.Kept && c.aside == nil && strings.Contains(job.Result.Guidance, aside) {
+				t.Errorf("startup says %q", job.Result.Guidance)
+			}
+			if !f.running() || f.savedJournal(job.ID) == "rolled_back" {
+				t.Fatalf("recovered before the undo: %s", f.savedJournal(job.ID))
+			}
+			var trace *restoreTrace
+			if c.checkCut {
+				checks := 0
+				trace = f.traceRestore(func(helperContainer *fakedocker.Container, op, _ string, code int) int {
+					if op == helper.RestoreCheckReturn {
+						if checks++; checks == 2 {
+							f.engine.RemoveContainer(helperContainer.ID)
+							return 1
+						}
+					}
+					return code
+				})
+			} else if c.checkFails {
+				trace = f.traceRestore(func(_ *fakedocker.Container, op, _ string, code int) int {
+					if op == helper.RestoreCheckReturn {
+						return 1
+					}
+					return code
+				})
+			} else {
+				trace = f.traceRestore(nil)
+			}
+			// A final journal saved without both notes fails its write.
+			if _, err := f.jobs.DB.Exec(`CREATE TRIGGER final_with_notes BEFORE UPDATE OF recovery_json ON operations
+				WHEN NEW.kind='restore' AND json_extract(NEW.recovery_json,'$.restore.status')='rolled_back' AND (
+					coalesce(json_extract(NEW.result_json,'$.guidance'),'')='' OR NOT EXISTS (
+					SELECT 1 FROM operations o WHERE o.kind='undo_restore' AND o.server_id=NEW.server_id AND
+					instr(coalesce(json_extract(o.result_json,'$.undoNote'),''), json_extract(NEW.result_json,'$.guidance'))>0))
+				BEGIN SELECT RAISE(ABORT, 'final journal without its notes'); END`); err != nil {
+				t.Fatal(err)
+			}
+			if c.refusal != "" {
+				if c.mounted != "" {
+					previous := mountinfo.Table
+					t.Cleanup(func() { mountinfo.Table = previous })
+					mount := filepath.Join(f.data, c.mounted)
+					mountinfo.Table = func() ([]byte, error) { return []byte("40 22 0:45 / " + mount + " rw - nfs4 server:/share rw\n"), nil }
+				}
+				before, journal, live := len(f.engine.Requests), f.savedJournal(job.ID), liveFiles(t, f.data)
+				undo := f.run(t, ops.KindUndoRestore, nil)
+				stopped := slices.ContainsFunc(f.engine.Requests[before:], func(request string) bool { return strings.Contains(request, f.game+"/stop") })
+				if undo.Status != ops.Failed || undo.Error != c.refusal || stopped != c.afterStop || !f.running() ||
+					f.savedJournal(job.ID) != journal || !maps.Equal(liveFiles(t, f.data), live) {
+					t.Errorf("%s %q, stopped %v, running %v, journal %s", undo.Status, undo.Error, stopped, f.running(), f.savedJournal(job.ID))
+				}
+				return
+			}
+			if c.helperFails {
+				f.engine.AddFault(`^POST .*/containers/create`, 500, false, 0)
+				undo := f.run(t, ops.KindUndoRestore, nil)
+				restore, _ := f.runner.Get(ctx, job.ID)
+				if undo.Status != ops.Failed || !strings.Contains(restore.Result.Guidance, "couldn’t check the folder "+aside) ||
+					!strings.Contains(undo.Result.UndoNote, restore.Result.Guidance) {
+					t.Errorf("%s %q, Activity says %q, the undo %q", undo.Status, undo.Error, restore.Result.Guidance, undo.Result.UndoNote)
+				}
+				return
+			}
+			if c.finalFails {
+				f.jobs.DB.Exec(`DROP TRIGGER final_with_notes`)
+				f.jobs.DB.Exec(`CREATE TRIGGER final_fails BEFORE UPDATE OF recovery_json ON operations
+					WHEN NEW.kind='restore' AND json_extract(NEW.recovery_json,'$.restore.status')='rolled_back'
+					BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`)
+				undo := f.run(t, ops.KindUndoRestore, nil)
+				// The undo's note was part of the write that failed.
+				if undo.Status != ops.Failed || strings.Contains(undo.Result.UndoNote+undo.Recovery.Undone, "finished undoing") {
+					t.Errorf("%s %q, undo note %q", undo.Status, undo.Error, undo.Result.UndoNote+undo.Recovery.Undone)
+				}
+				return
+			}
+			if c.failStep != "" || c.lostStep != "" {
+				f.mu.Lock()
+				f.failStep = c.failStep
+				f.mu.Unlock()
+				if c.rereadUnsaved {
+					// Startup read the folder and saved what it found; an earlier
+					// attempt's finding is back, and the next read can't replace it.
+					f.jobs.DB.Exec(`UPDATE operations SET recovery_json=json_set(recovery_json,'$.restore.kept',json(IIF(?,'true','false'))) WHERE id=?`, c.state.Kept, job.ID)
+					f.jobs.DB.Exec(`CREATE TRIGGER read_unsaved BEFORE UPDATE OF recovery_json ON operations
+						WHEN NEW.kind='restore' AND IFNULL(json_extract(OLD.recovery_json,'$.restore.kept'),0)!=IFNULL(json_extract(NEW.recovery_json,'$.restore.kept'),0)
+						BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`)
+				}
+				if c.lostStep != "" {
+					f.traceRestore(once(c.lostStep, "game", func(helperContainer *fakedocker.Container, _ int) int {
+						if c.lostHelper {
+							f.engine.RemoveContainer(helperContainer.ID)
+						}
+						return 1
+					}))
+				}
+				undo := f.run(t, ops.KindUndoRestore, nil)
+				restore, _ := f.runner.Get(ctx, job.ID)
+				_, err := os.Stat(filepath.Join(f.data, aside))
+				// It names the folder, which holds copies, and claims nothing
+				// about the stage folder it can't know.
+				if guidance := restore.Result.Guidance; undo.Status != ops.Failed || !strings.Contains(guidance, c.guidance) ||
+					strings.Contains(guidance, aside) == c.plain || (err != nil) != (c.plain || c.rereadUnsaved && c.state.Kept) || strings.Contains(guidance, "still in") ||
+					// The work that failed says the same.
+					!strings.Contains(undo.Result.UndoNote, guidance) {
+					t.Errorf("%s %q, Activity says %q", undo.Status, undo.Error, guidance)
+				}
+				if c.aside != nil {
+					checkKept()
+				}
+				return
+			}
+			if c.unlinkOnStop != "" {
+				stop := f.engine.OnStop
+				f.engine.OnStop = func(container *fakedocker.Container) {
+					if stop != nil {
+						stop(container)
+					}
+					if container.ID == f.game {
+						os.Remove(filepath.Join(f.data, c.unlinkOnStop))
+					}
+				}
+			}
+			undo := f.run(t, ops.KindUndoRestore, nil)
+			want := "rolled_back put back kept"
+			if c.plain || c.unreadable {
+				want = "rolled_back put back"
+			}
+			if undo.Status != ops.Succeeded || !f.running() || f.staged() || f.savedJournal(job.ID) != want {
+				t.Fatalf("%s %q, running %v, journal %s", undo.Status, undo.Error, f.running(), f.savedJournal(job.ID))
+			}
+			checkKept()
+			restore, _ := f.runner.Get(ctx, job.ID)
+			for _, note := range []string{undo.Result.UndoNote, restore.Result.Guidance} {
+				if c.unreadable {
+					if !strings.Contains(note, "couldn’t check the folder "+aside) || !strings.Contains(note, "back in place") {
+						t.Errorf("Activity says %q", note)
+					}
+					continue
+				}
+				if strings.Contains(note, "kept in") {
+					t.Errorf("Activity claims what the folder holds now: %q", note)
+				}
+				// A folder is named exactly when copies were kept in it.
+				if strings.Contains(note, aside) == c.plain || strings.Contains(note, "Anything Ludock moved") == c.plain || !strings.Contains(note, "back in place") {
+					t.Errorf("Activity says %q", note)
+				}
+			}
+			if got := trace.lines(); !slices.Equal(got, c.trace) {
+				t.Errorf("trace:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(c.trace, "\n"))
+			}
+		})
+	}
+}
+
+// A restore of two data folders is cut while moving each out, the server is
+// started outside Ludock and the game recreates a file in the config folder.
+// Undo sets that aside and returns the config folder, then fails on the
+// world folder, and reading the world folder's set-aside folder afterwards
+// fails too: the config folder's is still read, and the restore's Activity
+// says where the newer copy is.
+func TestUndoKeepsCopiesAcrossRoots(t *testing.T) {
+	f := setup(t)
+	twoRootBackup(t, f)
+	var aside string
+	job, _ := f.interruptedRestore(t, &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}, {Phase: "moving_old"}}}, func(stage string) {
+		name := filepath.Base(stage)
+		aside = helper.SetAsideName(strings.TrimPrefix(name, helper.StagePrefix))
+		for _, root := range []string{"world", "config"} {
+			relocate(t, filepath.Join(f.data, root, "large.dat"), filepath.Join(f.data, root, name, "old", "large.dat"))
+		}
+		if err := f.jobs.Docker.Start(ctx, f.game); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(f.data, "config", "large.dat"), []byte("new run"), 0o644)
+	})
+	// The newest folder is undone first.
+	fail := once(helper.RestoreRollbackOld, "world", func(*fakedocker.Container, int) int { return 1 })
+	unread := once(helper.RestoreKept, "world", func(*fakedocker.Container, int) int { return 1 })
+	f.traceRestore(func(c *fakedocker.Container, op, root string, code int) int {
+		return unread(c, op, root, fail(c, op, root, code))
+	})
+	undo := f.run(t, ops.KindUndoRestore, nil)
+	restore, _ := f.runner.Get(ctx, job.ID)
+	if guidance := restore.Result.Guidance; undo.Status != ops.Failed || !strings.Contains(guidance, "Anything Ludock moved out of the way of the server’s previous data went to the folder "+aside) ||
+		read(t, filepath.Join(f.data, "config", aside, "large.dat")) != "new run" {
+		t.Errorf("%s %q, journal %s, Activity says %q", undo.Status, undo.Error, f.savedJournal(job.ID), guidance)
+	}
+}
+
+// liveFiles reads every file in the data, by path, with its contents.
+func liveFiles(t *testing.T, root string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && entry.Type().IsRegular() {
+			name, _ := filepath.Rel(root, path)
+			files[name] = read(t, path)
+		}
+		return nil
+	})
+	return files
 }
 
 func lastRestore(f *fixture) string {

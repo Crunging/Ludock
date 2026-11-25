@@ -283,7 +283,16 @@ func (h *Helpers) ExecWithin(ctx context.Context, id string, command []string, a
 
 var helperErrors = &launch.ExecErrors{Timeout: errTimeout, Failed: errFailed, Unsafe: errFailed,
 	OutputLimit: fail("HELPER_OUTPUT", "Ludock’s helper sent back more than expected, so the work was stopped."),
-	Exits:       map[int]*apperr.Error{helper.FileMounted: ErrHostMount, helper.RestoreHoldsStage: StageInside("")}}
+	Exits: map[int]*apperr.Error{helper.FileMounted: ErrHostMount, helper.RestoreHoldsStage: StageInside(""),
+		helper.RestoreUnsafeEntry: ErrUndoEntryUnsafe, helper.RestoreClashUnsafe: ErrUndoClashUnsafe}}
+
+// ErrUndoEntryUnsafe is an undo that would have to move a link, a special
+// file, or a file with a second name.
+// ErrUndoClashUnsafe is what undoing the restore would refuse to move found
+// once the server stopped, as opposed to a check that couldn't run.
+var ErrUndoClashUnsafe = fail("RESTORE_UNDO_IN_THE_WAY", "Undoing the restore would have to move something in the server’s data that is a link, a special file, a file with a second name elsewhere, or on another disk, so Ludock went no further. That restore’s Activity says where the server’s previous data is.")
+
+var ErrUndoEntryUnsafe = fail("RESTORE_UNDO_UNSAFE", "Undoing the restore would have to move something in the server’s data that is a link, a special file, or a file with a second name elsewhere, so Ludock went no further. That restore’s Activity says where the server’s previous data is.")
 
 // IsRunning reports whether a reused restore helper is still running.
 func (h *Helpers) IsRunning(ctx context.Context, id string) (bool, error) {

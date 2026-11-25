@@ -77,35 +77,31 @@ func (j *Jobs) finishPendingRestores(ctx context.Context, server *servers.Contex
 	if err != nil {
 		return err
 	}
-	var notes []string
 	for _, restore := range pending {
-		note, err := j.finishPending(ctx, server, job, restore, stoppedAt)
-		if err != nil {
+		if err := j.finishPending(ctx, server, job, restore, stoppedAt); err != nil {
 			return err
 		}
-		notes = append(notes, note)
 		if job == nil {
 			log.Info("Finished a restore that had stopped partway", logging.F("operation", restore.Job.ID))
 		}
 	}
-	if job == nil || (len(notes) == 0 && !job.Job.Recovery.PendingUndo) {
+	if job == nil || (len(pending) == 0 && !job.Job.Recovery.PendingUndo) {
 		return nil
 	}
-	undone := strings.Join(slices.DeleteFunc(append([]string{job.Job.Recovery.Undone}, notes...), func(note string) bool { return note == "" }), " ")
+	// Each restore's note joined Undone as its journal became final.
 	result := job.Job.Result
-	if undone != "" {
+	if undone := job.Job.Recovery.Undone; undone != "" {
 		result.UndoNote = undone
 	}
-	return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.PendingUndo, r.Undone = false, undone }, &result)
+	return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.PendingUndo = false }, &result)
 }
 
-// finishPending finishes one restore that ended partway and returns what
-// Activity says it did.
-func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, restore *ops.Context, stoppedAt string) (string, error) {
+// finishPending finishes one restore that ended partway.
+func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, restore *ops.Context, stoppedAt string) error {
 	// As recovery does, only the binding the restore stopped is undone.
 	state, err := restoreState(restore)
 	if err != nil || state == nil || !journalMatches(state.Roots, server) || restore.Job.Recovery.Fingerprint != server.Logical.BindingFingerprint {
-		return "", errPendingBlocked
+		return errPendingBlocked
 	}
 	owner := restore
 	if job != nil {
@@ -113,9 +109,46 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	}
 	data, err := j.Backups.Helpers.NewDataHelper(ctx, server, false, owner.Job.ID)
 	if err != nil {
-		return "", err
+		j.sayKept(ctx, server, job, restore, state, false)
+		return err
 	}
-	live, missing := false, false
+	live, missing, moved := false, false, false
+	// What Activity says comes from the final journal, which also covers
+	// roots an earlier attempt finished.
+	note := func(final restoreRecovery) string {
+		var note string
+		aside := helper.SetAsideName(restore.Job.ID)
+		returned, missingAny := live || final.PutBack, missing || final.StageMissing
+		switch {
+		case state.Status == "committed":
+			note = "Ludock removed the folder " + stageName(restore) + " that a finished restore left, which held the data it replaced."
+		case missingAny && !returned:
+			note = "Ludock found nothing to put back for a restore that had stopped partway: the folder " + stageName(restore) +
+				" that held the server’s previous data is no longer there, so its data was left as it is."
+		// The folder holding something is the only evidence, and the owner
+		// may have changed it since, so Activity says where anything Ludock
+		// moved went, which stays true either way.
+		case returned && final.Kept:
+			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. Anything Ludock moved out of its way went to the folder " +
+				aside + " beside it."
+		case !returned:
+			note = "Ludock removed the backup’s unpacked copy that a stopped restore left in " + stageName(restore) + "."
+		default:
+			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place."
+		}
+		if missingAny && returned {
+			note += " One of its data folders had nothing to put back: its folder " + stageName(restore) + " is no longer there."
+		}
+		// An earlier attempt may have set copies aside before this one found
+		// a stage gone.
+		if final.Kept && !strings.Contains(note, aside) {
+			note += " " + keptNote(restore)
+		} else if !final.Kept && final.keptUnknown {
+			note += " " + unknownKeptNote(restore)
+		}
+		return note
+	}
+	finish := &restoreFinish{note: note, by: job}
 	err = func() error {
 		if job != nil {
 			if err := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID = data.Container }, nil); err != nil {
@@ -124,7 +157,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		}
 		if state.Status != "committed" {
 			var err error
-			if live, missing, err = j.checkUndo(ctx, server, data, restore, state, nil); err != nil {
+			if live, missing, err = j.checkUndo(ctx, server, data, restore, state, nil, true); err != nil {
 				return err
 			}
 		}
@@ -147,49 +180,57 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 			return err
 		}
 		if state.Status == "committed" {
-			return j.cleanupRestore(ctx, server, restore, data)
+			return j.cleanupRestore(ctx, server, restore, data, finish)
 		}
 		// Until live data moves, a failure leaves the server's data as it
 		// was, so the operation that stopped it can start it again.
 		return j.rollbackRestore(ctx, server, restore, data, func() error {
+			moved = true
 			if job == nil {
 				return nil
 			}
 			return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.PendingUndo = true }, nil)
-		})
+		}, finish)
 	}()
 	data.Cleanup()
 	restore.Progress("", func(r *ops.Recovery) { r.DataHelperID = "" }, nil)
+	if err != nil {
+		j.sayKept(ctx, server, job, restore, state, moved)
+	}
 	if job != nil {
 		if clearErr := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID = "" }, nil); err == nil {
 			err = clearErr
 		}
 	}
-	if err != nil {
-		return "", err
+	return err
+}
+
+// keptNote says where undoing restore moved what was in the way.
+func keptNote(restore *ops.Context) string {
+	return "Anything Ludock moved out of the way of the server’s previous data went to the folder " + helper.SetAsideName(restore.Job.ID) + " in its data."
+}
+
+// sayKept has a failed attempt at a restore whose live data had moved say
+// what the folders show now, on the restore and on the work that tried.
+func (j *Jobs) sayKept(ctx context.Context, server *servers.Context, job, restore *ops.Context, state *restoreRecovery, moved bool) {
+	if !moved && !touchedLive(state) {
+		return
 	}
-	var note string
-	switch {
-	case state.Status == "committed":
-		note = "Ludock removed the folder " + stageName(restore) + " that a finished restore left, which held the data it replaced."
-	case missing && !live:
-		note = "Ludock found nothing to put back for a restore that had stopped partway: the folder " + stageName(restore) +
-			" that held the server’s previous data is no longer there, so its data was left as it is."
-	case !live:
-		note = "Ludock removed the backup’s unpacked copy that a stopped restore left in " + stageName(restore) + "."
-	case state.SetAside:
-		note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place, and what the game wrote meanwhile is kept in the folder " +
-			helper.SetAsideName(restore.Job.ID) + " beside it."
-	default:
-		note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place."
-	}
-	if missing && live {
-		note += " One of its data folders had nothing to put back: its folder " + stageName(restore) + " is no longer there."
-	}
+	guidance := endedRestoreGuidance(restore, true, j.reconcileKept(ctx, server, restore))
 	result := restore.Job.Result
-	result.Guidance = note
+	result.Guidance = guidance
 	restore.Progress("", nil, &result)
-	return note, nil
+	if job != nil {
+		result := job.Job.Result
+		result.UndoNote = guidance
+		job.Progress(job.Job.Phase, nil, &result)
+	}
+}
+
+// touchedLive says a restore's live data had moved, so an undo of it may
+// have set something aside.
+func touchedLive(state *restoreRecovery) bool {
+	return state != nil && slices.ContainsFunc(state.Roots, func(entry journal) bool { return entry.Phase != "staging" })
 }
 
 // checkUndo marks the journal's roots whose stage folder is gone as having
@@ -197,7 +238,8 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 // another restore's stage. It reports whether any root has a stage to put
 // back and whether any had none.
 func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *backups.DataHelper, restore *ops.Context, state *restoreRecovery,
-	assertAccess func() error) (live, missing bool, err error) {
+	assertAccess func() error, stopped bool) (live, missing bool, err error) {
+	var readOnly *backups.DataHelper
 	// A root whose stage folder is gone has nothing to put back, for
 	// whatever removed it, such as the restore finishing after
 	// Ludock's data was saved.
@@ -217,6 +259,32 @@ func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *bac
 		switch found["exists"] {
 		case true:
 			live = true
+			// Returning originals sets aside what is in their way, which is
+			// refused before anything moves. Before the stop, only what the
+			// game can't change is: a mount or a second name in its data may
+			// go as it shuts down. A check that couldn't run refuses nothing:
+			// returning the originals checks again before it moves anything.
+			if entry.Phase == "moving_old" || entry.Phase == "rolling_back" {
+				// Once stopped, the check runs in a helper of its own: one cut
+				// by its time limit must not take the return's helper with it.
+				check := data
+				if stopped {
+					if readOnly == nil {
+						started, err := j.Backups.Helpers.NewDataHelper(ctx, server, true, restore.Job.ID)
+						if err != nil {
+							continue
+						}
+						readOnly = started
+						defer readOnly.Cleanup()
+					}
+					check = readOnly
+				}
+				_, err := j.restoreStep(ctx, check, rootPath, entry.Item, restore, helper.RestoreCheckReturn, assertAccess)
+				if apperr.Is(err, backups.ErrUndoEntryUnsafe.Code) || (stopped && (apperr.Is(err, backups.ErrUndoClashUnsafe.Code) ||
+					apperr.Is(err, backups.ErrHostMount.Code) || apperr.Is(err, backups.StageInside("").Code))) {
+					return false, false, err
+				}
+			}
 		case false:
 			state.Roots[index].Phase, missing, state.StageMissing = "rolled_back", true, true
 		default:
@@ -271,8 +339,8 @@ func (j *Jobs) assertPendingUndoable(ctx context.Context, server *servers.Contex
 				return nil
 			}
 		}
-		if _, _, err := j.checkUndo(ctx, server, data, restore, state, assertAccess); err != nil {
-			if apperr.Is(err, backups.StageInside("").Code) || apperr.Is(err, backups.ErrHostMount.Code) {
+		if _, _, err := j.checkUndo(ctx, server, data, restore, state, assertAccess, false); err != nil {
+			if apperr.Is(err, backups.StageInside("").Code) || apperr.Is(err, backups.ErrHostMount.Code) || apperr.Is(err, backups.ErrUndoEntryUnsafe.Code) {
 				return err
 			}
 			return nil

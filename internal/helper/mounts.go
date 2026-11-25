@@ -114,13 +114,18 @@ func RunIdle(timeoutMs string) int {
 // restore would read, write, or move another disk's data. The table needs no
 // walk of the data, so it is read before anything stops or moves.
 func ownMount(base, root string) error {
-	base, root = path.Clean(base), path.Clean(root)
-	if !strings.HasPrefix(base, "/") || base == "/" || !Within(root, base) {
-		return errUnsafe
-	}
 	mounts, err := mountinfo.Read()
 	if err != nil {
 		return err
+	}
+	return mountFree(mounts, base, root)
+}
+
+// mountFree is ownMount against a table already read.
+func mountFree(mounts []mountinfo.Mount, base, root string) error {
+	base, root = path.Clean(base), path.Clean(root)
+	if !strings.HasPrefix(base, "/") || base == "/" || !Within(root, base) {
+		return errUnsafe
 	}
 	for _, mount := range mounts {
 		if point := mount.Point; point != base && Within(point, base) && (Within(point, root) || Within(root, point)) {
