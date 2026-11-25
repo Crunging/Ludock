@@ -54,6 +54,16 @@ func (g *writeGate) enter(ctx context.Context) (leave func(), err error) {
 	}, nil
 }
 
+// refuses reports whether a write in ctx would be refused now.
+func (g *writeGate) refuses(ctx context.Context) bool {
+	if g == nil || maintenance(ctx) {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.closed > 0
+}
+
 // CloseWrites refuses every new write but the update's own, then waits for
 // the admitted ones to end. reopen admits writes again; a process that hands
 // itself over to an update never calls it.

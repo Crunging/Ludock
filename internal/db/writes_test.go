@@ -72,7 +72,15 @@ func TestWritesCloseForAnUpdate(t *testing.T) {
 			}
 			return err
 		},
-		"optimize":    func() error { _, err := d.Exec("PRAGMA optimize"); return err },
+		"optimize": func() error { _, err := d.Exec("PRAGMA optimize"); return err },
+		// Some PRAGMAs act as they are prepared.
+		"prepared": func() error {
+			stmt, err := d.Prepare("PRAGMA schema_version = 7")
+			if err == nil {
+				stmt.Close()
+			}
+			return err
+		},
 		"pragma call": func() error { _, err := d.Exec("PRAGMA user_version(42)"); return err },
 	}
 	for name, write := range refused {

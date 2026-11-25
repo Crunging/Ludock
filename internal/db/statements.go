@@ -81,6 +81,16 @@ func (c *statementConn) PrepareContext(ctx context.Context, query string) (drive
 		}
 		return &cachedStatement{stmt: stmt, busy: true, conn: c, writes: writes(query), changes: changes(query), transient: true}, nil
 	}
+	// Some PRAGMAs act as SQLite compiles them, so a write is refused
+	// before it is prepared, not only when it runs.
+	if !c.inTx && writes(query) {
+		if c.readOnly {
+			return nil, errReadOnlyWrite
+		}
+		if c.writes.refuses(ctx) {
+			return nil, ErrUpdating
+		}
+	}
 	stmt, err := c.Conn.(driver.ConnPrepareContext).PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
