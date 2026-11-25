@@ -61,8 +61,11 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
 
   // Started on the emptied folder, the game keeps exiting.
   await fake("/fake/crashloop", { container: server.container });
-  await openServer(page, server.name);
-  await expect(page.locator(".detail-header__identity")).toContainText("Keeps restarting");
+  // Pages reuse discovery for two seconds, and the container is new.
+  await expect(async () => {
+    await openServer(page, server.name);
+    await expect(page.locator(".detail-header__identity")).toContainText("Keeps restarting", { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
   await expect(page.locator("#detail-live")).toContainText("The game keeps stopping and Docker keeps starting it again.");
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeEnabled();
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Restart" })).toHaveCount(0);
