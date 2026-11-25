@@ -98,7 +98,8 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		// file again as the batch fills the disk.
 		var space *helper.FileSpace
 		if space, err = access.prepareUpload(ctx, root, normalized); err != nil {
-			access.Cleanup(false)
+			// Its sweep may still be removing files.
+			access.Cleanup(true)
 		} else {
 			// The rest may fit once earlier files replace larger ones.
 			if index := slices.Index(results, nil); entries[index].Size > space.Available-helper.UploadSpare(space.Total) {

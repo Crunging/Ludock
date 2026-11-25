@@ -680,30 +680,36 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 			return err
 		}
 	}
-	current, err := uploadTarget(parent, name)
-	if err != nil {
-		return err
-	}
-	if (current == nil) != (original == nil) || (original != nil && (original.Dev != current.Dev || original.Ino != current.Ino ||
-		original.Mode != current.Mode || original.Uid != current.Uid || original.Gid != current.Gid ||
-		original.Size != current.Size || mtimeMs(original) != mtimeMs(current) || ctimeMs(original) != ctimeMs(current))) {
-		return errors.New("the upload target changed")
-	}
 	written, err := fstat(file)
 	if err != nil {
 		return err
 	}
-	// The folder, found again from the root by its path, must still be the one
-	// written into: a rename while the file arrived could have moved it out of
-	// the root. A move in the moment between this check and the publish below
-	// can't be caught from here.
-	if err := h.sameFolder(parent); err != nil {
-		return err
+	// The destination must be as it was, the folder, found again from the
+	// root by its path, still the one written into (a rename while the file
+	// arrived could have moved it out of the root), and the staging name,
+	// which publishing goes by, still the inode written. Checked before the
+	// game may read the file and again right before publishing; a change in
+	// the moment between that and the publish can't be caught from here.
+	unchanged := func() error {
+		current, err := uploadTarget(parent, name)
+		if err != nil {
+			return err
+		}
+		if (current == nil) != (original == nil) || (original != nil && (original.Dev != current.Dev || original.Ino != current.Ino ||
+			original.Mode != current.Mode || original.Uid != current.Uid || original.Gid != current.Gid ||
+			original.Size != current.Size || mtimeMs(original) != mtimeMs(current) || ctimeMs(original) != ctimeMs(current))) {
+			return errors.New("the upload target changed")
+		}
+		if err := h.sameFolder(parent); err != nil {
+			return err
+		}
+		if staged, err := lstatAt(parent, temporary); err != nil || staged.Dev != written.Dev || staged.Ino != written.Ino {
+			return errors.New("the staged file changed")
+		}
+		return nil
 	}
-	// Publishing goes by the staging name, which must still be the inode
-	// written.
-	if staged, err := lstatAt(parent, temporary); err != nil || staged.Dev != written.Dev || staged.Ino != written.Ino {
-		return errors.New("the staged file changed")
+	if err := unchanged(); err != nil {
+		return err
 	}
 	// Only now may the game read it. Set permissions while the helper still
 	// owns the new inode; CHOWN is enough to restore game ownership without
@@ -723,6 +729,9 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	}
 	if h.uploadAborted() {
 		return errors.New("upload interrupted")
+	}
+	if err := unchanged(); err != nil {
+		return err
 	}
 	if original != nil {
 		if err := unix.Renameat(int(parent), temporary, int(parent), name); err != nil {
@@ -787,10 +796,10 @@ func (h *fileHelper) sweepStaging(folder fd) error {
 		if !found || !staged || !uploadIDPattern.MatchString(id) {
 			continue
 		}
+		// One that can't be removed, such as in a folder only its owner may
+		// delete from, is left; free space still decides each upload.
 		if info, err := lstatAt(folder, name); err == nil && isRegular(info) {
-			if err := unix.Unlinkat(int(folder), name, 0); err != nil && !isNotExist(err) {
-				return err
-			}
+			unix.Unlinkat(int(folder), name, 0)
 		}
 	}
 	return nil
