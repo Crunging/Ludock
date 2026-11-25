@@ -51,10 +51,12 @@ test("trusting a reverse proxy that Ludock noticed", async ({ page, session }) =
   const form = advanced.locator("#proxy-form");
   await expect(form.locator(".proxy-hint")).toContainText("You’re reaching Ludock through a proxy at 127.0.0.1 that it doesn’t trust");
 
-  // A value LUDOCK_TRUSTED_PROXIES would refuse is refused here too.
+  // A value LUDOCK_TRUSTED_PROXIES would refuse is refused here too. Enter
+  // saves what is typed; only the button trusts the proxy.
   await form.getByLabel("Trusted proxy addresses").fill("proxy.example:80");
-  await form.getByRole("button", { name: "Save proxies" }).click();
+  await form.getByLabel("Trusted proxy addresses").press("Enter");
   await expect(form.locator(".alert--error")).toContainText("Enter IP addresses or ranges separated by commas");
+  await expect(form.locator(".proxy-hint")).toContainText("127.0.0.1");
 
   await form.getByRole("button", { name: "Trust 127.0.0.1" }).click();
   await expect(form.locator(".alert--success")).toHaveText("Proxy trusted. New requests through it use each visitor’s own address.");

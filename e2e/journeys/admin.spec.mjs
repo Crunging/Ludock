@@ -111,16 +111,35 @@ test("changing the public address and backup limits", async ({ page }) => {
   for (const hidden of [backups.getByLabel("Backup folder"), page.getByLabel("Check for newer server images"),
     page.locator("#upload-limit-form"), page.locator("#notification-deliveries")]) await expect(hidden).toBeHidden();
   await page.locator("#advanced-settings > summary").click();
-  await expect(backups.getByLabel("Total limit for all backups (GiB)")).toHaveValue("");
-  await backups.getByLabel("Total limit for all backups (GiB)").fill("2.5");
-  await backups.getByRole("button", { name: "Save backup settings" }).click();
+  const limit = backups.getByLabel("Total limit for all backups (GiB)");
+  const save = backups.getByRole("button", { name: "Save backup settings" });
+  // Each section's Save waits for a change to it.
+  await expect(limit).toHaveValue("");
+  await expect(save).toBeDisabled();
+  // A half-typed number is refused, never saved: Save offers to save it so
+  // the browser can say what's wrong.
+  await limit.pressSequentially("-");
+  await expect(save).toBeEnabled();
+  await save.click();
+  expect(await limit.evaluate((field) => field.validationMessage)).not.toBe("");
+  await limit.fill("2.5");
+  await save.click();
   await expect(backups.locator(".alert--success")).toContainText("Backup settings saved.");
   await expect(storage).toContainText("Total limit2.5 GiB");
+  await expect(save).toBeDisabled();
   await page.reload();
   await page.locator("#advanced-settings > summary").click();
-  await expect(backups.getByLabel("Total limit for all backups (GiB)")).toHaveValue("2.5");
-  await backups.getByLabel("Total limit for all backups (GiB)").fill("");
-  await backups.getByRole("button", { name: "Save backup settings" }).click();
+  await expect(limit).toHaveValue("2.5");
+  // Nor does one clear a saved limit.
+  await limit.fill("");
+  await limit.pressSequentially("-");
+  await save.click();
+  expect(await limit.evaluate((field) => field.validity.badInput)).toBe(true);
+  await page.reload();
+  await page.locator("#advanced-settings > summary").click();
+  await expect(limit).toHaveValue("2.5");
+  await limit.fill("");
+  await save.click();
   await expect(storage).not.toContainText("Total limit");
 
   // The long backup folder path wraps instead of widening a phone screen.

@@ -149,6 +149,7 @@
       button.textContent = button.getAttribute("data-idle-label");
       button.removeAttribute("data-idle-label");
       button.disabled = false;
+      if (button.matches("[data-save-changes]") && button.form) updateSave(button);
     }
     var form = ctx.request.form;
     if (ctx.response && ctx.response.status < 400 && form && form.matches("dialog form[data-close-on-success]")) {
@@ -325,6 +326,7 @@
       if (field) {
         field.value = fill.getAttribute("data-fill-value");
         field.focus();
+        field.dispatchEvent(new Event("input", { bubbles: true }));
       }
     }
   });
@@ -530,6 +532,30 @@
     syncExpanders();
   });
   document.addEventListener("htmx:after:swap", syncExpanders);
+
+  // A Save marked data-save-changes is enabled while its form differs from
+  // what the page gave it, or while it is marked data-unsaved. A number
+  // field holding something else counts, so Save can say what's wrong.
+  function unsavedChange(form) {
+    return Array.prototype.some.call(form.elements, function (field) {
+      if (field.validity && field.validity.badInput) return true;
+      if (field.type === "checkbox" || field.type === "radio") return field.checked !== field.defaultChecked;
+      if (field.tagName === "SELECT") {
+        var initial = Array.prototype.findIndex.call(field.options, function (option) { return option.defaultSelected; });
+        return field.selectedIndex !== Math.max(initial, 0);
+      }
+      return field.tagName !== "BUTTON" && field.value !== field.defaultValue;
+    });
+  }
+  function updateSave(save) {
+    save.disabled = !save.hasAttribute("data-unsaved") && !unsavedChange(save.form);
+  }
+  ["input", "change"].forEach(function (type) {
+    document.addEventListener(type, function (event) {
+      var form = event.target.form, save = form && form.querySelector("button[data-save-changes]");
+      if (save && !save.hasAttribute("data-idle-label")) updateSave(save);
+    });
+  });
 
   // data-autosubmit submits its form on change (a GET form keeps working
   // without scripts through its submit button).

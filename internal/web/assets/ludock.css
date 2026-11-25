@@ -1145,6 +1145,8 @@ td > .cancel-form { display: block; margin-top: 6px; }
 .settings-advanced > .muted { max-width: var(--measure); }
 .advanced-settings { display: grid; gap: 32px; margin-top: 22px; }
 .settings-group { display: grid; gap: 12px; max-width: var(--measure); }
+.settings-save { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.settings-save .alert { flex: 1 1 16rem; margin: 0; }
 .backup-storage__found { display: block; margin-top: 4px; color: var(--ink-2); font-size: 14px; }
 .proxy-hint > div { display: grid; gap: 10px; justify-items: start; }
 .settings-page form.stack-form { max-width: 720px; }
