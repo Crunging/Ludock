@@ -85,8 +85,9 @@ func TestNextBackupFinishesStoppedRestore(t *testing.T) {
 	if backup.Status != ops.Succeeded || !f.running() {
 		t.Fatalf("%+v", backup)
 	}
-	// The undo is checked once before the stop and again once stopped.
-	want := append([]string{undoneLines[0]}, undoneLines...)
+	// The undo is checked before room is made for the backup, again before
+	// the stop, and once more when stopped.
+	want := append([]string{undoneLines[0], undoneLines[0]}, undoneLines...)
 	if got := trace.lines()[before:]; !slices.Equal(got, want) {
 		t.Errorf("trace:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}

@@ -82,7 +82,8 @@ func (j *Jobs) stopForBackup(ctx context.Context, server *servers.Context, job *
 		func(tx *sql.Tx) error { return j.dataAuthorityIn(ctx, tx, server, job) }, source); err != nil {
 		return err
 	}
-	return j.stopChecked(ctx, server, job)
+	// Checked again: making room takes time, and the server can change.
+	return j.stopForData(ctx, server, job)
 }
 
 // assertPendingBeforeStop refuses, while the game still runs, work whose
@@ -101,11 +102,6 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 	if err := j.assertPendingBeforeStop(ctx, server, job); err != nil {
 		return err
 	}
-	return j.stopChecked(ctx, server, job)
-}
-
-// stopChecked is stopForData once assertPendingBeforeStop passed.
-func (j *Jobs) stopChecked(ctx context.Context, server *servers.Context, job *ops.Context) error {
 	// The copy is only as fresh as the game's last save. A job that already
 	// saved, or resumes after its stop, doesn't save again.
 	if job.Job.Recovery.InitialRunning == nil && job.Job.Recovery.SaveStatus == "" {
