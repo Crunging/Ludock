@@ -1211,7 +1211,8 @@ func (h *fileHelper) uploadFiles(relative string) error {
 
 // readFiles reads the request's files from stdin, ahead of anything else
 // there, since a long list could pass an argument's size limit: its length,
-// then its JSON. Unless required, an empty stdin keeps the request's own.
+// then its JSON. Unless required, stdin holds only the list, and an empty
+// one keeps the request's own.
 func (h *fileHelper) readFiles(required bool) error {
 	var length [8]byte
 	if n, err := io.ReadFull(h.stdin, length[:]); n == 0 && errors.Is(err, io.EOF) && !required {
@@ -1226,6 +1227,14 @@ func (h *fileHelper) readFiles(required bool) error {
 	list := make([]byte, size)
 	if _, err := io.ReadFull(h.stdin, list); err != nil || json.Unmarshal(list, &h.request.Files) != nil {
 		return errUploadStream
+	}
+	// A list alone is read to its end, so the command never exits before
+	// the backend has sent all of it.
+	if !required {
+		var rest [1]byte
+		if n, err := h.stdin.Read(rest[:]); n > 0 || err != io.EOF {
+			return errUploadStream
+		}
 	}
 	return nil
 }
