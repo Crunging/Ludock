@@ -633,6 +633,9 @@ func describeAttention(item attention.Item) attentionText {
 		}
 		return attentionText{title, path + "?tab=activity&operation=" + item.OperationID, "Review activity"}
 	case "restore":
+		if item.UndoBlocked {
+			return attentionText{"Restore stopped partway", path, "Review server"}
+		}
 		return attentionText{"Restore stopped partway", path + "?tab=activity&operation=" + item.OperationID, "Review activity"}
 	case "schedule":
 		return attentionText{ActionLabel(item.Action) + " schedule suspended", path + "?tab=schedules&schedule=" + item.ScheduleID, "Review schedule"}
@@ -687,7 +690,11 @@ templ attentionDetail(item attention.Item) {
 				}
 			</span>
 		case "restore":
-			<span class="muted">The restore of { item.ServerName } was stopped partway. Its previous data is safe but not in place: undo the restore to put it back.</span>
+			if item.UndoBlocked {
+				<span class="muted">The restore of { item.ServerName } stopped partway, and its data folders or game changed since. Put them back as they were where the server is defined, then undo the restore.</span>
+			} else {
+				<span class="muted">The restore of { item.ServerName } was stopped partway. Its previous data is safe but not in place: undo the restore to put it back.</span>
+			}
 		case "schedule":
 			<span class="muted">{ scheduleReasons[item.Reason] }</span>
 		case "disk":
@@ -780,7 +787,7 @@ templ needsAttention(view AttentionView) {
 								<button class="secondary-btn secondary-btn--accent" type="button" hx-post={ "/servers/" + item.ServerID + "/start" } hx-target="#action-error" data-busy-label="Working…" aria-label={ "Start " + item.ServerName }>Start</button>
 								<a href={ templ.SafeURL(info.Link) } class="text-link" aria-label={ "Details: " + item.ServerName + ", " + info.Title }>Details</a>
 							</div>
-						} else if item.Kind == "restore" && !view.DiscoveryUnavailable {
+						} else if item.Kind == "restore" && !view.DiscoveryUnavailable && !item.UndoBlocked {
 							<div class="needs-attention__actions">
 								<button
 									class="secondary-btn secondary-btn--accent"

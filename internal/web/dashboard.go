@@ -226,6 +226,9 @@ func (s *Server) attentionFragment(w http.ResponseWriter, r *http.Request, reque
 			if item.Kind == "binding" && request.User().Role != db.RoleAdmin {
 				continue
 			}
+			if item.Kind == "restore" {
+				item.UndoBlocked = s.undoBlocked(r.Context(), item.ServerID)
+			}
 			view.Items = append(view.Items, item)
 		}
 		if view.Admin {

@@ -53,6 +53,9 @@ type Item struct {
 	// Undone: a restore that ended without finishing had moved live data,
 	// and its undo put all of the server's previous data back.
 	Undone bool
+	// UndoBlocked: a restore that stopped partway can't be undone until the
+	// server's data folders and game are back as it found them.
+	UndoBlocked bool
 	// notifications, with Since and Reason
 	Destination notify.Destination
 }

@@ -447,7 +447,7 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 		return
 	}
 	view := &d.Row.Server
-	u := views.UpdateView{ServerID: id, ServerName: view.DisplayName, CanBackup: canBeBackedUp(view) && can(view, authz.BackupsCreate),
+	u := views.UpdateView{ServerID: id, ServerName: view.DisplayName, CanBackup: canBeBackedUp(view) && can(view, authz.BackupsCreate) && !d.UndoBlocked,
 		NoData:  view.NoDataFolders,
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable || d.UndoBlocked, Gone: view.BindingStatus == identity.StatusMissing && !d.DiscoveryUnavailable,
 		Active: view.ActiveOperation != nil, Recreate: r.URL.Query().Get("recreate") == "1", Warn: warnOffer(view.Container), Running: view.Container.State == "running",
