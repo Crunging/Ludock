@@ -777,6 +777,8 @@ type UpdateView struct {
 	// NoData: the server has no data folders, so no backup can come first.
 	NoData bool
 	Blocked, Active      bool
+	// Gone: the server's container is missing, so there is nothing to update.
+	Gone                 bool
 	Recreate             bool
 	Capability           *update.Capability
 	Error                string
@@ -801,7 +803,9 @@ templ UpdateTab(serverID string, recreate bool) {
 
 templ UpdatePanel(u UpdateView) {
 	<div id="update-panel">
-		if u.Capability == nil {
+		if u.Gone {
+			<p role="status">Ludock can’t find this server in Docker, so it can’t be updated.</p>
+		} else if u.Capability == nil {
 			<div>
 				<p role="alert">Couldn’t check whether this server can be updated. Try again.</p>
 				@reloadUpdate(u.ServerID, "Check again")

@@ -347,9 +347,10 @@ free space left. Under **Settings → Advanced → Backup folder and limits**:
 - **Minimum free space (GiB):** kept free on the backup disk, and on game-data
   disks during restores and unpacking. 5 GiB by default.
 - **Total limit for all backups (GiB):** off by default. Backups whose
-  archives are gone, or aren't the size they were saved at, don't count
-  toward it, though the space used in **Settings → Backups** still includes
-  every backup Ludock lists.
+  archives are gone, from the second copy too, or aren't the size they were
+  saved at, don't count toward it or the space used in **Settings → Backups**
+  (unless a folder can't be read, in which case its backups count as recorded
+  and the page says so).
 - **Also copy backups to:** the [second copy](#a-second-copy-of-backups).
 
 Once these settings are saved, Ludock never changes them by itself. To turn

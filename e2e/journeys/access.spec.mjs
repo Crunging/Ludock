@@ -62,6 +62,11 @@ test("sharing a server with someone new by invite link, and what they can see", 
     const response = await pal.request.post(`/servers/${id}/${action}`, { form: { _csrf: csrf, person: "new", username: "sneaky", level: "full" }, headers });
     expect(response.status(), action).toBe(403);
   }
+  // The console page, opened by hand, says they can't use it and names no
+  // mode of its own.
+  await pal.goto(`/console/${id}`);
+  await expect(pal.getByRole("alert")).toHaveText("You can’t use this server’s console or logs.");
+  await expect(pal.locator(".console-header__status")).toHaveCount(0);
   await pal.goto("/users");
   await expect(pal).toHaveURL(/\/$/);
   await expect(pal.getByRole("link", { name: "Users" })).toHaveCount(0);

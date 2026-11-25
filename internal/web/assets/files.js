@@ -257,14 +257,17 @@
         offset = files.length;
       }
     } finally {
-      var kind = "error", message = "Uploaded " + completed + " of " + chosen.length + " files.";
+      var noun = chosen.length === 1 ? " file" : " files";
+      var kind = "error", message = "Uploaded " + completed + " of " + chosen.length + noun + ".";
       if (stop) lines.push(stop);
       var left = files.length - offset;
       if (left > 0) lines.push(left === 1 ? "The remaining file wasn’t uploaded." : "The remaining " + left + " files weren’t uploaded.");
       if (controller.signal.aborted) {
         kind = "success";
-        message = "Upload cancelled. " + completed + " of " + chosen.length + " files finished. Check the folder before trying again; " +
-          "files sent with “" + current + "” may have been written, and cancelling doesn’t undo them.";
+        message = chosen.length === 1
+          ? "Upload cancelled. “" + current + "” may have been written, and cancelling doesn’t undo it. Check the folder before trying again."
+          : "Upload cancelled. " + completed + " of " + chosen.length + " files finished. Check the folder before trying again; " +
+            "files sent with “" + current + "” may have been written, and cancelling doesn’t undo them.";
         lines = [];
       } else if (completed === chosen.length) {
         kind = "success";

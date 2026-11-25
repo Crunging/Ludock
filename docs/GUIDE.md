@@ -350,10 +350,10 @@ update the game with no backup to go back to. If Ludock itself restarts during
 the backup, the server is started again when Ludock is back, without the
 backup, and **Activity** says so.
 
-Every stop, restart, backup, restore, and update is listed in **Activity**,
-with who started it. If Docker itself restarts for a few seconds while work
-runs, such as for an upgrade, the work waits for it and carries on. What
-happens to work when Ludock or Docker restarts is in the
+Every start, stop, restart, backup, restore, and update is listed in
+**Activity**, with who started it. If Docker itself restarts for a few seconds
+while work runs, such as for an upgrade, the work waits for it and carries on.
+What happens to work when Ludock or Docker restarts is in the
 [reference](REFERENCE.md#after-an-interruption).
 
 ### Consoles

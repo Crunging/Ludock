@@ -1309,7 +1309,7 @@ td > .cancel-form { display: block; margin-top: 6px; }
   /* Fingers need about 44px; small controls grow, or reach past their edges. */
   .harbor__menu-button, .harbor__signout button, .console-header__back, .console-mode-tabs a, .console-quick button,
   .section-tabs a, .action-menu__trigger--compact, .action-menu__action, .range-switch a, .data-table .secondary-btn,
-  .schedule-day-presets .secondary-btn, .player-list__action { min-height: 44px; }
+  .schedule-day-presets .secondary-btn, .player-list__action, .checklist .checklist__toggle { min-height: 44px; }
   .console-header__back, .action-menu__trigger--compact { min-width: 44px; }
   .action-menu__action { display: flex; align-items: center; }
   .copy-address__button, .checklist__dismiss, .back-link, .player-menu__trigger, summary { position: relative; }

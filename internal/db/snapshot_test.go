@@ -108,35 +108,47 @@ func TestSnapshotConsistentWhileWriting(t *testing.T) {
 
 // A saved copy is a plain tar of the database and its key folder, named as
 // they are in the data folder and owner-only, with no work files left behind.
+// It is USTAR, unless Ludock runs as a user or group ID past what USTAR
+// holds, as some NAS directory services give; that one is PAX and restores.
 func TestSnapshotArchiveLayout(t *testing.T) {
 	d, path := openTemp(t)
-	archive := saveSnapshot(t, d)
-	file, err := os.Open(archive)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	reader := tar.NewReader(file)
-	var names []string
-	for {
-		header, err := reader.Next()
-		if err == io.EOF {
-			break
-		}
+	defer func(ids func() (int, int)) { processIDs = ids }(processIDs)
+	for _, id := range []int{os.Getuid(), 3_000_000} {
+		processIDs = func() (int, int) { return id, id }
+		archive := saveSnapshot(t, d)
+		file, err := os.Open(archive)
 		if err != nil {
 			t.Fatal(err)
 		}
-		names = append(names, header.Name+" "+header.FileInfo().Mode().Perm().String())
-		if header.Name == "ludock.db.identity-key/key" {
-			key, _ := io.ReadAll(reader)
-			if string(key) != string(d.key) {
-				t.Fatal("archived key differs from the database's key")
+		defer file.Close()
+		reader := tar.NewReader(file)
+		var names []string
+		for {
+			header, err := reader.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			names = append(names, header.Name+" "+header.FileInfo().Mode().Perm().String())
+			if header.Uid != id || header.Gid != id || (id < 1<<21) != (header.Format == tar.FormatUSTAR) {
+				t.Fatal("archived owner", id, header.Uid, header.Gid, header.Format)
+			}
+			if header.Name == "ludock.db.identity-key/key" {
+				key, _ := io.ReadAll(reader)
+				if string(key) != string(d.key) {
+					t.Fatal("archived key differs from the database's key")
+				}
 			}
 		}
-	}
-	want := "ludock.db -rw------- ludock.db.identity-key/ -rwx------ ludock.db.identity-key/key -rw-------"
-	if got := strings.Join(names, " "); got != want {
-		t.Fatalf("archive holds %q, want %q", got, want)
+		want := "ludock.db -rw------- ludock.db.identity-key/ -rwx------ ludock.db.identity-key/key -rw-------"
+		if got := strings.Join(names, " "); got != want {
+			t.Fatalf("archive holds %q, want %q", got, want)
+		}
+		if _, err := RestoreSnapshot(archive, filepath.Join(t.TempDir(), "data", "ludock.db")); err != nil {
+			t.Fatal(id, err)
+		}
 	}
 	entries, _ := os.ReadDir(filepath.Dir(path))
 	for _, entry := range entries {

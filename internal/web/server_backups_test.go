@@ -250,6 +250,10 @@ func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusForbidden {
 		t.Fatal("backup", response.StatusCode)
 	}
+	if panel := p.do("GET", "/fragments/servers/"+p.server+"/update", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String(); !strings.Contains(panel, "can’t find this server in Docker") ||
+		strings.Contains(panel, "Check again") {
+		t.Fatal(panel)
+	}
 	if kind, _ := p.queued(t); kind != "" {
 		t.Fatal("queued", kind)
 	}

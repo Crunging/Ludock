@@ -299,6 +299,18 @@ func BindingNote(status string) string {
 	return ""
 }
 
+// lastSeenLabel names the state monitoring last saw as the status badge
+// does. Without a container, the state is the server's binding status.
+func lastSeenLabel(state string) string {
+	switch state {
+	case "missing":
+		return "Missing in Docker"
+	case "ambiguous":
+		return "More than one container"
+	}
+	return ServerStatus(state, "", nil).Label
+}
+
 var healthNotes = map[string]string{"starting": "Health check is starting", "healthy": "Health check passing", "unhealthy": "Health check failing"}
 
 var healthStates = map[string]string{"starting": "Starting", "healthy": "Passing", "unhealthy": "Failing"}
@@ -639,7 +651,7 @@ templ AvailabilityStatus(d ServerDetail) {
 					} else if a.State.LastState == monitor.DockerUnavailable {
 						Unknown: Ludock can’t reach Docker
 					} else if a.State.LastState != "" {
-						{ Capitalize(a.State.LastState) }
+						{ lastSeenLabel(a.State.LastState) }
 					} else {
 						Not checked yet
 					}
