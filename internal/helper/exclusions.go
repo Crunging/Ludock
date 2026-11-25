@@ -139,8 +139,8 @@ func (h *fileHelper) excludedIn(parent fd, info *unix.Stat_t) bool {
 		}
 	}
 	for _, destination := range h.excluded.missing {
-		stop, missing, entry := deepest(destination)
-		if (entry != nil && sameInode(entry, info)) || (stop != nil && sameInode(stop, folder) && appeared(missing)) {
+		path := walkDestination(destination)
+		if (path.entry != nil && sameInode(path.entry, info)) || (path.stop != nil && sameInode(path.stop, folder) && appeared(path.missing)) {
 			return true
 		}
 	}
@@ -154,46 +154,76 @@ func (h *fileHelper) stoppedAt(folder *unix.Stat_t) bool {
 		return true
 	}
 	for _, destination := range h.excluded.missing {
-		if stop, _, _ := deepest(destination); stop != nil && sameInode(stop, folder) {
+		if path := walkDestination(destination); path.stop != nil && sameInode(path.stop, folder) {
 			return true
 		}
 	}
 	return false
 }
 
-// deepest walks destination from "/" by its spelling, without following
-// links or the tracker's refusal, and returns the deepest folder found with
-// the name missing from it, or the entry itself if it now exists.
-func deepest(destination string) (*unix.Stat_t, missingName, *unix.Stat_t) {
+// onMissingPath reports a folder that is, at the start or now, on the way to
+// an unresolved destination, which a change to a whole folder may not take.
+func (h *fileHelper) onMissingPath(folder *unix.Stat_t) bool {
+	if h.stoppedAt(folder) {
+		return true
+	}
+	for _, destination := range h.excluded.missing {
+		for _, ancestor := range walkDestination(destination).folders {
+			if sameInode(&ancestor, folder) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// destinationPath is where a destination's spelling leads now: the folders
+// on the way, the deepest with the name missing from it, or the entry itself
+// if it exists.
+type destinationPath struct {
+	folders []unix.Stat_t
+	stop    *unix.Stat_t
+	missing missingName
+	entry   *unix.Stat_t
+}
+
+// walkDestination walks destination from "/" by its spelling, without
+// following links or the tracker's refusal.
+func walkDestination(destination string) destinationPath {
+	var path destinationPath
 	parts, err := components(destination)
 	if err != nil || len(parts) == 0 {
-		return nil, missingName{}, nil
+		return path
 	}
 	current, err := unix.Open("/", directoryFlags, 0)
 	if err != nil {
-		return nil, missingName{}, nil
+		return path
 	}
 	defer func() { unix.Close(current) }()
 	for index, part := range parts {
 		var folder unix.Stat_t
 		if unix.Fstat(current, &folder) != nil {
-			return nil, missingName{}, nil
+			return destinationPath{}
 		}
+		path.folders = append(path.folders, folder)
 		if index == len(parts)-1 {
 			var entry unix.Stat_t
 			if unix.Fstatat(current, part, &entry, unix.AT_SYMLINK_NOFOLLOW) == nil {
-				return nil, missingName{}, &entry
+				path.entry = &entry
+			} else {
+				path.stop, path.missing = &folder, missingName{part, true}
 			}
-			return &folder, missingName{part, true}, nil
+			return path
 		}
 		next, err := unix.Openat(current, part, directoryFlags, 0)
 		if err != nil {
-			return &folder, missingName{part, false}, nil
+			path.stop, path.missing = &folder, missingName{part, false}
+			return path
 		}
 		unix.Close(current)
 		current = next
 	}
-	return nil, missingName{}, nil
+	return path
 }
 
 // checkIdentity refuses relative, below the root, when it is an excluded
@@ -246,7 +276,7 @@ func (h *fileHelper) checkIdentityOf(relative string, recursive, entry bool) (er
 			return nil
 		}
 	}
-	if h.excludedIn(folder, target) || (recursive && (h.excluded.ancestors[identityOf(target)] || h.stoppedAt(target))) {
+	if h.excludedIn(folder, target) || (recursive && (h.excluded.ancestors[identityOf(target)] || h.onMissingPath(target))) {
 		return errExcluded
 	}
 	return nil

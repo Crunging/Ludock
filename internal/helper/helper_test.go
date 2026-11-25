@@ -1191,6 +1191,25 @@ func TestExclusionsHoldByIdentity(t *testing.T) {
 	if code != 0 || strings.Contains(listing, `"alias"`) {
 		t.Fatal("listed an exclusion that appeared in a replaced folder", code, listing)
 	}
+	// A folder that comes to be on the way to one, in a replaced tree, can't
+	// be renamed or deleted as a whole. Spelled with a doubled slash, the
+	// exclusion's path differs from the request's for the byte comparison
+	// while the walk opens the same folders, as a loosely matching name would.
+	os.MkdirAll(filepath.Join(root, "e"), 0o755)
+	exclusionsResolved = func() {
+		os.Rename(filepath.Join(root, "e"), filepath.Join(root, "e-old"))
+		os.MkdirAll(filepath.Join(root, "e", "f"), 0o755)
+	}
+	for _, request := range []FileRequest{{Operation: "rename", Path: "e", Destination: "x"}, {Operation: "delete", Path: "e"}} {
+		request.Root, request.Blocked = root, []string{root + "//e/f/missing"}
+		if _, code := runFile(t, request, nil); code == 0 {
+			t.Error(request.Operation, "took a folder now on the way to an exclusion")
+		}
+		os.Rename(filepath.Join(root, "e-old"), filepath.Join(root, "e-older"))
+	}
+	if _, err := os.Stat(filepath.Join(root, "e", "f")); err != nil {
+		t.Fatal(err)
+	}
 	// A file where a folder on the way should be can't hold the exclusion,
 	// so it stays listed.
 	exclusionsResolved = func() {}
