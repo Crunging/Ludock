@@ -546,9 +546,6 @@ func OnlineNote(online int) string {
 	return ""
 }
 
-// DisconnectNote says taking a running server down disconnects whoever is
-// on, without a number: for tabs that don't follow the player count, where
-// one would go stale.
 // UndoRestoreDetail says what undoing a restore that stopped partway does.
 // It is the one data operation that stops a server another manager started.
 func UndoRestoreDetail(operationID string) string {
@@ -557,6 +554,9 @@ func UndoRestoreDetail(operationID string) string {
 		helper.SetAsideName(operationID) + " in its data folder, not deleted."
 }
 
+// DisconnectNote says taking a running server down disconnects whoever is
+// on, without a number: for tabs that don't follow the player count, where
+// one would go stale.
 func DisconnectNote(running bool) string {
 	if running {
 		return "Connected players will be disconnected."
@@ -631,7 +631,7 @@ func describeAttention(item attention.Item) attentionText {
 	case "restore":
 		return attentionText{"Restore stopped partway", path + "?tab=activity&operation=" + item.OperationID, "Review activity"}
 	case "schedule":
-		return attentionText{Capitalize(item.Action) + " schedule suspended", path + "?tab=schedules&schedule=" + item.ScheduleID, "Review schedule"}
+		return attentionText{ActionLabel(item.Action) + " schedule suspended", path + "?tab=schedules&schedule=" + item.ScheduleID, "Review schedule"}
 	case "binding":
 		title := "Server missing in Docker"
 		if item.BindingStatus == "ambiguous" {
@@ -704,6 +704,8 @@ templ attentionDetail(item attention.Item) {
 		default:
 			if item.State == "docker_unavailable" {
 				<span class="muted">Ludock can’t reach Docker.</span>
+			} else if item.State == monitor.NotAnswering {
+				<span class="muted">Not answering since @Time(item.OutageStartedAt, "", "")<span>.</span></span>
 			} else {
 				<span class="muted">Down since @Time(item.OutageStartedAt, "", "")<span>.</span></span>
 			}

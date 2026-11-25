@@ -40,6 +40,9 @@ type Snapshot struct {
 	Checksum string
 }
 
+// processIDs are the user and group IDs a save records.
+var processIDs = func() (int, int) { return os.Getuid(), os.Getgid() }
+
 // Snapshot copies the database through SQLite's VACUUM INTO, which reads one
 // transaction's view while writers carry on, and archives it with the key.
 func (d *DB) Snapshot(ctx context.Context) (*Snapshot, error) {
@@ -81,7 +84,14 @@ func (d *DB) Snapshot(ctx context.Context) (*Snapshot, error) {
 	base := filepath.Base(d.path)
 	keyFolder := base + ".identity-key"
 	now := time.Now().Truncate(time.Second)
-	uid, gid := os.Getuid(), os.Getgid()
+	uid, gid := processIDs()
+	// USTAR keeps the archive readable by every tar, BusyBox's included. Its
+	// IDs end at 7 octal digits; some NAS directory services give larger
+	// ones, which only PAX holds.
+	format := tar.FormatUSTAR
+	if max(uid, gid) >= 1<<21 {
+		format = tar.FormatPAX
+	}
 	entries := []struct {
 		header tar.Header
 		body   io.Reader
@@ -91,8 +101,7 @@ func (d *DB) Snapshot(ctx context.Context) (*Snapshot, error) {
 		{tar.Header{Typeflag: tar.TypeReg, Name: keyFolder + "/" + keyFilename, Mode: keyFileMode, Size: int64(len(d.key))}, strings.NewReader(string(d.key))},
 	}
 	for _, entry := range entries {
-		// USTAR keeps the archive readable by every tar, BusyBox's included.
-		entry.header.Format, entry.header.ModTime, entry.header.Uid, entry.header.Gid = tar.FormatUSTAR, now, uid, gid
+		entry.header.Format, entry.header.ModTime, entry.header.Uid, entry.header.Gid = format, now, uid, gid
 		if err := writer.WriteHeader(&entry.header); err != nil {
 			archive.Close()
 			return nil, err

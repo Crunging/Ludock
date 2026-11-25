@@ -46,10 +46,10 @@ const (
 
 var unavailableMessages = map[string]string{
 	OwnerMissing:        "Suspended: the schedule owner no longer exists",
-	OwnerDisabled:       "Suspended: the schedule owner's account is disabled",
+	OwnerDisabled:       "Suspended: the schedule owner’s account is disabled",
 	OwnerAccessRemoved:  "Suspended: the schedule owner can no longer set up schedules",
 	ActionAccessRemoved: "Suspended: the schedule owner can no longer do this action",
-	SharingPaused:       "Paused: the server's game or data folders changed, and an administrator needs to confirm it",
+	SharingPaused:       "Suspended: the server’s game or data folders changed, and an administrator needs to confirm it",
 	BindingUnavailable:  "Suspended: Ludock can’t find this server in Docker",
 	Unavailable:         "Suspended: this schedule can’t run right now; check the server and the schedule",
 }
@@ -75,7 +75,7 @@ func (e *UnavailableError) Unwrap() error { return e.Public }
 
 func missed(nonexistent bool) error {
 	if nonexistent {
-		return apperr.New("SCHEDULE_MISSED", 409, "Missed: the scheduled local time doesn't exist in its time zone")
+		return apperr.New("SCHEDULE_MISSED", 409, "Missed: the scheduled local time doesn’t exist in its time zone")
 	}
 	return apperr.New("SCHEDULE_MISSED", 409, "Missed: Ludock was not running at the scheduled time")
 }

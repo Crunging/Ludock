@@ -244,7 +244,7 @@ func TestScheduleAuthorityChanges(t *testing.T) {
 	pending, _ := f.s.Identity.Reconcile(ctx, []identity.Observation{changed}, "", 0)
 	f.s.Run(ctx, due+2*86400_000)
 	if f.operations(t) != 0 || f.first(t, admin).NextRunUnavailableReason != SharingPaused ||
-		!strings.HasPrefix(f.first(t, admin).LastResult, "Paused: the server's game or data folders changed") {
+		!strings.HasPrefix(f.first(t, admin).LastResult, "Suspended: the server’s game or data folders changed") {
 		t.Fatal(f.first(t, admin))
 	}
 	if err := f.s.Identity.ResumeSharing(ctx, admin.ID, adminSession, f.serverID, pending[0].BindingRevision); err != nil {

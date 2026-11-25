@@ -534,6 +534,10 @@ templ OperationSummary(o OperationDetailView) {
 		<dl class="metadata-list operation-detail-summary">
 			<dt>Action</dt>
 			<dd>{ Capitalize(operation.Kind) }</dd>
+			if item, _ := operation.Input["item"].(string); item != "" && o.Archives {
+				<dt>Restored item</dt>
+				<dd>{ item }</dd>
+			}
 			<dt>Status</dt>
 			<dd
 				if ActiveStatus(operation.Status) {

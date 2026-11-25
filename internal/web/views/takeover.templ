@@ -131,7 +131,7 @@ templ TakeOverResult(d jobs.TakeOver) {
 			<p>{ joinWords(d.KeptPeople) } kept the access they already had on { d.ToName }.</p>
 		}
 		if d.Paused {
-			<p>The people it was shared with can use { d.ToName } once you confirm the change on its page.</p>
+			<p>The people with access can use { d.ToName } once you confirm the change on its page.</p>
 		}
 		if !d.SameData && d.Backups > 0 {
 			<p>Its backups were taken from data kept somewhere else, so a restore asks you to confirm or says why it can’t.</p>

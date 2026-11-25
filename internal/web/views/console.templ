@@ -67,7 +67,9 @@ templ ConsolePage(page Page, c ConsoleView) {
 							<h1>{ c.ServerName }</h1>
 							@ServerState(c.State, c.Health, c.Exit)
 						</div>
-						<div class="console-header__status">{ c.statusText() }</div>
+						if c.allowed() {
+							<div class="console-header__status">{ c.statusText() }</div>
+						}
 					</div>
 				</div>
 				if len(c.Modes) > 0 {
