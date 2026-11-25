@@ -517,22 +517,31 @@ func (s *Service) ArchiveBytes(ctx context.Context) (total, kept int64, err erro
 // the total limit counts them. It lists each folder once; a folder that
 // can't be listed counts all its backups.
 func (s *Service) FoundBytes(ctx context.Context) (total, kept int64, err error) {
+	total, kept, _, err = s.foundBytes(ctx, 0)
+	return total, kept, err
+}
+
+// foundBytes is FoundBytes, and whether a folder couldn't be listed. A
+// budget above 0 bounds all its waits together; folders it leaves no time
+// for count as not listed.
+func (s *Service) foundBytes(ctx context.Context, budget time.Duration) (total, kept int64, unlisted bool, err error) {
+	start := time.Now()
 	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE state='complete'")
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
 	var list []*Backup
 	for rows.Next() {
 		backup, err := scanBackup(rows)
 		if err != nil {
 			rows.Close()
-			return 0, 0, err
+			return 0, 0, false, err
 		}
 		list = append(list, backup)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
 	// A nil listing is a folder that couldn't be listed.
 	listings := map[string]map[string]int64{}
@@ -543,7 +552,11 @@ func (s *Service) FoundBytes(ctx context.Context) (total, kept int64, err error)
 		sizes, seen := listings[folder]
 		if !seen {
 			var listed map[string]int64
-			if s.reach(folder, errFolderStalled, measureWait, func(func()) error {
+			limit := measureWait
+			if budget > 0 {
+				limit = min(limit, budget-time.Since(start))
+			}
+			if limit > 0 && s.reach(folder, errFolderStalled, limit, func(func()) error {
 				var err error
 				listed, err = s.Storage.archives(folder)
 				return err
@@ -551,6 +564,7 @@ func (s *Service) FoundBytes(ctx context.Context) (total, kept int64, err error)
 				sizes = listed
 			}
 			listings[folder] = sizes
+			unlisted = unlisted || sizes == nil
 		}
 		size, found := sizes[backup.ID+".tar"]
 		return sizes != nil && (!found || size != backup.Size)
@@ -568,7 +582,7 @@ func (s *Service) FoundBytes(ctx context.Context) (total, kept int64, err error)
 			kept += backup.Size
 		}
 	}
-	return total, kept, nil
+	return total, kept, unlisted, nil
 }
 
 // unlimited stands in for "no total limit"; it fits JSON's exact integers.
@@ -638,10 +652,13 @@ func readinessIssue(err error, fallback Issue) Issue {
 
 // StorageStatus is the storage readiness shown to administrators.
 type StorageStatus struct {
-	Configured     bool
-	Destination    string
+	Configured  bool
+	Destination string
+	// ArchiveBytes and KeptBytes count the archives found; while a folder
+	// can't be listed (Unlisted), its backups count as recorded.
 	ArchiveBytes   int64
 	KeptBytes      int64
+	Unlisted       bool
 	MaxBytes       int64 // 0 when there is no total limit
 	ReserveBytes   int64
 	AvailableBytes int64 // -1 when unknown
@@ -660,14 +677,21 @@ type StorageStatus struct {
 }
 
 // inspect checks storage; for a server, room its backups' retention may free
-// before a backup counts as room.
-func (s *Service) inspect(ctx context.Context, serverID string) (StorageStatus, *Settings) {
+// before a backup counts as room. measure counts the archives found, within
+// one wait, for both the usage shown and the limit.
+func (s *Service) inspect(ctx context.Context, serverID string, measure bool) (StorageStatus, *Settings) {
 	settings, found, _ := s.SavedSettings(ctx)
 	used, kept, err := s.ArchiveBytes(ctx)
 	status := StorageStatus{Configured: found, ArchiveBytes: used, KeptBytes: kept, AvailableBytes: -1, CopyAvailableBytes: -1}
 	if err != nil {
 		status.Issues = append(status.Issues, Issue{"BACKUP_RECORDS_UNAVAILABLE", "Ludock could not read its backup records. Try again."})
 		return status, nil
+	}
+	measured := false
+	if measure {
+		if used, kept, unlisted, err := s.foundBytes(ctx, measureWait); err == nil {
+			status.ArchiveBytes, status.KeptBytes, status.Unlisted, measured = used, kept, unlisted, true
+		}
 	}
 	if settings == nil {
 		code := "BACKUP_SETTINGS_INVALID"
@@ -708,8 +732,8 @@ func (s *Service) inspect(ctx context.Context, serverID string) (StorageStatus, 
 		}
 		return freed
 	}
-	_, err = Remaining(*settings, status.ArchiveBytes, kept)
-	if err != nil {
+	_, err = Remaining(*settings, status.ArchiveBytes, status.KeptBytes)
+	if err != nil && !measured {
 		// Only then are archives looked for: lost ones don't hold up a backup.
 		if found, foundKept, failed := s.FoundBytes(ctx); failed == nil {
 			_, err = Remaining(*settings, found-removable(), foundKept)
@@ -747,7 +771,7 @@ func (s *Service) inspect(ctx context.Context, serverID string) (StorageStatus, 
 }
 
 func (s *Service) Status(ctx context.Context) StorageStatus {
-	status, _ := s.inspect(ctx, "")
+	status, _ := s.inspect(ctx, "", true)
 	return status
 }
 
@@ -760,7 +784,7 @@ type Preflight struct {
 }
 
 func (s *Service) Preflight(ctx context.Context, server *servers.Context) Preflight {
-	status, settings := s.inspect(ctx, server.Logical.ID)
+	status, settings := s.inspect(ctx, server.Logical.ID, false)
 	issues := slices.Clone(status.Issues)
 	check := func(err error, fallback Issue) {
 		if err != nil {

@@ -58,17 +58,20 @@ type BackupsView struct {
 func (b BackupsView) archives() bool { return b.Admin && b.CanRead }
 
 // usage says how much space the listed backups use, and how much of it
-// kept backups hold.
+// kept backups hold. A missing archive takes none; one that couldn't be
+// looked for counts as recorded.
 func (b BackupsView) usage() string {
 	var count int
 	var total, kept int64
+	recorded := false
 	for _, backup := range b.Backups {
-		if backup.State == "complete" {
+		if backup.State == "complete" && !backup.Missing {
 			count++
 			total += backup.Size
 			if backup.KeptAt != 0 {
 				kept += backup.Size
 			}
+			recorded = recorded || !backup.FromCopy && (backup.FolderAway || backup.CopyAway)
 		}
 	}
 	if count == 0 {
@@ -80,6 +83,9 @@ func (b BackupsView) usage() string {
 	}
 	if kept > 0 {
 		text += ", " + FormatBytes(kept) + " of it in kept backups"
+	}
+	if recorded {
+		text += ". As recorded; a folder can’t be read"
 	}
 	return text + "."
 }

@@ -667,6 +667,31 @@ func TestStuckFolderIsMeasuredOnce(t *testing.T) {
 	}
 }
 
+// Backups were saved in five folders over time, and every share has stopped
+// responding: the storage summary still answers within about one wait for
+// the folder looks, counting those backups as recorded.
+func TestStuckFoldersBoundTheStorageSummary(t *testing.T) {
+	f := newCopyFixture(t)
+	previous := measureWait
+	measureWait = 200 * time.Millisecond
+	release := make(chan struct{})
+	testHook = func(point string) {
+		if point == "reaching" {
+			<-release
+		}
+	}
+	t.Cleanup(func() { close(release); testHook = nil; measureWait = previous })
+	for index := range 5 {
+		backup := f.add(t, "world data", int64(index))
+		f.s.DB.Exec("UPDATE backups SET destination=? WHERE id=?", filepath.Join(f.other, string(rune('a'+index))), backup.ID)
+	}
+	started := time.Now()
+	status := f.s.Status(ctx)
+	if elapsed := time.Since(started); elapsed > 3*measureWait || !status.Unlisted || status.ArchiveBytes != 50 {
+		t.Fatal(elapsed, status.Unlisted, status.ArchiveBytes)
+	}
+}
+
 // Reading a large copy back to verify it takes longer than the stall limit
 // while never stopping: it is progress, so the copy finishes instead of
 // being abandoned and retried forever.
