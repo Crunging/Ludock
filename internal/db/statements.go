@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"io"
+	"strings"
 	"sync/atomic"
 
 	"modernc.org/sqlite"
@@ -77,13 +79,13 @@ func (c *statementConn) PrepareContext(ctx context.Context, query string) (drive
 		if err != nil {
 			return nil, err
 		}
-		return &cachedStatement{stmt: stmt, busy: true, conn: c, writes: writes(query), transient: true}, nil
+		return &cachedStatement{stmt: stmt, busy: true, conn: c, writes: writes(query), changes: changes(query), transient: true}, nil
 	}
 	stmt, err := c.Conn.(driver.ConnPrepareContext).PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	cached := &cachedStatement{stmt: stmt, busy: true, conn: c, writes: writes(query)}
+	cached := &cachedStatement{stmt: stmt, busy: true, conn: c, writes: writes(query), changes: changes(query)}
 	if len(c.statements) >= maxStatements && !c.evict() {
 		cached.transient = true
 		return cached, nil
@@ -130,8 +132,48 @@ func (c *statementConn) BeginTx(ctx context.Context, options driver.TxOptions) (
 		leave()
 		return nil, err
 	}
+	if !options.ReadOnly && !maintenance(ctx) {
+		// Holding the write lock, a transaction of any process sees the
+		// record the update writes before its data save, so it can't
+		// commit after that save; a rollback would undo it.
+		if updating, err := c.updating(ctx); err != nil || updating {
+			tx.Rollback()
+			leave()
+			if err == nil {
+				err = ErrUpdating
+			}
+			return nil, err
+		}
+	}
 	c.inTx, c.readOnly = !options.ReadOnly, options.ReadOnly
 	return &gatedTx{Tx: tx, end: func() { c.inTx, c.readOnly = false, false; leave() }}, nil
+}
+
+// UpdateSetting is the setting that holds Ludock's latest self-update.
+const UpdateSetting = "ludock.update"
+
+// updating reports whether the database records a self-update that handed
+// over, after which nothing but the update writes.
+func (c *statementConn) updating(ctx context.Context) (bool, error) {
+	stmt, err := c.PrepareContext(ctx, "SELECT 1 FROM settings WHERE key = ? AND json_extract(value_json, '$.state') = 'handed_over'")
+	if err != nil && strings.Contains(err.Error(), "no such table: settings") {
+		// A database without settings has never begun an update.
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer stmt.Close()
+	rows, err := stmt.(driver.StmtQueryContext).QueryContext(ctx, []driver.NamedValue{{Ordinal: 1, Value: UpdateSetting}})
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	err = rows.Next(make([]driver.Value, 1))
+	if err == io.EOF {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 type gatedTx struct {
@@ -164,20 +206,41 @@ type cachedStatement struct {
 	busy bool
 	conn *statementConn
 	// writes: the statement may write, so outside a transaction it is
-	// admitted through the write gate.
-	writes bool
+	// admitted through the write gate; changes: it changes rows, so outside
+	// a transaction it runs in its own, which checks for an update.
+	writes, changes bool
 	// transient statements aren't kept, so closing them finalizes them.
 	transient bool
 }
 
-func (s *cachedStatement) admit(ctx context.Context) (func(), error) {
+// admit admits a write outside a transaction. One that changes rows then
+// runs in its own transaction, which end commits; a statement that can't
+// run in a transaction, such as VACUUM, is admitted by this process's gate
+// alone.
+func (s *cachedStatement) admit(ctx context.Context) (end func(failed bool) error, err error) {
 	if !s.writes || s.conn.inTx {
-		return func() {}, nil
+		return func(bool) error { return nil }, nil
 	}
 	if s.conn.readOnly {
 		return nil, errReadOnlyWrite
 	}
-	return s.conn.writes.enter(ctx)
+	if !s.changes || maintenance(ctx) {
+		leave, err := s.conn.writes.enter(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return func(bool) error { leave(); return nil }, nil
+	}
+	tx, err := s.conn.BeginTx(ctx, driver.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return func(failed bool) error {
+		if failed {
+			return tx.Rollback()
+		}
+		return tx.Commit()
+	}, nil
 }
 
 var errReadOnlyWrite = errors.New("a read-only transaction can't write")
@@ -199,55 +262,54 @@ func (s *cachedStatement) NumInput() int { return s.stmt.NumInput() }
 
 // Exec and Query complete driver.Stmt; database/sql calls the Context forms.
 func (s *cachedStatement) Exec(args []driver.Value) (driver.Result, error) {
-	leave, err := s.admit(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	defer leave()
-	//lint:ignore SA1019 driver.Stmt requires Exec
-	return s.stmt.Exec(args)
+	return s.ExecContext(context.Background(), named(args))
 }
 
 func (s *cachedStatement) Query(args []driver.Value) (driver.Rows, error) {
-	leave, err := s.admit(context.Background())
-	if err != nil {
-		return nil, err
+	return s.QueryContext(context.Background(), named(args))
+}
+
+func named(args []driver.Value) []driver.NamedValue {
+	values := make([]driver.NamedValue, len(args))
+	for index, arg := range args {
+		values[index] = driver.NamedValue{Ordinal: index + 1, Value: arg}
 	}
-	defer leave()
-	//lint:ignore SA1019 driver.Stmt requires Query
-	return s.stmt.Query(args)
+	return values
 }
 
 func (s *cachedStatement) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
-	leave, err := s.admit(ctx)
+	end, err := s.admit(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer leave()
-	return s.stmt.(driver.StmtExecContext).ExecContext(ctx, args)
+	result, err := s.stmt.(driver.StmtExecContext).ExecContext(ctx, args)
+	if endErr := end(err != nil); err == nil && endErr != nil {
+		return nil, endErr
+	}
+	return result, err
 }
 
-// QueryContext admits a writing query, such as DELETE … RETURNING, while it
-// runs: SQLite commits it when its rows are first read.
+// QueryContext admits a writing query, such as DELETE … RETURNING, until its
+// rows are closed.
 func (s *cachedStatement) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
-	leave, err := s.admit(ctx)
+	end, err := s.admit(ctx)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := s.stmt.(driver.StmtQueryContext).QueryContext(ctx, args)
 	if err != nil {
-		leave()
+		end(true)
 		return nil, err
 	}
-	return &gatedRows{Rows: rows, leave: leave}, nil
+	return &gatedRows{Rows: rows, end: end}, nil
 }
 
 type gatedRows struct {
 	driver.Rows
-	leave func()
+	end func(failed bool) error
 }
 
 func (r *gatedRows) Close() error {
-	defer r.leave()
-	return r.Rows.Close()
+	err := r.Rows.Close()
+	return errors.Join(err, r.end(err != nil))
 }

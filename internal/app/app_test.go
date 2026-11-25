@@ -353,11 +353,15 @@ func TestStartSignalsAnUpdateBeforeCleanupThatWrites(t *testing.T) {
 	engine.AddContainer(fakedocker.GameOptions{Name: selfupdate.HelperName(operation), Image: "ludock", Running: true,
 		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "self-update", "ludock.update.operation": operation}})
 	d := dbtest.Open(t)
-	for key, value := range map[string]any{
-		"ludock.update":    map[string]string{"id": operation, "state": "handed_over", "container": own, "from": "1.0.0", "target": "sha256:" + strings.Repeat("3", 64)},
-		"unpack-stage:one": map[string]string{"server": "gone", "root": "/data", "archive": "/data/mods.zip", "id": "one"},
+	// The record goes last: once it is there, only the update writes.
+	for _, setting := range []struct {
+		key   string
+		value any
+	}{
+		{"unpack-stage:one", map[string]string{"server": "gone", "root": "/data", "archive": "/data/mods.zip", "id": "one"}},
+		{"ludock.update", map[string]string{"id": operation, "state": "handed_over", "container": own, "from": "1.0.0", "target": "sha256:" + strings.Repeat("3", 64)}},
 	} {
-		if err := d.SetSetting(ctx, nil, key, value); err != nil {
+		if err := d.SetSetting(ctx, nil, setting.key, setting.value); err != nil {
 			t.Fatal(err)
 		}
 	}

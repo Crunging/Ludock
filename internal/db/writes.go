@@ -29,8 +29,10 @@ func Maintenance(ctx context.Context) context.Context {
 	return context.WithValue(ctx, maintenanceKey{}, true)
 }
 
+func maintenance(ctx context.Context) bool { return ctx.Value(maintenanceKey{}) != nil }
+
 func (g *writeGate) enter(ctx context.Context) (leave func(), err error) {
-	if g == nil || ctx.Value(maintenanceKey{}) != nil {
+	if g == nil || maintenance(ctx) {
 		return func() {}, nil
 	}
 	g.mu.Lock()
@@ -92,6 +94,20 @@ var readPragmas = map[string]bool{"application_id": true, "user_version": true, 
 
 // checkPragmas read whatever argument they are given.
 var checkPragmas = map[string]bool{"foreign_key_check": true, "quick_check": true, "integrity_check": true}
+
+// changes reports whether a statement changes rows and can run inside a
+// transaction.
+func changes(query string) bool {
+	words := strings.Fields(query)
+	if len(words) == 0 || strings.Contains(strings.TrimSuffix(strings.TrimSpace(query), ";"), ";") {
+		return false
+	}
+	switch strings.ToUpper(words[0]) {
+	case "INSERT", "UPDATE", "DELETE", "REPLACE", "WITH":
+		return true
+	}
+	return false
+}
 
 // writes reports whether a statement may write: anything but a single
 // SELECT or EXPLAIN, or reading one of readPragmas.

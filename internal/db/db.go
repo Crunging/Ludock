@@ -17,7 +17,9 @@ import (
 	"modernc.org/sqlite"
 )
 
-var bg = context.Background()
+// bg is Open's own context: its migrations run while an update holds the
+// database, which the new version must migrate.
+var bg = Maintenance(context.Background())
 
 // Now returns the current Unix time in milliseconds. Tests may replace it.
 var Now = func() int64 { return time.Now().UnixMilli() }
