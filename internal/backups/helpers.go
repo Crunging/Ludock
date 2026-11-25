@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"hash"
 	"io"
 	"os"
 	"path"
@@ -385,170 +386,245 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 		return 0, "", err
 	}
 	defer dir.close()
-	diskBudget, err := budget(dir, settings.ReserveBytes, 0)
+	snapshot, err := createSnapshot(dir, id, settings.ReserveBytes, availableBytes, assertAccess)
 	if err != nil {
 		return 0, "", err
 	}
-	partial := archivePartial(id)
-	fd, err := unix.Openat(dir.fd, partial, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
-	if err != nil {
+	// Until it is published, any return removes the partial archive.
+	defer snapshot.removeUnlessPublished()
+	if err := snapshot.writeTop(); err != nil {
 		return 0, "", err
 	}
-	file := os.NewFile(uintptr(fd), partial)
-	published := false
-	defer func() {
-		if !published {
-			file.Close()
-			unix.Unlinkat(dir.fd, partial, 0)
-		}
-	}()
-	hash := sha256.New()
-	var size, checked int64
-	// out coalesces small writes; chunk carries file bodies for every entry.
-	out, chunk := newCoalescer(file), make([]byte, 64*1024)
-	stillAllowed := launch.Periodic(assertAccess)
-	write := func(chunk []byte) error {
-		if stillAllowed != nil {
-			if err := stillAllowed(); err != nil {
-				return err
-			}
-		}
-		size += int64(len(chunk))
-		if size > availableBytes {
-			return CapacityError(codeOver, 0)
-		}
-		if size > diskBudget {
-			return CapacityError(codeDisk, 0)
-		}
-		if size-checked > 16*1024*1024 {
-			checked = size
-			if _, err := budget(dir, settings.ReserveBytes, int64(len(chunk))); err != nil {
-				return err
-			}
-		}
-		hash.Write(chunk)
-		return out.write(chunk)
-	}
-	header, _ := tarstream.EncodeHeader(tarstream.Header{Name: "snapshot/", Type: "directory", Mode: 0o755})
-	if err := write(header); err != nil {
-		return 0, "", err
-	}
-	// Restore refuses an archive of more than maxEntries entries, counting
-	// this header, so a backup it would refuse is refused while written.
-	entries := 1
 	for _, root := range data.Roots {
 		if err := assertStopped(); err != nil {
 			return 0, "", err
 		}
-		helperPath, err := HelperRoot(context, root)
-		if err != nil {
+		if err := h.copyRoot(ctx, snapshot, context, data, root, assertAccess); err != nil {
 			return 0, "", err
-		}
-		input, complete, err := h.archive(ctx, data.Container, helperBase(root), helperPath, assertAccess)
-		if err != nil {
-			return 0, "", err
-		}
-		prefix := ""
-		names := map[string]bool{}
-		err = tarstream.Walk(input, func(header *tarstream.Header, body io.Reader) error {
-			name := strings.TrimSuffix(header.Name, "/")
-			if strings.HasPrefix(name, "/") || slices.ContainsFunc(strings.Split(name, "/"), func(part string) bool { return part == "" || part == ".." || part == "." }) {
-				return fail("UNSAFE_ARCHIVE", "A file in the server’s data has a name Ludock can’t store safely, so the backup was stopped.")
-			}
-			if prefix == "" {
-				prefix = strings.Split(name, "/")[0]
-			}
-			if name != prefix && !strings.HasPrefix(name, prefix+"/") {
-				return fail("UNSAFE_ARCHIVE", "Ludock was handed a file from outside the server’s data folders, so the backup was stopped.")
-			}
-			suffix := ""
-			if header.Type == "directory" {
-				suffix = "/"
-			}
-			mapped, err := MappedHeader(header, "snapshot/"+root.ID+name[len(prefix):]+suffix)
-			if err != nil {
-				return err
-			}
-			if err := ValidateEntry(mapped, data.Roots); err != nil {
-				return err
-			}
-			if names[name] || entries >= maxEntries {
-				return fail("UNSAFE_ARCHIVE", "The server’s data folders have duplicate paths or too many entries.")
-			}
-			names[name] = true
-			entries++
-			encoded, err := tarstream.EncodeHeader(*mapped)
-			if err != nil {
-				return err
-			}
-			if err := write(encoded); err != nil {
-				return err
-			}
-			for {
-				n, readErr := body.Read(chunk)
-				if n > 0 {
-					if err := write(chunk[:n]); err != nil {
-						return err
-					}
-				}
-				if readErr == io.EOF {
-					break
-				}
-				if readErr != nil {
-					return readErr
-				}
-			}
-			if padding := tarstream.Padding(mapped.Size); len(padding) > 0 {
-				return write(padding)
-			}
-			return nil
-		}, nil)
-		// A stream cut off at the time limit or by Docker going away fails as
-		// a broken archive; the limit or Docker is the reason.
-		if completeErr := complete(); err == nil || errors.Is(completeErr, errBackupTimeout) || errors.Is(completeErr, ErrHostMount) ||
-			docker.Unavailable(completeErr) {
-			err = completeErr
-		}
-		input.Close()
-		if err != nil {
-			if _, ok := apperr.As(err); !ok && !docker.Unavailable(err) {
-				err = fail("UNSAFE_ARCHIVE", "Ludock couldn’t read everything in the server’s data folders, so the backup was stopped. A backup takes only ordinary files and folders that Ludock can read, not links (symbolic or hard) or device files.")
-			}
-			return 0, "", err
-		}
-		if prefix == "" || !names[prefix] {
-			return 0, "", fail("INVALID_BACKUP", "The archive is missing one of the server’s data folders.")
 		}
 		if err := assertStopped(); err != nil {
 			return 0, "", err
 		}
 	}
-	if err := write(tarstream.End()); err != nil {
+	if err := snapshot.finish(assertStopped); err != nil {
 		return 0, "", err
 	}
-	if err := out.flush(); err != nil {
+	if err := snapshot.publish(); err != nil {
 		return 0, "", err
 	}
-	if _, err := budget(dir, settings.ReserveBytes, 0); err != nil {
-		return 0, "", err
+	return snapshot.size, hex.EncodeToString(snapshot.hash.Sum(nil)), nil
+}
+
+// snapshotFile is an archive being written to its partial file. Every byte
+// goes through write, so the size, the limits, and the checksum cover exactly
+// what the file holds.
+type snapshotFile struct {
+	dir                pinned
+	id, partial        string
+	reserve, available int64
+	diskBudget         int64
+	file               *os.File
+	published          bool
+	hash               hash.Hash
+	size, checked      int64
+	entries            int
+	out                *coalescer
+	chunk              []byte
+	stillAllowed       func() error
+}
+
+func createSnapshot(dir pinned, id string, reserve, available int64, assertAccess func() error) (*snapshotFile, error) {
+	diskBudget, err := budget(dir, reserve, 0)
+	if err != nil {
+		return nil, err
+	}
+	partial := archivePartial(id)
+	fd, err := unix.Openat(dir.fd, partial, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), partial)
+	// out coalesces small writes; chunk carries file bodies for every entry.
+	return &snapshotFile{dir: dir, id: id, partial: partial, reserve: reserve, available: available, diskBudget: diskBudget,
+		file: file, hash: sha256.New(), out: newCoalescer(file), chunk: make([]byte, 64*1024),
+		stillAllowed: launch.Periodic(assertAccess)}, nil
+}
+
+func (s *snapshotFile) removeUnlessPublished() {
+	if !s.published {
+		s.file.Close()
+		unix.Unlinkat(s.dir.fd, s.partial, 0)
+	}
+}
+
+func (s *snapshotFile) write(chunk []byte) error {
+	if s.stillAllowed != nil {
+		if err := s.stillAllowed(); err != nil {
+			return err
+		}
+	}
+	s.size += int64(len(chunk))
+	if s.size > s.available {
+		return CapacityError(codeOver, 0)
+	}
+	if s.size > s.diskBudget {
+		return CapacityError(codeDisk, 0)
+	}
+	if s.size-s.checked > 16*1024*1024 {
+		s.checked = s.size
+		if _, err := budget(s.dir, s.reserve, int64(len(chunk))); err != nil {
+			return err
+		}
+	}
+	s.hash.Write(chunk)
+	return s.out.write(chunk)
+}
+
+func (s *snapshotFile) writeTop() error {
+	header, _ := tarstream.EncodeHeader(tarstream.Header{Name: "snapshot/", Type: "directory", Mode: 0o755})
+	if err := s.write(header); err != nil {
+		return err
+	}
+	// Restore refuses an archive of more than maxEntries entries, counting
+	// this header, so a backup it would refuse is refused while written.
+	s.entries = 1
+	return nil
+}
+
+// rootCopy is one root being copied into a snapshot: the folder name the
+// helper's stream starts with and the names it has sent.
+type rootCopy struct {
+	root   Root
+	data   *DataHelper
+	prefix string
+	names  map[string]bool
+}
+
+// copyRoot streams one root from the helper into the snapshot under its ID.
+func (h *Helpers) copyRoot(ctx context.Context, snapshot *snapshotFile, context *servers.Context, data *DataHelper, root Root,
+	assertAccess func() error) error {
+	helperPath, err := HelperRoot(context, root)
+	if err != nil {
+		return err
+	}
+	input, complete, err := h.archive(ctx, data.Container, helperBase(root), helperPath, assertAccess)
+	if err != nil {
+		return err
+	}
+	copied := &rootCopy{root: root, data: data, names: map[string]bool{}}
+	err = tarstream.Walk(input, func(header *tarstream.Header, body io.Reader) error {
+		return snapshot.copyEntry(copied, header, body)
+	}, nil)
+	// A stream cut off at the time limit or by Docker going away fails as
+	// a broken archive; the limit or Docker is the reason.
+	if completeErr := complete(); err == nil || errors.Is(completeErr, errBackupTimeout) || errors.Is(completeErr, ErrHostMount) ||
+		docker.Unavailable(completeErr) {
+		err = completeErr
+	}
+	input.Close()
+	if err != nil {
+		if _, ok := apperr.As(err); !ok && !docker.Unavailable(err) {
+			err = fail("UNSAFE_ARCHIVE", "Ludock couldn’t read everything in the server’s data folders, so the backup was stopped. A backup takes only ordinary files and folders that Ludock can read, not links (symbolic or hard) or device files.")
+		}
+		return err
+	}
+	if copied.prefix == "" || !copied.names[copied.prefix] {
+		return fail("INVALID_BACKUP", "The archive is missing one of the server’s data folders.")
+	}
+	return nil
+}
+
+func (s *snapshotFile) copyEntry(copied *rootCopy, header *tarstream.Header, body io.Reader) error {
+	name := strings.TrimSuffix(header.Name, "/")
+	mapped, err := copied.mapped(name, header)
+	if err != nil {
+		return err
+	}
+	if err := ValidateEntry(mapped, copied.data.Roots); err != nil {
+		return err
+	}
+	if copied.names[name] || s.entries >= maxEntries {
+		return fail("UNSAFE_ARCHIVE", "The server’s data folders have duplicate paths or too many entries.")
+	}
+	copied.names[name] = true
+	s.entries++
+	encoded, err := tarstream.EncodeHeader(*mapped)
+	if err != nil {
+		return err
+	}
+	if err := s.write(encoded); err != nil {
+		return err
+	}
+	if err := streamBody(body, s.chunk, s.write); err != nil {
+		return err
+	}
+	if padding := tarstream.Padding(mapped.Size); len(padding) > 0 {
+		return s.write(padding)
+	}
+	return nil
+}
+
+// mapped is the helper's entry renamed under the snapshot's root ID.
+func (c *rootCopy) mapped(name string, header *tarstream.Header) (*tarstream.Header, error) {
+	if strings.HasPrefix(name, "/") || slices.ContainsFunc(strings.Split(name, "/"), func(part string) bool { return part == "" || part == ".." || part == "." }) {
+		return nil, fail("UNSAFE_ARCHIVE", "A file in the server’s data has a name Ludock can’t store safely, so the backup was stopped.")
+	}
+	if c.prefix == "" {
+		c.prefix = strings.Split(name, "/")[0]
+	}
+	if name != c.prefix && !strings.HasPrefix(name, c.prefix+"/") {
+		return nil, fail("UNSAFE_ARCHIVE", "Ludock was handed a file from outside the server’s data folders, so the backup was stopped.")
+	}
+	suffix := ""
+	if header.Type == "directory" {
+		suffix = "/"
+	}
+	return MappedHeader(header, "snapshot/"+c.root.ID+name[len(c.prefix):]+suffix)
+}
+
+// finish ends the archive and makes it durable in its partial file.
+func (s *snapshotFile) finish(assertStopped func() error) error {
+	if err := s.write(tarstream.End()); err != nil {
+		return err
+	}
+	if err := s.out.flush(); err != nil {
+		return err
+	}
+	if _, err := budget(s.dir, s.reserve, 0); err != nil {
+		return err
 	}
 	if err := assertStopped(); err != nil {
-		return 0, "", err
+		return err
 	}
-	if err := file.Sync(); err != nil {
-		return 0, "", err
+	return s.file.Sync()
+}
+
+// publish renames the partial file to <id>.tar.
+func (s *snapshotFile) publish() error {
+	s.file.Close()
+	if err := unix.Renameat(s.dir.fd, s.partial, s.dir.fd, s.id+".tar"); err != nil {
+		return err
 	}
-	file.Close()
-	if err := unix.Renameat(dir.fd, partial, dir.fd, id+".tar"); err != nil {
-		unix.Unlinkat(dir.fd, partial, 0)
-		published = true
-		return 0, "", err
+	s.published = true
+	return unix.Fsync(s.dir.fd)
+}
+
+// streamBody passes an entry's body to write in chunks.
+func streamBody(body io.Reader, chunk []byte, write func([]byte) error) error {
+	for {
+		n, readErr := body.Read(chunk)
+		if n > 0 {
+			if err := write(chunk[:n]); err != nil {
+				return err
+			}
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
 	}
-	published = true
-	if err := unix.Fsync(dir.fd); err != nil {
-		return 0, "", err
-	}
-	return size, hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // coalescer joins small writes into ones of up to its buffer's size, which
@@ -611,123 +687,170 @@ var (
 // checksum covers the whole archive, so a changed archive is detected before
 // any game data is replaced.
 func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID string, targets []StageTarget, stage string,
-	roots []Root, maxBytes, reserveBytes int64, checksum string, assertAccess func() error) (err error) {
+	roots []Root, maxBytes, reserveBytes int64, checksum string, assertAccess func() error) error {
+	run := h.newStageRun(ctx, helperID)
+	defer run.cancel()
+	err := run.unpack(directory, id, targets, helper.ExtractRequest{MaxBytes: maxBytes, ReserveBytes: &reserveBytes, Stage: stage},
+		roots, maxBytes, checksum, assertAccess)
+	if err != nil {
+		// Every extraction is stopped and collected before the deadline is
+		// released; one that stopped at the reserve is why the unpack failed.
+		run.closeAll()
+		if extracted := run.wait(); errors.Is(extracted, errStagingCapacity) {
+			err = extracted
+		}
+	}
+	return err
+}
+
+// stageRun is one ExtractToStage: an extraction in the helper for each
+// target root, fed from one pass over the archive.
+type stageRun struct {
+	h        *Helpers
+	ctx      context.Context
+	helperID string
+	deadline context.Context
+	cancel   context.CancelFunc
+	// mu guards extractions against closeAll at the deadline.
+	mu          sync.Mutex
+	extractions map[string]*rootExtraction
+	// waited and extracted are wait's one collection.
+	waited    bool
+	extracted error
+}
+
+type rootExtraction struct {
+	conn *docker.Conn
+	// item, when set, is the only path below the root it is sent.
+	item      string
+	completed chan error
+	// sent counts the records written; report is what the helper printed,
+	// how many it read, set before completed.
+	sent   int
+	report string
+}
+
+func (h *Helpers) newStageRun(ctx context.Context, helperID string) *stageRun {
 	restoreTimeout := fail("RESTORE_TIMEOUT", "Unpacking the backup took longer than 30 minutes, so the restore was stopped.")
 	deadline, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), 30*time.Minute, restoreTimeout)
-	defer cancel()
-	expired := func() bool { return deadline.Err() != nil }
-	type extraction struct {
-		conn      *docker.Conn
-		completed chan error
-		// sent counts the records written; report is what the helper printed,
-		// how many it read, set before completed.
-		sent   int
-		report string
-	}
-	var mu sync.Mutex
-	extractions := map[string]*extraction{}
-	items := map[string]string{}
-	closeAll := func() {
-		mu.Lock()
-		defer mu.Unlock()
-		for _, extraction := range extractions {
-			extraction.conn.Close()
-		}
-	}
-	// wait collects every extraction once. A helper that stopped at the
-	// reserve, or refused what it was sent, is why writing to it failed; one
-	// that only saw its input end, or whose exit is unknown, isn't.
-	waited, extracted := false, error(nil)
-	wait := func() error {
-		if !waited {
-			waited = true
-			rank := func(err error) int {
-				switch {
-				case errors.Is(err, errStagingCapacity):
-					return 3
-				case errors.Is(err, errExtraction):
-					return 2
-				case err != nil:
-					return 1
-				}
-				return 0
-			}
-			for _, extraction := range extractions {
-				if err := <-extraction.completed; rank(err) > rank(extracted) {
-					extracted = err
-				}
-			}
-		}
-		return extracted
-	}
-	// cut explains a stream that ended early: Docker away as it ended, or
-	// the connection alone.
-	ping := func() error { return h.Docker.Ping(docker.Promptly(context.WithoutCancel(ctx))) }
-	cut := func(pingErr error) error {
-		if docker.Unavailable(pingErr) {
-			return pingErr
-		}
-		return ErrStreamCut
-	}
-	defer func() {
-		if err != nil {
-			closeAll()
-			if extracted := wait(); errors.Is(extracted, errStagingCapacity) {
-				err = extracted
-			}
-		}
-	}()
+	return &stageRun{h: h, ctx: ctx, helperID: helperID, deadline: deadline, cancel: cancel, extractions: map[string]*rootExtraction{}}
+}
+
+func (r *stageRun) unpack(directory, id string, targets []StageTarget, request helper.ExtractRequest, roots []Root, maxBytes int64,
+	checksum string, assertAccess func() error) error {
 	for _, target := range targets {
-		request := helper.ExtractRequest{MaxBytes: maxBytes, ReserveBytes: &reserveBytes, Root: target.Path, Stage: stage}
-		var execID string
-		err := launch.Step(ctx, "creating a helper command", func(ctx context.Context) (err error) {
-			execID, err = h.Docker.CreateExec(ctx, helperID, docker.ExecCreate{Cmd: helper.Command("restore-extract", request),
-				AttachStdin: true, AttachStdout: true, AttachStderr: true})
-			return err
-		})
-		if err != nil {
+		if err := r.start(target, request, assertAccess); err != nil {
 			return err
 		}
-		if assertAccess != nil {
-			if err := assertAccess(); err != nil {
-				return err
-			}
-		}
-		conn, err := launch.Start(deadline, h.Docker, helperID, execID, h.pollInterval)
-		if err != nil {
-			return err
-		}
-		extraction := &extraction{conn: conn, completed: make(chan error, 1)}
-		mu.Lock()
-		extractions[target.Root.ID] = extraction
-		items[target.Root.ID] = target.Item
-		mu.Unlock()
-		go func() {
-			out := &launch.FirstBytes{Limit: 64}
-			err := docker.Demux(conn, out, nil)
-			result := launch.WaitForExit(h.Docker, helperID, execID, h.pollInterval, expired)
-			switch {
-			case result == nil:
-				err = errExitUnknown
-			case *result.ExitCode == helper.ExtractFullStatus:
-				err = errStagingCapacity
-			case *result.ExitCode == helper.ExtractCutStatus || (*result.ExitCode == 0 && err != nil):
-				err = errInputCut
-			case *result.ExitCode != 0:
-				err = errExtraction
-			}
-			extraction.report = out.String()
-			extraction.completed <- err
-		}()
 	}
-	defer closeAll()
-	stop := context.AfterFunc(deadline, closeAll)
+	defer r.closeAll()
+	stop := context.AfterFunc(r.deadline, r.closeAll)
 	defer stop()
-	archive, err := h.Storage.Open(directory, id)
+	archive, err := r.h.Storage.Open(directory, id)
 	if err != nil {
 		return err
 	}
 	defer archive.Close()
+	err = r.send(archive, roots, maxBytes, checksum, assertAccess)
+	if errors.Is(err, errExtractCut) {
+		return r.whyCut()
+	}
+	if err != nil {
+		if _, ok := apperr.As(err); !ok {
+			err = fail("INVALID_BACKUP", "The backup archive is invalid or truncated.")
+		}
+		return err
+	}
+	return r.finish()
+}
+
+func (r *stageRun) expired() bool { return r.deadline.Err() != nil }
+
+// start runs target's extraction in the helper and collects its exit in the
+// background.
+func (r *stageRun) start(target StageTarget, request helper.ExtractRequest, assertAccess func() error) error {
+	request.Root = target.Path
+	var execID string
+	err := launch.Step(r.ctx, "creating a helper command", func(ctx context.Context) (err error) {
+		execID, err = r.h.Docker.CreateExec(ctx, r.helperID, docker.ExecCreate{Cmd: helper.Command("restore-extract", request),
+			AttachStdin: true, AttachStdout: true, AttachStderr: true})
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if assertAccess != nil {
+		if err := assertAccess(); err != nil {
+			return err
+		}
+	}
+	conn, err := launch.Start(r.deadline, r.h.Docker, r.helperID, execID, r.h.pollInterval)
+	if err != nil {
+		return err
+	}
+	extraction := &rootExtraction{conn: conn, item: target.Item, completed: make(chan error, 1)}
+	r.mu.Lock()
+	r.extractions[target.Root.ID] = extraction
+	r.mu.Unlock()
+	go r.collect(extraction, execID)
+	return nil
+}
+
+func (r *stageRun) collect(extraction *rootExtraction, execID string) {
+	out := &launch.FirstBytes{Limit: 64}
+	err := docker.Demux(extraction.conn, out, nil)
+	result := launch.WaitForExit(r.h.Docker, r.helperID, execID, r.h.pollInterval, r.expired)
+	switch {
+	case result == nil:
+		err = errExitUnknown
+	case *result.ExitCode == helper.ExtractFullStatus:
+		err = errStagingCapacity
+	case *result.ExitCode == helper.ExtractCutStatus || (*result.ExitCode == 0 && err != nil):
+		err = errInputCut
+	case *result.ExitCode != 0:
+		err = errExtraction
+	}
+	extraction.report = out.String()
+	extraction.completed <- err
+}
+
+func (r *stageRun) closeAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, extraction := range r.extractions {
+		extraction.conn.Close()
+	}
+}
+
+// wait collects every extraction once. A helper that stopped at the
+// reserve, or refused what it was sent, is why writing to it failed; one
+// that only saw its input end, or whose exit is unknown, isn't.
+func (r *stageRun) wait() error {
+	if !r.waited {
+		r.waited = true
+		rank := func(err error) int {
+			switch {
+			case errors.Is(err, errStagingCapacity):
+				return 3
+			case errors.Is(err, errExtraction):
+				return 2
+			case err != nil:
+				return 1
+			}
+			return 0
+		}
+		for _, extraction := range r.extractions {
+			if err := <-extraction.completed; rank(err) > rank(r.extracted) {
+				r.extracted = err
+			}
+		}
+	}
+	return r.extracted
+}
+
+// send writes each entry of the archive to its root's extraction as a record
+// and its body, and checks the checksum against every byte read.
+func (r *stageRun) send(archive io.Reader, roots []Root, maxBytes int64, checksum string, assertAccess func() error) error {
 	stillAllowed := launch.Periodic(assertAccess)
 	write := func(conn *docker.Conn, data []byte) error {
 		if stillAllowed != nil {
@@ -744,7 +867,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 	hash := sha256.New()
 	var total int64
 	chunk := make([]byte, 64*1024)
-	err = tarstream.Walk(archive, func(header *tarstream.Header, body io.Reader) error {
+	err := tarstream.Walk(archive, func(header *tarstream.Header, body io.Reader) error {
 		if err := ValidateEntry(header, roots); err != nil {
 			return err
 		}
@@ -753,13 +876,8 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 			return fail("UNSAFE_ARCHIVE", "The archive contains duplicate paths or too many entries.")
 		}
 		names[name] = true
-		rootID, entry, _ := strings.Cut(strings.TrimPrefix(name, "snapshot/"), "/")
-		extraction := extractions[rootID]
+		extraction, entry := r.destination(name)
 		if extraction == nil {
-			return nil
-		}
-		item := items[rootID]
-		if item != "" && entry != item && !strings.HasPrefix(entry, item+"/") {
 			return nil
 		}
 		// A whole root's own entry, which comes first and which validation
@@ -773,23 +891,10 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		if err := write(extraction.conn, append(record, '\n')); err != nil {
 			return err
 		}
-		mu.Lock()
+		r.mu.Lock()
 		extraction.sent++
-		mu.Unlock()
-		for {
-			n, readErr := body.Read(chunk)
-			if n > 0 {
-				if err := write(extraction.conn, chunk[:n]); err != nil {
-					return err
-				}
-			}
-			if readErr == io.EOF {
-				return nil
-			}
-			if readErr != nil {
-				return readErr
-			}
-		}
+		r.mu.Unlock()
+		return streamBody(body, chunk, func(data []byte) error { return write(extraction.conn, data) })
 	}, func(chunk []byte) error {
 		total += int64(len(chunk))
 		if total > maxBytes {
@@ -801,45 +906,74 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 	if err == nil && hex.EncodeToString(hash.Sum(nil)) != checksum {
 		err = fail("BACKUP_CHECKSUM", "The backup archive changed while it was being unpacked. No game data was replaced.")
 	}
-	if errors.Is(err, errExtractCut) {
-		// The archive is fine; the stream to a helper broke. A helper that
-		// refused what it was sent closed it; otherwise it was cut. Docker is
-		// asked first, since waiting for the helpers waits for it to answer.
-		pingErr := ping()
-		closeAll()
-		extracted := wait()
-		if expired() {
-			return context.Cause(deadline)
-		}
-		if errors.Is(extracted, errStagingCapacity) || errors.Is(extracted, errExtraction) {
-			return extracted
-		}
-		return cut(pingErr)
+	return err
+}
+
+// destination is the extraction an archive entry goes to and its path below
+// that root, or nil when no target takes it.
+func (r *stageRun) destination(name string) (*rootExtraction, string) {
+	rootID, entry, _ := strings.Cut(strings.TrimPrefix(name, "snapshot/"), "/")
+	extraction := r.extractions[rootID]
+	if extraction == nil {
+		return nil, ""
 	}
-	if err != nil {
-		if _, ok := apperr.As(err); !ok {
-			err = fail("INVALID_BACKUP", "The backup archive is invalid or truncated.")
-		}
-		return err
+	if item := extraction.item; item != "" && entry != item && !strings.HasPrefix(entry, item+"/") {
+		return nil, ""
 	}
-	for _, extraction := range extractions {
+	return extraction, entry
+}
+
+// whyCut explains errExtractCut. The archive is fine; the stream to a helper
+// broke. A helper that refused what it was sent closed it; otherwise it was
+// cut. Docker is asked first, since waiting for the helpers waits for it to
+// answer.
+func (r *stageRun) whyCut() error {
+	pingErr := r.ping()
+	r.closeAll()
+	extracted := r.wait()
+	if r.expired() {
+		return context.Cause(r.deadline)
+	}
+	if errors.Is(extracted, errStagingCapacity) || errors.Is(extracted, errExtraction) {
+		return extracted
+	}
+	return cut(pingErr)
+}
+
+// finish ends every extraction's input and confirms each helper read every
+// record it was sent.
+func (r *stageRun) finish() error {
+	for _, extraction := range r.extractions {
 		extraction.conn.CloseWrite()
 	}
-	if err := wait(); expired() {
-		return context.Cause(deadline)
+	if err := r.wait(); r.expired() {
+		return context.Cause(r.deadline)
 	} else if errors.Is(err, errInputCut) || errors.Is(err, errExitUnknown) {
-		return cut(ping())
+		return cut(r.ping())
 	} else if err != nil {
 		return err
 	}
 	// Every record was sent: a helper that read fewer saw the stream end
 	// cleanly between two.
-	for _, extraction := range extractions {
+	for _, extraction := range r.extractions {
 		if extraction.report != "ok "+strconv.Itoa(extraction.sent) {
-			return cut(ping())
+			return cut(r.ping())
 		}
 	}
 	return nil
+}
+
+func (r *stageRun) ping() error {
+	return r.h.Docker.Ping(docker.Promptly(context.WithoutCancel(r.ctx)))
+}
+
+// cut explains a stream that ended early: Docker away as it ended, or the
+// connection alone.
+func cut(pingErr error) error {
+	if docker.Unavailable(pingErr) {
+		return pingErr
+	}
+	return ErrStreamCut
 }
 
 // writableOwnerMount is the deepest writable bind or volume containing rootPath.
