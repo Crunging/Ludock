@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -125,6 +126,49 @@ func TestStartupFinishesStoppedRestoreOnStoppedServer(t *testing.T) {
 	if read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" ||
 		read(t, filepath.Join(f.data, "world", helper.SetAsideName(restore.ID), "generated.dat")) != "generated" {
 		t.Fatal("previous data not returned, or the game's writes not kept")
+	}
+}
+
+// A restore stops partway, then the owner renames the container, which keeps
+// its data folders, and an administrator moves the missing server to the
+// renamed one. The restore's undo is finished there: by startup while the
+// new server is stopped, or by its next backup while it runs.
+func TestTakeOverFinishesStoppedRestore(t *testing.T) {
+	for _, stopped := range []bool{true, false} {
+		t.Run(map[bool]string{true: "startup", false: "backup"}[stopped], func(t *testing.T) {
+			f := setup(t)
+			restore, _ := f.stoppedRestore(t)
+			f.game = f.engine.Recreate(f.game, url.Values{"name": {"mc-world"}})
+			if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
+				t.Fatal(err)
+			}
+			var renamed string
+			f.jobs.DB.QueryRow("SELECT id FROM logical_servers WHERE id<>? AND status='active'", f.serverID).Scan(&renamed)
+			if _, err := f.jobs.TakeOver(ctx, f.admin, f.adminSession, f.serverID, renamed, -1, ""); err != nil {
+				t.Fatal(err)
+			}
+			f.serverID = renamed
+			if stopped {
+				f.runner.Stop()
+				if err := f.jobs.Docker.Stop(ctx, f.game, nil); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.runner.Start(ctx, nil); err != nil {
+					t.Fatal(err)
+				}
+				if f.savedJournal(restore.ID) != "rolled_back put back" || f.running() ||
+					read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" ||
+					read(t, filepath.Join(f.data, "world", helper.SetAsideName(restore.ID), "generated.dat")) != "generated" {
+					t.Fatal(f.savedJournal(restore.ID))
+				}
+				return
+			}
+			backup := f.run(t, "backup", nil)
+			if backup.Status != ops.Succeeded || !f.running() {
+				t.Fatalf("%+v", backup)
+			}
+			f.checkUndone(t, restore, backup)
+		})
 	}
 }
 

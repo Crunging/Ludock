@@ -2,6 +2,7 @@ package history
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 
@@ -59,5 +60,40 @@ func TestPagesRecheckAccessAndHideTokens(t *testing.T) {
 	if err != nil || len(entries) != 1 || entries[0].Status != "failed" || entries[0].OperationID == "" ||
 		entries[0].Details.(map[string]any)["actorId"] != "viewer" {
 		t.Fatal(entries, err)
+	}
+}
+
+// A member's Activity is read as of one moment: a move that pauses sharing
+// and brings in another server's work, committing just after access was
+// checked, shows neither half.
+func TestOperationsReadOneSnapshot(t *testing.T) {
+	d := dbtest.Open(t)
+	admin := &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
+	member := &db.SessionUser{ID: "member", Username: "member", Role: db.RoleMember}
+	for _, user := range []*db.SessionUser{admin, member} {
+		d.CreateUser(ctx, db.UserRecord{User: db.User{ID: user.ID, Username: user.Username, Role: user.Role, CreatedAt: 1}, PasswordHash: "x"})
+	}
+	store := &identity.Store{DB: d}
+	list, _ := store.Reconcile(ctx, []identity.Observation{{ContainerID: "a", Name: "a", DisplayName: "a"}, {ContainerID: "b", Name: "b", DisplayName: "b"}}, "", 0)
+	authorization := &authz.Service{DB: d, Servers: store}
+	authorization.Share(ctx, admin, dbtest.Session(t, d, admin.ID), member.ID, list[0].ID, []authz.Capability{authz.ServerView})
+	const moved = "00000000-0000-4000-8000-000000000001"
+	d.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at)
+    VALUES (?,?,'admin','restore','succeeded','succeeded','{}',1,1,1)`, moved, list[1].ID)
+	testHook = func(string) {
+		if err := d.Tx(ctx, func(tx *sql.Tx) error {
+			if _, err := tx.Exec("UPDATE logical_servers SET sharing_paused=1 WHERE id=?", list[0].ID); err != nil {
+				return err
+			}
+			_, err := tx.Exec("UPDATE operations SET server_id=? WHERE id=?", list[0].ID, moved)
+			return err
+		}); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { testHook = nil })
+	s := &Service{DB: d, Authz: authorization, Identity: store}
+	if visible, _, err := s.Operations(ctx, member, Query{ServerID: list[0].ID, From: -1, To: -1}); err != nil || len(visible) != 0 {
+		t.Fatal(visible, err)
 	}
 }

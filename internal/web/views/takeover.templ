@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Crunging/Ludock/internal/schedules"
+	"github.com/Crunging/Ludock/internal/jobs"
 )
 
 // TakeOver offers to move a missing server's backups, schedules, and
@@ -21,20 +21,6 @@ type TakeOver struct {
 type TakeOverTarget struct {
 	ID, Name string
 	Revision int64
-}
-
-// TakeOverDone is what moved, and what stayed behind because the new server
-// already had its own.
-type TakeOverDone struct {
-	FromName, ToID, ToName     string
-	Backups, Schedules, People int
-	// SameData: the same game and data folders, kept in the same place.
-	SameData                   bool
-	Monitoring, KeptMonitoring bool
-	LeftSchedules              []schedules.Input
-	KeptPeople                 []string
-	// Paused: the moved sharing waits for an administrator to confirm.
-	Paused bool
 }
 
 func counted(count int, one, many string) string {
@@ -112,7 +98,7 @@ templ TakeOverNotice(o TakeOver) {
 
 // TakeOverResult says what moved, and what stayed because the new server
 // had its own.
-templ TakeOverResult(d TakeOverDone) {
+templ TakeOverResult(d jobs.TakeOver) {
 	<div class="alert alert--success stack-form" role="status" id="take-over-result">
 		<p>
 			Moved { d.FromName } to { d.ToName }: { counted(d.Backups, "backup", "backups") }, { counted(d.Schedules, "schedule", "schedules") }, and sharing with { counted(d.People, "person", "people") }.
@@ -147,7 +133,7 @@ templ TakeOverResult(d TakeOverDone) {
 }
 
 // TakeOverOnPage puts the result in place of the missing server's page.
-templ TakeOverOnPage(d TakeOverDone) {
+templ TakeOverOnPage(d jobs.TakeOver) {
 	@Partial("#detail-body", "innerHTML") {
 		@TakeOverResult(d)
 	}
