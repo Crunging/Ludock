@@ -195,7 +195,8 @@ func TestRenamedServerTakesOver(t *testing.T) {
 			}},
 		{name: "a one-time restart at the same time", status: http.StatusOK,
 			before: func(t *testing.T, p *pages, member *auth.Principal, renamed string) *auth.Principal {
-				once := schedules.Input{Kind: "once", Action: "restart", Enabled: true, Time: "04:00", Timezone: "UTC",
+				// Another name for the same zone runs at the same instant.
+				once := schedules.Input{Kind: "once", Action: "restart", Enabled: true, Time: "04:00", Timezone: "Etc/UTC",
 					Date: time.Now().UTC().AddDate(0, 0, 2).Format("2006-01-02")}
 				if _, err := p.app.Schedules.CreateAsAdmin(ctx, &p.admin.User, p.admin.TokenHash, renamed, once); err != nil {
 					t.Fatal(err)
