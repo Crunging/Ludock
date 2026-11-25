@@ -58,15 +58,16 @@ func TestLogoutClearsSecureCookie(t *testing.T) {
 	}
 }
 
-// totp computes the current authenticator code for a base32 secret.
-func totp(t *testing.T, secret string) string {
+// totp computes the authenticator code for a base32 secret at a time in Unix
+// milliseconds.
+func totp(t *testing.T, secret string, nowMs int64) string {
 	t.Helper()
 	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var counter [8]byte
-	binary.BigEndian.PutUint64(counter[:], uint64(time.Now().Unix()/30))
+	binary.BigEndian.PutUint64(counter[:], uint64(nowMs/30_000))
 	mac := hmac.New(sha1.New, key)
 	mac.Write(counter[:])
 	sum := mac.Sum(nil)
@@ -82,11 +83,14 @@ func TestSignInChallengeIsNotASession(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleMember)
+	// The password check can take longer than a code lives on a busy machine.
+	now := time.Now().UnixMilli()
+	p.app.Auth.Now = func() int64 { return now }
 	enrollment, err := p.app.Auth.BeginTwoFactor(context.Background(), operator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := p.app.Auth.EnableTwoFactor(context.Background(), operator, "password-u-operator", totp(t, enrollment.Secret), auth.Client{}); err != nil {
+	if _, _, err := p.app.Auth.EnableTwoFactor(context.Background(), operator, "password-u-operator", totp(t, enrollment.Secret, now), auth.Client{}); err != nil {
 		t.Fatal(err)
 	}
 	form := func(values url.Values) io.Reader { return strings.NewReader(values.Encode()) }
