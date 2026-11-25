@@ -43,7 +43,7 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
   cpSync(server.data, moved, { recursive: true });
   await fake("/fake/recreate", { container: server.container, mount: `${server.data}=${moved}` });
   await openServer(page, server.name);
-  await expect(page.locator(".alert--warning")).toContainText("the server’s data folders aren’t the ones that restore was working on any more");
+  await expect(page.locator(".alert--warning")).toContainText("the server’s data folders or game have changed since");
   await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page.getByRole("button", { name: "Create backup" })).toHaveCount(0);
   await expect(page.locator("#backup-list").getByRole("link", { name: "Restore…" })).toHaveCount(0);
@@ -56,7 +56,7 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
   await page.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
   await page.locator("#activity-list").getByRole("link", { name: /Undo restore/ }).first().click();
   await expect(page.locator("main")).toContainText(
-    "Put the data folders back as they were where the server is defined, such as in Compose, then undo the restore.", { timeout: 30_000 });
+    "Put them back as they were where the server is defined, such as in Compose, then undo the restore.", { timeout: 30_000 });
   await fake("/fake/recreate", { container: server.container, mount: `${server.data}=${server.data}` });
 
   // Started on the emptied folder, the game keeps exiting.

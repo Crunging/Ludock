@@ -441,9 +441,9 @@ func DetailLive(d ServerDetail) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var11 string
-		templ_7745c5c3_Var11, templ_7745c5c3_Err = templruntime.NewAttributeExpression("/fragments/servers/" + server.ID + "/live?" + url.Values{"tab": {d.Tab}, "operation": {d.Operation}, "active": {activeID(server)}}.Encode()).Resolve(ctx)
+		templ_7745c5c3_Var11, templ_7745c5c3_Err = templruntime.NewAttributeExpression("/fragments/servers/" + server.ID + "/live?" + url.Values{"tab": {d.Tab}, "operation": {d.Operation}, "active": {activeID(server)}, "blocked": {boolText(d.UndoBlocked)}}.Encode()).Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 206, Col: 172}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 206, Col: 210}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11)
 		if templ_7745c5c3_Err != nil {
@@ -456,7 +456,7 @@ func DetailLive(d ServerDetail) templ.Component {
 		var templ_7745c5c3_Var12 string
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templruntime.NewAttributeExpression(liveTrigger(server.ID, server.ActiveOperation != nil)).Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 206, Col: 241}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 206, Col: 279}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var12)
 		if templ_7745c5c3_Err != nil {
@@ -1050,9 +1050,9 @@ func ConfirmChange(serverID string, revision int64) templ.Component {
 
 // UndoBlockedNote explains a restore that stopped partway and can't be undone
 // while the server's data folders differ from the ones it worked on.
-const UndoBlockedNote = "An earlier restore of this server stopped partway, and the server’s data folders aren’t the ones that restore was working on any more, " +
+const UndoBlockedNote = "An earlier restore of this server stopped partway, and the server’s data folders or game have changed since, " +
 	"so Ludock can’t undo it, and backups, restores, and updates of this server are refused until it can. " +
-	"Put the data folders back as they were where the server is defined, such as in Compose, then undo the restore from Needs attention."
+	"Put them back as they were where the server is defined, such as in Compose, then undo the restore from Needs attention."
 
 // BindingNote explains a server without exactly one container, or is empty.
 func BindingNote(status string) string {
