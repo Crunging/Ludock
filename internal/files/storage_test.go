@@ -681,3 +681,26 @@ func TestUploadNestedBatch(t *testing.T) {
 		t.Fatal(started, "containers started for one batch")
 	}
 }
+
+// Access is confirmed again before each folder an upload makes, as before
+// each file it publishes: once it is revoked, no further folder is made.
+func TestUploadFoldersFollowAccess(t *testing.T) {
+	f := setup(t)
+	revoked := func() error {
+		if _, err := os.Stat(filepath.Join(f.data, "one")); err == nil {
+			return apperr.New("FORBIDDEN", 403, "You can’t do that")
+		}
+		return nil
+	}
+	entries := []UploadEntry{{Name: "one/a.txt", Size: 1}, {Name: "two/b.txt", Size: 1}}
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", entries, strings.NewReader("ab"), revoked)
+	if err == nil || results[0] == nil || results[1] == nil {
+		t.Fatal(results, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "one")); err != nil {
+		t.Fatal("the first folder wasn't made", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "two")); !os.IsNotExist(err) {
+		t.Fatal("made a folder after access was revoked", err)
+	}
+}

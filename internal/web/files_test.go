@@ -283,14 +283,6 @@ func TestUploadFollowsGrant(t *testing.T) {
 		t.Fatal("audited the folder as sent", details)
 	}
 
-	// A page from before files carried their own paths would put a folder's
-	// files here, so it is refused unread.
-	extra, body = "&into=mods", manifest("x.txt")+"hello"
-	if code, answer := send(strings.NewReader(body), int64(len(body))); code != http.StatusBadRequest || !strings.Contains(answer, "Reload Files") {
-		t.Fatal(code, answer)
-	}
-	extra = ""
-
 	head := manifest("d.txt", "e.txt")
 	reader, writer := io.Pipe()
 	go func() {
@@ -320,6 +312,13 @@ func TestUploadFollowsGrant(t *testing.T) {
 	started := time.Now()
 	if code, _ := send(never, 1000); code != http.StatusForbidden || time.Since(started) > 5*time.Second {
 		t.Fatal("waited for the list of someone who can't write", code, time.Since(started))
+	}
+	// A page from before files carried their own paths would put a folder's
+	// files here, so it is refused unread.
+	p.grant(member, authz.ServerView, authz.FilesRead, authz.FilesWrite)
+	extra, body = "&into=mods", manifest("x.txt")+"hello"
+	if code, answer := send(strings.NewReader(body), int64(len(body))); code != http.StatusBadRequest || !strings.Contains(answer, "Reload Files") {
+		t.Fatal(code, answer)
 	}
 	if entries, _ := os.ReadDir(data); len(entries) != 21 {
 		t.Fatal(len(entries), "files")

@@ -158,8 +158,9 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		return err
 	}
 	input.trailer = fileList(files)
-	acks := &uploadAcks{limit: len(files), ready: make(chan struct{}, len(files))}
-	input.ready = acks.ready
+	acks := &uploadAcks{limit: len(files), ready: make(chan struct{}, len(files)), folders: make(chan struct{}, len(files)),
+		files: make(chan struct{}, 1)}
+	input.ready, input.folders, input.files = acks.ready, acks.folders, acks.files
 	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized},
 		launch.ExecOptions{Input: input, Stdout: acks})
 	// Exec can return while its input is still being read; once stopped, no
@@ -256,16 +257,20 @@ func isRefusal(err error) bool {
 // trailer once the helper has staged the file and asks for it, and access
 // and the game are confirmed. Refused entries are read past.
 type batchInput struct {
-	body    io.Reader
-	check   func() error
-	ready   <-chan struct{}
-	done    chan struct{}
-	entries []UploadEntry
-	ids     []string
-	index   int
-	left    int64
-	started bool
-	trailer []byte
+	body  io.Reader
+	check func() error
+	ready <-chan struct{}
+	// folders has a token for each missing folder the helper asks to make
+	// before the files, and files one once their bodies may follow.
+	folders, files <-chan struct{}
+	begun          bool
+	done           chan struct{}
+	entries        []UploadEntry
+	ids            []string
+	index          int
+	left           int64
+	started        bool
+	trailer        []byte
 
 	mu sync.Mutex
 	// sent marks entries whose trailer was handed on, which may be committed.
@@ -292,6 +297,30 @@ func (b *batchInput) Read(p []byte) (int, error) {
 			n := copy(p, b.trailer)
 			b.trailer = b.trailer[n:]
 			return n, nil
+		}
+		// A folder is made only once access and the game are confirmed again,
+		// as each file is before it is published.
+		if !b.begun {
+			select {
+			case <-b.folders:
+				b.mu.Lock()
+				err := errInputStopped
+				if !b.stopped {
+					if err = nil; b.check != nil {
+						err = b.check()
+					}
+				}
+				b.mu.Unlock()
+				if err != nil {
+					return 0, err
+				}
+				b.trailer = []byte{helper.FolderGo}
+			case <-b.files:
+				b.begun = true
+			case <-b.done:
+				return 0, errInputStopped
+			}
+			continue
 		}
 		if b.index >= len(b.entries) {
 			return 0, io.EOF
@@ -347,9 +376,13 @@ type uploadAcks struct {
 	limit   int
 	pending []byte
 	results []helper.UploadResult
-	// ready has a token for each file the helper asked the trailer of.
-	ready   chan struct{}
-	readies int
+	// ready has a token for each file the helper asked the trailer of, and
+	// folders for each folder it asked to make; files, once it has made them.
+	ready          chan struct{}
+	readies        int
+	folders, files chan struct{}
+	asked          int
+	began          bool
 }
 
 func (a *uploadAcks) Write(p []byte) (int, error) {
@@ -364,6 +397,23 @@ func (a *uploadAcks) Write(p []byte) (int, error) {
 			return 0, errors.New("unexpected upload output")
 		}
 		a.pending = rest
+		// Each of a batch's folders holds at least one of its files.
+		if result.Folder {
+			if a.began || a.asked >= a.limit {
+				return 0, errors.New("unexpected upload output")
+			}
+			a.asked++
+			a.folders <- struct{}{}
+			continue
+		}
+		if result.Files {
+			if a.began {
+				return 0, errors.New("unexpected upload output")
+			}
+			a.began = true
+			a.files <- struct{}{}
+			continue
+		}
 		if result.Ready {
 			if a.readies >= a.limit {
 				return 0, errors.New("unexpected upload output")

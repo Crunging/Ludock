@@ -82,8 +82,8 @@ type ExecOptions struct {
 	// limited.
 	Stdout io.Writer
 	// AssertAccess runs before the exec, after it is created, and between
-	// input chunks; with Limit, also every second while the command runs.
-	// A settling command checks it only after the create.
+	// input chunks; with Limit and no input, also every second while the
+	// command runs. A settling command checks it only after the create.
 	AssertAccess func() error
 	// Limit replaces a command's bound: one minute, or 30 with input.
 	Limit time.Duration

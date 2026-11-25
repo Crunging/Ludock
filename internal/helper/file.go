@@ -1082,6 +1082,11 @@ type UploadResult struct {
 	Space *FileSpace `json:"space,omitempty"`
 	// Ready asks for the file's trailer, ahead of its result.
 	Ready bool `json:"ready,omitempty"`
+	// Folder asks, before the files, to make a missing folder; the backend
+	// answers with FolderGo once access is confirmed. Files says the files'
+	// bodies may follow.
+	Folder bool `json:"folder,omitempty"`
+	Files  bool `json:"files,omitempty"`
 	// Leftover: the file's staging file could not be removed.
 	Leftover bool `json:"leftover,omitempty"`
 }
@@ -1104,27 +1109,43 @@ func (h *fileHelper) uploadFiles(relative string) error {
 	if len(h.request.Files) > UploadBatchFiles || (len(h.request.Files) > 1 && total > UploadBatchBytes) {
 		return errors.New("the batch is too large")
 	}
-	// Every folder the files need is made first, while the access the
-	// command started with still holds; a file whose folders couldn't be
-	// made reports why.
+	// Every folder the files need is made first, each missing one only once
+	// the backend has confirmed access again, as it would for New folder; a
+	// file whose folders couldn't be made reports why.
 	unmade := map[string]error{}
 	for _, inside := range uploadFolders(h.request.Files) {
 		opened := len(h.t.open)
 		parts, err := ownParts(inside)
+		pin := func() (fd, error) {
+			folder, err := h.pinRoot()
+			if err == nil && relative != "" {
+				folder, err = h.pinDirectory(folder, relative)
+			}
+			return folder, err
+		}
 		var folder fd
 		if err == nil {
-			folder, err = h.pinRoot()
-		}
-		if err == nil && relative != "" {
-			folder, err = h.pinDirectory(folder, relative)
+			folder, err = pin()
 		}
 		if err == nil {
-			_, err = h.uploadFolder(folder, relative, parts, true)
+			if _, err = h.uploadFolder(folder, relative, parts, false); isNotExist(err) {
+				if err = h.confirmFolder(); err == nil {
+					if folder, err = pin(); err == nil {
+						_, err = h.uploadFolder(folder, relative, parts, true)
+					}
+				}
+			}
 		}
 		h.t.closeFrom(opened)
+		if errors.Is(err, errUploadStream) {
+			return err
+		}
 		if err != nil {
 			unmade[inside] = err
 		}
+	}
+	if err := h.line(`{"files":true}`); err != nil {
+		return err
 	}
 	h.buffer = make([]byte, 64*1024)
 	for _, file := range h.request.Files {
@@ -1207,6 +1228,31 @@ func (h *fileHelper) uploadFiles(relative string) error {
 		return errUploadStream
 	}
 	return nil
+}
+
+// FolderGo is the backend’s answer to a Folder request once access is
+// confirmed.
+const FolderGo = 'y'
+
+// confirmFolder asks the backend to confirm access before a missing folder
+// is made.
+func (h *fileHelper) confirmFolder() error {
+	if err := h.line(`{"folder":true}`); err != nil {
+		return err
+	}
+	var answer [1]byte
+	if _, err := io.ReadFull(h.stdin, answer[:]); err != nil || answer[0] != FolderGo {
+		return errUploadStream
+	}
+	return nil
+}
+
+// line writes a line of a batch's output, flushed so the backend can answer.
+func (h *fileHelper) line(text string) error {
+	if _, err := h.out.WriteString(text + "\n"); err != nil {
+		return err
+	}
+	return h.out.Flush()
 }
 
 // readFiles reads the request's files from stdin, ahead of anything else

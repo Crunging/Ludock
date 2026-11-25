@@ -117,8 +117,10 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 				mu.Lock()
 				defer mu.Unlock()
 				// A lost result loses the helper's answers too, but not a batch
-				// upload's requests for its next trailer, which it needs to go on.
-				if !lose || channel != 1 || bytes.Contains(data, []byte(`"ready":true`)) {
+				// upload's requests to go on: for its next trailer, to make a
+				// folder, or for its files.
+				if !lose || channel != 1 || bytes.Contains(data, []byte(`"ready":true`)) || bytes.Contains(data, []byte(`"folder":true`)) ||
+					bytes.Contains(data, []byte(`"files":true`)) {
 					conn.Write(Frame(channel, data))
 				}
 			}
