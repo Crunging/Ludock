@@ -796,9 +796,13 @@ func (h *fileHelper) sweepStaging(folder fd) error {
 		if !found || !staged || !uploadIDPattern.MatchString(id) {
 			continue
 		}
-		// One that can't be removed, such as in a folder only its owner may
-		// delete from, is left; free space still decides each upload.
+		// The folder must still be the approved one, in case it moved. One
+		// that can't be removed, such as in a folder only its owner may delete
+		// from, is left; free space still decides each upload.
 		if info, err := lstatAt(folder, name); err == nil && isRegular(info) {
+			if err := h.sameFolder(folder); err != nil {
+				return err
+			}
 			unix.Unlinkat(int(folder), name, 0)
 		}
 	}
@@ -1126,6 +1130,7 @@ func (h *fileHelper) run() error {
 		h.folder = relative
 		return h.uploadFiles(relative)
 	case "upload-prepare":
+		h.folder = relative
 		folder, err := h.pinDirectory(root, relative)
 		if err != nil {
 			return err
