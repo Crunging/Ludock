@@ -110,7 +110,6 @@ func setup(t *testing.T) *fixture {
 		f.alerts = append(f.alerts, message)
 		f.mu.Unlock()
 	}
-	service.Looping = f.jobs.Monitor.Looping
 	f.jobs.Register(f.runner)
 	f.adminSession = dbtest.Session(t, d, f.admin.ID)
 	service, backupService := f.jobs.Servers, f.jobs.Backups
@@ -148,8 +147,10 @@ func wire(engine *fakedocker.Engine, d *db.DB, backupRoots ...string) *Jobs {
 	storage := &backups.Storage{Roots: backupRoots, Own: self.New(client, "ludock")}
 	backupService := &backups.Service{DB: d, Storage: storage, Docker: client, Observer: observer, Locks: table,
 		Helpers: &backups.Helpers{Docker: client, Images: images, Storage: storage}}
+	monitoring := &monitor.Service{DB: d, Locks: table, Store: store}
+	service.Looping = monitoring.Looping
 	return &Jobs{DB: d, Authz: authorization, Identity: store, Servers: service, Docker: client, Locks: table,
-		Monitor: &monitor.Service{DB: d, Locks: table, Store: store}, Console: &console.Runtime{Docker: client},
+		Monitor: monitoring, Console: &console.Runtime{Docker: client},
 		Backups: backupService, Updates: &update.Service{Docker: client}, SaveSettle: time.Millisecond, ReplacementSettle: 100 * time.Millisecond,
 		Poll: 20 * time.Millisecond}
 }
