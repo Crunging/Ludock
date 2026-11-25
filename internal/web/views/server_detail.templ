@@ -25,6 +25,9 @@ type ServerDetail struct {
 	Admin                bool
 	Tab                  string
 	Tabs                 []DetailTab
+	// UndoBlocked: a restore that stopped partway can't be undone until the
+	// server's data folders are back as it found them.
+	UndoBlocked bool
 	Availability         *monitor.Availability
 	// Recovery is what automatic restarts last did.
 	Recovery monitor.Recovery
@@ -200,7 +203,7 @@ func tabLabel(d ServerDetail) string {
 // DetailLive is the header and server-wide notices; it reloads itself.
 templ DetailLive(d ServerDetail) {
 	{{ server := d.Row.Server }}
-	<div id="detail-live" hx-get={ "/fragments/servers/" + server.ID + "/live?" + url.Values{"tab": {d.Tab}, "operation": {d.Operation}, "active": {activeID(server)}}.Encode() } hx-trigger={ liveTrigger(server.ID, server.ActiveOperation != nil) } hx-swap="outerMorph">
+	<div id="detail-live" hx-get={ "/fragments/servers/" + server.ID + "/live?" + url.Values{"tab": {d.Tab}, "operation": {d.Operation}, "active": {activeID(server)}, "blocked": {boolText(d.UndoBlocked)}}.Encode() } hx-trigger={ liveTrigger(server.ID, server.ActiveOperation != nil) } hx-swap="outerMorph">
 		<header class={ headerClass(d) }>
 			@StateMark(d.Row.Status().Tone)
 			<div class="detail-header__title">
@@ -261,6 +264,11 @@ templ DetailLive(d ServerDetail) {
 		} else {
 			<div class="alert alert--error" role="alert">{ BindingNote(string(server.BindingStatus)) } Controls come back once Docker has exactly one container for it.</div>
 		}
+		if d.UndoBlocked && d.Admin {
+			@Alert("warning", UndoBlockedNote)
+		} else if d.UndoBlocked {
+			@Alert("warning", "Backups of this server are paused: an earlier restore stopped partway, and an administrator needs to finish undoing it.")
+		}
 		// The notice points to progress the page doesn't already show.
 		if operation := server.ActiveOperation; operation != nil && d.Tab != "activity" && operation.ID != d.Operation {
 			<div class="detail-operation-notice">
@@ -287,6 +295,12 @@ templ ConfirmChange(serverID string, revision int64) {
 		<button class="primary-btn" type="submit" data-busy-label="Confirming…">Confirm and restore access</button>
 	</form>
 }
+
+// UndoBlockedNote explains a restore that stopped partway and can't be undone
+// while the server's data folders differ from the ones it worked on.
+const UndoBlockedNote = "An earlier restore of this server stopped partway, and the server’s data folders or game have changed since, " +
+	"so Ludock can’t undo it, and backups, restores, and updates of this server are refused until it can. " +
+	"Put them back as they were where the server is defined, such as in Compose, then undo the restore from Needs attention."
 
 // BindingNote explains a server without exactly one container, or is empty.
 func BindingNote(status string) string {
@@ -413,6 +427,9 @@ templ OverviewLive(d ServerDetail) {
 						if backup := server.LatestBackup; backup != nil {
 							@Time(backup.CreatedAt, "sentence", "")
 							<span class="muted">{ FormatBytes(backup.Size) }</span>
+							if note := SafetyNote(backup.Reason); note != "" {
+								<span class="muted">{ note }</span>
+							}
 						} else {
 							Never
 						}
@@ -644,14 +661,21 @@ templ AvailabilityStatus(d ServerDetail) {
 					<dt>Outage since</dt>
 					<dd>@Time(described.OutageSince, "", "")</dd>
 				}
+				// Monitoring's last check can lag Docker, so the server shows as
+				// discovery sees it now; monitoring adds only a game not answering.
+				{{ server := d.Row.Server }}
 				<dt>Last seen</dt>
 				<dd>
-					if a.State.LastState == monitor.NotAnswering {
-						Running, but the game isn’t answering
-					} else if a.State.LastState == monitor.DockerUnavailable {
+					if d.DiscoveryUnavailable {
 						Unknown: Ludock can’t reach Docker
+					} else if server.BindingStatus != identity.StatusActive {
+						{ BindingNote(string(server.BindingStatus)) }
+					} else if server.State != "running" {
+						{ lastSeenLabel(server.State) }
+					} else if a.State.LastState == monitor.NotAnswering {
+						Running, but the game isn’t answering
 					} else if a.State.LastState != "" {
-						{ lastSeenLabel(a.State.LastState) }
+						{ lastSeenLabel(server.State) }
 					} else {
 						Not checked yet
 					}

@@ -59,11 +59,34 @@ func (s *Server) detail(r *http.Request, request *Request, id, tab string, withS
 	if admin {
 		d.Tabs = append(d.Tabs, views.DetailTab{ID: "update", Label: "Update"}, views.DetailTab{ID: "sharing", Label: "Sharing"})
 	}
+	if view.BindingStatus == identity.StatusActive && (admin || can(view, authz.BackupsCreate)) {
+		d.UndoBlocked = s.undoBlocked(ctx, view.ID)
+		d.Row.CanBackup = d.Row.CanBackup && !d.UndoBlocked
+	}
 	d.Tab = "overview"
 	if slices.ContainsFunc(d.Tabs, func(item views.DetailTab) bool { return item.ID == tab }) {
 		d.Tab = tab
 	}
 	return d, nil
+}
+
+// undoBlocked reports a restore that stopped partway and that Ludock refuses
+// to undo, and so refuses data work, until the server's data folders and
+// game are back as it found them. It compares the container as discovery
+// sees it, whose data folders a viewer's own view may leave out, and reports
+// nothing while discovery is unavailable.
+func (s *Server) undoBlocked(ctx context.Context, id string) bool {
+	logical, err := s.App.Identity.Get(ctx, id)
+	if err != nil || logical == nil || logical.Status != identity.StatusActive {
+		return false
+	}
+	current, err := s.App.Servers.Refresh(ctx)
+	container, found := current[logical.ContainerID]
+	if err != nil || !found {
+		return false
+	}
+	blocked, err := s.App.Jobs.UndoBlocked(ctx, &servers.Context{Logical: logical, Container: container})
+	return err == nil && blocked
 }
 
 // overview adds the overview's monitoring and next schedule.
@@ -219,7 +242,10 @@ func (s *Server) detailLive(w http.ResponseWriter, r *http.Request, request *Req
 	d.Operation = r.URL.Query().Get("operation")
 	// The work this header last showed has ended: tabs paused by it, such
 	// as Backups, catch up.
-	if was := r.URL.Query().Get("active"); was != "" && (d.Row.Server.ActiveOperation == nil || d.Row.Server.ActiveOperation.ID != was) {
+	// So do they when an earlier restore's undo became blocked or unblocked.
+	was := r.URL.Query().Get("active")
+	if (was != "" && (d.Row.Server.ActiveOperation == nil || d.Row.Server.ActiveOperation.ID != was)) ||
+		(r.URL.Query().Has("blocked") && r.URL.Query().Get("blocked") != strconv.FormatBool(d.UndoBlocked)) {
 		w.Header().Set("HX-Trigger", "operation-finished")
 	}
 	render(w, r, http.StatusOK, views.DetailLive(*d))

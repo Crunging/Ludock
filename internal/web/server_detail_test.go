@@ -150,9 +150,10 @@ func TestOperationLinkFallsBackToActivity(t *testing.T) {
 	}
 }
 
-// The live header sends back the operation it showed; once that work has
-// ended, its refresh tells paused tabs such as Backups to catch up, whatever
-// operation the page links to.
+// The live header sends back the operation it showed and whether an undo
+// was blocked; once that work has ended or the undo's state changed, its
+// refresh tells paused tabs such as Backups to catch up, whatever operation
+// the page links to.
 func TestLiveHeaderAnnouncesFinishedWork(t *testing.T) {
 	t.Parallel()
 	p := newDataPages(t)
@@ -168,6 +169,12 @@ func TestLiveHeaderAnnouncesFinishedWork(t *testing.T) {
 	}
 	if trigger := live("tab=backups&active=11111111-1111-4111-8111-111111111111"); trigger != "operation-finished" {
 		t.Fatal("ended work:", trigger)
+	}
+	if trigger := live("tab=backups&blocked=false"); trigger != "" {
+		t.Fatal("undo unchanged:", trigger)
+	}
+	if trigger := live("tab=backups&blocked=true"); trigger != "operation-finished" {
+		t.Fatal("undo no longer blocked:", trigger)
 	}
 	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusOK {
 		t.Fatal(response.StatusCode)

@@ -85,6 +85,11 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   await page.locator("#selected-operation").getByRole("link", { name: "Open on its own page" }).click();
   await expect(offered(page.locator("#operation-summary"))).toHaveAttribute("href", safety);
   await page.goto(backupsTab);
+  // The overview's last backup is the owner's own, not the newer safety backup.
+  const lastBackup = page.locator(".overview-facts div", { has: page.locator("dt", { hasText: "Last backup" }) });
+  await page.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
+  await expect(lastBackup).not.toContainText("Taken before");
+  await page.goto(backupsTab);
   await expect(page.locator("form.danger-panel")).toHaveCount(0);
   // Each backup has one button; the rest are in its menu.
   await expect(rows.last().locator(".backup-row__actions > .secondary-btn")).toHaveText(["Restore…"]);
@@ -98,6 +103,9 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   await expect(page.locator("#detail-status")).toHaveText("Backup deleted.");
   expect(await rows.count()).toBe(1);
   await page.unrouteAll();
+  // With only the safety backup left, the overview says what it is.
+  await page.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
+  await expect(lastBackup).toContainText("Taken before a restore");
 
   // A restart from the server list can take a backup first.
   await page.goto("/");
@@ -143,6 +151,9 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   const remove = page.locator(".remove-server");
   await page.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
   await expect(remove).toContainText("Delete this server’s backups on its Backups tab, or move them to its new server, before removing it from Ludock.");
+  // Monitoring says what Ludock sees now, not the last state it checked.
+  await expect(page.locator('section[aria-labelledby=availability-title] dt:has-text("Last seen") + dd')).toHaveText(
+    "Ludock can’t find this server’s container in Docker.");
   await expect(remove.getByRole("button", { name: "Remove from Ludock" })).toHaveCount(0);
   await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await (await menuItem(rows.first(), "button", "Delete")).click();
@@ -150,6 +161,10 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   await expect(rows).toHaveText(["No backups yet."]);
   await page.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
   await expect(remove).toContainText("Ludock can’t find this server in Docker.");
+  // Its row says once that Docker can't find it.
+  await page.goto("/");
+  await expect(serverRow(page, ownServer.name).locator(".server-row__identity p")).toHaveText(["Ludock can’t find this server’s container in Docker."]);
+  await openServer(page, ownServer.name);
   await remove.getByRole("button", { name: "Remove from Ludock" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Remove server" }).click();
   await expect(page).toHaveURL(/\/$/);

@@ -32,13 +32,13 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 	b := views.BackupsView{ServerID: view.ID, ServerName: view.DisplayName, Admin: d.Admin,
 		CanRead: can(view, authz.BackupsRead), CanCreate: can(view, authz.BackupsCreate),
 		CanRestore: can(view, authz.BackupsRestore), CanDelete: can(view, authz.BackupsDelete),
-		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Gone: view.BindingStatus == identity.StatusMissing && !d.DiscoveryUnavailable,
+		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable || d.UndoBlocked, Gone: view.BindingStatus == identity.StatusMissing && !d.DiscoveryUnavailable,
 		Active: view.ActiveOperation != nil, LatestBackup: view.LatestBackup, NoData: view.NoDataFolders, BindingRevision: view.BindingRevision,
 		Warn: warnOffer(view.Container), Running: view.Container.State == "running", DeletedOnStop: view.AutoRemove}
-	if view.Refuses(ops.KindBackup) {
+	if view.Refuses(ops.KindBackup) || d.UndoBlocked {
 		b.CanCreate = false
 	}
-	if view.Refuses(ops.KindRestore) {
+	if view.Refuses(ops.KindRestore) || d.UndoBlocked {
 		b.CanRestore = false
 	}
 	// The tab follows any running work, so readiness and paused controls come
@@ -59,7 +59,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 	if b.Admin && b.CanRead {
 		if id := r.URL.Query().Get("browse"); id != "" {
 			b.Browse = s.backupBrowser(r, view.ID, id, s.archiveAccess(r.Context(), request, view.ID))
-			b.Browse.ServerName, b.Browse.CanRestore = view.DisplayName, restoreOffered(view, d.DiscoveryUnavailable)
+			b.Browse.ServerName, b.Browse.CanRestore = view.DisplayName, restoreOffered(view, d.DiscoveryUnavailable) && !d.UndoBlocked
 			b.Browse.Warn, b.Browse.Running = b.Warn, b.Running
 			s.fitBrowser(r.Context(), view, b.Browse)
 			return b
@@ -74,7 +74,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 			if backup.State != "complete" {
 				continue
 			}
-			if backup.ID == restore && restoreOffered(view, d.DiscoveryUnavailable) && b.Fits[backup.ID].Refusal == "" && !backup.Missing && !backup.CopyAway {
+			if backup.ID == restore && restoreOffered(view, d.DiscoveryUnavailable) && !d.UndoBlocked && b.Fits[backup.ID].Refusal == "" && !backup.Missing && !backup.CopyAway {
 				b.Restore = backup
 			}
 			if backup.ID == keep && backup.KeptAt == 0 && !b.Gone {
@@ -449,7 +449,7 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 	view := &d.Row.Server
 	u := views.UpdateView{ServerID: id, ServerName: view.DisplayName, CanBackup: canBeBackedUp(view) && can(view, authz.BackupsCreate),
 		NoData:  view.NoDataFolders,
-		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Gone: view.BindingStatus == identity.StatusMissing && !d.DiscoveryUnavailable,
+		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable || d.UndoBlocked, Gone: view.BindingStatus == identity.StatusMissing && !d.DiscoveryUnavailable,
 		Active: view.ActiveOperation != nil, Recreate: r.URL.Query().Get("recreate") == "1", Warn: warnOffer(view.Container), Running: view.Container.State == "running",
 		DeletedOnStop: view.Refuses(ops.KindUpdate)}
 	resolved, _, err := s.resolveFresh(r, request, id, capability)
