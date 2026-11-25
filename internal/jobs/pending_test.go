@@ -67,7 +67,7 @@ func (f *fixture) checkUndone(t *testing.T, failed *ops.Job, later *ops.Job) {
 		!strings.Contains(guidance, "back in place") || !strings.Contains(guidance, aside) {
 		t.Errorf("%+v, journal %s", restore, f.savedJournal(restoreID))
 	}
-	if undone := later.Result.Undone; !strings.Contains(undone, "back in place") || !strings.Contains(undone, aside) {
+	if undone := later.Result.UndoNote; !strings.Contains(undone, "back in place") || !strings.Contains(undone, aside) {
 		t.Errorf("%+v", later)
 	}
 }
@@ -164,7 +164,7 @@ func TestNextBackupAfterStaleRestoreJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	backup := f.run(t, "backup", nil)
-	if undone := backup.Result.Undone; backup.Status != ops.Succeeded || !f.running() || !strings.Contains(undone, "nothing to put back") ||
+	if undone := backup.Result.UndoNote; backup.Status != ops.Succeeded || !f.running() || !strings.Contains(undone, "nothing to put back") ||
 		f.savedJournal(restoreID) != "rolled_back stage missing" {
 		t.Fatalf("%+v, running %v, journal %s", backup, f.running(), f.savedJournal(restoreID))
 	}

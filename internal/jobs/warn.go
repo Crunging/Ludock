@@ -157,7 +157,7 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 				return err
 			}
 			result := job.Job.Result
-			result.WarnFailed = warnFailedNote(job.Job.Kind)
+			result.WarnFailedNote = warnFailedNote(job.Job.Kind)
 			return job.Progress(phaseWarned, func(r *ops.Recovery) { r.WarnFailed = true }, &result)
 		default:
 			// A game that can't message its players waits out the minute.
@@ -283,7 +283,7 @@ func warnedResult(job *ops.Context, result *ops.Result, err error) (*ops.Result,
 			result = &ops.Result{}
 		}
 		if job.Job.Recovery.WarnFailed {
-			result.WarnFailed = warnFailedNote(job.Job.Kind)
+			result.WarnFailedNote = warnFailedNote(job.Job.Kind)
 		} else {
 			result.WarnSkipped = true
 		}

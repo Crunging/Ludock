@@ -94,7 +94,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (*ops.Res
 			// One stopped outside Ludock after the check above stays stopped,
 			// as its owner left it.
 			if !wasRunning(job) {
-				return withSave(job, &ops.Result{Action: ops.KindRestart, BackupID: backup.ID, Guidance: stoppedElsewhere}), nil
+				return withSave(job, &ops.Result{BackupID: backup.ID, Guidance: stoppedElsewhere}), nil
 			}
 			selected, err := j.resolve(ctx, job, authz.ServerRestart, true)
 			if err != nil {
@@ -121,7 +121,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (*ops.Res
 				return nil, err
 			}
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
-			return withSave(job, &ops.Result{Action: ops.KindRestart, BackupID: job.Job.Recovery.BackupID}), nil
+			return withSave(job, &ops.Result{BackupID: job.Job.Recovery.BackupID}), nil
 		}()
 		// Work cut by shutdown is recovered, and reported, on the next start.
 		if err != nil && ctx.Err() == nil {
@@ -154,7 +154,7 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (*ops
 	if err := j.recoverBackup(ctx, job); err != nil {
 		return nil, err
 	}
-	result := &ops.Result{Action: ops.KindRestart}
+	result := &ops.Result{}
 	running := wasRunning(job)
 	switch {
 	case completed && !running:

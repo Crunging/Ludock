@@ -218,8 +218,8 @@ func WarnDetail(result ops.Result) string {
 	if result.WarnSkipped {
 		return "Nobody was online, so players weren’t warned."
 	}
-	if result.WarnFailed != "" {
-		return result.WarnFailed
+	if result.WarnFailedNote != "" {
+		return result.WarnFailedNote
 	}
 	return ""
 }

@@ -76,6 +76,7 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
 
   // The restore kept a safety backup of the replaced data.
   await expect(rows).toHaveCount(2);
+  await expect(page.locator("#selected-operation").getByRole("link", { name: "Download the backup taken before this restore" })).toBeVisible();
   await expect(page.locator("form.danger-panel")).toHaveCount(0);
   // Each backup has one button; the rest are in its menu.
   await expect(rows.last().locator(".backup-row__actions > .secondary-btn")).toHaveText(["Restore…"]);

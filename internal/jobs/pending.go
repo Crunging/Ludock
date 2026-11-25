@@ -94,7 +94,7 @@ func (j *Jobs) finishPendingRestores(ctx context.Context, server *servers.Contex
 	undone := strings.Join(slices.DeleteFunc(append([]string{job.Job.Recovery.Undone}, notes...), func(note string) bool { return note == "" }), " ")
 	result := job.Job.Result
 	if undone != "" {
-		result.Undone = undone
+		result.UndoNote = undone
 	}
 	return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.PendingUndo, r.Undone = false, undone }, &result)
 }

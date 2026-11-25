@@ -62,7 +62,7 @@ func withSave(job *ops.Context, result *ops.Result) *ops.Result {
 		result.SaveStatus, result.SaveReason = recovery.SaveStatus, recovery.SaveReason
 	}
 	if undone := job.Job.Recovery.Undone; undone != "" {
-		result.Undone = undone
+		result.UndoNote = undone
 	}
 	if leftOut := job.Job.Recovery.LeftOut; leftOut != "" {
 		result.LeftOut = leftOut

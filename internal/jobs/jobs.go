@@ -154,7 +154,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 	runner.Register(ops.KindCommand, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		return j.runCommand(docker.Promptly(ctx), job)
 	}, Recover: func(context.Context, *ops.Context) (*ops.Result, error) {
-		return &ops.Result{Action: ops.KindCommand}, nil
+		return &ops.Result{}, nil
 	}})
 	runner.Register(ops.KindRestore, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		result, err := j.runRestore(ctx, job)
@@ -383,8 +383,8 @@ func (j *Jobs) assertCapability(ctx context.Context, job *ops.Context, capabilit
 
 const forceStopGuidance = "Force-stopped, recent progress may not have been saved."
 
-func lifecycleResult(kind string, recovery ops.Recovery) *ops.Result {
-	result := &ops.Result{Action: kind}
+func lifecycleResult(recovery ops.Recovery) *ops.Result {
+	result := &ops.Result{}
 	if recovery.SaveStatus != "" {
 		result.SaveStatus, result.SaveReason = recovery.SaveStatus, recovery.SaveReason
 	}
@@ -414,7 +414,7 @@ func record(job *ops.Context, phase string, change func(*ops.Recovery)) error {
 	if change != nil {
 		change(&next)
 	}
-	return job.Progress(phase, func(r *ops.Recovery) { *r = next }, lifecycleResult(job.Job.Kind, next))
+	return job.Progress(phase, func(r *ops.Recovery) { *r = next }, lifecycleResult(next))
 }
 
 // saveWorld sends the game's save command, best effort. Revoked authority
@@ -624,7 +624,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 		if err := assertAccess(); err != nil {
 			return nil, err
 		}
-		return lifecycleResult(job.Job.Kind, job.Job.Recovery), nil
+		return lifecycleResult(job.Job.Recovery), nil
 	})
 }
 
@@ -642,8 +642,7 @@ func (j *Jobs) suppressAfter(ctx context.Context, job *ops.Context, serverID str
 }
 
 var (
-	recoverySkipped = ops.Result{Action: ops.KindRestart, Skipped: true,
-		Guidance: "Skipped: the game answered again, or the server was no longer running"}
+	recoverySkipped    = ops.Result{Skipped: true, Guidance: "Skipped: the game answered again, or the server was no longer running"}
 	errRecoveryStopped = errors.New("server stopped before its recovery restart")
 )
 
@@ -776,5 +775,5 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (*ops.Res
 			}
 		}
 	}
-	return lifecycleResult(job.Job.Kind, job.Job.Recovery), nil
+	return lifecycleResult(job.Job.Recovery), nil
 }

@@ -848,8 +848,8 @@ templ ActivityList(a ActivityView) {
 // guidance is what an operation's result tells the owner, starting with
 // any restore it finished undoing first.
 func guidance(result ops.Result) string {
-	if result.Undone != "" {
-		return strings.TrimSpace(result.Undone + " " + result.Guidance)
+	if result.UndoNote != "" {
+		return strings.TrimSpace(result.UndoNote + " " + result.Guidance)
 	}
 	return result.Guidance
 }
@@ -928,9 +928,9 @@ templ SelectedOperation(a ActivityView) {
 			if text := guidance(operation.Result); text != "" {
 				<p class="section-note">{ text }</p>
 			}
-			if id := newBackup(operation); id != "" && a.Archives {
+			if id, label := newBackup(operation); id != "" && a.Archives {
 				<p class="inline-actions">
-					<a class="secondary-btn" href={ templ.SafeURL("/servers/" + a.ServerID + "/backups/" + id + "/download") } download>Download backup</a>
+					<a class="secondary-btn" href={ templ.SafeURL("/servers/" + a.ServerID + "/backups/" + id + "/download") } download>{ label }</a>
 				</p>
 			}
 		}
@@ -939,12 +939,16 @@ templ SelectedOperation(a ActivityView) {
 
 func ActiveStatus(status string) bool { return status == "queued" || status == "running" }
 
-// newBackup is the backup a finished operation made, if any.
-func newBackup(operation *ops.Job) string {
-	if operation.Status != "succeeded" {
-		return ""
+// newBackup is the backup a finished operation made, if any, and its
+// download's label.
+func newBackup(operation *ops.Job) (id, label string) {
+	switch {
+	case operation.Status != "succeeded":
+		return "", ""
+	case operation.Result.SafetyBackupID != "":
+		return operation.Result.SafetyBackupID, "Download the backup taken before this restore"
 	}
-	return operation.Result.BackupID
+	return operation.Result.BackupID, "Download backup"
 }
 
 // OperationList is a table of operations; showContext adds the server and

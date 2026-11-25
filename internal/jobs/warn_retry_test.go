@@ -111,7 +111,7 @@ func TestWarningIsRetriedUntilSent(t *testing.T) {
 		return current.Recovery.WarnSent || current.Phase != ops.PhaseWarningPlayers
 	})
 	done := finished(t, f.runner, job.ID)
-	if done.Status != ops.Succeeded || !done.Recovery.WarnSent || done.Recovery.WarnFailed || done.Result.WarnFailed != "" ||
+	if done.Status != ops.Succeeded || !done.Recovery.WarnSent || done.Recovery.WarnFailed || done.Result.WarnFailedNote != "" ||
 		time.Since(sentAt) < 1500*time.Millisecond || attempts.Load() < 4 {
 		t.Fatalf("%+v, %d attempts", done, attempts.Load())
 	}
@@ -129,7 +129,7 @@ func TestWarningThatNeverSendsSaysSo(t *testing.T) {
 	f.withPlayers(1)
 	serverID, received, _ := f.flakyConsole(t, 1<<30)
 	done := finished(t, f.runner, f.warnedRestart(t, serverID).ID)
-	if done.Status != ops.Succeeded || done.Recovery.WarnSent || done.Result.WarnFailed != "Couldn’t warn players before the restart." {
+	if done.Status != ops.Succeeded || done.Recovery.WarnSent || done.Result.WarnFailedNote != "Couldn’t warn players before the restart." {
 		t.Fatalf("%+v", done)
 	}
 	if got := received(); len(got) != 0 {
@@ -169,7 +169,7 @@ func TestResumedWarningIsSentAgain(t *testing.T) {
 	for _, until := range []time.Duration{time.Minute, -10 * time.Minute} {
 		runner, id := f.interruptedWarning(t, ops.PhaseWarningPlayers, ops.Recovery{WarnUntil: time.Now().Add(until).UnixMilli()})
 		done := finished(t, runner, id)
-		if done.Status != ops.Succeeded || done.Recovery.WarnSent || done.Result.WarnFailed != "Couldn’t warn players before the restart." {
+		if done.Status != ops.Succeeded || done.Recovery.WarnSent || done.Result.WarnFailedNote != "Couldn’t warn players before the restart." {
 			t.Fatalf("%+v", done)
 		}
 		runner.Stop()

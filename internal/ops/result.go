@@ -3,14 +3,13 @@ package ops
 // Result is an operation's public outcome, which Activity, Needs attention and
 // schedules show. Its JSON names are stored, so each one is read forever.
 type Result struct {
-	Action string `json:"action,omitempty"`
 	// Skipped and AlreadyCurrent end a job that succeeded with that status.
 	Skipped        bool   `json:"skipped,omitempty"`
 	AlreadyCurrent bool   `json:"alreadyCurrent,omitempty"`
 	Guidance       string `json:"guidance,omitempty"`
-	// Undone says what finishing an earlier restore's undo left; Activity
+	// UndoNote says what finishing an earlier restore's undo left; Activity
 	// shows it before Guidance.
-	Undone string `json:"undone,omitempty"`
+	UndoNote string `json:"undoNote,omitempty"`
 	// CancelledBy is the account that cancelled the job.
 	CancelledBy     string `json:"cancelledBy,omitempty"`
 	WaitedForDocker bool   `json:"waitedForDocker,omitempty"`
@@ -20,8 +19,8 @@ type Result struct {
 	ForceStopped         bool   `json:"forceStopped,omitempty"`
 	StopRecoveryTimedOut bool   `json:"stopRecoveryTimedOut,omitempty"`
 	WarnSkipped          bool   `json:"warnSkipped,omitempty"`
-	// WarnFailed is the note that players couldn't be warned.
-	WarnFailed string `json:"warnFailed,omitempty"`
+	// WarnFailedNote says players couldn't be warned.
+	WarnFailedNote string `json:"warnFailedNote,omitempty"`
 	// LeftOut names the folder holding a restore's stage that a backup left
 	// out.
 	LeftOut string `json:"leftOut,omitempty"`

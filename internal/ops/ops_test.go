@@ -80,7 +80,7 @@ func TestRunsHandlersAndRecordsOutcomes(t *testing.T) {
 	r, servers := setup(t, 3)
 	r.Register("start", Handler{Run: func(_ context.Context, c *Context) (*Result, error) {
 		c.Progress("starting", func(r *Recovery) { r.ContainerID = "x" }, nil)
-		return &Result{Action: "start"}, nil
+		return &Result{Guidance: "started"}, nil
 	}})
 	r.Register("update", Handler{Run: func(context.Context, *Context) (*Result, error) {
 		return &Result{AlreadyCurrent: true}, nil
@@ -93,7 +93,7 @@ func TestRunsHandlersAndRecordsOutcomes(t *testing.T) {
 	b, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[1], ActorID: "admin", Kind: "update"})
 	c, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[2], ActorID: "admin", Kind: "stop"})
 	job := waitStatus(t, r, a.ID, Succeeded)
-	if job.Recovery.ContainerID != "x" || job.Result.Action != "start" {
+	if job.Recovery.ContainerID != "x" || job.Result.Guidance != "started" {
 		t.Fatal(job)
 	}
 	waitStatus(t, r, b.ID, AlreadyCurrent)

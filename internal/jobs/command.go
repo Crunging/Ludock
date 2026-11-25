@@ -31,7 +31,7 @@ func commandFailed(message string) error { return apperr.New("COMMAND_FAILED", 4
 
 // skipped ends a run without sending its command, as the scheduler would.
 func skipped(reason schedules.Skip) (*ops.Result, error) {
-	return &ops.Result{Action: ops.KindCommand, Skipped: true, Guidance: string(reason)}, nil
+	return &ops.Result{Skipped: true, Guidance: string(reason)}, nil
 }
 
 // scheduledCommand reads the command from the schedule that queued job, at
@@ -120,7 +120,7 @@ func (j *Jobs) runCommand(ctx context.Context, job *ops.Context) (*ops.Result, e
 		return err
 	}
 	// Persisted first: an interrupted send is reported, never repeated.
-	if err := job.Progress("sending_command", nil, &ops.Result{Action: ops.KindCommand}); err != nil {
+	if err := job.Progress("sending_command", nil, &ops.Result{}); err != nil {
 		return nil, err
 	}
 	if db.Now()-job.Job.CreatedAt > commandLate.Milliseconds() {
@@ -145,5 +145,5 @@ func (j *Jobs) runCommand(ctx context.Context, job *ops.Context) (*ops.Result, e
 		}
 		return nil, commandFailed(message)
 	}
-	return &ops.Result{Action: ops.KindCommand, Sent: true, Reply: output.String()}, nil
+	return &ops.Result{Sent: true, Reply: output.String()}, nil
 }
