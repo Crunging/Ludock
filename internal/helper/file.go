@@ -112,6 +112,8 @@ const (
 	FileUncertain = 13
 	// FileArchiveDeep refuses an unpack whose files would pass MaxPath.
 	FileArchiveDeep = 14
+	// FileACLNotKept refuses replacing a file whose access ACL can't be kept.
+	FileACLNotKept = 15
 )
 
 type fileHelper struct {
@@ -128,6 +130,8 @@ type fileHelper struct {
 	folder string
 	// leftover: the last upload's staging file could not be removed.
 	leftover bool
+	// excluded is what the request's excluded mounts hide, by identity.
+	excluded exclusions
 
 	exit     func(int)
 	stop     atomic.Bool
@@ -182,9 +186,9 @@ func (h *fileHelper) absolute(relative string) string { return path.Join(h.reque
 
 func (h *fileHelper) check(relative string, recursive bool) error {
 	if h.blocked(h.absolute(relative), recursive) {
-		return errors.New("this path overlaps an excluded mount")
+		return errExcluded
 	}
-	return nil
+	return h.checkIdentity(relative, recursive)
 }
 
 func (h *fileHelper) pinRoot() (fd, error) {
@@ -367,6 +371,9 @@ func (h *fileHelper) removeEntry(parent fd, name string, depth int) error {
 	info, err := lstatAt(parent, name)
 	if err != nil {
 		return err
+	}
+	if h.excludedIn(parent, info) {
+		return errExcluded
 	}
 	if !isDir(info) {
 		return unix.Unlinkat(int(parent), name, 0)
@@ -740,15 +747,46 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	if original != nil {
 		mode = original.Mode & 0o777
 	}
+	// A replaced file keeps its access ACL: its group bits are the ACL's
+	// mask, which would otherwise become the owning group's own rights. It is
+	// read once the input is in, so a refusal is the command's result.
+	var acl []byte
+	if original != nil {
+		if acl, err = h.readAccessACL(parent, name, original); err != nil {
+			return err
+		}
+	}
 	if int(owner.Uid) != helperUID() {
 		owned := mode >> 6 & 7
 		mode = mode&0o700 | mode&0o070&(owned<<3) | mode&0o007&owned
+		if acl != nil {
+			if acl = narrowACL(acl); acl == nil {
+				return errACLNotKept
+			}
+		}
 	}
 	if err := fchown(int(file), -1, int(owner.Gid)); err != nil {
 		return err
 	}
-	if err := fchmod(int(file), mode); err != nil {
-		return err
+	// Setting an ACL sets the mode bits too, so a file with one never has
+	// its mask as group bits on their own. A replacement whose original had
+	// none drops any its folder's default ACL gave it, which the mode would
+	// otherwise switch on.
+	switch {
+	case acl != nil:
+		if err := fsetxattr(int(file), accessACL, acl, 0); err != nil {
+			return errACLNotKept
+		}
+	case original != nil:
+		if err := unix.Fremovexattr(int(file), accessACL); err != nil && !errors.Is(err, unix.ENODATA) &&
+			!errors.Is(err, unix.ENOTSUP) && !errors.Is(err, unix.EOPNOTSUPP) {
+			return errACLNotKept
+		}
+		fallthrough
+	default:
+		if err := fchmod(int(file), mode); err != nil {
+			return err
+		}
 	}
 	if err := fchown(int(file), int(owner.Uid), -1); err != nil {
 		return err
@@ -876,7 +914,7 @@ func (h *fileHelper) sweepStaging(folder fd) (int, error) {
 				continue
 			}
 			info, err := lstatAt(folder, name)
-			if err != nil || !isRegular(info) || time.Since(time.Unix(info.Mtim.Unix())) < stagingAge {
+			if err != nil || !isRegular(info) || h.excludedIn(folder, info) || time.Since(time.Unix(info.Mtim.Unix())) < stagingAge {
 				continue
 			}
 			// The folder must still be the approved one, in case it moved.
@@ -906,8 +944,8 @@ func (h *fileHelper) removeStaging(folder fd, relative, id string) error {
 	if err != nil {
 		return err
 	}
-	if h.blocked(h.absolute(path.Join(relative, temporary)), false) {
-		return errors.New("this path overlaps an excluded mount")
+	if info, err := lstatAt(folder, temporary); h.blocked(h.absolute(path.Join(relative, temporary)), false) || (err == nil && h.excludedIn(folder, info)) {
+		return errExcluded
 	}
 	if err := unix.Unlinkat(int(folder), temporary, 0); err != nil && !isNotExist(err) {
 		return err
@@ -1137,6 +1175,7 @@ func currentUmask() int {
 }
 
 func (h *fileHelper) run() error {
+	h.resolveExclusions()
 	root, err := h.pinRoot()
 	if err != nil {
 		return err
@@ -1147,7 +1186,11 @@ func (h *fileHelper) run() error {
 	}
 	relative := strings.Join(parts, "/")
 	operation := h.request.Operation
-	if err := h.check(relative, operation == "download" || operation == "delete" || operation == "rename"); err != nil {
+	check := h.check
+	if folderOperations[operation] {
+		check = h.checkFolder
+	}
+	if err := check(relative, operation == "download" || operation == "delete" || operation == "rename"); err != nil {
 		return err
 	}
 	switch operation {
@@ -1224,6 +1267,9 @@ func (h *fileHelper) run() error {
 			info, err := lstatAt(directory, name)
 			if err != nil {
 				return err
+			}
+			if h.excludedIn(directory, info) {
+				continue
 			}
 			entry := FileEntry{Name: name, ModifiedAt: mtimeMs(info)}
 			switch {
@@ -1494,6 +1540,8 @@ func fileExit(err error) int {
 		return FileUncertain
 	case errors.Is(err, errArchiveDeep):
 		return FileArchiveDeep
+	case errors.Is(err, errACLNotKept):
+		return FileACLNotKept
 	}
 	return 1
 }
@@ -1521,10 +1569,12 @@ var (
 	renameat  = unix.Renameat
 	linkat    = unix.Linkat
 	// fchown and fchmod let tests see the order an upload hands over in,
-	// and helperUID stand in for a helper that isn't the files' owner.
+	// helperUID stand in for a helper that isn't the files' owner, and
+	// fsetxattr fail to keep an ACL.
 	fchown    = unix.Fchown
 	fchmod    = unix.Fchmod
 	helperUID = os.Geteuid
+	fsetxattr = unix.Fsetxattr
 )
 
 // renameNoReplace moves an entry without ever replacing what is at the

@@ -304,6 +304,21 @@ func TestBrowsingSharesOneHelper(t *testing.T) {
 	if creates() != 6 {
 		t.Fatal("reused a helper from the game's previous run")
 	}
+	// A root inside the data mount still excludes the data mount's other
+	// mounts the helper leaves out: storage that matches names
+	// case-insensitively could reach them from the root's spelling.
+	other := t.TempDir()
+	world := f.engine.AddContainer(fakedocker.GameOptions{Name: "world", Image: "itzg/minecraft-server", Running: true,
+		Labels: map[string]string{"ludock.files": f.data + "/World"},
+		Mounts: []docker.MountPoint{{Type: "bind", Source: f.data, Destination: f.data, RW: true},
+			{Type: "bind", Source: other, Destination: f.data + "/alpha", RW: false}}})
+	inspection, _ := docker.New(f.engine.Socket).Inspect(ctx, world)
+	roots := Roots("minecraft", inspection.Config.Labels, identity.DockerMounts(inspection), notInContainer)
+	access, err := f.service.Acquire(ctx, Target{ContainerID: world, Name: "world", GameType: "minecraft", Roots: roots}, roots[0], true, nil)
+	if err != nil || !slices.Contains(access.blocked, f.data+"/alpha") {
+		t.Fatal("left a mount outside the root unexcluded", err, roots)
+	}
+	access.Cleanup(false)
 	denied := apperr.New("FORBIDDEN", 403, "Insufficient server permissions")
 	if _, err := f.service.Preview(ctx, f.target, f.root, "server.properties", func() error { return denied }); !apperr.Is(err, "FORBIDDEN") {
 		t.Fatal(err)

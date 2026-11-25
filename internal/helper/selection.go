@@ -114,7 +114,7 @@ func (h *fileHelper) move(root, parent fd, items []selected) error {
 		return err
 	}
 	destination := strings.Join(parts, "/")
-	if err := h.check(destination, false); err != nil {
+	if err := h.checkFolder(destination, false); err != nil {
 		return err
 	}
 	target, err := h.pinDirectory(root, destination)
@@ -124,6 +124,10 @@ func (h *fileHelper) move(root, parent fd, items []selected) error {
 	targetInfo, err := fstat(target)
 	if err != nil {
 		return err
+	}
+	// Checked on the folder moved into, not another lookup of its path.
+	if h.writesInto(targetInfo) {
+		return errExcluded
 	}
 	for _, item := range items {
 		absolute := h.absolute(item.relative)

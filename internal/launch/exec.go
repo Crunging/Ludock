@@ -45,6 +45,7 @@ var fileErrors = &ExecErrors{Timeout: ErrTimeout, Failed: ErrFailed, Unsafe: Err
 		datasize.Format(helper.Unpack.Bytes)+" or 100 times its own size, or has too many entries or nested folders."),
 	helper.FileArchiveFull: apperr.New("ARCHIVE_NO_SPACE", 409, "The archive wasn’t unpacked: the disk would run short of free space."),
 	helper.FileNotArchive:  apperr.New("NOT_AN_ARCHIVE", 415, "This file isn’t a zip, tar, or tar.gz archive, or it is damaged."),
+	helper.FileACLNotKept:  apperr.New("ACL_NOT_KEPT", 409, "The file wasn’t replaced: Ludock couldn’t keep its access control list, so the new file would have had wider permissions."),
 	helper.FileArchiveDeep: apperr.New("ARCHIVE_TOO_DEEP", 409, "The archive wasn’t unpacked: its files would sit deeper than Files can open. Move it to a folder nearer the top and unpack it there."),
 	// A 5xx status reports the result as unconfirmed.
 	helper.FilePartial:      apperr.New("FILE_PARTIAL", 500, "Only part of the selection was changed"),

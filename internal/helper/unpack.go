@@ -393,7 +393,7 @@ func (h *fileHelper) removeStage(parent fd, name string) error {
 	// An excluded mount isn't in the helper, so it would see and delete the
 	// files the mount hides from the game; a nested mount isn't staging.
 	relative := path.Join(h.stageFolder(), name)
-	if h.check(relative, true) != nil {
+	if h.checkFolder(relative, true) != nil {
 		return errUnsafe
 	}
 	if err := h.unmounted(parent, name, relative); err != nil {

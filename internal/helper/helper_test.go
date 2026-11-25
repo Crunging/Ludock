@@ -3,7 +3,9 @@ package helper
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -1061,5 +1063,267 @@ func TestChangesNeverCrossAMount(t *testing.T) {
 	}
 	if _, code := runFile(t, requests["back up"], nil); code != 0 {
 		t.Fatal("refused a backup on one mount", code)
+	}
+}
+
+// An excluded mount's entry stays out of reach under any spelling. A
+// case-insensitive share can't be mounted here, so the test makes the other
+// spelling the same way that storage would, with a rename right after the
+// helper resolves its exclusions: it proves that once resolved, every
+// operation refuses the entry by identity, whatever spelling reaches it; it
+// doesn't prove how a particular filesystem folds the destination's own
+// spelling when it is resolved.
+func TestExclusionsHoldByIdentity(t *testing.T) {
+	root, _ := dataRoot(t)
+	for _, folder := range []string{"mods", "a/deep"} {
+		os.MkdirAll(filepath.Join(root, folder), 0o755)
+		os.WriteFile(filepath.Join(root, folder, "hidden.txt"), []byte("hidden"), 0o644)
+	}
+	blocked := []string{root + "/mods", root + "/a/deep"}
+	swap := func(from, to string) {
+		os.Rename(filepath.Join(root, from[:4]), filepath.Join(root, to[:4]))
+		os.Rename(filepath.Join(root, from[5:]), filepath.Join(root, to[5:]))
+	}
+	exclusionsResolved = func() { swap("mods a", "MODS A") }
+	defer func() { exclusionsResolved = func() {} }()
+	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
+	size := int64(5)
+	for _, request := range []FileRequest{
+		{Operation: "list", Path: "MODS"},
+		{Operation: "download", Path: "MODS/hidden.txt"},
+		{Operation: "upload", Path: "MODS/new.txt", Size: &size, UploadID: id},
+		{Operation: "upload-prepare", Path: "MODS"},
+		{Operation: "mkdir", Path: "MODS/new"},
+		{Operation: "delete", Path: "MODS"},
+		{Operation: "rename", Path: "MODS", Destination: "other"},
+		// A folder that holds one can't be taken as a whole either.
+		{Operation: "delete", Path: "A"},
+		{Operation: "download", Path: "A"},
+		{Operation: "move", Paths: []string{"A"}, Destination: "world"},
+		{Operation: "delete-paths", Paths: []string{"A"}},
+	} {
+		swap("MODS A", "mods a")
+		request.Root, request.Blocked = root, blocked
+		if _, code := runFile(t, request, []byte("12345"+id)); code == 0 {
+			t.Error(request.Operation, request.Path, request.Paths, "reached an excluded entry")
+		}
+	}
+	swap("MODS A", "mods a")
+	listing, code := runFile(t, FileRequest{Operation: "list", Root: root, Blocked: blocked}, nil)
+	if code != 0 || strings.Contains(listing, "MODS") || !strings.Contains(listing, `"A"`) {
+		t.Fatal("listing", code, listing)
+	}
+	if got := listTree(t, filepath.Join(root, "MODS")); !slices.Equal(got, []string{"hidden.txt"}) {
+		t.Fatal(got)
+	}
+	if got := listTree(t, filepath.Join(root, "A")); !slices.Equal(got, []string{"deep", "deep/hidden.txt"}) {
+		t.Fatal(got)
+	}
+	// Everything else still works, with the exclusions where they were.
+	exclusionsResolved = func() {}
+	swap("MODS A", "mods a")
+	if _, code := runFile(t, FileRequest{Operation: "upload", Root: root, Path: "fine.txt", Size: &size, UploadID: id, Blocked: blocked},
+		[]byte("12345"+id)); code != 0 {
+		t.Fatal("refused an upload away from the exclusions", code)
+	}
+	// An exclusion that can't be resolved stops writes into the deepest
+	// folder found on its way, under any spelling, where an entry could
+	// become it; not reads, and not writes elsewhere.
+	exclusionsResolved = func() {}
+	missing := []string{root + "/missing"}
+	for _, request := range []FileRequest{
+		{Operation: "mkdir", Path: "MISSING"},
+		{Operation: "move", Path: "world", Paths: []string{"level.dat"}},
+	} {
+		request.Root, request.Blocked = root, missing
+		if _, code := runFile(t, request, nil); code == 0 {
+			t.Error(request.Operation, "wrote where an exclusion it couldn't find could appear")
+		}
+	}
+	for _, request := range []FileRequest{{Operation: "list"}, {Operation: "mkdir", Path: "world/new"}, {Operation: "upload-prepare", Path: "world"},
+		{Operation: "move", Path: "world", Paths: []string{"level.dat"}, Destination: "private"}} {
+		request.Root, request.Blocked = root, missing
+		if _, code := runFile(t, request, nil); code != 0 {
+			t.Error(request.Operation, "refused away from an exclusion it couldn't find", code)
+		}
+	}
+	// One that appears after the start, in a folder reached under another
+	// spelling, is refused like a resolved one.
+	os.MkdirAll(filepath.Join(root, "b"), 0o755)
+	os.MkdirAll(filepath.Join(root, "parked"), 0o755)
+	os.WriteFile(filepath.Join(root, "parked", "hidden.txt"), []byte("hidden"), 0o644)
+	exclusionsResolved = func() {
+		os.Rename(filepath.Join(root, "b"), filepath.Join(root, "B"))
+		os.Rename(filepath.Join(root, "parked"), filepath.Join(root, "B", "missing"))
+	}
+	late := []string{root + "/b/missing"}
+	for _, request := range []FileRequest{
+		{Operation: "list", Path: "B"},
+		{Operation: "download", Path: "B/missing/hidden.txt"},
+		{Operation: "upload", Path: "B/missing/new.txt", Size: &size, UploadID: id},
+		{Operation: "mkdir", Path: "B/missing/new"},
+		{Operation: "delete", Path: "B/missing"},
+		{Operation: "rename", Path: "B/missing", Destination: "B/other"},
+	} {
+		os.Rename(filepath.Join(root, "B", "missing"), filepath.Join(root, "parked"))
+		os.Rename(filepath.Join(root, "B"), filepath.Join(root, "b"))
+		request.Root, request.Blocked = root, late
+		out, code := runFile(t, request, []byte("12345"+id))
+		if request.Operation == "list" && (code != 0 || strings.Contains(out, "missing")) {
+			t.Error("listed an exclusion that appeared later", code, out)
+		} else if request.Operation != "list" && code == 0 {
+			t.Error(request.Operation, "reached an exclusion that appeared later")
+		}
+	}
+	if got := listTree(t, filepath.Join(root, "B", "missing")); !slices.Equal(got, []string{"hidden.txt"}) {
+		t.Fatal(got)
+	}
+	// So is one that appears in a folder that replaced the one it stopped at.
+	// A second spelling of a folder can't be made here, so a second name for
+	// the same file, a hard link, stands in for it.
+	os.MkdirAll(filepath.Join(root, "c"), 0o755)
+	exclusionsResolved = func() {
+		os.Rename(filepath.Join(root, "c"), filepath.Join(root, "c-old"))
+		os.Mkdir(filepath.Join(root, "c"), 0o755)
+		os.WriteFile(filepath.Join(root, "c", "missing"), []byte("hidden"), 0o644)
+		os.Link(filepath.Join(root, "c", "missing"), filepath.Join(root, "alias"))
+	}
+	listing, code = runFile(t, FileRequest{Operation: "list", Root: root, Blocked: []string{root + "/c/missing"}}, nil)
+	if code != 0 || strings.Contains(listing, `"alias"`) {
+		t.Fatal("listed an exclusion that appeared in a replaced folder", code, listing)
+	}
+	// A folder that comes to be on the way to one, in a replaced tree, can't
+	// be renamed or deleted as a whole. Spelled with a doubled slash, the
+	// exclusion's path differs from the request's for the byte comparison
+	// while the walk opens the same folders, as a loosely matching name would.
+	os.MkdirAll(filepath.Join(root, "e"), 0o755)
+	exclusionsResolved = func() {
+		os.Rename(filepath.Join(root, "e"), filepath.Join(root, "e-old"))
+		os.MkdirAll(filepath.Join(root, "e", "f"), 0o755)
+	}
+	for _, request := range []FileRequest{{Operation: "rename", Path: "e", Destination: "x"}, {Operation: "delete", Path: "e"}} {
+		request.Root, request.Blocked = root, []string{root + "//e/f/missing"}
+		if _, code := runFile(t, request, nil); code == 0 {
+			t.Error(request.Operation, "took a folder now on the way to an exclusion")
+		}
+		os.Rename(filepath.Join(root, "e-old"), filepath.Join(root, "e-older"))
+	}
+	if _, err := os.Stat(filepath.Join(root, "e", "f")); err != nil {
+		t.Fatal(err)
+	}
+	// One present at the start and replaced after it by another folder is
+	// refused both as the folder its path names now and as the one it named.
+	for _, folder := range []string{"g", "spare"} {
+		os.MkdirAll(filepath.Join(root, folder), 0o755)
+		os.WriteFile(filepath.Join(root, folder, "hidden.txt"), []byte("hidden"), 0o644)
+	}
+	exclusionsResolved = func() {
+		os.Rename(filepath.Join(root, "g"), filepath.Join(root, "g-old"))
+		os.Rename(filepath.Join(root, "spare"), filepath.Join(root, "g"))
+	}
+	for _, request := range []FileRequest{
+		{Operation: "list", Path: "g"},
+		{Operation: "download", Path: "g/hidden.txt"},
+		{Operation: "upload", Path: "g/new.txt", Size: &size, UploadID: id},
+		{Operation: "download", Path: "g-old/hidden.txt"},
+		{Operation: "list"},
+	} {
+		os.Rename(filepath.Join(root, "g"), filepath.Join(root, "spare"))
+		os.Rename(filepath.Join(root, "g-old"), filepath.Join(root, "g"))
+		request.Root, request.Blocked = root, []string{root + "//g"}
+		out, code := runFile(t, request, []byte("12345"+id))
+		if request.Path == "" && (code != 0 || strings.Contains(out, `"g"`) || strings.Contains(out, `"g-old"`)) {
+			t.Error("listed a replaced exclusion", code, out)
+		} else if request.Path != "" && code == 0 {
+			t.Error(request.Operation, request.Path, "reached a replaced exclusion")
+		}
+	}
+	// So is one replaced after the current snapshot was taken, part-way
+	// through a listing.
+	exclusionsResolved = func() {}
+	for _, folder := range []string{"h", "spare"} {
+		os.MkdirAll(filepath.Join(root, folder), 0o755)
+	}
+	replaced := false
+	rootInfo, _ := os.Stat(root)
+	currentTaken = func(folder *unix.Stat_t) {
+		if !replaced && folder.Ino == rootInfo.Sys().(*syscall.Stat_t).Ino {
+			replaced = true
+			os.Rename(filepath.Join(root, "h"), filepath.Join(root, "h-old"))
+			os.Rename(filepath.Join(root, "spare"), filepath.Join(root, "h"))
+		}
+	}
+	listing, code = runFile(t, FileRequest{Operation: "list", Root: root, Blocked: []string{root + "//h"}}, nil)
+	currentTaken = func(*unix.Stat_t) {}
+	if !replaced || code != 0 || strings.Contains(listing, `"h"`) || strings.Contains(listing, `"h-old"`) {
+		t.Fatal("listed an exclusion replaced after its snapshot", replaced, code, listing)
+	}
+	// A file where a folder on the way should be can't hold the exclusion,
+	// so it stays listed.
+	exclusionsResolved = func() {}
+	os.WriteFile(filepath.Join(root, "plain"), []byte("plain"), 0o644)
+	listing, code = runFile(t, FileRequest{Operation: "list", Root: root, Blocked: []string{root + "/plain/missing"}}, nil)
+	if code != 0 || !strings.Contains(listing, `"plain"`) {
+		t.Fatal("hid a file on the way to an exclusion", code, listing)
+	}
+}
+
+// A replaced file keeps its access ACL, whose mask the mode bits only show,
+// set as the ACL rather than as mode bits; if the ACL can't be kept the file
+// isn't replaced; and a replacement whose original had none takes none from
+// its folder. A filesystem without ACLs skips the test.
+func TestUploadKeepsAccessACL(t *testing.T) {
+	root, _ := dataRoot(t)
+	target := filepath.Join(root, "server.properties")
+	// Owner rw-, user 4242 rw-, owning group r--, mask rw-, others ---: the
+	// mode shows 0660, but the owning group may only read.
+	entry := func(tag, perm uint16, id uint32) []byte {
+		return binary.LittleEndian.AppendUint32(binary.LittleEndian.AppendUint16(binary.LittleEndian.AppendUint16(nil, tag), perm), id)
+	}
+	acl := binary.LittleEndian.AppendUint32(nil, 2)
+	for _, part := range [][]byte{entry(0x01, 6, 0xffffffff), entry(0x02, 6, 4242), entry(0x04, 4, 0xffffffff), entry(0x10, 6, 0xffffffff),
+		entry(0x20, 0, 0xffffffff)} {
+		acl = append(acl, part...)
+	}
+	if err := unix.Setxattr(target, accessACL, acl, 0); err != nil {
+		t.Skip("no ACLs here:", err)
+	}
+	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
+	size := int64(5)
+	upload := FileRequest{Operation: "upload", Root: root, Path: "server.properties", Size: &size, UploadID: id}
+	if _, code := runFile(t, upload, []byte("hello"+id)); code != 0 {
+		t.Fatal("replace", code)
+	}
+	kept := make([]byte, 64)
+	if n, err := unix.Getxattr(target, accessACL, kept); err != nil || !bytes.Equal(kept[:n], acl) {
+		t.Fatal("ACL not kept", err)
+	}
+	fsetxattr = func(int, string, []byte, int) error { return unix.EIO }
+	defer func() { fsetxattr = unix.Fsetxattr }()
+	if _, code := runFile(t, upload, []byte("other"+id)); code != FileACLNotKept {
+		t.Fatal("replaced a file whose ACL couldn't be kept", code)
+	}
+	if data, _ := os.ReadFile(target); string(data) != "hello" {
+		t.Fatal(string(data))
+	}
+	fsetxattr = unix.Fsetxattr
+	// The ACL sets the mode itself: the mask is never the group's on its own.
+	fchmod = func(int, uint32) error { return errors.New("set the mode bits of a file with an ACL") }
+	defer func() { fchmod = unix.Fchmod }()
+	if _, code := runFile(t, upload, []byte("third"+id)); code != 0 {
+		t.Fatal("replace", code)
+	}
+	fchmod = unix.Fchmod
+	// A replacement whose original had no ACL keeps none from its folder's
+	// default ACL.
+	plain := filepath.Join(root, "plain.txt")
+	os.WriteFile(plain, []byte("plain"), 0o640)
+	unix.Setxattr(root, "system.posix_acl_default", acl, 0)
+	replace := FileRequest{Operation: "upload", Root: root, Path: "plain.txt", Size: &size, UploadID: id}
+	if _, code := runFile(t, replace, []byte("hello"+id)); code != 0 {
+		t.Fatal("replace", code)
+	}
+	if _, err := unix.Getxattr(plain, accessACL, kept); !errors.Is(err, unix.ENODATA) {
+		t.Fatal("a replacement took its folder's default ACL", err)
 	}
 }
