@@ -76,7 +76,15 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
 
   // The restore kept a safety backup of the replaced data.
   await expect(rows).toHaveCount(2);
-  await expect(page.locator("#selected-operation").getByRole("link", { name: "Download the backup taken before this restore" })).toBeVisible();
+  // Its Activity entry offers that backup, here and on its own page.
+  await expect(rows.first()).toContainText("Taken before a restore");
+  const safety = await rows.first().locator('a[href$="/download"]').getAttribute("href");
+  const offered = (scope) => scope.getByRole("link", { name: "Download the backup taken before this restore" });
+  await expect(offered(page.locator("#selected-operation"))).toHaveAttribute("href", safety);
+  const backupsTab = page.url();
+  await page.locator("#selected-operation").getByRole("link", { name: "Open on its own page" }).click();
+  await expect(offered(page.locator("#operation-summary"))).toHaveAttribute("href", safety);
+  await page.goto(backupsTab);
   await expect(page.locator("form.danger-panel")).toHaveCount(0);
   // Each backup has one button; the rest are in its menu.
   await expect(rows.last().locator(".backup-row__actions > .secondary-btn")).toHaveText(["Restore…"]);

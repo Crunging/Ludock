@@ -119,6 +119,10 @@ func (s *Server) operationDetail(r *http.Request, request *Request) views.Operat
 	if server, err := s.App.Identity.Get(r.Context(), job.ServerID); err == nil && server != nil {
 		o.ServerName = server.DisplayName
 	}
+	if o.Admin {
+		_, err := s.App.Authz.Assert(r.Context(), request.User(), job.ServerID, authz.BackupsRead)
+		o.Archives = err == nil
+	}
 	return o
 }
 

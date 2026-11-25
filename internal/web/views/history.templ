@@ -488,7 +488,9 @@ type OperationDetailView struct {
 	CanCancel   bool
 	ServerName  string
 	Admin       bool
-	Error       string
+	// Archives offers the download of a backup the operation made.
+	Archives bool
+	Error    string
 }
 
 templ OperationDetailPage(page Page, o OperationDetailView) {
@@ -586,6 +588,9 @@ templ OperationSummary(o OperationDetailView) {
 		}
 		if text := guidance(operation.Result); text != "" {
 			<p class="section-note">{ text }</p>
+		}
+		if o.Archives {
+			@backupDownload(operation)
 		}
 		<div class="inline-actions operation-detail-actions history-entry-links">
 			<a class="text-link" href={ templ.SafeURL("/activity?serverId=" + url.QueryEscape(operation.ServerID)) }>More from this server</a>
