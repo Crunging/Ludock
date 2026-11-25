@@ -270,7 +270,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 			data: backedUp, containers: []string{"/mc running unless-stopped 0000"}, sameRun: true},
 		// A restart whose stop was sent and done but not confirmed: recovery
 		// confirms the stop and starts the server, as the restart would have.
-		{name: "restart-stop-unconfirmed", status: ops.Succeeded, guidance: "Ludock restarted while this ran, and started the server again.", data: backedUp,
+		{name: "restart-stop-unconfirmed", status: ops.Succeeded, guidance: "Ludock restarted while this ran. Ludock started the server again.", data: backedUp,
 			containers: []string{"/mc running unless-stopped 0000"}, stopConfirmed: true},
 		// That restart's recovery killed in turn, its start saved and taken
 		// but not confirmed: it isn't sent again, and with only a request
@@ -281,7 +281,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		// A restart with a backup, its archive written but not published:
 		// the partial archive goes and the server runs again.
 		{name: "restart-backup-copying", status: ops.Interrupted,
-			guidance: "Ludock restarted before the backup finished, so there’s no new backup. The server was started again.",
+			guidance: "Ludock restarted before the backup finished, so there’s no new backup. Ludock started the server again.",
 			data:     backedUp, containers: []string{"/mc running unless-stopped 0000"}, alerts: []string{backupAlert}},
 		// A restore that failed because the server was started elsewhere,
 		// with its new data in place, and the server stopped since: startup
@@ -310,7 +310,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		// The replacement created under its temporary name, its ID not yet
 		// saved: found by its name and label, removed.
 		{name: "update-created", status: ops.Interrupted,
-			guidance: "Ludock restarted during the update, so the update didn’t happen. The server was started again as it was.",
+			guidance: "Ludock restarted during the update, so the update didn’t happen. Ludock started the server again.",
 			data:     backedUp, containers: []string{"/mc running unless-stopped 0000"}},
 		// The replacement started but not yet verified: removed, and the
 		// original kept stopped.

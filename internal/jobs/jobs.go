@@ -423,8 +423,8 @@ var errRestartTakenOver = errors.New("the server changed before its restart's st
 // left as it is. A stop whose answer was lost can't be told apart from
 // another manager's stop of the same run. It says what it did, or "".
 func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission authz.Capability) (string, error) {
-	const started, runningAgainNote = "Ludock restarted while this ran, and started the server again.",
-		"Ludock restarted while this ran. The server was running again, so Ludock left it as it was."
+	const restarted = "Ludock restarted while this ran. "
+	const started, runningAgainNote = restarted + serverStarted, restarted + serverRunningAgain
 	recovery := job.Job.Recovery
 	if recovery.StopRecoveryTimedOut || recovery.StopInitialStartedAt == nil {
 		return "", nil
@@ -465,7 +465,7 @@ func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission a
 			return "", err
 		}
 		if run, err := time.Parse(time.RFC3339Nano, info.State.StartedAt); err == nil && run.UnixMilli() != stopped {
-			return runningAgain("Ludock restarted while this ran. The server was started again, and its game keeps exiting, so Docker keeps restarting it.")
+			return runningAgain(restarted + serverRestarting)
 		}
 		return "", nil
 	}
@@ -473,7 +473,7 @@ func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission a
 		return "", nil
 	}
 	if server.Container.Exit.Started != stopped {
-		return "The server ran again and had stopped when Ludock checked it, so Ludock left it stopped.", nil
+		return serverStoppedAgain, nil
 	}
 	if err := j.suppressFor(job)(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.allowedIn(ctx, tx, job, permission) }); err != nil {
 		return "", err
@@ -638,7 +638,10 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 				}
 			}
 		}()
+		// unchanged: Docker found the server already as the last change asked.
+		unchanged := false
 		mutate := func(mutation servers.Action) error {
+			unchanged = false
 			if err := assertAccess(); err != nil {
 				return err
 			}
@@ -661,10 +664,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			if err := record(job, phase, func(r *ops.Recovery) { r.ContainerID = server.Container.ID }); err != nil {
 				return err
 			}
-			change := j.Servers.Observer.ChangeStateUnsent
-			if recovery {
-				change = j.Servers.Observer.ChangeStateExactUnsent
-			}
+			change := j.Servers.Observer.ChangeStateExactUnsent
 			// A stop known never to have reached Docker is not one recovery
 			// waits for or finishes.
 			unsent := func() error {
@@ -694,8 +694,12 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 				}
 				return nil
 			}, unsent)
-			if recovery && errors.Is(err, servers.ErrUnchanged) {
-				return errRecoveryStopped
+			if errors.Is(err, servers.ErrUnchanged) {
+				if recovery {
+					return errRecoveryStopped
+				}
+				// Docker had it so already: a stop ended no run.
+				unchanged, err = true, nil
 			}
 			return err
 		}
@@ -726,7 +730,8 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			if err := record(job, "verifying_stop", func(r *ops.Recovery) {
 				r.StopSettled = true
 				r.ForceStopped = r.StopStarted && forcedExit(r, server.Container.Exit)
-				if server.Container.Exit != nil {
+				// Only a stop that ended a run knows which one it was.
+				if server.Container.Exit != nil && !unchanged {
 					r.StoppedRun = server.Container.Exit.Started
 				}
 			}); err != nil {
@@ -910,7 +915,6 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (*ops.Res
 			if err := record(job, "reconciling", func(r *ops.Recovery) {
 				r.StopSettled = true
 				r.ForceStopped = r.ForceStopped || forcedExit(r, server.Container.Exit)
-				r.StoppedRun = server.Container.Exit.Started
 			}); err != nil {
 				return nil, err
 			}

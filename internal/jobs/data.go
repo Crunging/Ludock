@@ -336,6 +336,14 @@ func settleStop(r *ops.Recovery) { r.StopSettled = true }
 // before Ludock restarted.
 const restartedAfter = "Ludock restarted while this ran, after "
 
+// What recovery found a server it had stopped as, for every operation.
+const (
+	serverStarted      = "Ludock started the server again."
+	serverRunningAgain = "The server was running again, so Ludock left it as it was."
+	serverStoppedAgain = "The server ran again and had stopped when Ludock checked it, so Ludock left it stopped."
+	serverRestarting   = "The server was started again, and its game keeps exiting, so Docker keeps restarting it."
+)
+
 // withServerAfterRecovery adds to result's guidance what recovery did with
 // the server the operation stopped.
 func withServerAfterRecovery(job *ops.Context, result *ops.Result) *ops.Result {
@@ -344,12 +352,17 @@ func withServerAfterRecovery(job *ops.Context, result *ops.Result) *ops.Result {
 	switch {
 	case recovery.InitialRunning != nil && !*recovery.InitialRunning:
 		said = "The server was stopped before this began, so Ludock didn’t start it."
-	case !wasRunning(job) || !recovery.StateRestored:
+	case !wasRunning(job):
 		return result
+	case recovery.StateRestored && recovery.StartRequested:
+		said = serverStarted
+	case recovery.StateRestored:
+		said = serverRunningAgain
+	// restoreInitialState leaves only a newer run that stopped unrestored.
 	case recovery.StartRequested:
-		said = "Ludock started the server again."
+		said = serverStoppedAgain
 	default:
-		said = "The server was running again, so Ludock left it as it was."
+		return result
 	}
 	if result == nil {
 		result = &ops.Result{}
@@ -379,8 +392,13 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 			if err != nil {
 				return err
 			}
+			// The start took. A run that has stopped since stays stopped; one
+			// Docker is restarting, or that is paused, was started again.
 			if info.State.StartedAt != job.Job.Recovery.StoppedStartedAt {
-				return nil
+				if slices.Contains(stoppedStates, observed.Container.State) {
+					return nil
+				}
+				return job.Progress("state_restored", func(r *ops.Recovery) { r.StateRestored = true }, nil)
 			}
 		}
 		// Persist before dispatch, so recovery recognizes a start that reached Docker.
