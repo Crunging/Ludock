@@ -46,9 +46,10 @@ type restoreRecovery struct {
 	// root, as when a server started meanwhile had made a newer copy of
 	// something it returned.
 	Kept bool `json:"kept,omitempty"`
-	// keptUnknown, never saved: a set-aside folder couldn't be read, so
-	// Activity says where to look instead of what is there.
-	keptUnknown bool
+	// KeptUnknown: the latest read couldn't read a set-aside folder, so
+	// Activity says where to look instead of what is there. Each read of the
+	// folders replaces it, with Kept.
+	KeptUnknown bool `json:"keptUnknown,omitempty"`
 }
 
 var errJournal = fail("INVALID_RESTORE_JOURNAL", "Restore recovery records are invalid. Keep the server stopped and review its recovery state.")
@@ -340,12 +341,13 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 	var entries []journal
 	setAside, missing, kept, unknown := false, false, false, false
 	if state != nil {
-		entries, setAside, missing, kept = state.Roots, state.SetAside, state.StageMissing, state.Kept
+		entries, setAside, missing, kept, unknown = state.Roots, state.SetAside, state.StageMissing, state.Kept, state.KeptUnknown
 	}
 	// A root past staging had live data moved, even one a restart midway
 	// through this undo already put back.
 	touched := slices.ContainsFunc(entries, func(entry journal) bool { return entry.Phase != "staging" })
-	if err := saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries, SetAside: setAside, StageMissing: missing, Kept: kept}, ""); err != nil {
+	if err := saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries, SetAside: setAside, StageMissing: missing, Kept: kept,
+		KeptUnknown: unknown}, ""); err != nil {
 		return err
 	}
 	// The helper's callback runs once its command exists, just before it
@@ -423,7 +425,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 	if touched {
 		kept, unknown = j.keptOnDisk(ctx, server, data, job, &restoreRecovery{Roots: entries}, true)
 	}
-	return j.saveFinal(ctx, job, restoreRecovery{Status: "rolled_back", StageMissing: missing, PutBack: touched && !missing, Kept: kept, keptUnknown: unknown}, finish)
+	return j.saveFinal(ctx, job, restoreRecovery{Status: "rolled_back", StageMissing: missing, PutBack: touched && !missing, Kept: kept, KeptUnknown: unknown}, finish)
 }
 
 func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper, finish *restoreFinish) error {
@@ -859,13 +861,13 @@ func (r *restoreRun) failed(err error) (*ops.Result, error) {
 	}
 	touched, seen := false, keptSeen{}
 	if state != nil {
-		touched, seen.kept = slices.ContainsFunc(state.Roots, holdsLive), state.Kept
+		touched, seen = slices.ContainsFunc(state.Roots, holdsLive), keptSeen{kept: state.Kept, unknown: state.KeptUnknown}
 	}
 	if (r.data != nil || r.stageMade) && (state == nil || (state.Status != "committed" && state.Status != "cleaned")) {
 		// Activity is saved with the final journal, so a stop right after
 		// still says where to look.
 		heard := &restoreFinish{note: func(final restoreRecovery) string {
-			seen = keptSeen{kept: final.Kept, unknown: final.keptUnknown}
+			seen = keptSeen{kept: final.Kept, unknown: final.KeptUnknown}
 			return endedGuidance(job, &final, touched, seen)
 		}}
 		if rollbackErr := r.j.rollbackAfterFailure(ctx, r.server, job, &r.data, heard); rollbackErr != nil {
@@ -982,8 +984,8 @@ func (j *Jobs) reconcileKept(ctx context.Context, server *servers.Context, job *
 		data.Cleanup()
 	}
 	// A read whose result can't be saved isn't one Activity can stand on.
-	if kept != state.Kept {
-		state.Kept = kept
+	if kept != state.Kept || unknown != state.KeptUnknown {
+		state.Kept, state.KeptUnknown = kept, unknown
 		if saveRestore(job, *state, "") != nil {
 			return keptSeen{unknown: true}
 		}
@@ -1015,7 +1017,8 @@ func (j *Jobs) keptOnDisk(ctx context.Context, server *servers.Context, data *ba
 }
 
 // unknownKeptNote says where newer copies may be when that couldn't be read.
-func unknownKeptNote(restore *ops.Context) string {
+// Tests reword it: nothing saved may depend on its wording.
+var unknownKeptNote = func(restore *ops.Context) string {
 	return "Ludock couldn’t check the folder " + helper.SetAsideName(restore.Job.ID) + " in the server’s data, where it moves anything in the way of the previous data."
 }
 
@@ -1098,9 +1101,10 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 		defer j.notifyInterrupted(ctx, job, notify.Results, "restore-result:"+job.Job.ID,
 			"Ludock restarted during a restore. Its Activity says what the data was left as.")
 	}
-	seen, read := keptSeen{}, false
+	// A recovery cut after its final journal finds there what that read.
+	seen := keptSeen{}
 	if state, _ := restoreState(job); state != nil {
-		seen.kept = state.Kept
+		seen = keptSeen{kept: state.Kept, unknown: state.KeptUnknown}
 	}
 	err := j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
 		entries, err := journals(job)
@@ -1131,7 +1135,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 					return j.cleanupRestore(ctx, server, job, data, nil)
 				}
 				heard := &restoreFinish{note: func(final restoreRecovery) string {
-					seen, read = keptSeen{kept: final.Kept, unknown: final.keptUnknown}, true
+					seen = keptSeen{kept: final.Kept, unknown: final.KeptUnknown}
 					return keptOutcome(job, outcome, seen)
 				}}
 				return j.rollbackRestore(ctx, server, job, data, nil, heard)
@@ -1139,7 +1143,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 			// Any recovery that can't finish, such as one of a server already
 			// running again, says what the folders show now.
 			if state, _ := restoreState(job); err != nil && touchedLive(state) {
-				seen, read = j.reconcileKept(ctx, server, job), true
+				seen = j.reconcileKept(ctx, server, job)
 			}
 			if err != nil {
 				return err
@@ -1150,11 +1154,6 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 		return j.restoreInitialState(ctx, server, job)
 	})
 	result := job.Job.Result
-	// A recovery cut after its final journal said there what couldn't be
-	// read; that stays unless this run read the folders again.
-	if !read && strings.Contains(result.Guidance, unknownKeptNote(job)) {
-		seen.unknown = true
-	}
 	if err == nil {
 		outcome = keptOutcome(job, outcome, seen)
 	}

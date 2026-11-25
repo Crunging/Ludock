@@ -143,7 +143,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		// a stage gone.
 		if final.Kept && !strings.Contains(note, aside) {
 			note += " " + keptNote(restore)
-		} else if !final.Kept && final.keptUnknown {
+		} else if !final.Kept && final.KeptUnknown {
 			note += " " + unknownKeptNote(restore)
 		}
 		return note

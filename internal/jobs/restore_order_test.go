@@ -97,6 +97,9 @@ func (f *fixture) savedJournal(id string) string {
 	if state.Kept {
 		out += " kept"
 	}
+	if state.KeptUnknown {
+		out += " unknown"
+	}
 	if recovery.DataUnsafe {
 		out += " unsafe"
 	}
@@ -919,10 +922,10 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				os.Mkdir(filepath.Join(f.data, aside), 0)
 				t.Cleanup(func() { os.Chmod(filepath.Join(f.data, aside), 0o700) })
 			}, unreadable: true,
-			trace: []string{"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
-				"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
-				"rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe",
-				"kept game: rolling_back rolled_back unsafe"}},
+			trace: []string{"stageExists game: replacing moving_old unknown unsafe", "checkReturn game: replacing moving_old unknown unsafe",
+				"stageExists game: replacing moving_old unknown unsafe", "checkReturn game: replacing moving_old unknown unsafe",
+				"rollbackOld game: rolling_back rolling_back unknown unsafe", "cleanup game: rolling_back rolled_back unknown unsafe",
+				"kept game: rolling_back rolled_back unknown unsafe"}},
 		// The return happens, but its helper is removed before Ludock hears:
 		// Activity doesn't claim the previous data is out of place.
 		{name: "return's helper lost", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
@@ -1054,7 +1057,13 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 					t.Errorf("set aside %q, want %v", kept, c.aside)
 				}
 			}
+			reworded := ""
 			if c.cutAfterFinal {
+				// The next start reads the fact, not the words Activity used.
+				note := unknownKeptNote
+				unknownKeptNote = func(restore *ops.Context) string { return note(restore) + " (reworded)" }
+				t.Cleanup(func() { unknownKeptNote = note })
+				reworded = " (reworded)"
 				f.runner.Stop()
 				if _, err := f.jobs.DB.Exec(`UPDATE operations SET status='running', result_json=(SELECT result_json FROM final_row) WHERE id=?`, job.ID); err != nil {
 					t.Fatal(err)
@@ -1067,10 +1076,11 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 			if c.recovered {
 				journal, says := "rolled_back put back kept", "Anything Ludock moved"
 				if c.unreadable {
-					journal, says = "rolled_back put back", "couldn’t check the folder"
+					journal, says = "rolled_back put back unknown", "couldn’t check the folder"
 				}
 				if guidance := job.Result.Guidance; f.savedJournal(job.ID) != journal || f.running() == c.startFails ||
-					!strings.Contains(guidance, "undone") || !strings.Contains(guidance, says) || !strings.Contains(guidance, aside) {
+					!strings.Contains(guidance, "undone") || !strings.Contains(guidance, says) || !strings.Contains(guidance, reworded) ||
+					!strings.Contains(guidance, aside) {
 					t.Errorf("journal %s, running %v, Activity says %q", f.savedJournal(job.ID), f.running(), guidance)
 				}
 				checkKept()
@@ -1203,8 +1213,10 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 			}
 			undo := f.run(t, ops.KindUndoRestore, nil)
 			want := "rolled_back put back kept"
-			if c.plain || c.unreadable {
+			if c.plain {
 				want = "rolled_back put back"
+			} else if c.unreadable {
+				want = "rolled_back put back unknown"
 			}
 			if undo.Status != ops.Succeeded || !f.running() || f.staged() || f.savedJournal(job.ID) != want {
 				t.Fatalf("%s %q, running %v, journal %s", undo.Status, undo.Error, f.running(), f.savedJournal(job.ID))
