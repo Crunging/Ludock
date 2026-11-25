@@ -21,6 +21,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/logging"
+	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -180,6 +181,12 @@ func (s *Server) authed(handler func(http.ResponseWriter, *http.Request, *Reques
 			}
 			if principal, err = s.principal(r); err != nil || principal == nil {
 				s.loginRedirect(w, r)
+				return
+			}
+			// Putting a failed update back restores the data saved before it,
+			// which would undo any change made meanwhile.
+			if s.App != nil && s.App.SelfUpdate != nil && s.App.SelfUpdate.Updating() && r.URL.Path != "/logout" {
+				s.fail(w, r, nil, selfupdate.ErrUpdating)
 				return
 			}
 		}

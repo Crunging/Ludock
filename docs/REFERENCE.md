@@ -520,8 +520,10 @@ docker compose pull ludock
 docker compose up -d ludock
 ```
 
-These work any time. Its data and your servers stay as they are, and work
-Ludock is stopped in the middle of is recovered at the next start.
+Use them only while no update runs from Settings, since one started meanwhile
+could run beside the new container. Its data and your servers stay as they
+are, and work Ludock is stopped in the middle of is recovered at the next
+start.
 
 `latest` follows every release. Each release is also published under its
 version, such as `1.2.3`, and moves the shorter tags `1.2` and `1`. To stay

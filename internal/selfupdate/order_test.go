@@ -223,7 +223,7 @@ func (g *rig) boot(container, version string) *process {
 	ctx, cancel := context.WithCancel(context.Background())
 	g.t.Cleanup(cancel)
 	p := &process{d: d, cancel: cancel, id: container, svc: &selfupdate.Service{DB: d, Docker: g.client, Own: self.New(g.client, container),
-		Updates: &update.Service{Docker: g.client}, Locks: locks.New(), DataDir: g.dataDir, Socket: socket, Version: version, Poll: 5 * time.Millisecond,
+		Updates: &update.Service{Docker: g.client}, Locks: locks.New(), DataDir: g.dataDir, Socket: socket, SelfFound: "mounts", Version: version, Poll: 5 * time.Millisecond,
 		Snapshot: func(ctx context.Context) (*db.Snapshot, error) {
 			g.add("save")
 			return d.Snapshot(ctx)
@@ -298,11 +298,13 @@ func (g *rig) restartHelper() {
 // The steps every update takes before Docker replaces anything, and those
 // that end it.
 var (
-	begin    = []string{"pull", "save", "create helper", "start helper", "create state", "create new"}
-	swap     = []string{"policy old", "stop old"}
-	forward  = []string{"remove old", "rename new", "policy new", "remove helper"}
-	putBack  = []string{"create undo", "remove new", "policy old", "stop old", "aside", "restore", "mark restored", "policy old", "start old", "remove helper"}
-	recorded = []string{"remove state", "remove undo"}
+	begin   = []string{"pull", "save", "create helper", "start helper", "create state", "create new"}
+	swap    = []string{"policy old", "stop old"}
+	forward = []string{"remove old", "rename new", "policy new", "remove helper"}
+	putBack = []string{"create undo", "remove new", "policy old", "stop old", "aside", "restore", "mark restored", "policy old", "start old", "remove helper"}
+	// What the Ludock that comes up removes.
+	forwardDone = []string{"remove state"}
+	backDone    = []string{"remove state", "remove undo"}
 )
 
 func join(parts ...[]string) []string { return slices.Concat(parts...) }
@@ -342,9 +344,9 @@ func TestSelfUpdateOrder(t *testing.T) {
 		// refused is the code Update Ludock was refused with.
 		refused string
 	}{
-		{name: "success", trace: join(begin, swap, []string{"start new"}, forward, recorded), image: newImage, state: selfupdate.StateSucceeded},
+		{name: "success", trace: join(begin, swap, []string{"start new"}, forward, forwardDone), image: newImage, state: selfupdate.StateSucceeded},
 		{name: "the new container fails to start", arrange: func(g *rig) { g.fail["start new"] = 500 },
-			trace: join(begin, swap, []string{"start new"}, putBack, recorded), image: oldImage, state: selfupdate.StatePutBack,
+			trace: join(begin, swap, []string{"start new"}, putBack, backDone), image: oldImage, state: selfupdate.StatePutBack,
 			reason: "Docker couldn’t start the new container, for example because its port was still in use"},
 		{name: "the new version never reports healthy", arrange: func(g *rig) {
 			g.engine.OnStart = func(c *fakedocker.Container) {
@@ -352,7 +354,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 					g.engine.Update(c.ID, func(c *fakedocker.Container) { c.State.Health = &docker.HealthState{Status: "starting"} })
 				}
 			}
-		}, trace: join(begin, swap, []string{"start new"}, putBack, recorded), image: oldImage, state: selfupdate.StatePutBack,
+		}, trace: join(begin, swap, []string{"start new"}, putBack, backDone), image: oldImage, state: selfupdate.StatePutBack,
 			reason: "the new version didn’t report healthy within 3 minutes"},
 		{name: "the helper dies after stopping the old container", arrange: func(g *rig) {
 			stop := g.engine.OnStop
@@ -363,7 +365,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 					once.Do(g.restartHelper)
 				}
 			}
-		}, trace: join(begin, swap, swap, []string{"start new"}, forward, recorded), image: newImage, state: selfupdate.StateSucceeded},
+		}, trace: join(begin, swap, swap, []string{"start new"}, forward, forwardDone), image: newImage, state: selfupdate.StateSucceeded},
 		{name: "the helper dies after starting the new container", arrange: func(g *rig) {
 			once := sync.Once{}
 			g.engine.OnStart = func(c *fakedocker.Container) {
@@ -371,10 +373,13 @@ func TestSelfUpdateOrder(t *testing.T) {
 					once.Do(g.restartHelper)
 				}
 			}
-		}, trace: join(begin, swap, []string{"start new"}, forward, recorded), image: newImage, state: selfupdate.StateSucceeded},
+		}, trace: join(begin, swap, []string{"start new"}, forward, forwardDone), image: newImage, state: selfupdate.StateSucceeded},
 		{name: "a newer schema that fails is restored before the old version starts", arrange: newerSchema,
-			trace: join(begin, swap, []string{"start new"}, putBack, recorded), image: oldImage, state: selfupdate.StatePutBack,
+			trace: join(begin, swap, []string{"start new"}, putBack, backDone), image: oldImage, state: selfupdate.StatePutBack,
 			reason: "the new version reported itself unhealthy"},
+		{name: "the helper never starts", arrange: func(g *rig) { g.fail["start helper"] = 500 },
+			trace: []string{"pull", "save", "create helper", "start helper", "stop helper", "remove helper"}, image: oldImage,
+			state: selfupdate.StateFailed, reason: "Docker couldn’t start the helper that replaces Ludock, so nothing was changed. Try again in a moment."},
 		{name: "work is running", arrange: func(g *rig) {
 			d, err := db.Open(filepath.Join(g.dataDir, "ludock.db"))
 			if err == nil {
@@ -391,10 +396,13 @@ func TestSelfUpdateOrder(t *testing.T) {
 		}, refused: "OPERATION_CONFLICT", image: oldImage},
 		{name: "a second click while it updates", arrange: func(g *rig) { g.pulled = make(chan struct{}) },
 			act: func(g *rig, p *process) error {
+				if !p.svc.Updating() {
+					t.Error("changes aren't held back while Ludock updates")
+				}
 				err := p.svc.Start(context.Background(), "admin", g.session, "")
 				close(g.pulled)
 				return err
-			}, refused: "LUDOCK_UPDATING", trace: join(begin, swap, []string{"start new"}, forward, recorded), image: newImage, state: selfupdate.StateSucceeded},
+			}, refused: "LUDOCK_UPDATING", trace: join(begin, swap, []string{"start new"}, forward, forwardDone), image: newImage, state: selfupdate.StateSucceeded},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -451,7 +459,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 			if user != "admin" || action != "ludock.update."+outcome || details != wantDetails {
 				t.Errorf("audit %s %s %s", user, action, details)
 			}
-			if failed := after.svc.Failed(context.Background()); (failed != nil) != (c.state == selfupdate.StatePutBack) {
+			if failed := after.svc.Failed(context.Background()); (failed != nil) != (c.state != selfupdate.StateSucceeded) {
 				t.Errorf("needs attention: %+v", failed)
 			}
 			if release, err := after.svc.Locks.Acquire([]string{"server:x"}, nil); err != nil {

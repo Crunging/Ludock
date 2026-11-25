@@ -217,8 +217,20 @@ func selfUpdate(args []string) int {
 		<-ctx.Done()
 		return 2
 	}
-	client := docker.New(cmp.Or(os.Getenv("LUDOCK_DOCKER_SOCKET"), config.DefaultDockerSocket))
-	(&selfupdate.Helper{Docker: client, Container: args[1], Image: args[2], Operation: args[3]}).Run(ctx)
+	socket := cmp.Or(os.Getenv("LUDOCK_DOCKER_SOCKET"), config.DefaultDockerSocket)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		(&selfupdate.Helper{Docker: docker.New(socket), Container: args[1], Image: args[2], Operation: args[3]}).Run(ctx)
+	}()
+	// As serve does, a replaced socket ends the helper so Docker starts it
+	// again with the new one.
+	select {
+	case <-socketReplaced(ctx, socket):
+		log.Error("Docker replaced its socket; restarting Ludock's update helper to reach the new one")
+		return 1
+	case <-done:
+	}
 	<-ctx.Done()
 	return 0
 }

@@ -91,6 +91,9 @@ func (h *Helper) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if old != nil && old.ID != h.Container {
+		return errors.New("another container answers to the previous container's ID")
+	}
 	replacement, err := h.replacement(ctx, recorded.name)
 	if err != nil {
 		return err
@@ -98,6 +101,11 @@ func (h *Helper) pass(ctx context.Context) error {
 	if old == nil {
 		if replacement == nil {
 			return errBothGone
+		}
+		// The original goes only once its replacement, of the pulled image,
+		// reported healthy.
+		if replacement.Image != h.Image {
+			return errors.New("the previous container is gone and the one left doesn't run the pulled image")
 		}
 		return h.finish(ctx, replacement, recorded)
 	}
@@ -146,7 +154,7 @@ func (h *Helper) pass(ctx context.Context) error {
 	}
 	// The new version works: the original goes, and from here the swap only
 	// goes forward.
-	if err := h.removeUntilGone(ctx, old.ID); err != nil {
+	if err := h.removeUntilGone(ctx, old.ID, false); err != nil {
 		return err
 	}
 	if replacement, err = h.inspect(ctx, replacement.ID); err != nil || replacement == nil {
@@ -382,7 +390,7 @@ func policy(recorded marker) json.RawMessage {
 // restoring the data save if the new version may have changed the data.
 func (h *Helper) putBack(ctx context.Context, old, replacement *docker.ContainerSpec, recorded marker, decided *undo) error {
 	if replacement != nil {
-		if err := h.removeUntilGone(ctx, replacement.ID); err != nil {
+		if err := h.removeUntilGone(ctx, replacement.ID, false); err != nil {
 			return err
 		}
 	}
@@ -422,16 +430,24 @@ func (h *Helper) leave(ctx context.Context, expected, name string) error {
 		}
 	}
 	log.Info("Ludock's update is settled; removing its helper")
-	// Removing itself ends this process; the answer may never come.
-	err = h.Docker.Remove(ctx, HelperName(h.Operation), true, false)
-	if err != nil && !docker.IsNotFound(err) && docker.StatusCode(err) != 0 {
-		return err
+	// Removing itself ends this process, so the answer may never come; one
+	// that never reached Docker leaves it to retry.
+	self, err := h.inspect(ctx, HelperName(h.Operation))
+	if err != nil || self == nil || labels(self)[operationLabel] != h.Operation {
+		return cmpErr(err, errors.New("the helper can't find its own container"))
+	}
+	if err := h.Docker.Remove(ctx, self.ID, true, true); err != nil && !docker.IsNotFound(err) {
+		if still, inspectErr := h.inspect(ctx, self.ID); inspectErr != nil || still != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (h *Helper) removeUntilGone(ctx context.Context, id string) error {
-	if err := h.Docker.Remove(ctx, id, true, false); err != nil && !docker.IsNotFound(err) {
+// removeUntilGone removes a container; volumes also removes the anonymous
+// volumes its image gave it, which a Ludock container's replacement may use.
+func (h *Helper) removeUntilGone(ctx context.Context, id string, volumes bool) error {
+	if err := h.Docker.Remove(ctx, id, true, volumes); err != nil && !docker.IsNotFound(err) {
 		return err
 	}
 	if spec, err := h.inspect(ctx, id); err != nil || spec != nil {
@@ -457,6 +473,11 @@ func (h *Helper) restoreData(ctx context.Context, old *docker.ContainerSpec) err
 	code, err = h.runData(ctx, old, old.Image, "restore-data", path.Join(dataDir, SaveName(h.Operation)))
 	if err != nil {
 		return err
+	}
+	// restore-data refuses a save with 1; any other end, such as being
+	// killed, repeats the restore.
+	if code != 0 && code != 1 {
+		return errors.New("the data restore was cut short")
 	}
 	if code != 0 {
 		log.Error("The previous version couldn't restore its data save, so the newer data was kept; the previous version may refuse it")
@@ -511,10 +532,13 @@ func (h *Helper) runData(ctx context.Context, old *docker.ContainerSpec, image s
 	if leftover, err := h.inspect(ctx, name); err != nil {
 		return 0, err
 	} else if leftover != nil {
+		if found := labels(leftover); found[launch.InternalLabel] != dataKind || found[operationLabel] != h.Operation {
+			return 0, errors.New("another container has the data step's name")
+		}
 		if _, err := h.Docker.Wait(ctx, leftover.ID); err != nil && !docker.IsNotFound(err) {
 			return 0, err
 		}
-		if err := h.removeUntilGone(ctx, leftover.ID); err != nil {
+		if err := h.removeUntilGone(ctx, leftover.ID, true); err != nil {
 			return 0, err
 		}
 	}
@@ -551,10 +575,16 @@ func (h *Helper) runData(ctx context.Context, old *docker.ContainerSpec, image s
 	}
 	// Removed whatever happened; a step cut short is repeated whole, and a
 	// removal that fails is retried by the next pass, which waits it out.
-	if removeErr := h.removeUntilGone(context.WithoutCancel(ctx), id); err == nil {
+	if removeErr := h.removeUntilGone(context.WithoutCancel(ctx), id, true); err == nil {
 		err = removeErr
 	}
 	return code, err
+}
+
+func labels(spec *docker.ContainerSpec) map[string]string {
+	var config struct{ Labels map[string]string }
+	json.Unmarshal(encode(spec.Config), &config)
+	return config.Labels
 }
 
 func encode(fields map[string]json.RawMessage) []byte {

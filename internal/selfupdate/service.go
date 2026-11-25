@@ -81,12 +81,16 @@ type Service struct {
 	Snapshot func(ctx context.Context) (*db.Snapshot, error)
 	// DataDir and Socket are Ludock's data folder and Docker socket.
 	DataDir, Socket string
-	Version         string
-	Poll            time.Duration
+	// SelfFound says how Ludock found its own container: "mounts" (its own
+	// ID), "env" (LUDOCK_SELF_CONTAINER), or "hostname".
+	SelfFound string
+	Version   string
+	Poll      time.Duration
 
 	mu   sync.Mutex
 	base context.Context
-	lift func()
+	// lifts release each update's hold on work, by update.
+	lifts map[string]func()
 }
 
 var (
@@ -104,6 +108,8 @@ var (
 		"Ludock’s container has its health check turned off, so an update couldn’t tell whether the new version works. Update it with the commands below.")
 	errNoSocket = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
 		"Ludock doesn’t reach Docker through a mounted socket, so it can’t hand its update to a helper. Update it with the commands below.")
+	errSelfUnsure = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
+		"Ludock can’t be sure which container is its own, so it won’t replace one. Unset LUDOCK_SELF_CONTAINER if it holds an ID, or set it to the container’s name, then use the commands below.")
 	errNoDataMount = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
 		"Ludock’s data folder isn’t on a volume or a mounted folder, so it would be lost with the container. Update it with the commands below.")
 	errPull = apperr.New("PULL_FAILED", 409,
@@ -234,6 +240,15 @@ func (s *Service) check(ctx context.Context, dependents bool) (*docker.Container
 	if err != nil {
 		return nil, nil, err
 	}
+	// The new container must find itself as the old one did: by its own
+	// ID, read from its mounts, or by the name it takes over. A hostname
+	// may be stale, and an ID in the environment would name the old one.
+	switch {
+	case s.SelfFound == "mounts" && s.Own.Name() == own.ID:
+	case s.SelfFound == "env" && "/"+s.Own.Name() == own.Name:
+	default:
+		return own, nil, errSelfUnsure
+	}
 	plan, err := s.Updates.CheckContainer(ctx, own.ID, dependents)
 	switch {
 	case apperr.Is(err, "UNSUPPORTED_IMAGE"):
@@ -300,8 +315,8 @@ func (s *Service) Start(ctx context.Context, adminID, tokenHash, ip string) erro
 		lift()
 		return authz.AdminMutationError(err)
 	}
+	s.hold(record.ID, lift)
 	s.mu.Lock()
-	s.lift = lift
 	base := s.base
 	s.mu.Unlock()
 	if base == nil {
@@ -433,35 +448,52 @@ func (s *Service) startHelper(ctx context.Context, record Record) error {
 	json.Unmarshal(encode(spec.Config), &config)
 	var host struct{ GroupAdd, CapAdd []string }
 	json.Unmarshal(encode(spec.HostConfig), &host)
-	labels := launch.HelperLabels(helperKind)
-	labels[operationLabel] = record.ID
+	helperLabels := launch.HelperLabels(helperKind)
+	helperLabels[operationLabel] = record.ID
 	body := map[string]any{"Image": record.Target, "Entrypoint": []string{helper.Binary},
 		"Cmd":  []string{"self-update", Version, record.Container, record.Target, record.ID},
 		"Env":  []string{"LUDOCK_DOCKER_SOCKET=" + socket.Destination},
-		"User": config.User, "Labels": labels, "Healthcheck": map[string]any{"Test": []string{"NONE"}},
+		"User": config.User, "Labels": helperLabels, "Healthcheck": map[string]any{"Test": []string{"NONE"}},
 		"HostConfig": map[string]any{"NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": []string{"ALL"},
 			"CapAdd": host.CapAdd, "SecurityOpt": []string{"no-new-privileges:true"}, "GroupAdd": host.GroupAdd,
 			"RestartPolicy": map[string]any{"Name": "unless-stopped"},
 			"Mounts":        []map[string]any{{"Type": "bind", "Source": socket.Source, "Target": socket.Destination, "ReadOnly": !socket.RW}}}}
 	id, err := s.Docker.Create(ctx, HelperName(record.ID), "", body)
 	if err != nil {
+		// A create whose answer was lost may have made it; it never started.
+		if spec, inspectErr := s.Docker.InspectSpec(ctx, HelperName(record.ID)); inspectErr == nil && labels(spec)[operationLabel] == record.ID {
+			s.Docker.Remove(context.WithoutCancel(ctx), spec.ID, true, true)
+		}
 		return err
 	}
 	if err := s.Docker.Start(ctx, id); err != nil && !docker.Unavailable(err) {
 		// It never ran, so nothing changed.
-		s.Docker.Remove(context.WithoutCancel(ctx), id, true, false)
+		s.Docker.Remove(context.WithoutCancel(ctx), id, true, true)
 		return err
 	}
 	return nil
 }
 
+// handshake bounds how long a helper may run without recording its marker,
+// which it does before it changes anything.
+const handshake = 2 * time.Minute
+
 // watch waits for the helper to settle the update and remove itself, then
-// records how it ended. Ludock may be stopped by the helper meanwhile.
+// records how it ended. Ludock may be stopped by the helper meanwhile. A
+// helper that never started, or never got as far as its marker, is ended.
 func (s *Service) watch(ctx context.Context, record Record) {
+	began := time.Now()
 	for {
-		_, err := s.Docker.InspectSpec(ctx, HelperName(record.ID))
-		if docker.IsNotFound(err) && s.judge(ctx, record) == nil {
-			return
+		spec, err := s.Docker.InspectSpec(ctx, HelperName(record.ID))
+		switch {
+		case docker.IsNotFound(err):
+			if s.judge(ctx, record) == nil {
+				return
+			}
+		case err == nil && labels(spec)[operationLabel] == record.ID && (spec.State.Status == "created" || time.Since(began) >= handshake):
+			if s.abandon(ctx, record, spec.ID) {
+				return
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -469,6 +501,32 @@ func (s *Service) watch(ctx context.Context, record Record) {
 		case <-time.After(s.poll()):
 		}
 	}
+}
+
+// abandon ends an update whose helper changed nothing: with no marker once
+// it is stopped, it never got that far. It reports whether it ended it.
+func (s *Service) abandon(ctx context.Context, record Record, helper string) bool {
+	marked := func() bool {
+		_, err := s.Docker.InspectSpec(ctx, stateName(record.ID))
+		return !docker.IsNotFound(err)
+	}
+	if marked() {
+		return false
+	}
+	zero := 0
+	if err := s.Docker.Stop(ctx, helper, &zero); err != nil && docker.StatusCode(err) != 304 {
+		return false
+	}
+	if marked() {
+		// It recorded its marker as it was stopped, so it goes on.
+		s.Docker.Start(ctx, helper)
+		return false
+	}
+	if err := s.Docker.Remove(ctx, helper, true, true); err != nil && !docker.IsNotFound(err) {
+		return false
+	}
+	s.removeLeftovers(record.ID)
+	return s.finish(ctx, record, StateFailed, errHelper.Message) == nil
 }
 
 // judge records an update whose helper is gone, by whether this Ludock runs
@@ -501,10 +559,8 @@ func (s *Service) judge(ctx context.Context, record Record) error {
 		// Its name, which Ludock may find itself by, is the new container's.
 		s.Own.Forget()
 	}
-	for _, name := range []string{stateName(record.ID), undoName(record.ID), dataName(record.ID)} {
-		if err := s.Docker.Remove(ctx, name, true, false); err != nil && !docker.IsNotFound(err) {
-			log.Warn("Could not remove a container Ludock's update left; remove it with docker rm")
-		}
+	if err := s.removeMarkers(ctx, record.ID); err != nil {
+		log.Warn("Could not remove a container Ludock's update left; remove it with docker rm")
 	}
 	s.removeLeftovers(record.ID)
 	return s.finish(ctx, record, state, reason)
@@ -553,7 +609,7 @@ func (s *Service) finish(ctx context.Context, record Record, state, reason strin
 			return err
 		}
 		entry := db.AuditEntry{Action: "ludock.update." + outcome, TargetType: "ludock", TargetID: record.ID, Details: details}
-		if user, _ := s.DB.FindUserByID(ctx, record.ActorID); user != nil {
+		if user, _ := db.FindUserIn(ctx, tx, record.ActorID); user != nil {
 			entry.UserID = record.ActorID
 		}
 		return s.DB.WriteAudit(ctx, tx, entry)
@@ -567,8 +623,8 @@ func (s *Service) finish(ctx context.Context, record Record, state, reason strin
 			". It is still on version "+record.From+"; Needs attention says what to do.")
 	}
 	s.mu.Lock()
-	lift := s.lift
-	s.lift = nil
+	lift := s.lifts[record.ID]
+	delete(s.lifts, record.ID)
 	s.mu.Unlock()
 	if lift != nil {
 		lift()
@@ -576,21 +632,42 @@ func (s *Service) finish(ctx context.Context, record Record, state, reason strin
 	return nil
 }
 
-// removeOld removes the markers and data steps of updates other than one in
-// progress, and helpers of theirs that ended, such as after the update's
-// record was restored from an older save.
-func (s *Service) removeOld(ctx context.Context, record *Record) error {
-	containers, err := s.Docker.ListContainers(ctx, true, docker.Filters{"label": {operationLabel}})
-	if err != nil {
-		return err
+func (s *Service) hold(operation string, lift func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lifts == nil {
+		s.lifts = map[string]func(){}
 	}
-	for _, container := range containers {
-		kind, operation := container.Labels[launch.InternalLabel], container.Labels[operationLabel]
-		ended := container.State == nil || *container.State != "running"
-		if (record.InProgress() && operation == record.ID) || (kind != markerKind && kind != dataKind && !(kind == helperKind && ended)) {
+	s.lifts[operation] = lift
+}
+
+// Updating reports that an update holds work back. Changes people make
+// meanwhile are refused: putting the old version back restores the data
+// saved before, which would undo them.
+func (s *Service) Updating() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.lifts) > 0
+}
+
+// ErrUpdating refuses a change while Ludock updates itself.
+var ErrUpdating = errUpdating
+
+// removeMarkers removes the update's markers and data step, each only if it
+// carries the update's label, with the volumes the image gave them.
+func (s *Service) removeMarkers(ctx context.Context, operation string) error {
+	for _, name := range []string{stateName(operation), undoName(operation), dataName(operation)} {
+		spec, err := s.Docker.InspectSpec(ctx, name)
+		if docker.IsNotFound(err) {
 			continue
 		}
-		if err := s.Docker.Remove(ctx, container.ID, true, false); err != nil && !docker.IsNotFound(err) {
+		if err != nil {
+			return err
+		}
+		if labels(spec)[operationLabel] != operation {
+			continue
+		}
+		if err := s.Docker.Remove(ctx, spec.ID, true, true); err != nil && !docker.IsNotFound(err) {
 			return err
 		}
 	}
@@ -605,11 +682,12 @@ func (s *Service) Recover(ctx, base context.Context) error {
 	s.base = base
 	s.mu.Unlock()
 	record := s.Last(ctx)
-	if err := s.removeOld(ctx, record); err != nil {
-		return err
-	}
-	if !record.InProgress() {
+	if record == nil {
 		return nil
+	}
+	// What an update that ended left, if removing it failed then.
+	if !record.InProgress() {
+		return s.removeMarkers(ctx, record.ID)
 	}
 	if record.State == StatePreparing {
 		return s.finish(ctx, *record, StateFailed, "Ludock restarted before the update began, so nothing changed.")
@@ -621,10 +699,7 @@ func (s *Service) Recover(ctx, base context.Context) error {
 	if err != nil {
 		return err
 	}
-	lift := s.Locks.Hold(errUpdating)
-	s.mu.Lock()
-	s.lift = lift
-	s.mu.Unlock()
+	s.hold(record.ID, s.Locks.Hold(errUpdating))
 	go s.watch(base, *record)
 	return nil
 }

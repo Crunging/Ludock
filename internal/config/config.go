@@ -41,6 +41,8 @@ type Config struct {
 	// SelfContainer identifies Ludock's own container (LUDOCK_SELF_CONTAINER,
 	// else detected from its mounts, else HOSTNAME).
 	SelfContainer string
+	// SelfFound is how: "env", "mounts" (its full ID), or "hostname".
+	SelfFound string
 	// BackupRoots are approved backup destinations (LUDOCK_BACKUP_ROOTS,
 	// ':'-separated, default /backups; set it empty to turn backups off).
 	BackupRoots []string
@@ -135,11 +137,12 @@ func Load() (Config, error) {
 		DockerConfig:   value("LUDOCK_DOCKER_CONFIG", ""),
 		HelperImage:    value("LUDOCK_HELPER_IMAGE", ""),
 	}
+	c.SelfFound = "env"
 	if c.SelfContainer == "" {
-		c.SelfContainer = value("HOSTNAME", "")
+		c.SelfContainer, c.SelfFound = value("HOSTNAME", ""), "hostname"
 		if mounts, err := mountinfo.Read(); err == nil {
 			if id := containerID(mounts); id != "" {
-				c.SelfContainer = id
+				c.SelfContainer, c.SelfFound = id, "mounts"
 			}
 		}
 	}
