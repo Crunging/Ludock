@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -554,7 +555,8 @@ func (s *Service) run(ctx context.Context, record Record, plan *update.Plan, tok
 		}
 		return
 	}
-	if err := s.save(maintenance, record.ID); err != nil {
+	saved, err := s.save(maintenance, record.ID)
+	if err != nil {
 		failed(errSave)
 		return
 	}
@@ -567,13 +569,14 @@ func (s *Service) run(ctx context.Context, record Record, plan *update.Plan, tok
 		failed(err)
 		return
 	}
-	if step, err := s.startHelper(ctx, record); err != nil && !errors.Is(err, errUncertain) {
+	step, err := s.startHelper(ctx, record, saved)
+	if err != nil && !errors.Is(err, errUncertain) {
 		log.Warn("Ludock's update helper didn't get going, so nothing was changed",
 			append(logging.Cause(err, docker.StatusCode(err)), logging.F("step", step), logging.F("docker", docker.Said(err)))...)
 		failed(errHelper)
 		return
 	}
-	s.watch(ctx, record)
+	s.watch(ctx, record, errors.Is(err, errUncertain))
 }
 
 // repository is a reference without its tag or digest.
@@ -627,17 +630,18 @@ func (s *Service) settle(ctx context.Context, record Record, state, reason strin
 }
 
 // save writes the data save beside the database.
-func (s *Service) save(ctx context.Context, operation string) error {
+// It returns the save's SHA-256, which binds it to the update.
+func (s *Service) save(ctx context.Context, operation string) (digest string, err error) {
 	snapshot, err := s.Snapshot(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer snapshot.Close()
 	final := filepath.Join(s.DataDir, SaveName(operation))
 	partial := final + ".partial"
 	file, err := os.OpenFile(partial, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
 	if err != nil {
-		return err
+		return "", err
 	}
 	saved := false
 	defer func() {
@@ -646,27 +650,28 @@ func (s *Service) save(ctx context.Context, operation string) error {
 			os.Remove(partial)
 		}
 	}()
-	if written, err := io.Copy(file, snapshot); err != nil || written != snapshot.Size {
-		return cmpErr(err, errors.New("data save was cut short"))
+	sum := sha256.New()
+	if written, err := io.Copy(io.MultiWriter(file, sum), snapshot); err != nil || written != snapshot.Size {
+		return "", cmpErr(err, errors.New("data save was cut short"))
 	}
 	if err := file.Sync(); err != nil {
-		return err
+		return "", err
 	}
 	if err := file.Close(); err != nil {
-		return err
+		return "", err
 	}
 	if err := os.Rename(partial, final); err != nil {
-		return err
+		return "", err
 	}
 	saved = true
-	return syncDir(s.DataDir)
+	return hex.EncodeToString(sum.Sum(nil)), syncDir(s.DataDir)
 }
 
 // startHelper starts the helper from the pulled image, by ID, with only the
 // Docker socket, mounted as Ludock's own is, and the interface's arguments.
 // Docker runs it again when it exits and after a daemon restart, even one
 // stopped through Docker meanwhile; it removes itself.
-func (s *Service) startHelper(ctx context.Context, record Record) (step string, err error) {
+func (s *Service) startHelper(ctx context.Context, record Record, save string) (step string, err error) {
 	spec, err := s.Docker.InspectSpec(ctx, record.Container)
 	if docker.IsNotFound(err) {
 		// Resumed once the original is gone: the replacement has its
@@ -688,6 +693,9 @@ func (s *Service) startHelper(ctx context.Context, record Record) (step string, 
 	json.Unmarshal(encode(spec.HostConfig), &host)
 	helperLabels := launch.HelperLabels(helperKind)
 	helperLabels[operationLabel] = record.ID
+	if save != "" {
+		helperLabels[saveLabel] = save
+	}
 	body := map[string]any{"Image": record.Target, "Entrypoint": []string{helper.Binary},
 		"Cmd":  []string{"self-update", Version, record.Container, record.Target, record.ID},
 		"Env":  []string{"LUDOCK_DOCKER_SOCKET=" + socket.Destination},
@@ -755,11 +763,14 @@ const handshake = 2 * time.Minute
 // records how it ended, saying meanwhile that this Ludock opened its data.
 // Ludock may be stopped by the helper meanwhile. A helper that never
 // started, or never got as far as its marker, is ended.
-func (s *Service) watch(ctx context.Context, record Record) {
+// uncertain: Docker didn't answer the helper's create, which may still land,
+// so its absence counts only after the handshake.
+func (s *Service) watch(ctx context.Context, record Record, uncertain bool) {
 	began := time.Now()
 	for {
 		spec, err := s.Docker.InspectSpec(ctx, HelperName(record.ID))
 		switch {
+		case docker.IsNotFound(err) && uncertain && time.Since(began) < handshake:
 		case docker.IsNotFound(err), err == nil && !ours(spec, helperKind, record.ID):
 			// Another container under the helper's name was never ours.
 			if s.judge(ctx, record) == nil {
@@ -959,7 +970,8 @@ func (s *Service) judge(ctx context.Context, record Record) error {
 		}
 	}
 	log.Warn("Ludock's update helper was removed before the update finished; starting it again to finish it")
-	if step, err := s.startHelper(ctx, record); err != nil && !errors.Is(err, errUncertain) {
+	// Its marker holds the save's digest already.
+	if step, err := s.startHelper(ctx, record, ""); err != nil && !errors.Is(err, errUncertain) {
 		log.Warn("Ludock's update helper couldn't be started again; retrying",
 			append(logging.Cause(err, docker.StatusCode(err)), logging.F("step", step), logging.F("docker", docker.Said(err)))...)
 		return err
@@ -1314,6 +1326,6 @@ func (s *Service) Recover(ctx, base context.Context) error {
 	} else if err != nil {
 		return retry(err)
 	}
-	go s.watch(base, *record)
+	go s.watch(base, *record, false)
 	return nil
 }

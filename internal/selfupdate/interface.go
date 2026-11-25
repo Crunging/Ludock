@@ -8,6 +8,9 @@ package selfupdate
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
+
+	"github.com/Crunging/Ludock/internal/identity"
 )
 
 // Version is the interface between Ludock versions, which 1.0 froze: the
@@ -67,6 +70,16 @@ import (
 // once it has recorded the outcome.
 const Version = "1"
 
+// ParseHelperArgs reads the helper's arguments after self-update.
+func ParseHelperArgs(args []string) (container, image, operation string, ok bool) {
+	hex64 := func(value string) bool { return len(value) == 64 && strings.Trim(value, "0123456789abcdef") == "" }
+	if len(args) != 4 || args[0] != Version || !hex64(args[1]) || !strings.HasPrefix(args[2], "sha256:") ||
+		!hex64(strings.TrimPrefix(args[2], "sha256:")) || !identity.ValidID(args[3]) {
+		return "", "", "", false
+	}
+	return args[1], args[2], args[3], true
+}
+
 // Reason codes a helper leaves when it puts the previous container back.
 // Codes are never reused; a Ludock reports an unknown one generically.
 const (
@@ -93,6 +106,7 @@ const (
 	containerLabel = "ludock.update.container"
 	startedLabel   = "ludock.update.started"
 	operationLabel = "ludock.update.operation"
+	saveLabel      = "ludock.update.save"
 )
 
 // Kinds of InternalLabel this package's containers carry.

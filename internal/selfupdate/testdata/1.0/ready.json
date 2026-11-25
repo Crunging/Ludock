@@ -1,0 +1,12 @@
+{
+  "name": "ludock-self-update-c4f4ca5435311deb-ready-{{container}}",
+  "body": {
+    "Image": "{{old-image}}",
+    "Entrypoint": ["/usr/local/bin/ludock"],
+    "Cmd": ["version"],
+    "Labels": {"ludock.enable": "false", "ludock.internal": "self-update-ready", "ludock.update.operation": "0d3e7b1c-5a2f-4c6e-9b8d-1f2a3b4c5d6e",
+      "ludock.update.container": "{{container}}", "ludock.update.started": "{{started}}"},
+    "Healthcheck": {"Test": ["NONE"]},
+    "HostConfig": {"NetworkMode": "none"}
+  }
+}

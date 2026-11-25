@@ -48,8 +48,13 @@ func Run(engine *fakedocker.Engine, options Options) {
 		engine.Starts = map[string]func(*fakedocker.Container){}
 	}
 	engine.Starts["self-update"] = func(c *fakedocker.Container) {
+		// As `ludock self-update …` reads them.
 		cmd := c.CreateRequest.Cmd
-		if len(cmd) != 5 {
+		if len(cmd) == 0 || cmd[0] != "self-update" {
+			return
+		}
+		container, image, operation, ok := selfupdate.ParseHelperArgs(cmd[1:])
+		if !ok {
 			return
 		}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -57,7 +62,7 @@ func Run(engine *fakedocker.Engine, options Options) {
 		if options.Started != nil {
 			options.Started(cancel, done)
 		}
-		run := &selfupdate.Helper{Docker: docker.New(engine.Socket), Container: cmd[2], Image: cmd[3], Operation: cmd[4],
+		run := &selfupdate.Helper{Docker: docker.New(engine.Socket), Container: container, Image: image, Operation: operation,
 			Poll: options.Poll, HealthWait: options.HealthWait}
 		go func() {
 			defer close(done)
@@ -101,8 +106,12 @@ func data(c *fakedocker.Container) int {
 	switch {
 	case len(cmd) > 0 && cmd[0] == "self-update-data":
 		return selfupdate.DataMain(cmd[1:], dataDir, io.Discard)
-	case len(cmd) == 2 && cmd[0] == "restore-data":
-		if _, err := db.RestoreSnapshot(host(c, cmd[1]), filepath.Join(dataDir, "ludock.db")); err != nil {
+	case len(cmd) > 0 && cmd[0] == "restore-data":
+		file, digest, ok := db.ParseRestoreArgs(cmd[1:])
+		if !ok {
+			return 2
+		}
+		if _, err := db.RestoreSnapshot(host(c, file), filepath.Join(dataDir, "ludock.db"), digest); err != nil {
 			return db.RestoreExitCode(err)
 		}
 		return 0

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,7 +22,6 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/helper"
-	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/web"
@@ -198,11 +196,6 @@ func socketReplaced(ctx context.Context, socket string) <-chan struct{} {
 	return replaced
 }
 
-var (
-	containerID = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	imageID     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-)
-
 // selfUpdate runs the helper that replaces Ludock's container, in its own
 // container from the new image (selfupdate.Version describes the
 // arguments). It removes itself once done; Docker runs it again if it is
@@ -211,8 +204,8 @@ var (
 func selfUpdate(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if len(args) != 4 || args[0] != selfupdate.Version || !containerID.MatchString(args[1]) || !imageID.MatchString(args[2]) ||
-		!identity.ValidID(args[3]) {
+	container, image, operation, ok := selfupdate.ParseHelperArgs(args)
+	if !ok {
 		log.Error("Ludock's update helper got arguments it can't read; remove this container")
 		<-ctx.Done()
 		return 2
@@ -221,7 +214,7 @@ func selfUpdate(args []string) int {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		(&selfupdate.Helper{Docker: docker.New(socket), Container: args[1], Image: args[2], Operation: args[3]}).Run(ctx)
+		(&selfupdate.Helper{Docker: docker.New(socket), Container: container, Image: image, Operation: operation}).Run(ctx)
 	}()
 	// As serve does, a replaced socket ends the helper so Docker starts it
 	// again with the new one.
@@ -285,15 +278,16 @@ func recoverAccount(args []string) int {
 // restoreData restores a saved copy of Ludock's data into an empty data
 // folder, after checking that the copy is whole and its key matches.
 func restoreData(args []string) int {
-	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "Usage: ludock restore-data <ludock-data-….tar>")
+	file, digest, ok := db.ParseRestoreArgs(args)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "Usage: ludock restore-data [--sha256 <digest>] <ludock-data-….tar>")
 		return 2
 	}
 	cfg, ok := loadConfig()
 	if !ok {
 		return 2
 	}
-	savedAt, err := db.RestoreSnapshot(args[0], cfg.DBPath())
+	savedAt, err := db.RestoreSnapshot(file, cfg.DBPath(), digest)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, startupError(err, "Could not restore Ludock's data. Check that the file can be read and the data folder is writable."))
 		return db.RestoreExitCode(err)

@@ -6,7 +6,8 @@
     "Cmd": ["self-update", "1", "{{container}}", "{{image}}", "0d3e7b1c-5a2f-4c6e-9b8d-1f2a3b4c5d6e"],
     "Env": ["LUDOCK_DOCKER_SOCKET={{socket}}"],
     "User": "",
-    "Labels": {"ludock.enable": "false", "ludock.internal": "self-update", "ludock.update.operation": "0d3e7b1c-5a2f-4c6e-9b8d-1f2a3b4c5d6e"},
+    "Labels": {"ludock.enable": "false", "ludock.internal": "self-update", "ludock.update.operation": "0d3e7b1c-5a2f-4c6e-9b8d-1f2a3b4c5d6e",
+      "ludock.update.save": "{{save}}"},
     "Healthcheck": {"Test": ["NONE"]},
     "HostConfig": {
       "NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": ["ALL"], "CapAdd": null,

@@ -287,7 +287,7 @@ func (g *rig) boot(container, image, name string, run ...string) *process {
 	}
 	p := &process{d: d, cancel: cancel, svc: &selfupdate.Service{DB: d, Docker: g.client, Own: self.New(g.client, own),
 		Updates: &update.Service{Docker: g.client}, Locks: locks.New(), DataDir: g.dataDir, Socket: socket, MountID: mountID,
-		Version: version, Poll: 5 * time.Millisecond, Handover: 100 * time.Millisecond,
+		Version: version, Poll: 5 * time.Millisecond, Handover: 2 * time.Second,
 		Snapshot: func(ctx context.Context) (*db.Snapshot, error) {
 			g.add("save")
 			g.mu.Lock()

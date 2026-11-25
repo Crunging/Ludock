@@ -6,6 +6,7 @@ import (
 	"errors"
 	"maps"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,6 +41,8 @@ type Helper struct {
 	Poll                        time.Duration
 	HealthWait                  time.Duration
 }
+
+var saveDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 var (
 	errBothGone     = errors.New("both Ludock containers are gone")
@@ -87,6 +90,8 @@ func (h *Helper) poll() time.Duration {
 type marker struct {
 	name   string
 	policy json.RawMessage
+	// save is the data save's SHA-256, which restore-data checks.
+	save string
 }
 
 type undo struct {
@@ -247,10 +252,20 @@ func (h *Helper) marker(ctx context.Context) (marker, error) {
 			found := labels(spec)
 			var policy struct{ Name string }
 			if found[nameLabel] == "" || json.Unmarshal([]byte(found[policyLabel]), &policy) != nil ||
-				!slices.Contains([]string{"", "no", "always", "unless-stopped", "on-failure"}, policy.Name) {
+				!slices.Contains([]string{"", "no", "always", "unless-stopped", "on-failure"}, policy.Name) || !saveDigest.MatchString(found[saveLabel]) {
 				return marker{}, errors.New("the update's marker is unreadable")
 			}
-			return marker{name: found[nameLabel], policy: json.RawMessage(found[policyLabel])}, nil
+			return marker{name: found[nameLabel], policy: json.RawMessage(found[policyLabel]), save: found[saveLabel]}, nil
+		}
+		// The digest Ludock gave this helper goes into the marker, which a
+		// helper started again reads.
+		self, err := h.Docker.InspectSpec(ctx, HelperName(h.Operation))
+		if err != nil {
+			return marker{}, err
+		}
+		save := labels(self)[saveLabel]
+		if !h.ours(self, helperKind) || !saveDigest.MatchString(save) {
+			return marker{}, errors.New("this helper wasn't given the update's data save")
 		}
 		original, err := h.Docker.InspectSpec(ctx, h.Container)
 		if err != nil {
@@ -259,7 +274,8 @@ func (h *Helper) marker(ctx context.Context) (marker, error) {
 		if original.ID != h.Container {
 			return marker{}, errors.New("another container answers to the previous container's ID")
 		}
-		record := map[string]string{nameLabel: strings.TrimPrefix(original.Name, "/"), policyLabel: string(original.HostConfig["RestartPolicy"])}
+		record := map[string]string{nameLabel: strings.TrimPrefix(original.Name, "/"), policyLabel: string(original.HostConfig["RestartPolicy"]),
+			saveLabel: save}
 		if err := h.createMarker(ctx, stateName(h.Operation), stateKind, record); err != nil {
 			return marker{}, err
 		}
@@ -542,7 +558,7 @@ func (h *Helper) putBack(ctx context.Context, old, replacement *docker.Container
 			if err := h.stopOriginal(ctx, old.ID); err != nil {
 				return err
 			}
-			if err := h.restoreData(ctx, old); err != nil {
+			if err := h.restoreData(ctx, old, recorded.save); err != nil {
 				return err
 			}
 		}
@@ -643,7 +659,7 @@ func (h *Helper) removeUntilGone(ctx context.Context, id string, volumes bool) e
 // old binary can be trusted with its data. A save that version can't
 // restore moves the newer data back, so nothing is lost; any other failure
 // keeps the save and tries again.
-func (h *Helper) restoreData(ctx context.Context, old *docker.ContainerSpec) error {
+func (h *Helper) restoreData(ctx context.Context, old *docker.ContainerSpec, save string) error {
 	dataDir := dataDirOf(old)
 	code, err := h.runData(ctx, old, h.Image, "self-update-data", "aside", h.Operation)
 	if err != nil || code == dataSettled {
@@ -653,7 +669,7 @@ func (h *Helper) restoreData(ctx context.Context, old *docker.ContainerSpec) err
 		return errors.New("could not move the newer data aside")
 	}
 	outcome := "restored"
-	code, err = h.runData(ctx, old, old.Image, "restore-data", path.Join(dataDir, SaveName(h.Operation)))
+	code, err = h.runData(ctx, old, old.Image, "restore-data", "--sha256", save, path.Join(dataDir, SaveName(h.Operation)))
 	switch {
 	case err != nil:
 		return err

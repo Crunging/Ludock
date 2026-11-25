@@ -230,11 +230,24 @@ func RestoreExitCode(err error) int {
 	return 1
 }
 
+// ParseRestoreArgs reads `ludock restore-data [--sha256 <digest>] <file>`,
+// whose form an update's helper of a later version sends.
+func ParseRestoreArgs(args []string) (file, digest string, ok bool) {
+	if len(args) == 3 && args[0] == "--sha256" && len(args[1]) == 64 && strings.Trim(args[1], "0123456789abcdef") == "" {
+		digest, args = args[1], args[2:]
+	}
+	if len(args) != 1 || args[0] == "" || strings.HasPrefix(args[0], "-") {
+		return "", "", false
+	}
+	return args[0], digest, true
+}
+
 // RestoreSnapshot restores a saved copy into the data folder of dbPath, which
 // must not hold a database or key yet. The archive is checked first: only
-// the database and its key, a database this version can open, and a key
-// that matches it. Nothing is placed until all of that holds.
-func RestoreSnapshot(archivePath, dbPath string) (savedAt time.Time, err error) {
+// the database and its key, a database this version can open, a key that
+// matches it, and, when digest is set, the SHA-256 of the whole file in hex.
+// Nothing is placed until all of that holds.
+func RestoreSnapshot(archivePath, dbPath, digest string) (savedAt time.Time, err error) {
 	folder := filepath.Dir(dbPath)
 	base := filepath.Base(dbPath)
 	keyFolder := base + ".identity-key"
@@ -259,10 +272,20 @@ func RestoreSnapshot(archivePath, dbPath string) (savedAt time.Time, err error) 
 		return savedAt, err
 	}
 	defer source.Close()
-	key, err := extractSnapshot(&recordingReader{r: source}, work, base, keyFolder, &savedAt)
+	sum := sha256.New()
+	reader := &recordingReader{r: io.TeeReader(source, sum)}
+	key, err := extractSnapshot(reader, work, base, keyFolder, &savedAt)
 	defer clear(key)
 	if err != nil {
 		return savedAt, err
+	}
+	if digest != "" {
+		if _, err := io.Copy(io.Discard, reader); err != nil {
+			return savedAt, err
+		}
+		if hex.EncodeToString(sum.Sum(nil)) != digest {
+			return savedAt, errRestoreArchive
+		}
 	}
 	if err := checkRestored(filepath.Join(work, base), key); err != nil {
 		return savedAt, err

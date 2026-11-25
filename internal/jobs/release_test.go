@@ -51,7 +51,7 @@ func TestReadsDataWrittenBy10(t *testing.T) {
 	// The save restores as `ludock restore-data` does and opens as Ludock
 	// starts.
 	path := filepath.Join(t.TempDir(), "data", "ludock.db")
-	if _, err := db.RestoreSnapshot("testdata/1.0/ludock-data-20261124-190205.tar", path); err != nil {
+	if _, err := db.RestoreSnapshot("testdata/1.0/ludock-data-20261124-190205.tar", path, ""); err != nil {
 		t.Fatal("restore-data:", err)
 	}
 	d, err := db.Open(path)

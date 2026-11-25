@@ -83,7 +83,7 @@ func TestSnapshotConsistentWhileWriting(t *testing.T) {
 	for range 5 {
 		path := saveSnapshot(t, d)
 		folder := t.TempDir()
-		if _, err := RestoreSnapshot(path, filepath.Join(folder, "ludock.db")); err != nil {
+		if _, err := RestoreSnapshot(path, filepath.Join(folder, "ludock.db"), ""); err != nil {
 			t.Fatal(err)
 		}
 		restored, err := sql.Open("sqlite", fileURI(filepath.Join(folder, "ludock.db"), map[string][]string{"mode": {"ro"}}))
@@ -190,7 +190,7 @@ func TestRestoreSnapshot(t *testing.T) {
 	archive := saveSnapshot(t, d)
 
 	target := filepath.Join(t.TempDir(), "data", "ludock.db")
-	if _, err := RestoreSnapshot(archive, target); err != nil {
+	if _, err := RestoreSnapshot(archive, target, ""); err != nil {
 		t.Fatal(err)
 	}
 	restored, err := Open(target)
@@ -217,7 +217,7 @@ func TestRestoreSnapshot(t *testing.T) {
 		t.Fatal("restored journals", journals)
 	}
 	restored.Close()
-	if _, err := RestoreSnapshot(archive, target); !apperr.Is(err, "RESTORE_DATA_EXISTS") {
+	if _, err := RestoreSnapshot(archive, target, ""); !apperr.Is(err, "RESTORE_DATA_EXISTS") {
 		t.Fatal("restore replaced existing data", err)
 	}
 
@@ -253,7 +253,7 @@ func TestRestoreSnapshot(t *testing.T) {
 		"a damaged database": {damaged, "RESTORE_ARCHIVE", 3}, "a copy that can't be read": {t.TempDir(), "", 1},
 	} {
 		folder := t.TempDir()
-		if _, err := RestoreSnapshot(test.archive, filepath.Join(folder, "ludock.db")); err == nil || test.code != "" && !apperr.Is(err, test.code) ||
+		if _, err := RestoreSnapshot(test.archive, filepath.Join(folder, "ludock.db"), ""); err == nil || test.code != "" && !apperr.Is(err, test.code) ||
 			RestoreExitCode(err) != test.exit {
 			t.Fatalf("restore of %s: %v, exit %d", name, err, RestoreExitCode(err))
 		}
