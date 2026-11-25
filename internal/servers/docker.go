@@ -850,6 +850,13 @@ func (o *Observer) ChangeStateExact(ctx context.Context, id string, action Actio
 	return o.changeStateExact(ctx, id, action, assertAccess, nil)
 }
 
+// ChangeStateExactUnsent is ChangeStateExact that calls unsent as
+// ChangeStateUnsent does.
+func (o *Observer) ChangeStateExactUnsent(ctx context.Context, id string, action Action,
+	assertAccess func(identity.Observation, *docker.ContainerInspect) error, unsent func() error) error {
+	return o.changeStateExact(ctx, id, action, assertAccess, unsent)
+}
+
 func (o *Observer) changeStateExact(ctx context.Context, id string, action Action,
 	assertAccess func(identity.Observation, *docker.ContainerInspect) error, unsent func() error) error {
 	var since time.Time
