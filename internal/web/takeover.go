@@ -185,7 +185,7 @@ func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID 
 		}
 		if pending > 0 {
 			return errTakeOver("A restore of " + from.DisplayName + " stopped partway, and only its old data folders can finish it. " +
-				"Bring back its old container and undo the restore from Needs attention, then try again.")
+				"Bring back its old container and back it up once, which finishes the restore, then try again.")
 		}
 
 		// A grant someone already has on the new server is theirs to keep.
@@ -215,11 +215,16 @@ func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID 
       WHERE server_id=?1 AND user_id NOT IN (SELECT user_id FROM server_grants WHERE server_id=?2)`, from.ID, to.ID); err != nil {
 			return err
 		}
-		// Access given for other data folders, or for a change nobody
-		// confirmed, waits for an administrator as a change in Docker does.
-		// A new binding revision voids confirmations opened before the move.
+		// Other data folders, or moved access for a change nobody confirmed,
+		// wait for an administrator as a change in Docker does: its members
+		// would see the other folders' history. A new binding revision voids
+		// confirmations opened before the move.
+		var shared bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM server_grants WHERE server_id=?)", to.ID).Scan(&shared); err != nil {
+			return err
+		}
 		revision := to.BindingRevision
-		if done.People > 0 && (!done.SameData || from.SharingPaused) {
+		if shared && (!done.SameData || (done.People > 0 && from.SharingPaused)) {
 			done.Paused, revision = true, revision+1
 			if _, err := tx.ExecContext(ctx, "UPDATE logical_servers SET sharing_paused=1, binding_revision=? WHERE id=?", revision, to.ID); err != nil {
 				return err
@@ -313,13 +318,18 @@ func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID 
 			Scan(&done.Backups); err != nil {
 			return err
 		}
+		// Startup removes an interrupted unpack's staging folder by its
+		// server's ID, which only the same storage holds.
+		if done.SameData {
+			if _, err := tx.ExecContext(ctx, `UPDATE settings SET value_json=json_set(value_json,'$.server',?1)
+        WHERE key LIKE 'unpack-stage:%' AND json_valid(value_json) AND json_extract(value_json,'$.server')=?2`, to.ID, from.ID); err != nil {
+				return err
+			}
+		}
 		for _, statement := range []string{
 			"UPDATE backups SET server_id=?1 WHERE server_id=?2",
 			"UPDATE operations SET server_id=?1 WHERE server_id=?2",
 			"UPDATE audit_log SET target_id=?1 WHERE target_type='server' AND target_id=?2",
-			// Startup removes an interrupted unpack's staging folder by its
-			// server's ID.
-			"UPDATE settings SET value_json=json_set(value_json,'$.server',?1) WHERE key LIKE 'unpack-stage:%' AND json_valid(value_json) AND json_extract(value_json,'$.server')=?2",
 			"DELETE FROM availability WHERE server_id=?2",
 			"DELETE FROM logical_servers WHERE id=?2",
 		} {
