@@ -437,6 +437,14 @@ func TestSelfUpdateOrder(t *testing.T) {
 		check   func(t *testing.T, g *rig, after *process)
 	}{
 		{name: "success", trace: join(begin, swap, []string{"start new"}, forward, forwardDone), image: newImage, state: selfupdate.StateSucceeded},
+		{name: "with the containerd image store, a new image stored as an index runs by its own ID", arrange: func(g *rig) {
+			amd64 := docker.Platform{OS: "linux", Architecture: "amd64"}
+			g.engine.SetIndex(newImage, map[string]docker.Platform{"sha256:" + strings.Repeat("5", 64): amd64,
+				"sha256:" + strings.Repeat("6", 64): {OS: "unknown", Architecture: "unknown"}})
+			g.engine.Update(g.old, func(c *fakedocker.Container) {
+				c.ImageManifestDescriptor = &docker.ManifestDescriptor{Digest: "sha256:" + strings.Repeat("7", 64), Platform: &amd64}
+			})
+		}, trace: join(begin, swap, []string{"start new"}, forward, forwardDone), image: newImage, state: selfupdate.StateSucceeded},
 		{name: "the new container fails to start", arrange: func(g *rig) { g.fail["start new"] = 500 },
 			trace: join(begin, swap, []string{"start new"}, putBack, backDone), image: oldImage, state: selfupdate.StatePutBack,
 			reason: "Docker couldn’t start the new container, for example because its port was still in use",

@@ -53,7 +53,7 @@ func (e *Engine) create(w http.ResponseWriter, r *http.Request) {
 	e.mu.Lock()
 	imageID, known := e.images[body.Image]
 	// Docker creates from any local image by its ID.
-	if !known && strings.HasPrefix(body.Image, "sha256:") {
+	if !known && strings.HasPrefix(body.Image, "sha256:") && !e.manifestLocked(body.Image) {
 		imageID, known = body.Image, true
 	}
 	defaults := e.imageConfigs[imageID]

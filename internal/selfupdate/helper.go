@@ -735,29 +735,40 @@ func (h *Helper) runData(ctx context.Context, old *docker.ContainerSpec, image s
 	return code, err
 }
 
-// resolveImage is the image ID reference gives the plan's platform, as the
-// pull fetched it. The containerd image store records the platform the
-// container runs; without that record a reference names one image, unless
-// the store holds several platforms of it, so the pulled platform is asked
-// for first.
+// resolveImage is the ID of the image reference names, which must hold the
+// platform the container runs. With the containerd image store, a
+// platform-qualified inspect answers with the platform manifest's ID, which
+// Docker can't create a container from when the image is an index.
 func resolveImage(ctx context.Context, client *docker.Client, reference string, plan *update.Plan) (string, error) {
+	image, err := client.InspectImageConfig(ctx, reference)
+	if err != nil {
+		return "", err
+	}
+	var want docker.Platform
 	if running := plan.Spec.ImageManifestDescriptor; running != nil && running.Platform != nil {
-		image, err := client.InspectImageVariant(ctx, reference, *running.Platform)
-		if err != nil {
-			return "", err
+		want = *running.Platform
+	} else if parts := strings.SplitN(plan.Platform(), "/", 3); len(parts) >= 2 {
+		want = docker.Platform{OS: parts[0], Architecture: parts[1]}
+		if len(parts) == 3 {
+			want.Variant = parts[2]
 		}
+	}
+	if want.OS == "" {
 		return image.ID, nil
 	}
-	if parts := strings.SplitN(plan.Platform(), "/", 3); len(parts) >= 2 {
-		platform := docker.Platform{OS: parts[0], Architecture: parts[1]}
-		if len(parts) == 3 {
-			platform.Variant = parts[2]
-		}
-		if image, err := client.InspectImageVariant(ctx, reference, platform); err == nil {
-			return image.ID, nil
-		}
+	same := func(have docker.Platform) bool {
+		return have.OS == want.OS && have.Architecture == want.Architecture && (want.Variant == "" || have.Variant == want.Variant)
 	}
-	return client.InspectImage(ctx, reference)
+	if len(image.Manifests) > 0 {
+		for _, manifest := range image.Manifests {
+			if manifest.Kind == "image" && manifest.Available && manifest.ImageData != nil && same(manifest.ImageData.Platform) {
+				return image.ID, nil
+			}
+		}
+	} else if same(docker.Platform{OS: image.OS, Architecture: image.Architecture, Variant: image.Variant}) {
+		return image.ID, nil
+	}
+	return "", errors.New("the image holds no " + plan.Platform() + " variant")
 }
 
 func labels(spec *docker.ContainerSpec) map[string]string {

@@ -139,19 +139,32 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()
 		id, ok := e.images[reference]
 		// Every image ID a container reports exists.
-		if !ok && strings.HasPrefix(reference, "sha256:") {
+		if !ok && strings.HasPrefix(reference, "sha256:") && !e.manifestLocked(reference) {
 			id, ok = reference, true
 		}
 		config := e.imageConfigs[id]
 		if variant, ok := e.imageConfigs[id+" "+r.URL.Query().Get("platform")]; ok {
 			config = variant
 		}
-		repoDigests := e.repoDigestsLocked(id)
+		answer := map[string]any{"Id": id, "Config": config, "RepoDigests": e.repoDigestsLocked(id)}
+		if manifests, indexed := e.indexes[id]; indexed {
+			var listed []map[string]any
+			var want docker.Platform
+			json.Unmarshal([]byte(r.URL.Query().Get("platform")), &want)
+			for manifest, platform := range manifests {
+				listed = append(listed, map[string]any{"ID": manifest, "Kind": "image", "Available": true,
+					"ImageData": map[string]any{"Platform": platform}})
+				if platform == want {
+					answer["Id"] = manifest
+				}
+			}
+			answer["Manifests"] = listed
+		}
 		e.mu.Unlock()
 		if !ok {
 			fail(w, 404)
 		} else {
-			writeJSON(w, 200, map[string]any{"Id": id, "Config": config, "RepoDigests": repoDigests})
+			writeJSON(w, 200, answer)
 		}
 	case distribution.MatchString(path):
 		reference := distribution.FindStringSubmatch(path)[1]

@@ -50,6 +50,9 @@ type Engine struct {
 	images     map[string]string
 	// imageConfigs are the container defaults of each image ID.
 	imageConfigs map[string]map[string]any
+	// indexes are the platform manifests, by ID, of each image ID stored
+	// as an index.
+	indexes map[string]map[string]docker.Platform
 	// registry is the image ID each published tag points to; registryFail
 	// is the status its registry lookups fail with.
 	registry     map[string]string
@@ -128,7 +131,7 @@ func Start(dir string) (*Engine, error) {
 // StartSocket serves on the unix socket at path, which must not exist.
 func StartSocket(socket string) (*Engine, error) {
 	engine := &Engine{containers: map[string]*Container{}, volumes: map[string]docker.VolumeInspect{},
-		images: map[string]string{}, imageConfigs: map[string]map[string]any{},
+		images: map[string]string{}, imageConfigs: map[string]map[string]any{}, indexes: map[string]map[string]docker.Platform{},
 		registry: map[string]string{}, registryFail: map[string]int{}, disks: map[string]string{}, execs: map[string]*exec{}, APIVersion: "1.47", Socket: socket}
 	if err := engine.listen(); err != nil {
 		return nil, err
