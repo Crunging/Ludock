@@ -16,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/jobs"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/schedules"
@@ -25,6 +26,13 @@ import (
 // sameGame: "unknown" is every unrecognized image, so it shows nothing.
 func sameGame(a, b string) bool {
 	return !strings.EqualFold(a, "unknown") && strings.EqualFold(games.Canonical(a), games.Canonical(b))
+}
+
+// sameData: the same game and data folders, kept in the same place. Servers
+// without data folders share one fingerprint per game, which shows nothing.
+func (s *Server) sameData(from, to *identity.Server) bool {
+	none, err := s.App.Identity.BindingFingerprint(identity.Observation{GameType: from.GameType})
+	return err == nil && from.BindingFingerprint != "" && from.BindingFingerprint != none && from.BindingFingerprint == to.BindingFingerprint
 }
 
 // takeOverOffer is what a missing server's page and Needs attention offer:
@@ -42,7 +50,7 @@ func (s *Server) takeOverOffer(ctx context.Context, from *identity.Server, all [
 			continue
 		}
 		target := views.TakeOverTarget{ID: server.ID, Name: server.DisplayName}
-		if from.BindingFingerprint != "" && server.BindingFingerprint == from.BindingFingerprint && server.FirstSeenAt > from.FirstSeenAt {
+		if s.sameData(from, &server) && server.FirstSeenAt > from.FirstSeenAt {
 			likely = append(likely, target)
 		} else if sameGame(from.GameType, server.GameType) {
 			offer.Others = append(offer.Others, target)
@@ -123,7 +131,7 @@ func errTakeOver(message string) error { return apperr.New("TAKE_OVER_REFUSED", 
 func scheduleKey(input schedules.Input) string {
 	days := slices.Clone(input.Days)
 	slices.Sort(days)
-	return fmt.Sprint(input.Action, input.Kind, input.Time, input.Timezone, input.Date, days, input.Command)
+	return fmt.Sprint(input.Action, input.Kind, input.Enabled, input.Time, input.Timezone, input.Date, days, input.Command)
 }
 
 func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID string) (*views.TakeOverDone, error) {
@@ -161,7 +169,17 @@ func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID 
 			return errTakeOver("Wait for the work in progress to finish, then try again.")
 		}
 		done = views.TakeOverDone{FromName: from.DisplayName, ToID: to.ID, ToName: to.DisplayName,
-			SameData: from.BindingFingerprint != "" && from.BindingFingerprint == to.BindingFingerprint}
+			SameData: s.sameData(from, to)}
+		// A restore that stopped partway is undone only on the data it
+		// stopped, so its journal can't move to other folders.
+		var pending int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM operations WHERE server_id=? AND "+jobs.PendingRestore, from.ID).
+			Scan(&pending); err != nil {
+			return err
+		}
+		if pending > 0 && !done.SameData {
+			return errTakeOver("A restore of " + from.DisplayName + " stopped partway on its old data folders. Start its old container again so Ludock can finish it, then try again.")
+		}
 
 		// A grant someone already has on the new server is theirs to keep.
 		rows, err := tx.QueryContext(ctx, `SELECT u.username, EXISTS(SELECT 1 FROM server_grants t WHERE t.server_id=?2 AND t.user_id=g.user_id)
@@ -192,9 +210,11 @@ func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID 
 		}
 		// Access given for other data folders, or for a change nobody
 		// confirmed, waits for an administrator as a change in Docker does.
+		// A new binding revision voids confirmations opened before the move.
+		revision := to.BindingRevision
 		if done.People > 0 && (!done.SameData || from.SharingPaused) {
-			done.Paused = true
-			if _, err := tx.ExecContext(ctx, "UPDATE logical_servers SET sharing_paused=1 WHERE id=?", to.ID); err != nil {
+			done.Paused, revision = true, revision+1
+			if _, err := tx.ExecContext(ctx, "UPDATE logical_servers SET sharing_paused=1, binding_revision=? WHERE id=?", revision, to.ID); err != nil {
 				return err
 			}
 		}
@@ -243,8 +263,8 @@ func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID 
 		}
 		// changed_at keeps a run missed while the server was missing from
 		// starting late on the new one.
-		if _, err := tx.ExecContext(ctx, "UPDATE schedules SET server_id=?, binding_revision=?, changed_at=? WHERE server_id=?",
-			to.ID, to.BindingRevision, db.Now(), from.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE schedules SET server_id=?, binding_revision=?, changed_at=?, revision=revision+1 WHERE server_id=?",
+			to.ID, revision, db.Now(), from.ID); err != nil {
 			return err
 		}
 
@@ -289,6 +309,9 @@ func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID 
 			"UPDATE backups SET server_id=?1 WHERE server_id=?2",
 			"UPDATE operations SET server_id=?1 WHERE server_id=?2",
 			"UPDATE audit_log SET target_id=?1 WHERE target_type='server' AND target_id=?2",
+			// Startup removes an interrupted unpack's staging folder by its
+			// server's ID.
+			"UPDATE settings SET value_json=json_set(value_json,'$.server',?1) WHERE key LIKE 'unpack-stage:%' AND json_valid(value_json) AND json_extract(value_json,'$.server')=?2",
 			"DELETE FROM availability WHERE server_id=?2",
 			"DELETE FROM logical_servers WHERE id=?2",
 		} {

@@ -83,7 +83,7 @@ templ TakeOverNotice(o TakeOver) {
 	if o.Likely != nil {
 		<form class="notice-panel stack-form" id="take-over" hx-post={ "/servers/" + o.From + "/take-over" } hx-target="#detail-status" { takeOverConfirm(o, o.Likely.Name)... }>
 			<h3>Looks like it was renamed to { o.Likely.Name }</h3>
-			<p>{ o.Likely.Name } has the same game and data folders, and Ludock found it after this server went missing. Move this server’s backups, schedules, and sharing there?</p>
+			<p>{ o.Likely.Name } has the same game and data folders as this server. Move this server’s backups, schedules, and sharing there?</p>
 			<input type="hidden" name="to" value={ o.Likely.ID }/>
 			<button class="primary-btn" type="submit" data-busy-label="Moving…">Move to { o.Likely.Name }</button>
 		</form>

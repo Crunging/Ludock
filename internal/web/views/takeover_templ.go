@@ -167,7 +167,7 @@ func TakeOverNotice(o TakeOver) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, " has the same game and data folders, and Ludock found it after this server went missing. Move this server’s backups, schedules, and sharing there?</p><input type=\"hidden\" name=\"to\" value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, " has the same game and data folders as this server. Move this server’s backups, schedules, and sharing there?</p><input type=\"hidden\" name=\"to\" value=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

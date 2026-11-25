@@ -103,8 +103,9 @@ func TestAddServerRefusesForgedRequests(t *testing.T) {
 // same game and data folders; the move gives it everything, the old server
 // leaves Ludock, and its work shows in the new server's Activity. A new
 // server with its own schedule or grant for the same person keeps its own.
-// One with other data folders is offered only by name: moved sharing waits
-// for a confirmation, and the backups say the data lived elsewhere. Work on
+// One with other data folders, or two with none, is offered only by name:
+// moved sharing waits for a confirmation that a page opened before the move
+// can't give, and the backups say the data lived elsewhere. Work on
 // either server, a member, or an administrator demoted at the write is
 // refused with nothing changed.
 func TestRenamedServerTakesOver(t *testing.T) {
@@ -114,8 +115,9 @@ func TestRenamedServerTakesOver(t *testing.T) {
 	restart := schedules.Input{Kind: "recurring", Action: "restart", Enabled: true, Time: "04:00", Timezone: "UTC", Days: []int{0, 1, 2, 3, 4, 5, 6}}
 	for _, test := range []struct {
 		name string
-		// data moves the renamed container's data to another host folder.
-		data bool
+		// data moves the renamed container's data to another host folder;
+		// bare gives the server none.
+		data, bare bool
 		// before runs once the renamed server is found; it returns who moves.
 		before func(t *testing.T, p *pages, member *auth.Principal, renamed string) *auth.Principal
 		status int
@@ -175,12 +177,21 @@ func TestRenamedServerTakesOver(t *testing.T) {
 			if !strings.Contains(body, "once you confirm the change") {
 				t.Fatal(body)
 			}
+			stale := url.Values{"bindingRevision": {"1"}}
+			if response := p.action("/servers/"+renamed+"/confirm-change", p.admin, stale); response.StatusCode != http.StatusConflict {
+				t.Fatal("stale confirmation", response.StatusCode)
+			}
 			if can, _ := p.app.Authz.Has(ctx, &member.User, renamed, authz.ServerView); can {
 				t.Fatal("shared before the change was confirmed")
 			}
 			page := p.do("GET", "/servers/"+renamed+"?tab=backups&restore="+backupID, p.admin, nil, nil).Body.String()
 			if !strings.Contains(page, "Taken when the server’s data lived somewhere else") {
 				t.Fatal(page)
+			}
+		}},
+		{name: "no data folders", bare: true, status: http.StatusOK, check: func(t *testing.T, p *pages, member *auth.Principal, old, renamed, body string) {
+			if can, _ := p.app.Authz.Has(ctx, &member.User, renamed, authz.ServerView); can || !strings.Contains(body, "once you confirm the change") {
+				t.Fatal(can, body)
 			}
 		}},
 		{name: "work on the missing server", status: http.StatusConflict,
@@ -204,7 +215,11 @@ func TestRenamedServerTakesOver(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			folder, elsewhere := t.TempDir(), t.TempDir()
-			p := newPagesWith(t, []docker.MountPoint{{Type: "bind", Source: folder, Destination: "/config", RW: true}})
+			mounts := []docker.MountPoint{{Type: "bind", Source: folder, Destination: "/config", RW: true}}
+			if test.bare {
+				mounts = nil
+			}
+			p := newPagesWith(t, mounts)
 			member := p.user("u-friend", "friend", db.RoleMember)
 			p.grant(member, authz.ServerView, authz.ServerRestart, authz.SchedulesManage)
 			if _, err := p.app.Schedules.Create(ctx, &member.User, member.TokenHash, p.server, restart); err != nil {
@@ -232,7 +247,8 @@ func TestRenamedServerTakesOver(t *testing.T) {
 			suggested := "Looks like it was renamed to valheim-world"
 			page := p.do("GET", "/servers/"+p.server, p.admin, nil, nil).Body.String()
 			attention := p.do("GET", "/fragments/attention", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String()
-			if renamed == "" || strings.Contains(page, suggested) == test.data || strings.Contains(attention, suggested) == test.data ||
+			offered := !test.data && !test.bare
+			if renamed == "" || strings.Contains(page, suggested) != offered || strings.Contains(attention, suggested) != offered ||
 				!strings.Contains(page, `value="`+renamed+`"`) {
 				t.Fatal(renamed, page, attention)
 			}
