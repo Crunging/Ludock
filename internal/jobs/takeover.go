@@ -119,8 +119,7 @@ func errTakeOver(message string) error { return apperr.New("TAKE_OVER_REFUSED", 
 
 // sameTime reports whether two enabled schedules run at the same instant,
 // whatever time zones they name: a one-time schedule's run against the
-// other's, or two recurring ones on any of the next runs of the first, now
-// and half a year on, which reach every weekday they share in both seasons.
+// other's, or two recurring ones on any run of the first in the coming year.
 func sameTime(a, b schedules.Input, now int64) bool {
 	if !a.Enabled || !b.Enabled {
 		return false
@@ -135,20 +134,18 @@ func sameTime(a, b schedules.Input, now int64) bool {
 			return ok && runsAt(pair[1], at)
 		}
 	}
-	// Zones that agree in one half of the year can differ in the other.
-	for _, from := range []int64{now, now + 26*7*24*time.Hour.Milliseconds()} {
-		for at, n := from, 0; n < 8; n++ {
-			next, ok := schedtime.NextRun(a.Clock(), at, "")
-			if !ok {
-				break
-			}
-			if runsAt(b, next) {
-				return true
-			}
-			at = next + 60_000
+	// A year of runs covers every weekday the two share and every stretch
+	// in which their time zones line up.
+	for at := now; ; {
+		next, ok := schedtime.NextRun(a.Clock(), at, "")
+		if !ok || next > now+366*24*time.Hour.Milliseconds() {
+			return false
 		}
+		if runsAt(b, next) {
+			return true
+		}
+		at = next + 60_000
 	}
-	return false
 }
 
 // TakeOver moves a missing server's backups, schedules, sharing, monitoring
@@ -168,7 +165,11 @@ func (j *Jobs) TakeOver(ctx context.Context, actor *db.SessionUser, tokenHash, f
 	defer release()
 	admin := actor.ID
 	var done TakeOver
+	// Compared once the move is saved: a year of runs takes too long to
+	// work out while holding the write lock.
+	var moved, own []schedules.Input
 	err = j.DB.AdminMutation(ctx, admin, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		moved, own = nil, nil
 		from, err := j.Identity.GetIn(ctx, tx, fromID)
 		if err != nil {
 			return err
@@ -287,6 +288,7 @@ func (j *Jobs) TakeOver(ctx context.Context, actor *db.SessionUser, tokenHash, f
 		for _, schedule := range theirs {
 			if schedule.valid {
 				taken[schedule.input.Key()] = true
+				own = append(own, schedule.input)
 			}
 		}
 		for _, schedule := range list {
@@ -302,9 +304,7 @@ func (j *Jobs) TakeOver(ctx context.Context, actor *db.SessionUser, tokenHash, f
 				continue
 			}
 			taken[schedule.input.Key()] = true
-			if slices.ContainsFunc(theirs, func(their entry) bool { return their.valid && sameTime(their.input, schedule.input, db.Now()) }) {
-				done.SameTime = append(done.SameTime, schedule.input)
-			}
+			moved = append(moved, schedule.input)
 		}
 		if existing+done.Schedules > schedules.MaxPerServer {
 			return errTakeOver(fmt.Sprintf("%s would have more than %d schedules. Delete some, then try again.", to.DisplayName, schedules.MaxPerServer))
@@ -380,6 +380,12 @@ func (j *Jobs) TakeOver(ctx context.Context, actor *db.SessionUser, tokenHash, f
 	})
 	if err != nil {
 		return nil, err
+	}
+	now := db.Now()
+	for _, schedule := range moved {
+		if slices.ContainsFunc(own, func(their schedules.Input) bool { return sameTime(their, schedule, now) }) {
+			done.SameTime = append(done.SameTime, schedule)
+		}
 	}
 	return &done, nil
 }
