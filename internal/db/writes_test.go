@@ -33,6 +33,10 @@ func TestWritesCloseForAnUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// It would commit later, whenever it ends.
+	if _, err := readOnly.Exec("INSERT INTO numbers VALUES (3)"); !errors.Is(err, errReadOnlyWrite) {
+		t.Errorf("a read-only transaction wrote: %v", err)
+	}
 	closed := make(chan func())
 	go func() {
 		reopen, err := d.CloseWrites(ctx)
@@ -68,15 +72,13 @@ func TestWritesCloseForAnUpdate(t *testing.T) {
 			}
 			return err
 		},
-		"optimize": func() error { _, err := d.Exec("PRAGMA optimize"); return err },
+		"optimize":    func() error { _, err := d.Exec("PRAGMA optimize"); return err },
+		"pragma call": func() error { _, err := d.Exec("PRAGMA user_version(42)"); return err },
 	}
 	for name, write := range refused {
 		if err := write(); !errors.Is(err, ErrUpdating) {
 			t.Errorf("%s: %v", name, err)
 		}
-	}
-	if _, err := readOnly.Exec("INSERT INTO numbers VALUES (3)"); err == nil {
-		t.Error("a read-only transaction wrote")
 	}
 	readOnly.Rollback()
 	var count int

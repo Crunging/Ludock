@@ -90,6 +90,9 @@ func (d *DB) CloseWrites(ctx context.Context) (reopen func(), err error) {
 var readPragmas = map[string]bool{"application_id": true, "user_version": true, "database_list": true, "foreign_key_check": true,
 	"foreign_keys": true, "journal_mode": true, "quick_check": true, "integrity_check": true}
 
+// checkPragmas read whatever argument they are given.
+var checkPragmas = map[string]bool{"foreign_key_check": true, "quick_check": true, "integrity_check": true}
+
 // writes reports whether a statement may write: anything but a single
 // SELECT or EXPLAIN, or reading one of readPragmas.
 func writes(query string) bool {
@@ -105,9 +108,15 @@ func writes(query string) bool {
 	case "SELECT", "EXPLAIN":
 		return false
 	case "PRAGMA":
-		name := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(query, words[0])))
-		name, _, _ = strings.Cut(name, "(")
-		return strings.Contains(name, "=") || !readPragmas[strings.TrimPrefix(strings.TrimSpace(name), "main.")]
+		// PRAGMA name(value) sets as PRAGMA name = value does, but for the
+		// checks, whose argument is what to check.
+		rest := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(query, words[0])))
+		name, argument, called := strings.Cut(rest, "(")
+		name = strings.TrimPrefix(strings.TrimSpace(name), "main.")
+		if strings.Contains(name, "=") || !readPragmas[name] {
+			return true
+		}
+		return called && !checkPragmas[name] || strings.Contains(argument, "=")
 	}
 	return true
 }
