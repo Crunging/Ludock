@@ -144,7 +144,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 		Resources: &resources.Service{DB: database, Identity: store, Authz: authorization, Sample: serverService.Sample},
 		stop:      make(chan struct{})}
 	a.SelfUpdate = &selfupdate.Service{DB: database, Docker: client, Own: own, Updates: updates, Checks: checks, Locks: table,
-		Notify: notifications.Notify, DataDir: cfg.DataDir, Socket: cfg.DockerSocket, SelfFound: cfg.SelfFound,
+		Notify: notifications.Notify, DataDir: cfg.DataDir, Socket: cfg.DockerSocket, SelfFound: cfg.SelfFound, MountID: cfg.MountID,
 		Snapshot: func(ctx context.Context) (*db.Snapshot, error) {
 			// Saves share a work folder that each new one clears.
 			a.saving.Lock()

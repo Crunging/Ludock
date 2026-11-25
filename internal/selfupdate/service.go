@@ -84,8 +84,10 @@ type Service struct {
 	// SelfFound says how Ludock found its own container: "mounts" (its own
 	// ID), "env" (LUDOCK_SELF_CONTAINER), or "hostname".
 	SelfFound string
-	Version   string
-	Poll      time.Duration
+	// MountID is the container ID read from Ludock's own mounts, or "".
+	MountID string
+	Version string
+	Poll    time.Duration
 
 	mu   sync.Mutex
 	base context.Context
@@ -245,7 +247,7 @@ func (s *Service) check(ctx context.Context, dependents bool) (*docker.Container
 	// may be stale, and an ID in the environment would name the old one.
 	switch {
 	case s.SelfFound == "mounts" && s.Own.Name() == own.ID:
-	case s.SelfFound == "env" && "/"+s.Own.Name() == own.Name:
+	case s.SelfFound == "env" && "/"+s.Own.Name() == own.Name && (s.MountID == "" || s.MountID == own.ID):
 	default:
 		return own, nil, errSelfUnsure
 	}
@@ -490,6 +492,9 @@ func (s *Service) watch(ctx context.Context, record Record) {
 			if s.judge(ctx, record) == nil {
 				return
 			}
+		case err == nil && labels(spec)[operationLabel] == record.ID && spec.State.Status == "exited":
+			// Stopped by abandon as it recorded its marker, it goes on.
+			s.Docker.Start(ctx, spec.ID)
 		case err == nil && labels(spec)[operationLabel] == record.ID && (spec.State.Status == "created" || time.Since(began) >= handshake):
 			if s.abandon(ctx, record, spec.ID) {
 				return
@@ -518,7 +523,8 @@ func (s *Service) abandon(ctx context.Context, record Record, helper string) boo
 		return false
 	}
 	if marked() {
-		// It recorded its marker as it was stopped, so it goes on.
+		// It recorded its marker as it was stopped, so it goes on; watch
+		// starts it again if this start fails.
 		s.Docker.Start(ctx, helper)
 		return false
 	}
@@ -540,7 +546,15 @@ func (s *Service) judge(ctx context.Context, record Record) error {
 	if own == nil {
 		own = &docker.ContainerInspect{}
 	}
-	if own.Image != record.Target {
+	_, err = s.Docker.InspectSpec(ctx, stateName(record.ID))
+	if err != nil && !docker.IsNotFound(err) {
+		return err
+	}
+	marked := err == nil
+	if own.Image != record.Target && !marked {
+		// The helper records its marker before it changes anything.
+		state, reason = StateFailed, errHelper.Message
+	} else if own.Image != record.Target {
 		state, reason = StatePutBack, "the update stopped before the new version started"
 		spec, err := s.Docker.InspectSpec(ctx, undoName(record.ID))
 		if err != nil && !docker.IsNotFound(err) {
@@ -653,10 +667,11 @@ func (s *Service) Updating() bool {
 // ErrUpdating refuses a change while Ludock updates itself.
 var ErrUpdating = errUpdating
 
-// removeMarkers removes the update's markers and data step, each only if it
-// carries the update's label, with the volumes the image gave them.
+// removeMarkers removes the update's markers, data step, and a helper that
+// never started, each only if it carries the update's label, with the
+// volumes the image gave them.
 func (s *Service) removeMarkers(ctx context.Context, operation string) error {
-	for _, name := range []string{stateName(operation), undoName(operation), dataName(operation)} {
+	for _, name := range []string{stateName(operation), undoName(operation), dataName(operation), HelperName(operation)} {
 		spec, err := s.Docker.InspectSpec(ctx, name)
 		if docker.IsNotFound(err) {
 			continue
@@ -664,7 +679,9 @@ func (s *Service) removeMarkers(ctx context.Context, operation string) error {
 		if err != nil {
 			return err
 		}
-		if labels(spec)[operationLabel] != operation {
+		// A helper is left only by a create whose answer was lost, never
+		// started.
+		if labels(spec)[operationLabel] != operation || (name == HelperName(operation) && spec.State.Status != "created") {
 			continue
 		}
 		if err := s.Docker.Remove(ctx, spec.ID, true, true); err != nil && !docker.IsNotFound(err) {
@@ -699,7 +716,13 @@ func (s *Service) Recover(ctx, base context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.hold(record.ID, s.Locks.Hold(errUpdating))
-	go s.watch(base, *record)
+	// Startup retries recovery; the update is watched once.
+	s.mu.Lock()
+	_, watched := s.lifts[record.ID]
+	s.mu.Unlock()
+	if !watched {
+		s.hold(record.ID, s.Locks.Hold(errUpdating))
+		go s.watch(base, *record)
+	}
 	return nil
 }
