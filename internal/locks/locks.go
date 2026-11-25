@@ -115,6 +115,34 @@ func (t *Table) Maintain(reason error) (lift func(), err error) {
 	return t.holdLocked(reason), nil
 }
 
+// Drain cancels background holders and waits until no work holds a key, for
+// a hold that must not start with work still running.
+func (t *Table) Drain(ctx context.Context) error {
+	for {
+		released := t.NextRelease()
+		t.mu.Lock()
+		var cancels []func()
+		for _, owner := range t.active {
+			if owner.background != nil {
+				cancels = append(cancels, owner.background)
+			}
+		}
+		idle := len(t.active) == 0
+		t.mu.Unlock()
+		if idle {
+			return nil
+		}
+		for _, cancel := range cancels {
+			cancel()
+		}
+		select {
+		case <-released:
+		case <-ctx.Done():
+			return ErrConflict
+		}
+	}
+}
+
 func (t *Table) holdLocked(reason error) (lift func()) {
 	t.holds = append(t.holds, reason)
 	var once sync.Once

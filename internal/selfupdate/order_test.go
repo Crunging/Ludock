@@ -290,6 +290,12 @@ func (g *rig) boot(container, image, name string, run ...string) *process {
 		Version: version, Poll: 5 * time.Millisecond, Handover: 100 * time.Millisecond,
 		Snapshot: func(ctx context.Context) (*db.Snapshot, error) {
 			g.add("save")
+			g.mu.Lock()
+			at := g.at["save"]
+			g.mu.Unlock()
+			if at != nil {
+				at(nil)
+			}
 			return d.Snapshot(ctx)
 		}}}
 	g.mu.Lock()
@@ -704,6 +710,17 @@ func TestSelfUpdateOrder(t *testing.T) {
 			g.engine.HangCreates = 1
 		}, trace: []string{"pull", "save", "create helper", "stop helper", "remove helper"}, image: oldImage,
 			state: selfupdate.StateFailed, reason: "Docker couldn’t start the helper that replaces Ludock, so nothing was changed. Try again in a moment."},
+		{name: "an administrator signed out during the data save gets no helper", arrange: func(g *rig) {
+			g.at["save"] = func(*http.Request) {
+				g.mu.Lock()
+				old := g.processes[g.old]
+				g.mu.Unlock()
+				if _, err := old.d.ExecContext(db.Maintenance(ctx), "DELETE FROM sessions"); err != nil {
+					t.Error(err)
+				}
+			}
+		}, trace: []string{"pull", "save"}, image: oldImage, state: selfupdate.StateFailed,
+			reason: "The administrator who asked for the update signed out or isn’t one any more, so nothing was changed."},
 		{name: "a tag moved back to an older version is refused", arrange: func(g *rig) {
 			g.engine.SetImageConfig(newImage, map[string]any{"Labels": map[string]any{"org.opencontainers.image.version": "0.9.0"}})
 		}, trace: []string{"pull"}, image: oldImage, state: selfupdate.StateFailed, to: "0.9.0",
@@ -727,11 +744,21 @@ func TestSelfUpdateOrder(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, refused: "OPERATION_CONFLICT"},
+		{name: "a host port range, from which Docker picks", arrange: func(g *rig) {
+			g.engine.Update(g.old, func(c *fakedocker.Container) {
+				c.HostConfig["PortBindings"] = map[string]any{"3000/tcp": []any{map[string]any{"HostIp": "", "HostPort": "3000-3005"}}}
+			})
+		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
 		{name: "a data folder with another mount inside it, such as the key folder", arrange: func(g *rig) {
 			g.engine.Update(g.old, func(c *fakedocker.Container) {
 				c.Mounts = append(c.Mounts, docker.MountPoint{Type: "volume", Name: "key", Destination: g.dataDir + "/ludock.db.identity-key", RW: true})
 			})
 		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
+		{name: "background work that won't stop when asked stops the update before the save", before: func(g *rig, p *process) {
+			if _, err := p.svc.Locks.Acquire([]string{"server:stuck"}, func() {}); err != nil {
+				t.Fatal(err)
+			}
+		}, trace: []string{"pull"}, image: oldImage, state: selfupdate.StateFailed, reason: "Wait for the work in progress to finish, then update Ludock."},
 		{name: "startup recovery hasn't finished", before: func(g *rig, p *process) { p.svc.Locks.Fence() }, refused: "RECOVERY_PENDING"},
 		{name: "a container that can't show it is Ludock's own", self: func(g *rig) string { return "?" }, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
 		{name: "LUDOCK_SELF_CONTAINER naming the container", self: func(g *rig) string { return "ludock" },

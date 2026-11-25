@@ -334,9 +334,10 @@ func (s *Service) check(ctx context.Context, dependents bool) (*docker.Container
 		PortBindings    map[string][]docker.PortBinding
 	}
 	json.Unmarshal(encode(plan.Spec.HostConfig), &host)
+	// A blank port, 0, or a range such as 3000-3005 lets Docker choose.
 	for _, bindings := range host.PortBindings {
 		for _, binding := range bindings {
-			if binding.HostPort == "" || binding.HostPort == "0" {
+			if port, err := strconv.Atoi(binding.HostPort); err != nil || port <= 0 {
 				host.PublishAllPorts = true
 			}
 		}
@@ -501,11 +502,14 @@ func (s *Service) run(ctx context.Context, record Record, plan *update.Plan, tok
 	}
 	// Release images name their version in a label; a build without one is
 	// named once it runs.
-	if image, err := s.Docker.InspectImageConfig(ctx, target); err == nil {
-		var config struct{ Labels map[string]string }
-		json.Unmarshal(encode(image.Config), &config)
-		record.To = config.Labels["org.opencontainers.image.version"]
+	image, err := s.Docker.InspectImageConfig(ctx, target)
+	if err != nil {
+		failed(errPull)
+		return
 	}
+	var config struct{ Labels map[string]string }
+	json.Unmarshal(encode(image.Config), &config)
+	record.To = config.Labels["org.opencontainers.image.version"]
 	// An older version can't open data a newer one wrote, so it would only
 	// be put back.
 	if older(record.To, record.From) {
@@ -515,6 +519,15 @@ func (s *Service) run(ctx context.Context, record Record, plan *update.Plan, tok
 	}
 	// Nothing is admitted after the save, since putting the old version back
 	// restores it; what was admitted finishes first.
+	// Work that was cancellable when the update began, such as a player
+	// reading, ends first; nothing else can start under the hold.
+	drain, cancel := context.WithTimeout(ctx, s.handover())
+	err = s.Locks.Drain(drain)
+	cancel()
+	if err != nil {
+		failed(errBusy)
+		return
+	}
 	if err := s.closeWrites(ctx, record.ID); err != nil {
 		failed(errDrain)
 		return
@@ -543,6 +556,15 @@ func (s *Service) run(ctx context.Context, record Record, plan *update.Plan, tok
 	}
 	if err := s.save(maintenance, record.ID); err != nil {
 		failed(errSave)
+		return
+	}
+	// The save can take a while too; the helper gets Docker's socket only
+	// for an administrator still signed in.
+	if err := s.DB.AdminMutation(maintenance, record.ActorID, tokenHash, db.Now(), func(*sql.Tx) error { return nil }); err != nil {
+		if errors.Is(err, db.ErrSessionGone) || errors.Is(err, db.ErrNotAdmin) {
+			err = errNoLongerAdmin
+		}
+		failed(err)
 		return
 	}
 	if step, err := s.startHelper(ctx, record); err != nil && !errors.Is(err, errUncertain) {
