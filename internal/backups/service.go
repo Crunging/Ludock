@@ -521,9 +521,10 @@ func (s *Service) FoundBytes(ctx context.Context) (total, kept int64, err error)
 	return total, kept, err
 }
 
-// foundBytes is FoundBytes, and whether a folder couldn't be listed. A
-// budget above 0 bounds all its waits together; folders it leaves no time
-// for count as not listed.
+// foundBytes is FoundBytes, and whether a folder couldn't be listed. With a
+// budget above 0, no folder is looked into once it is spent, and those
+// folders count as not listed. Each look keeps its full wait: one given up
+// early would hold a healthy folder as not responding.
 func (s *Service) foundBytes(ctx context.Context, budget time.Duration) (total, kept int64, unlisted bool, err error) {
 	start := time.Now()
 	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE state='complete'")
@@ -552,11 +553,7 @@ func (s *Service) foundBytes(ctx context.Context, budget time.Duration) (total, 
 		sizes, seen := listings[folder]
 		if !seen {
 			var listed map[string]int64
-			limit := measureWait
-			if budget > 0 {
-				limit = min(limit, budget-time.Since(start))
-			}
-			if limit > 0 && s.reach(folder, errFolderStalled, limit, func(func()) error {
+			if (budget == 0 || time.Since(start) < budget) && s.reach(folder, errFolderStalled, measureWait, func(func()) error {
 				var err error
 				listed, err = s.Storage.archives(folder)
 				return err
@@ -764,7 +761,7 @@ func (s *Service) inspect(ctx context.Context, serverID string, measure bool) (S
 	} else {
 		status.AvailableBytes = available
 		if available <= settings.ReserveBytes && available+removable() <= settings.ReserveBytes {
-			status.Issues = append(status.Issues, readinessIssue(CapacityError(codeDisk, kept), Issue{}))
+			status.Issues = append(status.Issues, readinessIssue(CapacityError(codeDisk, status.KeptBytes), Issue{}))
 		}
 	}
 	return status, settings

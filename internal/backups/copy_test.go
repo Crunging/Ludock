@@ -668,8 +668,8 @@ func TestStuckFolderIsMeasuredOnce(t *testing.T) {
 }
 
 // Backups were saved in five folders over time, and every share has stopped
-// responding: the storage summary still answers within about one wait for
-// the folder looks, counting those backups as recorded.
+// responding: the storage summary stops looking once one wait is spent and
+// counts the rest as recorded.
 func TestStuckFoldersBoundTheStorageSummary(t *testing.T) {
 	f := newCopyFixture(t)
 	previous := measureWait
@@ -680,7 +680,19 @@ func TestStuckFoldersBoundTheStorageSummary(t *testing.T) {
 			<-release
 		}
 	}
-	t.Cleanup(func() { close(release); testHook = nil; measureWait = previous })
+	t.Cleanup(func() {
+		close(release)
+		// Calls given up on read the hook until they return.
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			f.s.Storage.folders.mu.Lock()
+			idle := len(f.s.Storage.folders.busy) == 0
+			f.s.Storage.folders.mu.Unlock()
+			if idle {
+				break
+			}
+		}
+		testHook, measureWait = nil, previous
+	})
 	for index := range 5 {
 		backup := f.add(t, "world data", int64(index))
 		f.s.DB.Exec("UPDATE backups SET destination=? WHERE id=?", filepath.Join(f.other, string(rune('a'+index))), backup.ID)
@@ -931,6 +943,19 @@ func TestRetentionCountsReadableBackups(t *testing.T) {
 	if issues := f.s.Status(ctx).Issues; len(issues) != 0 {
 		t.Fatal(issues)
 	}
+	// At the disk's reserve, the advice leaves out the lost kept backup:
+	// releasing it would free nothing.
+	reserve := func(bytes int64) {
+		t.Helper()
+		if _, err := f.s.DB.Exec(`UPDATE settings SET value_json=json_set(value_json,'$.reserveBytes',?) WHERE key='backups'`, bytes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reserve(1 << 50)
+	if issues := f.s.Status(ctx).Issues; len(issues) != 1 || issues[0].Code != codeDisk || strings.Contains(issues[0].Message, "Kept backups") {
+		t.Fatal(issues)
+	}
+	reserve(f.settings.ReserveBytes)
 	if total, _, err := f.s.FoundBytes(ctx); err != nil || total != 40 {
 		t.Fatal(total, err)
 	}
