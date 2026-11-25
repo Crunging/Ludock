@@ -130,9 +130,6 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if err == nil {
 		err = unix.Setxattr(filepath.Join(data, "world"), "system.posix_acl_default", def, 0)
 	}
-	if err != nil && !errors.Is(err, unix.ENOTSUP) {
-		t.Fatal(err)
-	}
 	// ops.json (0660) and logs have no ACL, and the data folder gets a
 	// default ACL only after them, so they restore without one: a stage
 	// folder inherits that default ACL, and the archived mode must not
@@ -143,6 +140,9 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if err == nil {
 		err = unix.Setxattr(data, "system.posix_acl_default",
 			aclValue([3]uint32{1, 7}, [3]uint32{2, 6, 4242}, [3]uint32{4, 7}, [3]uint32{16, 7}, [3]uint32{32, 0}), 0)
+	}
+	if err != nil && !errors.Is(err, unix.ENOTSUP) {
+		t.Fatal(err)
 	}
 	acls := err == nil
 	if !acls {

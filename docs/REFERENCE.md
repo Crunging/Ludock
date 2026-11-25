@@ -611,10 +611,14 @@ Run these as root so owners stay as they were; `--acls` puts back ACLs. Stop the
 replace the contents of its data folder with those of `restored/$id/`, still
 as root and keeping owners and permissions, such as with
 `sudo cp -a "restored/$id/." <folder>/` after emptying the folder. If the
-data folder has a default ACL, `cp -a`, plain `tar`, and bsdtar let a file
-that had no ACL take it; for exactly what Ludock restores, extract with GNU
-tar straight into the emptied folder instead:
-`sudo tar -xpf backup.tar --acls --numeric-owner -C <folder> --strip-components=2 "snapshot/$id"`. For a data
+data folder has a default ACL, a copy, like plain `tar` or bsdtar, lets each
+file that had no ACL take it, as any new file there would. For exactly what
+Ludock restores, make `restored` with `sudo mkdir -m 700` on the same
+filesystem as the data folder, and move the entries in instead, which keeps
+each one's ACLs:
+`sudo find "restored/$id" -mindepth 1 -maxdepth 1 -exec mv -t <folder>/ {} +`.
+Moving leaves the data folder's own owner and permissions as they are;
+`restored/$id` itself has the backup's. For a data
 folder that is a whole named volume, the folder is the one
 `docker volume inspect -f '{{.Mountpoint}}' <volume>` prints; for one inside a
 volume, add the rest of its container path to that.
@@ -630,7 +634,9 @@ docker run --rm -v <volume or folder>:/target -v "$PWD/backup.tar:/backup.tar:ro
 ```
 
 Alpine's `tar` and `cp` leave ACLs out, so files keep only the permissions
-in their mode, which never give more than the ACLs did.
+in their mode, which never give more than the ACLs did. Copied into a folder
+with a default ACL, though, they take it, which can give the users it names
+access the backup didn't.
 
 In the backup folder itself, each archive is `<id>.tar`. `ls -lt` lists the
 newest first (a second copy is dated as its backup, not when it was copied),
