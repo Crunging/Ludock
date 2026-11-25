@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"maps"
 	"math"
 	"slices"
 	"sync"
@@ -129,10 +130,28 @@ func (j *Jobs) Register(queue *ops.Runner) {
 		if resumable(job) {
 			return nil, ops.ErrResume
 		}
-		if !j.backupCompleted(ctx, job) {
+		completed := j.backupCompleted(ctx, job)
+		if !completed {
 			defer j.notifyInterrupted(ctx, job, notify.FailedWork, "backup-failed:"+job.Job.ID, backupInterrupted)
 		}
-		return nil, j.recoverBackup(ctx, job)
+		outcome := func() map[string]any {
+			result := maps.Clone(job.Job.Result)
+			if result == nil {
+				result = map[string]any{}
+			}
+			result["guidance"] = "Ludock restarted before the backup finished, so there’s no new backup."
+			if completed {
+				result["guidance"], result["backupId"] = "The backup had finished.", job.Job.Recovery.BackupID
+				result = withSave(job, result)
+			}
+			return result
+		}
+		if err := j.recoverBackup(ctx, job); err != nil {
+			// The outcome keeps what is known of the backup.
+			job.Progress(job.Job.Phase, nil, outcome())
+			return nil, err
+		}
+		return withServerAfterRecovery(job, outcome()), nil
 	}})
 	// An interrupted command is reported as interrupted and never sent again.
 	// It is sent on time or not at all, so it doesn't wait for Docker.
@@ -157,7 +176,10 @@ func (j *Jobs) Register(queue *ops.Runner) {
 		if resumable(job) {
 			return nil, ops.ErrResume
 		}
-		return nil, j.recoverBackup(ctx, job)
+		if err := j.recoverBackup(ctx, job); err != nil {
+			return nil, err
+		}
+		return withServerAfterRecovery(job, maps.Clone(job.Job.Result)), nil
 	}})
 	runner.Register(ops.KindUpdate, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		result, err := j.runUpdate(ctx, job)

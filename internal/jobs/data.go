@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -311,6 +312,29 @@ func (j *Jobs) settleInterruptedStop(ctx context.Context, server *servers.Contex
 }
 
 func settleStop(r *ops.Recovery) { r.StopSettled = true }
+
+// withServerAfterRecovery adds to result's guidance what recovery did with
+// the server the operation stopped.
+func withServerAfterRecovery(job *ops.Context, result map[string]any) map[string]any {
+	recovery := job.Job.Recovery
+	var said string
+	switch {
+	case recovery.InitialRunning != nil && !*recovery.InitialRunning:
+		said = "The server was stopped before this began, so Ludock didn’t start it."
+	case !wasRunning(job) || !recovery.StateRestored:
+		return result
+	case recovery.StartRequested:
+		said = "Ludock started the server again."
+	default:
+		said = "The server was running again, so Ludock left it as it was."
+	}
+	if result == nil {
+		result = map[string]any{}
+	}
+	text, _ := result["guidance"].(string)
+	result["guidance"] = strings.TrimSpace(text + " " + said)
+	return result
+}
 
 // restoreInitialState starts a server that was running when the operation
 // stopped it, once its data is safe. A start that reached Docker is never

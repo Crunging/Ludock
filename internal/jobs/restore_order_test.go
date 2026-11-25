@@ -438,8 +438,8 @@ func relocate(t *testing.T, from, to string) {
 // A restore interrupted by a kill of Ludock is recovered from the journal
 // it saved: one that committed is cleaned up, any other is rolled back
 // without removing current data that never moved or was already returned,
-// and the server starts again. A recovery that can't finish leaves the
-// server stopped.
+// and the server starts again, which Activity says. A recovery that can't
+// finish leaves the server stopped.
 func TestRestoreRecoveryFromEachState(t *testing.T) {
 	const (
 		nothing  = "Nothing was restored: the server’s data is as it was."
@@ -530,6 +530,9 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 			}
 			guidance, _ := job.Result["guidance"].(string)
 			c.guidance = strings.ReplaceAll(c.guidance, "%s", job.ID)
+			if c.running {
+				c.guidance += " Ludock started the server again."
+			}
 			if journal := f.savedJournal(job.ID); job.Status != ops.Interrupted || guidance != c.guidance || journal != c.journal ||
 				f.running() != c.running || f.staged() == c.running || (c.want != "" && data != c.want+","+c.want) {
 				t.Errorf("%s, %q, %q, journal %q, data %s", job.Status, job.Error, guidance, journal, data)
@@ -539,7 +542,7 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 			}
 			// Only a restore that didn't finish alerts, once.
 			var alerts []string
-			if guidance != finished {
+			if !strings.HasPrefix(guidance, finished) {
 				alerts = []string{"mc: Ludock restarted during a restore. Its Activity says what the data was left as."}
 			}
 			if !slices.Equal(f.alerts, alerts) {

@@ -982,7 +982,9 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 	for _, rw := range running {
 		job, err := rw.job()
 		var result map[string]any
+		startedBefore := false
 		if err == nil {
+			startedBefore = job.Recovery.StartRequested
 			if handler, ok := r.handler(job.Kind); ok && handler.Recover != nil {
 				result, err = handler.Recover(ctx, &Context{Job: job, runner: r})
 			}
@@ -997,6 +999,7 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 				db.Now(), rw.id); err != nil {
 				return err
 			}
+			logRecovered(rw, "queued to run again")
 			continue
 		}
 		if err != nil {
@@ -1004,16 +1007,28 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 				"Recovery requires administrator attention. The server has been left stopped where possible.", false); err != nil {
 				return err
 			}
+			logRecovered(rw, "needs an administrator")
 			continue
 		}
 		if _, err := r.finish(ctx, job, Interrupted, result, "Ludock restarted while this ran. Check the server before trying again.", false); err != nil {
 			return err
 		}
+		outcome := "ended as interrupted"
+		if job.Recovery.StateRestored && job.Recovery.StartRequested && !startedBefore {
+			outcome = "ended as interrupted, server started again"
+		}
+		logRecovered(rw, outcome)
 	}
 	if r.AfterRecovery != nil {
 		r.AfterRecovery(ctx)
 	}
 	return nil
+}
+
+// logRecovered logs what startup did with an interrupted operation, in fixed
+// words.
+func logRecovered(rw *row, outcome string) {
+	log.Info("Recovered an operation a restart interrupted", logging.F("operation", rw.id), logging.F("kind", rw.kind), logging.F("outcome", outcome))
 }
 
 // Stop lets running jobs finish; queued and waiting jobs stay queued.
