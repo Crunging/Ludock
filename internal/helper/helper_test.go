@@ -750,6 +750,28 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if data, _ := os.ReadFile(staging); string(data) != "original" {
 		t.Fatal("moved the original:", string(data))
 	}
+	// Nor is another file returned in its place.
+	swapped := false
+	renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
+		err := original(fromFD, from, toFD, to, flags)
+		folder, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(toFD))
+		if err == nil && !swapped && Within(folder, filepath.Join(root, asideName)) {
+			swapped = true
+			os.WriteFile(staging+".new", []byte("substitute"), 0o644)
+			os.Rename(staging+".new", staging)
+		}
+		return err
+	}
+	if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
+		t.Fatal("returned a file put in the original's place")
+	}
+	renameat2 = original
+	if _, err := os.Lstat(filepath.Join(root, "ops.json")); !swapped || !os.IsNotExist(err) {
+		t.Fatal("put the substitute in place:", swapped, err)
+	}
+	os.WriteFile(staging, []byte("original"), 0o644)
+	os.Rename(filepath.Join(root, asideName, "ops.json"), filepath.Join(root, "ops.json"))
+	os.Remove(filepath.Join(root, asideName))
 	// The check before the stop refuses an original it can't return as one,
 	// whatever is in another's way, in whichever order the folder lists.
 	os.Symlink("nowhere", filepath.Join(root, stage, "old", "a-link"))

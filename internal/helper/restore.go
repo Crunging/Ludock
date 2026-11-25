@@ -969,9 +969,14 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 				return err
 			}
 			h.movedAside++
-			// It may have gained a second name while that moved.
+			// It may have gained a second name while that moved; it is
+			// still the entry checked before.
+			checked := source
 			if source, err = h.stagedEntry(old, name); err != nil {
 				return err
+			}
+			if !sameInode(checked, source) {
+				return errUnsafe
 			}
 		}
 		// The checks above looked the original and its name up; the rename
@@ -1467,9 +1472,14 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 					return err
 				}
 				h.movedAside++
-				// It may have gained a second name while that moved.
+				// It may have gained a second name while that moved; it
+				// is still the entry checked before.
+				checked := info
 				if info, err = h.stagedEntry(old, "item"); err != nil {
 					return err
+				}
+				if !sameInode(checked, info) {
+					return errUnsafe
 				}
 			}
 		}
