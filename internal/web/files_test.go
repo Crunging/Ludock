@@ -114,6 +114,13 @@ func TestUploadChecks(t *testing.T) {
 	if longest > 36 {
 		t.Fatal("audited a forged server ID of", longest, "bytes")
 	}
+	// A destination that would put a selected name past the bound is said
+	// in the move dialog, which keeps its way back.
+	deep := p.do("GET", "/fragments/files/"+p.server+"/move?root=0&name=selected&to="+strings.Repeat("d", 4090), p.admin, nil,
+		map[string]string{"HX-Request": "true", "HX-Target": "file-action"})
+	if body := deep.Body.String(); deep.Code != http.StatusOK || !strings.Contains(body, "Invalid file path") || !strings.Contains(body, "Cancel") {
+		t.Fatal("move dialog lost its controls", deep.Code, body)
+	}
 	// Dialogs refuse a path past the bound, composed as the change would.
 	folder := strings.Repeat("d", 4090)
 	for _, dialog := range []string{"/dialog?action=delete&root=0&path=" + strings.Repeat("d", 4097),

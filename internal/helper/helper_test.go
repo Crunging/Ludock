@@ -236,6 +236,17 @@ func TestMutationsAndUploads(t *testing.T) {
 		fmt.Sprintf("mode with group %d", want.Gid), fmt.Sprintf("owner %d group -1", want.Uid)}) {
 		t.Fatal(code, steps)
 	}
+	// A mode whose group grants more than its owner is narrowed to the
+	// owner's, since the future owner holds the group's rights until it is
+	// set.
+	fchown, fchmod = unix.Fchown, unix.Fchmod
+	os.Chmod(filepath.Join(root, "new.txt"), 0o460)
+	if _, code := runFile(t, created, []byte("12345"+id)); code != 0 {
+		t.Fatal("replace", code)
+	}
+	if info, _ := os.Stat(filepath.Join(root, "new.txt")); info.Mode().Perm() != 0o440 {
+		t.Fatal("kept a mode wider than its owner's", info.Mode())
+	}
 	// A publish that took effect and then failed, as on NFS, is a success.
 	renameat = func(fromDirectory int, from string, toDirectory int, to string) error {
 		unix.Renameat(fromDirectory, from, toDirectory, to)

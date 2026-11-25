@@ -1,7 +1,6 @@
 package web
 
 import (
-	"errors"
 	"net/http"
 	"slices"
 
@@ -43,12 +42,13 @@ func (s *Server) fileMoveDialog(w http.ResponseWriter, r *http.Request, request 
 	if !query.Has("to") {
 		m.To = m.Path
 	}
-	// The folder and the one shown as the destination each hold the names
-	// within the path bound.
-	if err := errors.Join(files.CheckSelection(m.Path, m.Names), files.CheckSelection(m.To, m.Names)); err != nil {
+	// The folder must hold the names within the path bound; a destination
+	// that can't is said inside the dialog, which keeps its controls.
+	if err := files.CheckSelection(m.Path, m.Names); err != nil {
 		s.fail(w, r, request, err)
 		return
 	}
+	destination := files.CheckSelection(m.To, m.Names)
 	action, err := s.startAction(r, request, m.ServerID, authz.FilesWrite)
 	if err != nil {
 		s.fail(w, r, request, err)
@@ -56,6 +56,9 @@ func (s *Server) fileMoveDialog(w http.ResponseWriter, r *http.Request, request 
 	}
 	defer action.Done()
 	s.moveView(action, &m)
+	if destination != nil {
+		m.Error = publicMessage(destination)
+	}
 	if htmxTarget(r) == "file-action" {
 		render(w, r, http.StatusOK, views.FileMoveContent(m))
 		return

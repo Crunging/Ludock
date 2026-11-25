@@ -732,11 +732,15 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// group. The owner stays the helper until last, so it may still set the
 	// mode without FOWNER, which would also let a publish override a sticky
 	// folder; the owner bits meanwhile grant root nothing DAC_OVERRIDE
-	// doesn't.
+	// doesn't. Until the owner changes, the future owner gets the group or
+	// other bits, so neither may grant more than the owner bits will: a mode
+	// that does, such as 0460, is narrowed to the owner's.
 	mode := uint32(0o666 &^ currentUmask())
 	if original != nil {
 		mode = original.Mode & 0o777
 	}
+	owned := mode >> 6 & 7
+	mode = mode&0o700 | mode&0o070&(owned<<3) | mode&0o007&owned
 	if err := fchown(int(file), -1, int(owner.Gid)); err != nil {
 		return err
 	}
