@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -180,13 +179,10 @@ func (s *Service) Operations(ctx context.Context, actor *db.SessionUser, q Query
 	defer tx.Rollback()
 	var visible []string
 	for _, id := range candidates {
-		if actor == nil {
-			break
-		}
-		if err := s.Authz.AssertAccountIn(ctx, tx, actor.ID, id, authz.ServerView); err == nil {
-			visible = append(visible, id)
-		} else if !errors.Is(err, authz.ErrServerNotFound) {
+		if ok, err := s.Authz.HasIn(ctx, tx, actor, id, authz.ServerView); err != nil {
 			return nil, "", err
+		} else if ok {
+			visible = append(visible, id)
 		}
 	}
 	if testHook != nil {

@@ -52,32 +52,50 @@ func (j *Jobs) SameData(from, to *identity.Server) bool {
 // there. Only a journal for the target's binding and exactly its data
 // folders moves: recovery undoes a restore only on the data it stopped.
 func adoptRestores(ctx context.Context, tx *sql.Tx, from *identity.Server, target *servers.Context) error {
-	rows, err := tx.QueryContext(ctx, "SELECT id, recovery_json FROM operations WHERE server_id=? AND "+PendingRestore, from.ID)
+	rows, err := tx.QueryContext(ctx, "SELECT id, server_id, recovery_json FROM operations WHERE server_id IN (?,?) AND "+PendingRestore,
+		from.ID, target.Logical.ID)
 	if err != nil {
 		return err
 	}
-	saved := map[string]string{}
+	saved, theirs := map[string]ops.Recovery{}, map[string]ops.Recovery{}
 	for rows.Next() {
-		var id, raw string
-		if err := rows.Scan(&id, &raw); err != nil {
+		var id, server, raw string
+		var recovery ops.Recovery
+		if err := rows.Scan(&id, &server, &raw); err != nil {
 			rows.Close()
 			return err
 		}
-		saved[id] = raw
+		if json.Unmarshal([]byte(raw), &recovery) != nil {
+			rows.Close()
+			return errJournal
+		}
+		if server == from.ID {
+			saved[id] = recovery
+		} else {
+			theirs[id] = recovery
+		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for id, raw := range saved {
-		var recovery ops.Recovery
-		if err := json.Unmarshal([]byte(raw), &recovery); err != nil {
-			return errJournal
-		}
+	fits := func(recovery ops.Recovery) bool {
 		state, err := restoreState(&ops.Context{Job: &ops.Job{Recovery: recovery}})
-		if err != nil || state == nil || recovery.Fingerprint != target.Logical.BindingFingerprint || !journalMatches(state.Roots, target) {
-			return errTakeOver("A restore of " + from.DisplayName + " stopped partway, and only its old data folders can finish it. " +
-				"Bring back its old container and back it up once, which finishes the restore, then try again.")
+		return err == nil && state != nil && recovery.Fingerprint == target.Logical.BindingFingerprint && journalMatches(state.Roots, target)
+	}
+	refused := errTakeOver("A restore of " + from.DisplayName + " stopped partway, and only its old data folders can finish it. " +
+		"Bring back its old container and back it up once, which finishes the restore, then try again.")
+	// Recovery finishes a server's restores in turn, so one of the target's
+	// own that can't be finished there would hold back the moved ones.
+	for _, recovery := range theirs {
+		if len(saved) > 0 && (!fits(recovery) || recovery.ContainerID != target.Logical.ContainerID) {
+			return errTakeOver("A restore of " + target.Logical.DisplayName + " stopped partway and can’t be finished on it as it is now. " +
+				"Sort that out first, then try again.")
+		}
+	}
+	for id, recovery := range saved {
+		if !fits(recovery) {
+			return refused
 		}
 		recovery.ContainerID, recovery.LockKeys = target.Logical.ContainerID, target.LockKeys
 		encoded, err := json.Marshal(recovery)
