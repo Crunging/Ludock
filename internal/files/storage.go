@@ -104,7 +104,7 @@ type lister struct {
 // tools, in one call, and the bound keeps helper arguments and audit rows
 // small. Requests longer only in their spelling, such as "./" repeated, are
 // still accepted.
-const MaxPath = 4096
+const MaxPath = helper.MaxPath
 
 // errLongPath refuses a composed path past MaxPath.
 func errLongPath() error { return Error("INVALID_PATH", 400) }
@@ -636,13 +636,19 @@ func (s *Service) write(ctx context.Context, target Target, root Root, normalize
 	if err != nil {
 		return err
 	}
-	uploadID := identity.NewUUID()
-	out, err := access.request(ctx, helper.FileRequest{Operation: "upload", Root: root.Path, Path: normalized, Size: &size,
-		UploadID: uploadID, Expected: expected}, io.LimitReader(body, size+1), []byte(uploadID))
-	var answer struct{ Stuck int }
-	if err == nil && json.Unmarshal(out, &answer) == nil {
-		logStuck(target, answer.Stuck)
+	// Its own step, so what the sweep left is said even if the save fails.
+	folder := path.Dir(normalized)
+	if folder == "." {
+		folder = ""
 	}
+	if _, err := access.prepareUpload(ctx, target, root, folder); err != nil {
+		// Its sweep may still be removing files.
+		access.Cleanup(true)
+		return err
+	}
+	uploadID := identity.NewUUID()
+	_, err = access.request(ctx, helper.FileRequest{Operation: "upload", Root: root.Path, Path: normalized, Size: &size,
+		UploadID: uploadID, Expected: expected}, io.LimitReader(body, size+1), []byte(uploadID))
 	// A helper that finished removed its own staging file; one cut off may not
 	// have, so only a failed upload sends the cleanup request.
 	if err != nil {

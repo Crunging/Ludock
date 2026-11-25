@@ -226,6 +226,11 @@ func TestMutationsAndUploads(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(root, "server.properties")); string(data) != "again" {
 		t.Fatal(string(data))
 	}
+	// One that failed with nothing to show it did nothing is unconfirmed.
+	renameat = func(int, string, int, string) error { return unix.EIO }
+	if _, code := runFile(t, upload, []byte("third"+id)); code != FileUncertain {
+		t.Fatal("reported an unknown publish as", code)
+	}
 }
 
 // An upload first removes the staging files that cut-off uploads left in its

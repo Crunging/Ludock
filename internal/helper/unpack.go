@@ -526,7 +526,12 @@ func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd
 		if attempt > 1 {
 			candidate = base + " (" + strconv.Itoa(attempt) + ")"
 		}
-		if len(candidate) > 255 || attempt > 50 {
+		// The folder keeps within MaxPath, so Files can open it: an archive's
+		// own folder name gives way to the archive's.
+		if long := len(path.Join(path.Dir(h.request.Path), candidate)) > MaxPath; long && base != unpackBase(archive) {
+			base, attempt = unpackBase(archive), 0
+			continue
+		} else if long || len(candidate) > 255 || attempt > 50 {
 			return result, errNameTaken
 		}
 		if _, err := lstatAt(parent, candidate); err == nil {

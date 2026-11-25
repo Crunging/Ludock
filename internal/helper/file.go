@@ -687,13 +687,16 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// The destination must be as it was, the folder, found again from the
 	// root by its path, still the one written into, and the staging name,
 	// which publishing goes by, still the inode written. Checked before the
-	// game may read the file and again right before publishing. Moving the
-	// folder out of the root on the same filesystem needs a rename across
-	// the container's mount, which a process in the game's container can't
-	// do (it gets EXDEV); it takes someone acting on the host's filesystem,
-	// who can already write anywhere the helper can. So this catches a move
-	// during a long transfer and reports it; it is not a boundary against that
-	// actor, and a move between the last check and the publish goes unseen.
+	// game may read the file and again right before publishing; a move
+	// between the last check and the publish goes unseen. When the root is
+	// its own mount, moving a folder out of it needs a rename across the
+	// container's mount, which a process in the game's container can't do (it
+	// gets EXDEV); it takes someone acting on the host's filesystem, who can
+	// already write anywhere the helper can. When the root is a folder inside
+	// a larger mount, the game can move a folder out of the root within that
+	// mount, but only to where the game itself can already write. So this
+	// catches a move during a long transfer and reports it; it is not a
+	// boundary against either.
 	unchanged := func() error {
 		current, err := uploadTarget(parent, name)
 		if err != nil {
@@ -715,12 +718,13 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	if err := unchanged(); err != nil {
 		return err
 	}
-	// Only now may the game read it. Once it has its owner the game may also
-	// write to it, as it may a moment later once it has its name, so nothing
-	// is gained by changing it in between; the owner is set before the publish
-	// so a published file never appears with the wrong one. Set permissions
-	// while the helper still owns the new inode; CHOWN is enough to restore
-	// game ownership without granting FOWNER.
+	// Only now may the game read the staged inode. Once it has its owner the
+	// game may also write to it, as it may a moment later once it has its
+	// name, so nothing is gained by changing it in between. The owner is set
+	// before the publish, so the inode the helper publishes has it; what
+	// holds the name afterwards is checked below. Set permissions while the
+	// helper still owns the new inode; CHOWN is enough to restore game
+	// ownership without granting FOWNER.
 	mode := uint32(0o666 &^ currentUmask())
 	if original != nil {
 		mode = original.Mode & 0o777
@@ -748,13 +752,14 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 		publishErr = linkat(int(parent), temporary, int(parent), name, 0)
 	}
 	// A publish can take effect and still fail, as on NFS when its reply is
-	// lost, so the name is what decides: the file is published if it has the
-	// name, failed only if the name is provably something else.
+	// lost: the file is published if it has the name; a link refused because
+	// the name exists did nothing; any other failure is unknown, since the
+	// game could have moved a published file away before the name was read.
 	if publishErr != nil {
 		published, err := lstatAt(parent, name)
 		switch {
 		case err == nil && published.Dev == written.Dev && published.Ino == written.Ino:
-		case err == nil || isNotExist(err):
+		case original == nil && errors.Is(publishErr, unix.EEXIST):
 			return publishErr
 		default:
 			return errPublished
@@ -908,6 +913,10 @@ func UploadSpare(total int64) int64 { return min(1<<30, total/20) }
 type noSpaceError struct{ space FileSpace }
 
 func (e *noSpaceError) Error() string { return "not enough free space" }
+
+// MaxPath bounds the path below a root that a file change uses: Linux's
+// PATH_MAX. The files package explains it.
+const MaxPath = 4096
 
 // A batch upload holds at most UploadBatchFiles files, and several files
 // at most UploadBatchBytes in all; a larger file is uploaded alone.
@@ -1316,14 +1325,10 @@ func (h *fileHelper) run() error {
 			return errors.New("invalid upload size")
 		}
 		h.folder = path.Dir(relative)
-		stuck, err := h.sweepStaging(parent)
-		if err != nil {
-			return err
-		}
 		if err := h.upload(parent, name, *h.request.Size, h.request.UploadID, h.request.Expected); err != nil {
 			return err
 		}
-		return h.json(map[string]any{"ok": true, "stuck": stuck})
+		return h.json(map[string]bool{"ok": true})
 	case "upload-cleanup":
 		if err := h.removeStaging(parent, path.Dir(relative), h.request.UploadID); err != nil {
 			return err
