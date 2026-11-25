@@ -599,10 +599,12 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			// restart announces its own outcome.
 			up := r.notified == 1 && !s.suppressed(server.ID, policy, 0, now, active[server.ID]) && running &&
 				container.Health != "unhealthy" && container.Health != "starting"
+			game := GameNotChecked
 			if up && s.Game != nil {
-				game := s.Game(server.ID, container)
+				game = s.Game(server.ID, container)
 				up = game != GameNotAnswering && !((game == GameUnknown || game == GameWaiting) && r.lastState.String == NotAnswering)
 			}
+			up = up && !briefRun(r, container, game, policy, now)
 			if up {
 				if changed, err := s.recovered(ctx, server, r, now); err != nil {
 					log.Warn("Could not save a server's availability; it will be checked again")
@@ -668,6 +670,9 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			}
 			silent = game == GameNotAnswering
 			healthy = healthy && !silent
+		}
+		if healthy && briefRun(r, container, game, policy, now) {
+			continue
 		}
 		// State is saved before any alert: the saved outage start keys each
 		// alert, so an unsaved state could later alert again under a new key.
@@ -755,6 +760,13 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		s.changed(serverID)
 	}
 	return nil
+}
+
+// briefRun reports a run too short to end an outage Docker saw as
+// restarting: a game that keeps exiting runs for moments between restarts.
+// The game answering, or a run as long as the grace period, ends it.
+func briefRun(r *row, container servers.Container, game GameAnswer, policy Policy, now int64) bool {
+	return r.lastState.String == "restarting" && game != GameAnswering && now-container.StateSince < int64(policy.GraceSeconds)*1000
 }
 
 // adopt starts watching servers seen for the first time with the default

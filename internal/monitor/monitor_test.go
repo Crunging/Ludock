@@ -433,6 +433,43 @@ func problem(s *Service, serverID string, now int64) (*Problem, error) {
 	return problems[serverID], err
 }
 
+// A game that keeps exiting under its restart policy shows restarting, with
+// runs too short for anyone to join between restarts. That is one outage,
+// alerted once: a run counts as the server back only once the game answers
+// or it has stayed up for the grace period.
+func TestCrashLoopIsOneOutage(t *testing.T) {
+	const down, back = "Minecraft: the server is down.", "Minecraft: the server is back up."
+	s, events, server := setup(t)
+	game := GameWaiting
+	s.Game = func(string, servers.Container) GameAnswer { return game }
+	runSince := func(started int64) map[string]servers.Container {
+		return map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: started}}
+	}
+	s.Check(ctx, state("restarting", ""), 1000)
+	s.Check(ctx, state("restarting", ""), 61_000)
+	s.Check(ctx, runSince(70_000), 75_000)
+	s.Check(ctx, state("restarting", ""), 90_000)
+	s.Check(ctx, state("restarting", ""), 151_000)
+	if found, _ := problem(s, server.ID, 151_000); found == nil || found.State != "restarting" || found.OutageStartedAt != 1000 {
+		t.Fatal(found)
+	}
+	s.Check(ctx, runSince(155_000), 160_000)
+	game = GameAnswering
+	s.Check(ctx, runSince(155_000), 165_000)
+	if !slices.Equal(events.events, []string{down, back}) {
+		t.Fatal(events.events)
+	}
+	// Without a status check, staying up as long as the grace period does.
+	s.Game = nil
+	s.Check(ctx, state("restarting", ""), 200_000)
+	s.Check(ctx, state("restarting", ""), 261_000)
+	s.Check(ctx, runSince(270_000), 300_000)
+	s.Check(ctx, runSince(270_000), 330_000)
+	if !slices.Equal(events.events, []string{down, back, down, back}) {
+		t.Fatal(events.events)
+	}
+}
+
 // A game that stops answering while its container runs alerts with its own
 // message. While no recent query says it answers, as after Ludock restarts,
 // the outage stays rather than recovering unseen; an answer recovers it.

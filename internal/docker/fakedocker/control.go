@@ -127,6 +127,19 @@ func (e *Engine) control(w http.ResponseWriter, r *http.Request) {
 		e.mu.Unlock()
 		w.WriteHeader(204)
 		return
+	case "/fake/crashloop":
+		// Leaves a container restarting, as Docker shows a game that keeps
+		// exiting, until it is stopped: POST /fake/crashloop?container=NAME.
+		e.mu.Lock()
+		c := e.find(r.URL.Query().Get("container"))
+		e.mu.Unlock()
+		if c == nil {
+			fail(w, 404)
+			return
+		}
+		e.CrashLoop(c.ID)
+		w.WriteHeader(204)
+		return
 	case "/fake/remove":
 		e.mu.Lock()
 		if c := e.find(r.URL.Query().Get("container")); c != nil {

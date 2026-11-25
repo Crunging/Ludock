@@ -106,6 +106,9 @@ type Recovery struct {
 	StopInitialStartedAt   *int64 `json:"stopInitialStartedAt,omitempty"`
 	StopRecoveryTimedOut   bool   `json:"stopRecoveryTimedOut,omitempty"`
 	ForceStopped           bool   `json:"forceStopped,omitempty"`
+	// Restarting: Docker was restarting the server, whose game kept exiting,
+	// when the stop was sent, so its exit is the game's own.
+	Restarting bool `json:"restarting,omitempty"`
 	// StoppedStartedAt is the stopped container's StartedAt, which changes if
 	// anything starts it.
 	StoppedStartedAt string `json:"stoppedStartedAt,omitempty"`

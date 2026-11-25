@@ -420,6 +420,9 @@ func record(job *ops.Context, phase string, change func(*ops.Recovery)) error {
 // saveWorld sends the game's save command, best effort. Revoked authority
 // still stops the job.
 func (j *Jobs) saveWorld(ctx context.Context, job *ops.Context, server *servers.Context, assertAccess func() error) error {
+	if server.Container.State == "restarting" {
+		return record(job, "save_skipped", func(r *ops.Recovery) { r.SaveStatus, r.SaveReason = "skipped", "restarting" })
+	}
 	expected := games.ResolveAdapter(server.Container.GameType, map[string]string{})
 	adapter := games.ResolveAdapter(server.Container.GameType, server.Container.Labels)
 	command := ""
@@ -608,7 +611,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			}
 			if err := record(job, "verifying_stop", func(r *ops.Recovery) {
 				r.StopSettled = true
-				r.ForceStopped = r.StopStarted && server.Container.Exit != nil && server.Container.Exit.Code == 137
+				r.ForceStopped = server.Container.Exit != nil && forcedStop(r, server.Container.Exit.Code, false)
 			}); err != nil {
 				return nil, err
 			}
@@ -689,6 +692,12 @@ func (j *Jobs) awaitStopDeadline(ctx context.Context, job *ops.Context, unsettle
 func recordStop(r *ops.Recovery, info *docker.ContainerInspect) {
 	state := servers.StopRecoveryState(info, time.Now())
 	r.StopStarted, r.StopRecoveryDeadlineAt, r.StopInitialStartedAt = state.StopStarted, state.StopRecoveryDeadlineAt, state.StopInitialStartedAt
+	r.Restarting = info.State.Restarting
+}
+
+// forcedStop reports whether a stop Ludock sent ended in Docker's kill.
+func forcedStop(r *ops.Recovery, exitCode int, oomKilled bool) bool {
+	return r.StopStarted && !r.Restarting && (exitCode == 137 || oomKilled)
 }
 
 // recoverLifecycle only observes: Docker may still be handling the
@@ -769,7 +778,7 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (*ops.Res
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, job.Job.Kind == ops.KindStop))
 			if err := record(job, "reconciling", func(r *ops.Recovery) {
 				r.StopSettled = true
-				r.ForceStopped = r.ForceStopped || server.Container.Exit.Code == 137
+				r.ForceStopped = r.ForceStopped || (!r.Restarting && server.Container.Exit.Code == 137)
 			}); err != nil {
 				return nil, err
 			}

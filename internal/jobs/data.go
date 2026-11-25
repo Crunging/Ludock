@@ -20,6 +20,8 @@ import (
 
 func fail(code, message string) error { return apperr.New(code, 409, message) }
 
+const restartingGuidance = "The server kept stopping and starting again before this, so Ludock started it again as it was: it stays up if this fixed the cause, and otherwise goes on restarting."
+
 var stoppedStates = []string{"exited", "dead", "created"}
 
 // dataAuthority rechecks the owner's capability for the data operation and
@@ -56,10 +58,14 @@ func dataCapabilities(job *ops.Context) []authz.Capability {
 	return []authz.Capability{authz.ServerUpdate}
 }
 
-// withSave adds the outcome of the save before the stop to a result.
+// withSave adds the outcome of the save before the stop to a result, and
+// says what starting a server whose game kept exiting again means.
 func withSave(job *ops.Context, result *ops.Result) *ops.Result {
 	if recovery := job.Job.Recovery; recovery.SaveStatus != "" {
 		result.SaveStatus, result.SaveReason = recovery.SaveStatus, recovery.SaveReason
+	}
+	if job.Job.Recovery.Restarting && wasRunning(job) {
+		result.Guidance = strings.TrimSpace(result.Guidance + " " + restartingGuidance)
 	}
 	if undone := job.Job.Recovery.Undone; undone != "" {
 		result.UndoNote = undone
@@ -111,7 +117,7 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 		if err != nil {
 			return err
 		}
-		if current.Container.State == "running" {
+		if current.Container.State == "running" || current.Container.State == "restarting" {
 			if err := j.saveWorld(ctx, job, current, func() error { return j.dataAuthority(ctx, current, job) }); err != nil {
 				return err
 			}
@@ -199,7 +205,7 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 	}
 	// Only a stop this work made is judged: a server killed earlier, such as
 	// one Docker had to kill when stopped outside Ludock, is copied as it is.
-	if job.Job.Recovery.StopStarted && (stopped.State.ExitCode == 137 || stopped.State.OOMKilled) {
+	if forcedStop(&job.Job.Recovery, stopped.State.ExitCode, stopped.State.OOMKilled) {
 		return fail("UNCLEAN_SHUTDOWN", "The server didn’t shut down by itself and had to be forced to stop, so Ludock went no further: its last save may be incomplete. Give it more time to stop where it is defined (its stop timeout), then try again.")
 	}
 	return nil

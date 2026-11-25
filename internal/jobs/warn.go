@@ -249,8 +249,9 @@ const recentReading = 15 * time.Second
 // since someone may have joined since the panel's last. A count that can't
 // be read isn't nobody: the warning goes out.
 func (j *Jobs) nobodyOnline(ctx context.Context, server *servers.Context, locked bool) bool {
+	// A restarting server's game keeps exiting before anyone can join.
 	switch server.Container.State {
-	case "running", "paused", "restarting":
+	case "running", "paused":
 	default:
 		return true
 	}

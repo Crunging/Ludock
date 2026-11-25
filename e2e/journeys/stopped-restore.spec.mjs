@@ -5,9 +5,12 @@ import { test, expect, asAdmin, openServer, expectOperationSucceeded, fake } fro
 asAdmin();
 
 // Another manager starts the server between a restore moving its data out
-// and the backup's in. The restore stops and says where the data is; Needs
-// attention offers to undo it, which stops the server, puts the data back,
-// keeps what the game wrote meanwhile, and starts the server again.
+// and the backup's in, and the game, finding its folder emptied, keeps
+// exiting and being restarted by Docker. Its page says so and offers Stop.
+// The restore stops and says where the data is; Needs attention offers to
+// undo it, which stops the server without warning anyone, puts the data
+// back, keeps what the game wrote meanwhile, and starts the server again.
+// Stop works on a server that keeps restarting.
 test("undoing a restore that was stopped partway", async ({ page, ownServer: server }) => {
   const marker = join(server.data, "stopped-restore.txt");
   writeFileSync(marker, "from the backup");
@@ -31,6 +34,12 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
   await expect(details).toContainText(`The restore was stopped partway. The server’s previous data is safe in the folder .ludock-restore-${restoreID}`);
   // The game, started on the emptied folder, writes a new world.
   writeFileSync(join(server.data, "generated.txt"), "written meanwhile");
+  await fake("/fake/crashloop", { container: server.container });
+  await openServer(page, server.name);
+  await expect(page.locator(".detail-header__identity")).toContainText("Keeps restarting");
+  await expect(page.locator("#detail-live")).toContainText("The game keeps stopping and Docker keeps starting it again.");
+  await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeEnabled();
+  await expect(page.locator(".detail-actions").getByRole("button", { name: "Restart" })).toHaveCount(0);
 
   await page.goto("/");
   const item = page.locator(".needs-attention__list li", { hasText: "Restore stopped partway" });
@@ -50,6 +59,11 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
 
   await openServer(page, server.name);
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
+  await fake("/fake/crashloop", { container: server.container });
+  await expect(page.locator(".detail-header__identity")).toContainText("Keeps restarting");
+  await page.locator(".detail-actions").getByRole("button", { name: "Stop" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Stop server" }).click();
+  await expect(page.locator(".detail-actions").getByRole("button", { name: "Start" })).toBeVisible({ timeout: 15_000 });
   await page.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
   await page.locator("#activity-list").getByRole("link", { name: /Undo restore/ }).first().click();
   await expect(page.locator("main")).toContainText("Succeeded");
