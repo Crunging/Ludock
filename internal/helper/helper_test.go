@@ -1146,6 +1146,37 @@ func TestExclusionsHoldByIdentity(t *testing.T) {
 			t.Error(request.Operation, "refused away from an exclusion it couldn't find", code)
 		}
 	}
+	// One that appears after the start, in a folder reached under another
+	// spelling, is refused like a resolved one.
+	os.MkdirAll(filepath.Join(root, "b"), 0o755)
+	os.MkdirAll(filepath.Join(root, "parked"), 0o755)
+	os.WriteFile(filepath.Join(root, "parked", "hidden.txt"), []byte("hidden"), 0o644)
+	exclusionsResolved = func() {
+		os.Rename(filepath.Join(root, "b"), filepath.Join(root, "B"))
+		os.Rename(filepath.Join(root, "parked"), filepath.Join(root, "B", "missing"))
+	}
+	late := []string{root + "/b/missing"}
+	for _, request := range []FileRequest{
+		{Operation: "list", Path: "B"},
+		{Operation: "download", Path: "B/missing/hidden.txt"},
+		{Operation: "upload", Path: "B/missing/new.txt", Size: &size, UploadID: id},
+		{Operation: "mkdir", Path: "B/missing/new"},
+		{Operation: "delete", Path: "B/missing"},
+		{Operation: "rename", Path: "B/missing", Destination: "B/other"},
+	} {
+		os.Rename(filepath.Join(root, "B", "missing"), filepath.Join(root, "parked"))
+		os.Rename(filepath.Join(root, "B"), filepath.Join(root, "b"))
+		request.Root, request.Blocked = root, late
+		out, code := runFile(t, request, []byte("12345"+id))
+		if request.Operation == "list" && (code != 0 || strings.Contains(out, "missing")) {
+			t.Error("listed an exclusion that appeared later", code, out)
+		} else if request.Operation != "list" && code == 0 {
+			t.Error(request.Operation, "reached an exclusion that appeared later")
+		}
+	}
+	if got := listTree(t, filepath.Join(root, "B", "missing")); !slices.Equal(got, []string{"hidden.txt"}) {
+		t.Fatal(got)
+	}
 }
 
 // A replaced file keeps its access ACL, whose mask the mode bits only show,

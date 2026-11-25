@@ -372,7 +372,7 @@ func (h *fileHelper) removeEntry(parent fd, name string, depth int) error {
 	if err != nil {
 		return err
 	}
-	if h.isExcluded(info) {
+	if h.excludedIn(parent, info) {
 		return errExcluded
 	}
 	if !isDir(info) {
@@ -914,7 +914,7 @@ func (h *fileHelper) sweepStaging(folder fd) (int, error) {
 				continue
 			}
 			info, err := lstatAt(folder, name)
-			if err != nil || !isRegular(info) || h.isExcluded(info) || time.Since(time.Unix(info.Mtim.Unix())) < stagingAge {
+			if err != nil || !isRegular(info) || h.excludedIn(folder, info) || time.Since(time.Unix(info.Mtim.Unix())) < stagingAge {
 				continue
 			}
 			// The folder must still be the approved one, in case it moved.
@@ -944,7 +944,7 @@ func (h *fileHelper) removeStaging(folder fd, relative, id string) error {
 	if err != nil {
 		return err
 	}
-	if info, err := lstatAt(folder, temporary); h.blocked(h.absolute(path.Join(relative, temporary)), false) || (err == nil && h.isExcluded(info)) {
+	if info, err := lstatAt(folder, temporary); h.blocked(h.absolute(path.Join(relative, temporary)), false) || (err == nil && h.excludedIn(folder, info)) {
 		return errExcluded
 	}
 	if err := unix.Unlinkat(int(folder), temporary, 0); err != nil && !isNotExist(err) {
@@ -1268,7 +1268,7 @@ func (h *fileHelper) run() error {
 			if err != nil {
 				return err
 			}
-			if h.isExcluded(info) {
+			if h.excludedIn(directory, info) {
 				continue
 			}
 			entry := FileEntry{Name: name, ModifiedAt: mtimeMs(info)}
