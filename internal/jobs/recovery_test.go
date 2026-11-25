@@ -139,8 +139,9 @@ func TestRecoveryRestartSkipsUnlessStillWanted(t *testing.T) {
 // phase it was in, what happened to the server while Ludock was down, and
 // what recovery then sent to Docker, in order. A restart whose stop Ludock
 // sent is finished: its server is started once, unless something else
-// started, replaced, or ran it since. A stop stays stopped, and a restart
-// that never sent its stop is only marked interrupted.
+// started, replaced, or ran it since. Work recovery finished ends as
+// succeeded; the rest stays interrupted, and says what the server was left
+// as wherever Ludock knows.
 func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 	stopped := func(f *fixture, run string) {
 		f.engine.Update(f.game, func(c *fakedocker.Container) {
@@ -149,6 +150,11 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 		})
 	}
 	later := func() string { return time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano) }
+	startedElsewhere := func(f *fixture, _ string) {
+		f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.StartedAt = later() })
+	}
+	const started, runningAgain = "Ludock restarted while this ran, and started the server again.",
+		"Ludock restarted while this ran. The server was running again, so Ludock left it as it was."
 	for _, c := range []struct {
 		name, kind, phase string
 		// settled: the stop's end was saved before Ludock restarted;
@@ -159,37 +165,40 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 		meanwhile func(f *fixture, run string)
 		sent      []string
 		running   bool
-		// guidance is what Activity adds; with it, the server is as the work
-		// left it, so the entry doesn't ask to check it.
+		// done: the work ends as succeeded. Otherwise, with guidance the
+		// entry doesn't ask to check the server.
+		done     bool
 		guidance string
 		// err, when set, is the entry's error instead.
 		err      string
 		recovery bool
 	}{
 		{name: "restart, stop done unconfirmed", kind: "restart", phase: "stopping", meanwhile: stopped,
-			sent: []string{"start mc"}, running: true, guidance: "Ludock started the server again."},
+			sent: []string{"start mc"}, running: true, done: true, guidance: started},
 		{name: "restart, stop confirmed", kind: "restart", phase: "verifying_stop", settled: true, meanwhile: stopped,
-			sent: []string{"start mc"}, running: true, guidance: "Ludock started the server again."},
+			sent: []string{"start mc"}, running: true, done: true, guidance: started},
 		{name: "restart, start sent but not taken", kind: "restart", phase: "starting", settled: true, meanwhile: stopped,
-			sent: []string{"start mc"}, running: true, guidance: "Ludock started the server again."},
-		{name: "restart, started elsewhere", kind: "restart", phase: "stopping", meanwhile: func(f *fixture, _ string) {
-			f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.StartedAt = later() })
-		}, running: true, guidance: "The server was running again, so Ludock left it as it was."},
+			sent: []string{"start mc"}, running: true, done: true, guidance: started},
+		{name: "restart, started elsewhere", kind: "restart", phase: "stopping", meanwhile: startedElsewhere,
+			running: true, done: true, guidance: runningAgain},
 		{name: "restart, recovery's start unconfirmed, then started elsewhere", kind: "restart", phase: "starting", settled: true, requested: true,
-			meanwhile: func(f *fixture, _ string) {
-				f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.StartedAt = later() })
-			}, running: true, guidance: "The server was running again, so Ludock left it as it was."},
+			meanwhile: startedElsewhere, running: true, done: true, guidance: runningAgain},
 		{name: "restart, run elsewhere and stopped", kind: "restart", phase: "verifying_stop", settled: true,
-			meanwhile: func(f *fixture, _ string) { stopped(f, later()) }},
+			meanwhile: func(f *fixture, _ string) { stopped(f, later()) },
+			guidance:  "Something outside Ludock started the server meanwhile, so Ludock left it as it is."},
 		{name: "restart, replaced", kind: "restart", phase: "stopping", meanwhile: func(f *fixture, run string) {
 			stopped(f, run)
 			f.game = f.engine.Recreate(f.game, nil)
 			stopped(f, later())
 		}, err: "Recovery requires administrator attention. The server has been left stopped where possible."},
-		{name: "stop", kind: "stop", phase: "stopping", meanwhile: stopped},
-		{name: "restart, stop not sent", kind: "restart", phase: "saving_world", running: true},
+		{name: "stop", kind: "stop", phase: "stopping", meanwhile: stopped, done: true,
+			guidance: "Ludock restarted while this ran, and confirmed the server stopped."},
+		{name: "stop, started again elsewhere", kind: "stop", phase: "stopping", meanwhile: startedElsewhere, running: true,
+			guidance: "Something outside Ludock started the server again before it stopped, so it is running."},
+		{name: "restart, stop not sent", kind: "restart", phase: "saving_world", running: true,
+			guidance: "Ludock restarted before it stopped the server, so the server is as it was."},
 		{name: "recovery restart, stop done unconfirmed", kind: "restart", phase: "stopping", recovery: true, meanwhile: stopped,
-			sent: []string{"start mc"}, running: true, guidance: "Ludock started the server again."},
+			sent: []string{"start mc"}, running: true, done: true, guidance: started},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := setup(t)
@@ -250,13 +259,16 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 				}
 				sent = append(sent, parts[4]+" "+name)
 			}
-			want := "Ludock restarted while this ran. Check the server before trying again."
-			if c.guidance != "" {
-				want = "Ludock restarted while this ran."
-			} else if c.err != "" {
+			status, want := ops.Interrupted, "Ludock restarted while this ran. Check the server before trying again."
+			switch {
+			case c.done:
+				status, want = ops.Succeeded, ""
+			case c.err != "":
 				want = c.err
+			case c.guidance != "":
+				want = "Ludock restarted while this ran."
 			}
-			if job.Status != ops.Interrupted || job.Error != want || job.Result.Guidance != c.guidance || !slices.Equal(sent, c.sent) || f.running() != c.running {
+			if job.Status != status || job.Error != want || job.Result.Guidance != c.guidance || !slices.Equal(sent, c.sent) || f.running() != c.running {
 				t.Fatalf("%s %q %q, sent %v, running %v", job.Status, job.Error, job.Result.Guidance, sent, f.running())
 			}
 			// Only a stop is one on purpose, and a start pauses outage tracking
@@ -265,7 +277,7 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if state := availability.State; state.IntentionallyStopped != (c.kind == "stop") || state.OutageStartedAt != 0 ||
+			if state := availability.State; state.IntentionallyStopped != (c.kind == "stop" && !c.running) || state.OutageStartedAt != 0 ||
 				(len(c.sent) > 0 && state.SuppressedUntil <= time.Now().UnixMilli()) {
 				t.Fatalf("monitoring %+v", state)
 			}

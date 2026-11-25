@@ -584,7 +584,7 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 	const (
 		nothing  = "Nothing was restored: the server’s data is as it was."
 		undone   = "The restore was undone: the server’s data is as it was."
-		finished = "The restore had finished: what it restored is in place."
+		finished = "Ludock restarted while this ran, after the restore had finished: what it restored is in place."
 		// A return under way may have finished unheard.
 		pending = "The restore was stopped partway while its previous data was being put back, so Ludock can’t confirm where all of it is: look in the server’s data and in the folder " + helper.StagePrefix + "%s. An administrator can undo the restore from Needs attention; otherwise Ludock undoes it the next time it stops the server for a backup, a restore or an update."
 	)
@@ -678,7 +678,12 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 			if c.running {
 				c.guidance += " Ludock started the server again."
 			}
-			if journal := f.savedJournal(job.ID); job.Status != ops.Interrupted || guidance != c.guidance || journal != c.journal ||
+			// A restore that had finished ends as succeeded.
+			status := ops.Interrupted
+			if strings.HasPrefix(guidance, finished) {
+				status = ops.Succeeded
+			}
+			if journal := f.savedJournal(job.ID); job.Status != status || guidance != c.guidance || journal != c.journal ||
 				f.running() != c.running || f.staged() == c.running || (c.want != "" && data != c.want+","+c.want) {
 				t.Errorf("%s, %q, %q, journal %q, data %s", job.Status, job.Error, guidance, journal, data)
 			}

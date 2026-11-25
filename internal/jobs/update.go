@@ -154,11 +154,14 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (*ops
 	if err := j.recoverBackup(ctx, job); err != nil {
 		return nil, err
 	}
-	result := &ops.Result{}
+	result := &ops.Result{Finished: completed}
 	running := wasRunning(job)
 	switch {
-	case completed && !running:
-		result.Guidance = stoppedElsewhere
+	case completed && running:
+		result.Guidance = restartedAfter + "the backup had finished."
+		withServerAfterRecovery(job, result)
+	case completed:
+		result.Guidance = restartedAfter + "the backup had finished. " + stoppedElsewhere
 	case !completed && running:
 		result.Guidance = "Ludock restarted before the backup finished, so there’s no new backup. The server was started again."
 	case !completed:
@@ -253,7 +256,7 @@ func (j *Jobs) finishedUpdate(ctx context.Context, job *ops.Context, started err
 		// A server that was stopped stays stopped on purpose, as when the
 		// update finishes without a restart.
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, !wasRunning(job)))
-		return &ops.Result{Guidance: finished}
+		return &ops.Result{Guidance: finished, Finished: true}
 	case apperr.Is(started, errReplacementNotStarted.Code):
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, true))
 		alert("the server’s new container is stopped and couldn’t be started. Check it, then start it.")

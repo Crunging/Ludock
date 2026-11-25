@@ -802,11 +802,11 @@ Each piece of work in **Activity** shows one result:
 | --- | --- |
 | Queued | Waiting for other work on the server, or on the backup folder, to finish |
 | Running | Under way; work asked to warn players first shows **Checking who is online**, then **Warning players** until the warning is sent and **Giving players 1 minute** once it is |
-| Succeeded | Done |
+| Succeeded | Done, including work Ludock finished after it restarted, which says so |
 | Already up to date | An update found nothing newer |
 | Skipped | Decided not to act, such as a scheduled command for a stopped server |
 | Failed | Stopped with the reason shown; Ludock left the server as safe as it could |
-| Interrupted | Ludock restarted while it acted; check the server |
+| Interrupted | Ludock restarted while it acted and couldn't finish it; the entry says what the server was left as, or to check it where Ludock can't tell |
 | Cancelled | Called off while it was queued or warning players, before it changed anything, by the person named |
 
 An automatic restart is listed as by "Ludock, because the game stopped
@@ -847,7 +847,13 @@ anything that was in progress:
   are recorded as missed, and repeating ones missed by more than 15 minutes
   skip that time.
 
-**Activity** says what happened to each piece of work.
+**Activity** says what happened to each piece of work. Work recovery
+finished, such as a restart whose server was started again, a confirmed stop,
+a backup that had been recorded, a restore that had committed, a completed
+undo, or a finished update, ends as **Succeeded** and isn't listed in **Needs
+attention**. Work whose purpose wasn't achieved, such as a backup that made no
+backup, a restore that was rolled back, or an update that was undone, ends as
+**Interrupted**.
 
 Asked to stop, Ludock gives running work about six seconds to finish, inside
 the ten Docker waits before killing it. Work still running then, such as a

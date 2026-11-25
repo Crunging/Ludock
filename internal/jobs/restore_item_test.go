@@ -197,7 +197,7 @@ func TestRestoreInterruptedAfterCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	recovered, _ := f.runner.Get(ctx, job.ID)
-	if recovered.Status != ops.Interrupted || recovered.Result.Guidance != "The restore had finished: what it restored is in place. Ludock started the server again." || !f.running() {
+	if recovered.Status != ops.Succeeded || recovered.Result.Guidance != "Ludock restarted while this ran, after the restore had finished: what it restored is in place. Ludock started the server again." || !f.running() {
 		t.Fatalf("%+v", recovered)
 	}
 }

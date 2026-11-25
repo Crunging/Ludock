@@ -1018,19 +1018,24 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 			logRecovered(rw, "needs an administrator")
 			continue
 		}
-		// A server recovery returned to how it was needs no checking.
+		started := job.Recovery.StateRestored && job.Recovery.StartRequested && !startedBefore
+		if result != nil && result.Finished {
+			if _, err := r.finish(ctx, job, Succeeded, result, "", false); err != nil {
+				return err
+			}
+			logRecovered(rw, map[bool]string{false: "finished", true: "finished, server started again"}[started])
+			continue
+		}
+		// Work whose outcome says what the server was left as, or that
+		// returned it to how it was, needs no checking.
 		message := "Ludock restarted while this ran. Check the server before trying again."
-		if job.Recovery.StateRestored {
+		if job.Recovery.StateRestored || (result != nil && result.Guidance != "") {
 			message = "Ludock restarted while this ran."
 		}
 		if _, err := r.finish(ctx, job, Interrupted, result, message, false); err != nil {
 			return err
 		}
-		outcome := "ended as interrupted"
-		if job.Recovery.StateRestored && job.Recovery.StartRequested && !startedBefore {
-			outcome = "ended as interrupted, server started again"
-		}
-		logRecovered(rw, outcome)
+		logRecovered(rw, map[bool]string{false: "ended as interrupted", true: "ended as interrupted, server started again"}[started])
 	}
 	if r.AfterRecovery != nil {
 		r.AfterRecovery(ctx)
