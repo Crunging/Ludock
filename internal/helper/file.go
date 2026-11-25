@@ -442,13 +442,15 @@ func (h *fileHelper) removeEntry(parent fd, name string, depth int) error {
 // before a change that would delete or move what is inside it. A stage is
 // below the top of a data folder when another server's, or a wider
 // ludock.files, shows the folder that holds it.
-func (h *fileHelper) unmounted(parent fd, name, relative string) error {
+// unmounted checks the tree at name from depth, which a staging folder
+// starts a level up.
+func (h *fileHelper) unmounted(parent fd, name, relative string, depth int) error {
 	absolute := h.absolute(relative)
 	if slices.ContainsFunc(h.request.Mounts, func(mount string) bool { return Within(mount, absolute) }) {
 		return errMounted
 	}
 	count := 0
-	return h.oneMount(parent, name, 0, &count)
+	return h.oneMount(parent, name, depth, &count)
 }
 
 // oneMount checks files too: unlinking a mounted file fails only after
@@ -779,19 +781,23 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 		mode = original.Mode & 0o777
 	}
 	// A replaced file keeps its access ACL: its group bits are the ACL's
-	// mask, which would otherwise become the owning group's own rights. It is
-	// read once the input is in, so a refusal is the command's result.
+	// mask, which would otherwise become the owning group's own rights. A new
+	// one gets what creating it in its folder would have given it, since the
+	// staged file's ACL was cut down to 0600. It is read once the input is
+	// in, so a refusal is the command's result.
 	var acl []byte
 	if original != nil {
 		if acl, err = h.readAccessACL(parent, name, original); err != nil {
 			return err
 		}
+	} else if acl, err = createdACL(parent, 0o666); err != nil {
+		return err
 	}
 	if int(owner.Uid) != helperUID() {
 		owned := mode >> 6 & 7
 		mode = mode&0o700 | mode&0o070&(owned<<3) | mode&0o007&owned
 		if acl != nil {
-			if acl = narrowACL(acl); acl == nil {
+			if acl = narrowACL(acl, owner.Uid); acl == nil {
 				return errACLNotKept
 			}
 		}
@@ -800,21 +806,22 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 		return err
 	}
 	// Setting an ACL sets the mode bits too, so a file with one never has
-	// its mask as group bits on their own. A replacement whose original had
-	// none drops any its folder's default ACL gave it, which the mode would
-	// otherwise switch on.
-	switch {
-	case acl != nil:
-		if err := fsetxattr(int(file), accessACL, acl, 0); err != nil {
-			return errACLNotKept
-		}
-	case original != nil:
-		if err := unix.Fremovexattr(int(file), accessACL); err != nil && !errors.Is(err, unix.ENODATA) &&
-			!errors.Is(err, unix.ENOTSUP) && !errors.Is(err, unix.EOPNOTSUPP) {
-			return errACLNotKept
-		}
-		fallthrough
-	default:
+	// its mask as group bits on their own. A file that gets none drops any
+	// the folder's default ACL gave the staged file, which the mode would
+	// otherwise switch on: a replacement whose original had none, or a new
+	// file whose folder lost its default ACL meanwhile.
+	var aclErr error
+	if acl != nil {
+		aclErr = fsetxattr(int(file), accessACL, acl, 0)
+	} else if err := unix.Fremovexattr(int(file), accessACL); err != nil && !unsupportedXattr(err) {
+		aclErr = err
+	}
+	if aclErr != nil && original != nil {
+		return errACLNotKept
+	} else if aclErr != nil {
+		return aclErr
+	}
+	if acl == nil {
 		if err := fchmod(int(file), mode); err != nil {
 			return err
 		}
@@ -1393,7 +1400,7 @@ func (h *fileHelper) run() error {
 		}
 		return h.json(map[string]bool{"ok": true})
 	case "delete":
-		if err := h.unmounted(parent, name, relative); err != nil {
+		if err := h.unmounted(parent, name, relative, 0); err != nil {
 			return err
 		}
 		if err := h.removeEntry(parent, name, 0); err != nil {
@@ -1420,7 +1427,7 @@ func (h *fileHelper) run() error {
 		if isSymlink(info) {
 			return errors.New("symbolic links cannot be renamed")
 		}
-		if err := h.unmounted(parent, name, relative); err != nil {
+		if err := h.unmounted(parent, name, relative, 0); err != nil {
 			return err
 		}
 		if _, err := lstatAt(targetParent, targetName); err == nil {

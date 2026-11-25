@@ -189,6 +189,33 @@ func TestUnpackFormatsAndNames(t *testing.T) {
 	if got := listTree(t, filepath.Join(root, deep)); !reflect.DeepEqual(got, []string{"pack", "pack/a", "v.tar", "w", "w/a", "w.tar", "x.tar"}) {
 		t.Fatal(got)
 	}
+	// In a folder with a default ACL, the folder unpacked into it and what
+	// it holds get what creating them there (0777 folders, 0666 files)
+	// would, setgid included. Its owner entry lets this test, unlike the root
+	// helper, write into the staging folder.
+	shared := filepath.Join(root, "shared")
+	os.Mkdir(shared, 0o755)
+	os.Chmod(shared, os.ModeSetgid|0o755)
+	err := unix.Setxattr(shared, defaultACL, mustACL(t, "user::rwx,user:4242:rwx,group::rwx,group:4343:rw-,mask::r-x,other::---"), 0)
+	if errors.Is(err, unix.ENOTSUP) {
+		t.Log("no ACLs here, so unpacking into a folder with one isn't checked")
+		return
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	result, code = unpackFile(t, root, "shared/plugins.tar", tarArchive(t, pack))
+	if code != 0 {
+		t.Fatal(result, code)
+	}
+	os.Mkdir(filepath.Join(shared, "reference"), 0o777)
+	os.Mkdir(filepath.Join(shared, "reference", "folder"), 0o777)
+	reference, _ := os.OpenFile(filepath.Join(shared, "reference", "file"), os.O_CREATE|os.O_WRONLY, 0o666)
+	reference.Close()
+	folder := "user::rwx,user:4242:rwx,group::rwx,group:4343:rw-,mask::r-x,other::---"
+	sameAsCreated(t, filepath.Join(shared, result.Name), filepath.Join(shared, "reference"), folder, os.ModeSetgid|0o750)
+	sameAsCreated(t, filepath.Join(shared, result.Name, "configs"), filepath.Join(shared, "reference", "folder"), folder, os.ModeSetgid|0o750)
+	sameAsCreated(t, filepath.Join(shared, result.Name, "a.jar"), filepath.Join(shared, "reference", "file"),
+		"user::rw-,user:4242:rwx,group::rwx,group:4343:rw-,mask::r--,other::---", 0o640)
 }
 
 // Hostile archives write nothing outside, or at all, and leave no staging
@@ -293,6 +320,14 @@ func TestUnpackStagingCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(planted, "game data")); err != nil {
 		t.Fatal("an unpack removed a folder Ludock didn't record")
+	}
+	// Its unpacked folder may hold an entry as deep as an archive's may be.
+	deepest := filepath.Join(fresh, "unpacked", strings.Repeat("d/", 63)+"f")
+	if err := os.MkdirAll(filepath.Dir(deepest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(deepest, nil, 0o644); err != nil {
+		t.Fatal(err)
 	}
 	if _, code := runFile(t, FileRequest{Operation: "unpack-cleanup", Root: root, Path: "other.tar", UploadID: stageID}, nil); code != 0 {
 		t.Fatal(code)

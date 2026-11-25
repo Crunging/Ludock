@@ -308,17 +308,49 @@ func ParseACLText(text string) ([]byte, error) {
 	return encodeACL(entries), nil
 }
 
-// narrowACL caps an ACL's mask and its other entry at the owner's rights, as
-// the mode is when the owner changes: until then the future owner holds
-// those. It returns nil for a value it can't read.
-func narrowACL(value []byte) []byte {
+// createdACL is the access ACL the kernel gives an entry created with mode
+// in folder, which has a default ACL, or nil for a folder without one. As in
+// acl(5), the owner, the mask (the owning group without one), and other
+// entries keep only what mode grants, named entries stay, and the umask
+// doesn't apply.
+func createdACL(folder fd, mode uint32) ([]byte, error) {
+	entries, err := readACL(folder, defaultACL)
+	if err != nil || entries == nil {
+		return nil, err
+	}
+	_, masked := aclPerm(entries, aclMask)
+	for index, entry := range entries {
+		switch {
+		case entry.tag == aclUserObj:
+			entries[index].perm &= uint16(mode >> 6 & 7)
+		case entry.tag == aclMask, entry.tag == aclGroupObj && !masked:
+			entries[index].perm &= uint16(mode >> 3 & 7)
+		case entry.tag == aclOther:
+			entries[index].perm &= uint16(mode & 7)
+		}
+	}
+	return encodeACL(entries), nil
+}
+
+// narrowACL caps what an ACL gives the future owner uid at the owner entry's
+// rights, as the mode is when the owner changes: until then that user holds
+// its own named entry if it has one, else what a group it may be in or
+// others get. Other named users keep theirs, and an entry the mask governs
+// loses only what the mask lets through. It returns nil for a value it
+// can't read.
+func narrowACL(value []byte, uid uint32) []byte {
 	entries, err := decodeACL(value)
 	if err != nil {
 		return nil
 	}
 	owner, _ := aclPerm(entries, aclUserObj)
+	mask, masked := aclPerm(entries, aclMask)
+	named := slices.ContainsFunc(entries, func(entry aclEntry) bool { return entry.tag == aclUser && entry.id == uid })
 	for index, entry := range entries {
-		if entry.tag == aclMask || entry.tag == aclOther {
+		switch {
+		case entry.tag == aclUser && entry.id == uid, !named && entry.tag == aclGroup, !named && masked && entry.tag == aclGroupObj:
+			entries[index].perm &^= uint16(mask &^ owner)
+		case !named && (entry.tag == aclGroupObj || entry.tag == aclOther):
 			entries[index].perm &= uint16(owner)
 		}
 	}
