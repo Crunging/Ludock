@@ -1129,6 +1129,7 @@ func (h *fileHelper) uploadFiles(relative string) error {
 		}
 		if err == nil {
 			if _, err = h.uploadFolder(folder, relative, parts, false); isNotExist(err) {
+				h.t.closeFrom(opened)
 				if err = h.confirmFolder(); err == nil {
 					if folder, err = pin(); err == nil {
 						_, err = h.uploadFolder(folder, relative, parts, true)
