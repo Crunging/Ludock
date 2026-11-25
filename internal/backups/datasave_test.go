@@ -302,7 +302,10 @@ func otherSave(t *testing.T) []byte {
 // was given, stay as they were. With the backup folder lost, the copies stay.
 func TestCopyDataFollowsSaves(t *testing.T) {
 	f := newCopyFixture(t)
-	old := time.Now().Add(-30 * 24 * time.Hour)
+	// Midday, so the four saves a minute apart are of one day whenever this
+	// runs: a day holds on to its newest save.
+	day := time.Now().AddDate(0, 0, -30)
+	old := time.Date(day.Year(), day.Month(), day.Day(), 12, 0, 0, 0, time.Local)
 	others := map[string][]byte{
 		dataFileName(old.Add(-48 * time.Hour)):                     otherSave(t),
 		dataFileName(old.Add(-47 * time.Hour)):                     otherSave(t),
