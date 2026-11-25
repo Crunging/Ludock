@@ -277,12 +277,12 @@ func (h *restoreHelper) pinStage(root fd, optional bool) (fd, error) {
 // undone. It is owned before anything moves in, so a retry fixes one that
 // an interruption left as the helper made it.
 func (h *restoreHelper) pinAside(root, stage fd) (fd, error) {
-	if err := unix.Mkdirat(int(root), h.request.Aside, 0o700); err == nil {
-		// The undo journals that the folder exists only after this.
-		if err := syncAll(root); err != nil {
-			return -1, err
-		}
-	} else if !errors.Is(err, unix.EEXIST) {
+	if err := unix.Mkdirat(int(root), h.request.Aside, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
+		return -1, err
+	}
+	// The undo journals that the folder exists only after this, also when
+	// an attempt cut before syncing made it.
+	if err := syncAll(root); err != nil {
 		return -1, err
 	}
 	aside, err := h.t.openAt(root, h.request.Aside, directoryFlags, 0)
@@ -351,6 +351,15 @@ func (h *restoreHelper) checkReturn(root, stage fd) error {
 	for _, name := range children {
 		if Reserved(name) {
 			continue
+		}
+		if _, err := lstatAt(root, name); isNotExist(err) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		// A mount on the entry itself is reported as one, not by movable.
+		if err := ownMount(h.request.Base, h.request.Root+"/"+name); err != nil {
+			return err
 		}
 		info, err := movable(root, name, rootInfo.Dev)
 		if err != nil {
@@ -1162,6 +1171,10 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		if info, err := movable(old, "item", rootInfo.Dev); err != nil || info == nil {
+			return err
+		}
+		// A mount on the item or a folder on its way is reported as one.
+		if err := ownMount(h.request.Base, h.request.Root+"/"+strings.Join(parts, "/")); err != nil {
 			return err
 		}
 		parent, err := h.itemParent(root, parts)

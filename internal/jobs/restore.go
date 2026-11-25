@@ -145,9 +145,10 @@ func (j *Jobs) saveFinal(ctx context.Context, job *ops.Context, final restoreRec
 	var saved []func()
 	err = j.DB.Tx(ctx, func(tx *sql.Tx) error {
 		if finish.by != nil {
-			done, err := finish.by.ProgressIn(tx, finish.by.Job.Phase, func(r *ops.Recovery) {
-				r.Undone = strings.TrimSpace(r.Undone + " " + note)
-			}, nil)
+			undone := strings.TrimSpace(finish.by.Job.Recovery.Undone + " " + note)
+			byResult := finish.by.Job.Result
+			byResult.UndoNote = undone
+			done, err := finish.by.ProgressIn(tx, finish.by.Job.Phase, func(r *ops.Recovery) { r.Undone = undone }, &byResult)
 			if err != nil {
 				return err
 			}
@@ -847,6 +848,8 @@ func endedRestoreGuidance(job *ops.Context, touched bool) string {
 		return ""
 	}
 	switch {
+	case state.Status == "rolled_back" && touched && state.Kept:
+		return restoreUndone + " " + keptNote(job)
 	case state.Status == "rolled_back" && touched:
 		return restoreUndone
 	case state.Status == "rolled_back" || state.Status == "cleaned":

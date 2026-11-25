@@ -112,37 +112,40 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		return err
 	}
 	live, missing := false, false
-	note := func(kept bool) string {
+	// What Activity says comes from the final journal, which also covers
+	// roots an earlier attempt finished.
+	note := func(final restoreRecovery) string {
 		var note string
 		aside := helper.SetAsideName(restore.Job.ID)
+		returned, missingAny := live || final.PutBack, missing || final.StageMissing
 		switch {
 		case state.Status == "committed":
 			note = "Ludock removed the folder " + stageName(restore) + " that a finished restore left, which held the data it replaced."
-		case missing && !live:
+		case missingAny && !returned:
 			note = "Ludock found nothing to put back for a restore that had stopped partway: the folder " + stageName(restore) +
 				" that held the server’s previous data is no longer there, so its data was left as it is."
-		case state.SetAside && live:
+		case state.SetAside && returned:
 			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place, and what the game wrote meanwhile is kept in the folder " +
 				aside + " beside it."
-		case kept:
+		case final.Kept:
 			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. The game had since made newer copies of some of it, which are kept in the folder " +
 				aside + " beside it."
-		case !live:
+		case !returned:
 			note = "Ludock removed the backup’s unpacked copy that a stopped restore left in " + stageName(restore) + "."
 		default:
 			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place."
 		}
-		if missing && live {
+		if missingAny && returned {
 			note += " One of its data folders had nothing to put back: its folder " + stageName(restore) + " is no longer there."
 		}
 		// An earlier attempt may have set copies aside before this one found
 		// a stage gone.
-		if kept && !strings.Contains(note, aside) {
+		if final.Kept && !strings.Contains(note, aside) {
 			note += " " + keptNote(restore)
 		}
 		return note
 	}
-	finish := &restoreFinish{note: func(final restoreRecovery) string { return note(final.Kept) }, by: job}
+	finish := &restoreFinish{note: note, by: job}
 	err = func() error {
 		if job != nil {
 			if err := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID = data.Container }, nil); err != nil {

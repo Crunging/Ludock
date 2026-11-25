@@ -565,7 +565,8 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 // folder holds afterwards. Undo checks the stage and what is in the
 // originals' way before the stop and again once stopped, and the restore's
 // final journal is saved with what both Activity entries say. A mount the
-// host added inside the newer world refuses the undo before the stop. A
+// host added on or inside the newer copy, or on a restored file's folder,
+// refuses the undo before the stop. A
 // newer copy found by startup's recovery of the cut restore, with the server
 // still stopped, is set aside too, and its Activity says where.
 func TestUndoAfterInterruptedMove(t *testing.T) {
@@ -575,7 +576,11 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 		arrange func(t *testing.T, f *fixture, stage, aside string)
 		aside   map[string]string
 		trace   []string
-		mounted bool
+		// mounted is where the host mounted something, below the data.
+		mounted string
+		// plain: nothing was set aside, so Activity says only that the
+		// previous data is back.
+		plain bool
 		// recovered: the server stays stopped and startup recovers the cut
 		// restore, with no undo.
 		recovered bool
@@ -616,10 +621,23 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				os.WriteFile(filepath.Join(f.data, aside, "world", "level.dat"), []byte("first run"), 0o644)
 			}, aside: map[string]string{"world/level.dat": "first run"},
 			trace: []string{"cleanup game: rolling_back rolled_back kept unsafe"}},
+		// Cut likewise, with nothing set aside.
+		{name: "returned and saved, nothing kept", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+			}, plain: true, trace: []string{"cleanup game: rolling_back rolled_back unsafe"}},
 		{name: "mount in the newer copy", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
-			}, mounted: true},
+			}, mounted: "world/mods"},
+		{name: "mount on the newer copy", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, mounted: "world"},
+		{name: "mount on the file's folder", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Item: "world/level.dat", Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
+			}, mounted: "world"},
 		{name: "recovered at startup", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
@@ -684,35 +702,38 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 			// A final journal saved without both notes fails its write.
 			if _, err := f.jobs.DB.Exec(`CREATE TRIGGER final_with_notes BEFORE UPDATE OF recovery_json ON operations
 				WHEN NEW.kind='restore' AND json_extract(NEW.recovery_json,'$.restore.status')='rolled_back' AND (
-					instr(coalesce(json_extract(NEW.result_json,'$.guidance'),''), 'ludock-set-aside-'||NEW.id)=0 OR NOT EXISTS (
+					coalesce(json_extract(NEW.result_json,'$.guidance'),'')='' OR NOT EXISTS (
 					SELECT 1 FROM operations o WHERE o.kind='undo_restore' AND o.server_id=NEW.server_id AND
-					instr(coalesce(json_extract(o.recovery_json,'$.undone'),''), 'ludock-set-aside-'||NEW.id)>0))
+					instr(coalesce(json_extract(o.result_json,'$.undoNote'),''), json_extract(NEW.result_json,'$.guidance'))>0))
 				BEGIN SELECT RAISE(ABORT, 'final journal without its notes'); END`); err != nil {
 				t.Fatal(err)
 			}
-			if c.mounted {
+			if c.mounted != "" {
 				previous := mountinfo.Table
 				t.Cleanup(func() { mountinfo.Table = previous })
-				mods := filepath.Join(f.data, "world", "mods")
-				mountinfo.Table = func() ([]byte, error) { return []byte("40 22 0:45 / " + mods + " rw - nfs4 server:/share rw\n"), nil }
-				before := len(f.engine.Requests)
+				mount := filepath.Join(f.data, c.mounted)
+				mountinfo.Table = func() ([]byte, error) { return []byte("40 22 0:45 / " + mount + " rw - nfs4 server:/share rw\n"), nil }
+				before, journal := len(f.engine.Requests), f.savedJournal(job.ID)
 				undo := f.run(t, ops.KindUndoRestore, nil)
 				stopped := slices.ContainsFunc(f.engine.Requests[before:], func(request string) bool { return strings.Contains(request, f.game+"/stop") })
-				stage := filepath.Join(f.data, helper.StageName(job.ID))
 				if undo.Status != ops.Failed || undo.Error != backups.ErrHostMount.Message || stopped || !f.running() ||
-					read(t, filepath.Join(stage, "old", "world", "level.dat")) != "newer" || read(t, filepath.Join(f.data, "world", "level.dat")) != "new run" {
+					f.savedJournal(job.ID) != journal || read(t, filepath.Join(f.data, "world", "level.dat")) != "new run" {
 					t.Errorf("%s %q, stopped %v, running %v", undo.Status, undo.Error, stopped, f.running())
 				}
 				return
 			}
 			undo := f.run(t, ops.KindUndoRestore, nil)
-			if undo.Status != ops.Succeeded || !f.running() || f.staged() || f.savedJournal(job.ID) != "rolled_back put back kept" {
+			want := "rolled_back put back kept"
+			if c.plain {
+				want = "rolled_back put back"
+			}
+			if undo.Status != ops.Succeeded || !f.running() || f.staged() || f.savedJournal(job.ID) != want {
 				t.Fatalf("%s %q, running %v, journal %s", undo.Status, undo.Error, f.running(), f.savedJournal(job.ID))
 			}
 			checkKept()
 			restore, _ := f.runner.Get(ctx, job.ID)
 			for _, note := range []string{undo.Result.UndoNote, restore.Result.Guidance} {
-				if !strings.Contains(note, "newer copies") || !strings.Contains(note, aside) {
+				if (strings.Contains(note, "newer copies") && strings.Contains(note, aside)) == c.plain || !strings.Contains(note, "back in place") {
 					t.Errorf("Activity says %q", note)
 				}
 			}
