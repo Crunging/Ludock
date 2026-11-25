@@ -37,6 +37,7 @@ type ContainerState struct {
 	Restarting bool         `json:"Restarting"`
 	OOMKilled  bool         `json:"OOMKilled"`
 	ExitCode   int          `json:"ExitCode"`
+	Error      string       `json:"Error"`
 	StartedAt  string       `json:"StartedAt"`
 	FinishedAt string       `json:"FinishedAt"`
 	Health     *HealthState `json:"Health,omitempty"`

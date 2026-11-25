@@ -1,11 +1,13 @@
 package selfupdate_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -20,6 +22,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/selfupdate/fake"
@@ -413,6 +416,7 @@ func join(parts ...[]string) []string { return slices.Concat(parts...) }
 func TestSelfUpdateOrder(t *testing.T) {
 	ctx := context.Background()
 	var probe error
+	var logged bytes.Buffer
 	cases := []struct {
 		name    string
 		arrange func(g *rig)
@@ -579,9 +583,17 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 		}, trace: []string{"pull", "save", "create helper"}, image: oldImage, state: selfupdate.StateFailed,
 			reason: "Docker couldn’t start the helper that replaces Ludock, so nothing was changed. Try again in a moment."},
-		{name: "the helper never starts", arrange: func(g *rig) { g.fail["start helper"] = 500 },
-			trace: []string{"pull", "save", "create helper", "start helper", "stop helper", "remove helper"}, image: oldImage,
-			state: selfupdate.StateFailed, reason: "Docker couldn’t start the helper that replaces Ludock, so nothing was changed. Try again in a moment."},
+		{name: "the helper never starts, and the log says how Docker left it", arrange: func(g *rig) {
+			g.fail["start helper"] = 500
+			logging.SetOutput(&logged, &logged)
+		}, trace: []string{"pull", "save", "create helper", "start helper", "stop helper", "remove helper"}, image: oldImage,
+			state: selfupdate.StateFailed, reason: "Docker couldn’t start the helper that replaces Ludock, so nothing was changed. Try again in a moment.",
+			check: func(t *testing.T, g *rig, _ *process) {
+				logging.SetOutput(os.Stdout, os.Stderr)
+				if !strings.Contains(logged.String(), `"why":"it never started","status":"created"`) {
+					t.Errorf("logged %s", logged.String())
+				}
+			}},
 		{name: "a tag moved back to an older version is refused", arrange: func(g *rig) {
 			g.engine.SetImageConfig(newImage, map[string]any{"Labels": map[string]any{"org.opencontainers.image.version": "0.9.0"}})
 		}, trace: []string{"pull"}, image: oldImage, state: selfupdate.StateFailed, to: "0.9.0",

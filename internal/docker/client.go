@@ -1,7 +1,8 @@
 // Package docker is a minimal Docker Engine API client over the local unix
 // socket. Requests never go through HTTP proxies, mutations are never
-// resent unless they provably never reached Docker, and daemon error bodies (which can contain credentials, commands,
-// and host paths) are discarded.
+// resent unless they provably never reached Docker, and daemon error bodies
+// (which can contain credentials, commands, and host paths) are kept only as
+// the scrubbed text Said gives.
 package docker
 
 import (
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/logging"
 )
 
 // Tested Engine API range. Recursive read-only bind proofs need v1.44.
@@ -40,10 +42,23 @@ var (
 		"This Docker Engine is newer than this version of Ludock supports. Update Ludock, then restart it.")
 )
 
-type APIError struct{ Status int }
+type APIError struct {
+	Status int
+	said   string
+}
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("Docker API request failed (HTTP %d)", e.Status)
+}
+
+// Said is what Docker answered with err, without host paths or credentials,
+// for a log line.
+func Said(err error) string {
+	var api *APIError
+	if !errors.As(err, &api) {
+		return ""
+	}
+	return logging.Scrub(api.said)
 }
 
 func StatusCode(err error) int {
@@ -239,9 +254,11 @@ func (c *Client) request(ctx context.Context, method, path string, body any, hea
 		return nil, ErrRequestFailed
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
+		var answer struct{ Message string }
+		json.NewDecoder(io.LimitReader(response.Body, 64*1024)).Decode(&answer)
 		io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
 		response.Body.Close()
-		return nil, &APIError{response.StatusCode}
+		return nil, &APIError{Status: response.StatusCode, said: answer.Message}
 	}
 	return response, nil
 }
@@ -801,7 +818,7 @@ func (c *Client) pull(ctx context.Context, image, registryAuth, platform string)
 		_, hasError := record["error"]
 		_, hasDetail := record["errorDetail"]
 		if hasError || hasDetail {
-			failure = &APIError{500}
+			failure = &APIError{Status: 500}
 			return failure
 		}
 		records++
@@ -901,7 +918,7 @@ func (c *Client) hijack(ctx context.Context, path string, body any) (*Conn, erro
 	limited.done = true
 	if response.StatusCode != http.StatusSwitchingProtocols && response.StatusCode != http.StatusOK {
 		stop()
-		return fail(&APIError{response.StatusCode})
+		return fail(&APIError{Status: response.StatusCode})
 	}
 	header := response.Header
 	upgrade := false

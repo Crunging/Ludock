@@ -1,7 +1,7 @@
 // The built image against real Docker: the shell and logs, image updates,
 // Ludock updating itself, cleanup when Ludock starts, and account recovery.
-import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect, asAdmin, admin, openServer, expectOperationSucceeded, expectOffline } from "../journeys/fixtures.mjs";
 import { docker, gameImage, ludock, game, stack, gameContainer, healthy, ludockImage, nextImage, unhealthyImage } from "../docker-setup.mjs";
@@ -105,10 +105,17 @@ async function updateLudock(page) {
 // reports another version. Update Ludock replaces its container through a
 // helper and the page comes back on the new version, with the game left
 // running. A version whose health check never passes is then put back.
-test("Ludock updates itself, and puts itself back when the new version fails", async ({ page }) => {
+test("Ludock updates itself, and puts itself back when the new version fails", async ({ page }, testInfo) => {
   test.skip(!nextImage || !unhealthyImage, "LUDOCK_TEST_NEXT_IMAGE and LUDOCK_TEST_UNHEALTHY_IMAGE name second builds of the image");
   test.setTimeout(600_000);
-  const began = Math.floor(Date.now() / 1000);
+  // Recorded as they happen: Docker keeps only its last 256 events, which
+  // the game's health checks fill within minutes.
+  const eventsFile = testInfo.outputPath("container-events.txt");
+  const eventsOut = openSync(eventsFile, "w");
+  const events = spawn("docker", ["events", "--filter", "type=container",
+    ...["create", "start", "die", "kill", "stop", "destroy", "rename", "health_status"].flatMap((event) => ["--filter", `event=${event}`]),
+    "--format", "{{.TimeNano}} {{.Action}} {{.Actor.ID}} {{.Actor.Attributes.name}} {{.Actor.Attributes.image}} exit={{.Actor.Attributes.exitCode}}"],
+  { stdio: ["ignore", eventsOut, eventsOut] });
   docker("run", "--detach", "--name", "ludocktest-registry", "--publish", "127.0.0.1:5000:5000", "registry:2");
   try {
     await expect.poll(async () => (await fetch("http://127.0.0.1:5000/v2/").catch(() => ({ ok: false }))).ok, { timeout: 30_000 }).toBe(true);
@@ -172,15 +179,17 @@ test("Ludock updates itself, and puts itself back when the new version fails", a
     await expect(page.locator(".needs-attention__list li", { hasText: "Ludock’s update didn’t finish" }))
       .toContainText("The new version reported itself unhealthy, so Ludock is still on version e2e-next");
   } catch (error) {
-    diagnose(began);
+    diagnose(eventsFile);
     throw error;
   } finally {
+    events.kill();
+    closeSync(eventsOut);
     docker("rm", "--force", "ludocktest-registry");
   }
 });
 
-/** Prints what Docker did since began, each Ludock container's state and health, and the logs of Ludock and its helpers. */
-function diagnose(began) {
+/** Prints the container events recorded in eventsFile, each Ludock container's and marker's state and health, and the logs of Ludock and its helpers. */
+function diagnose(eventsFile) {
   const run = (...args) => {
     try {
       return docker(...args);
@@ -188,13 +197,12 @@ function diagnose(began) {
       return String(error.stderr || error);
     }
   };
-  const out = [run("events", "--since", String(began), "--until", String(Math.floor(Date.now() / 1000)), "--filter", "type=container",
-    "--format", "{{.Time}} {{.Action}} {{.Actor.Attributes.name}} {{.Actor.Attributes.image}}"),
-  run("ps", "--all", "--no-trunc", "--format", "{{.ID}} {{.Names}} {{.Image}} {{.Status}}")];
+  const out = ["--- container events", readFileSync(eventsFile, "utf8"),
+    "--- containers", run("ps", "--all", "--no-trunc", "--format", "{{.ID}} {{.Names}} {{.Image}} {{.Status}}")];
   const ids = run("ps", "--all", "--quiet", "--filter", "label=ludock.internal").split("\n")
     .concat(run("ps", "--all", "--quiet", "--filter", "label=com.docker.compose.service=ludock").split("\n")).filter(Boolean);
   for (const id of new Set(ids)) {
-    out.push(`--- ${id}`, run("inspect", "--format", "{{.Name}} {{.Image}} {{json .State}} {{json .Config.Labels}}", id),
+    out.push(`--- ${id}`, run("inspect", "--format", "{{.Name}} {{.Image}} restarts={{.RestartCount}} {{json .State}} {{json .Config.Labels}} {{json .HostConfig.RestartPolicy}}", id),
       run("logs", "--tail", "100", id));
   }
   console.log(out.join("\n"));

@@ -1,6 +1,7 @@
 package selfupdate
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -28,6 +29,7 @@ import (
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -528,7 +530,9 @@ func (s *Service) run(ctx context.Context, record Record, plan *update.Plan, tok
 		failed(errSave)
 		return
 	}
-	if err := s.startHelper(ctx, record); err != nil {
+	if step, err := s.startHelper(ctx, record); err != nil {
+		log.Warn("Ludock's update helper didn't get going, so nothing was changed",
+			append(logging.Cause(err, docker.StatusCode(err)), logging.F("step", step), logging.F("docker", docker.Said(err)))...)
 		failed(errHelper)
 		return
 	}
@@ -625,14 +629,14 @@ func (s *Service) save(ctx context.Context, operation string) error {
 // Docker socket, mounted as Ludock's own is, and the interface's arguments.
 // Docker runs it again when it exits and after a daemon restart, even one
 // stopped through Docker meanwhile; it removes itself.
-func (s *Service) startHelper(ctx context.Context, record Record) error {
+func (s *Service) startHelper(ctx context.Context, record Record) (step string, err error) {
 	spec, err := s.Docker.InspectSpec(ctx, record.Container)
 	if err != nil {
-		return err
+		return "inspect Ludock", err
 	}
 	socket := s.socket(spec)
 	if socket == nil {
-		return errNoSocket
+		return "find the socket", errNoSocket
 	}
 	var config struct{ User string }
 	json.Unmarshal(encode(spec.Config), &config)
@@ -654,14 +658,14 @@ func (s *Service) startHelper(ctx context.Context, record Record) error {
 		if spec, inspectErr := s.Docker.InspectSpec(ctx, HelperName(record.ID)); inspectErr == nil && ours(spec, helperKind, record.ID) {
 			s.Docker.Remove(context.WithoutCancel(ctx), spec.ID, true, true)
 		}
-		return err
+		return "create", err
 	}
 	if err := s.Docker.Start(ctx, id); err != nil && !docker.Unavailable(err) {
 		// It never ran, so nothing changed.
 		s.Docker.Remove(context.WithoutCancel(ctx), id, true, true)
-		return err
+		return "start", err
 	}
-	return nil
+	return "", nil
 }
 
 func ours(spec *docker.ContainerSpec, kind, operation string) bool {
@@ -712,7 +716,7 @@ func (s *Service) watch(ctx context.Context, record Record) {
 				// Stopped by abandon as it recorded its marker, it goes on.
 				s.Docker.Start(ctx, spec.ID)
 			case marked == nil && (spec.State.Status == "created" || spec.State.Status == "exited" || time.Since(began) >= handshake):
-				if s.abandon(ctx, record, spec.ID) {
+				if s.abandon(ctx, record, spec) {
 					return
 				}
 			}
@@ -761,7 +765,8 @@ func ReadyMarker(operation, container, started, image string) (name string, body
 
 // abandon ends an update whose helper changed nothing: with no marker once
 // it is stopped, it never got that far. It reports whether it ended it.
-func (s *Service) abandon(ctx context.Context, record Record, helper string) bool {
+func (s *Service) abandon(ctx context.Context, record Record, spec *docker.ContainerSpec) bool {
+	helper := spec.ID
 	if marked, known := s.marker(ctx, stateName(record.ID), stateKind, record.ID); marked != nil || !known {
 		return false
 	}
@@ -777,10 +782,43 @@ func (s *Service) abandon(ctx context.Context, record Record, helper string) boo
 		s.Docker.Start(ctx, helper)
 		return false
 	}
+	s.describe(ctx, spec)
 	if err := s.Docker.Remove(ctx, helper, true, true); err != nil && !docker.IsNotFound(err) {
 		return false
 	}
 	return s.conclude(ctx, record, StateFailed, errHelper.Message) == nil
+}
+
+// describe logs the state a helper was found in, before it is removed for
+// never recording its marker, and its last log lines. Its log is Ludock's
+// own, which redacts itself; Docker's words and every line are scrubbed again
+// all the same.
+func (s *Service) describe(ctx context.Context, spec *docker.ContainerSpec) {
+	why := "it ran for 2 minutes without recording that it began"
+	switch spec.State.Status {
+	case "created":
+		why = "it never started"
+	case "exited":
+		why = "it exited"
+	}
+	fields := []logging.Field{logging.F("why", why), logging.F("status", spec.State.Status),
+		logging.F("exitCode", spec.State.ExitCode), logging.F("oomKilled", spec.State.OOMKilled),
+		logging.F("docker", logging.Scrub(spec.State.Error))}
+	logs, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if stream, err := s.Docker.Logs(logs, spec.ID, docker.LogsOptions{Stdout: true, Stderr: true, Tail: 10}); err == nil {
+		var output bytes.Buffer
+		docker.Demux(io.LimitReader(stream, 64*1024), &output, &output)
+		stream.Close()
+		var lines []string
+		for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				lines = append(lines, logging.Scrub(line))
+			}
+		}
+		fields = append(fields, logging.F("helperLog", strings.Join(lines, " | ")))
+	}
+	log.Warn("Ludock's update helper didn't get going, so nothing was changed", fields...)
 }
 
 // judge records an update whose helper is gone, by whether this Ludock runs
@@ -801,6 +839,7 @@ func (s *Service) judge(ctx context.Context, record Record) error {
 	switch {
 	case own.Image != record.Target && marked == nil:
 		// The helper records its marker before it changes anything.
+		log.Warn("Ludock's update helper was gone before it recorded that it began, so nothing was changed")
 		state, reason = StateFailed, errHelper.Message
 	case own.Image != record.Target:
 		state, reason = StatePutBack, "the update stopped before the new version started"

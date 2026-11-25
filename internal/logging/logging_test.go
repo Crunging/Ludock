@@ -22,6 +22,22 @@ func TestRedactsCredentials(t *testing.T) {
 	}
 }
 
+// Docker's own error text, as the Engine wrote it, keeps its meaning in a log
+// line without the host paths and credentials it names.
+func TestScrubsDockerWords(t *testing.T) {
+	for input, want := range map[string]string{
+		"error while creating mount source path '/srv/ludock/docker.sock': mkdir /srv/ludock/docker.sock: file exists":                                                                                                                                     "error while creating mount source path '[path]': mkdir [path]: file exists",
+		`failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: exec: "/usr/local/bin/ludock": stat /usr/local/bin/ludock: no such file or directory: unknown`: `failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: exec: "[path]": stat [path]: no such file or directory: unknown`,
+		"Get \"https://registry.example/v2/\": dial tcp: lookup registry.example: no such host":                                                                                                                                                            "Get \"https://registry.example/v2/\": dial tcp: lookup registry.example: no such host",
+		"Conflict. The container name \"/ludock-self-update-c4f4ca5435311deb\" is already in use":                                                                                                                                                          "Conflict. The container name \"[path]\" is already in use",
+		"pull access denied for ghcr.io/crunging/ludock, token=synthetic-secret":                                                                                                                                                                           "pull access denied for ghcr.io/crunging/ludock, token=[REDACTED]",
+	} {
+		if got := Scrub(input); got != want {
+			t.Errorf("%q\n got %q\nwant %q", input, got, want)
+		}
+	}
+}
+
 func TestRedactsQuotedCredentials(t *testing.T) {
 	leak := regexp.MustCompile(`synthetic|secret words|credential-tail|unfinished secret`)
 	for _, input := range []string{

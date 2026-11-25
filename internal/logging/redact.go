@@ -7,11 +7,14 @@ import "regexp"
 const SensitiveKeySource = "password|passwd|secret|token|credential|rconpw|authorization|cookie|api[-_]?key|session"
 
 var (
-	sensitiveKey        = regexp.MustCompile("(?i)" + SensitiveKeySource)
-	secretKeyPattern    = regexp.MustCompile(`(?i)(` + SensitiveKeySource + `)(\s*[=:]\s*)[^\s,"';&}]+`)
-	bearerPattern       = regexp.MustCompile(`(?i)\bBearer\s+[^\s,;]+`)
-	cookiePattern       = regexp.MustCompile(`(?i)\b(ludock_session)=([^;\s]+)`)
-	sensitiveQuery      = regexp.MustCompile(`(?i)([?&](?:` + SensitiveKeySource + `)=)[^&#\s]+`)
+	sensitiveKey     = regexp.MustCompile("(?i)" + SensitiveKeySource)
+	secretKeyPattern = regexp.MustCompile(`(?i)(` + SensitiveKeySource + `)(\s*[=:]\s*)[^\s,"';&}]+`)
+	bearerPattern    = regexp.MustCompile(`(?i)\bBearer\s+[^\s,;]+`)
+	cookiePattern    = regexp.MustCompile(`(?i)\b(ludock_session)=([^;\s]+)`)
+	sensitiveQuery   = regexp.MustCompile(`(?i)([?&](?:` + SensitiveKeySource + `)=)[^&#\s]+`)
+	// An absolute path not inside a URL or a word, such as a bind source,
+	// without the colon that ends a clause.
+	pathPattern         = regexp.MustCompile(`(^|[^\w.:/-])/(?:[^\s"'(),;\[\]:]|:[^\s"'(),;\[\]])*`)
 	quotedSecretPattern = regexp.MustCompile(`(?i)(` + SensitiveKeySource + `)(["']?\s*[=:]\s*)("(?:\\[\s\S]|[^"\\])*(?:"|\\?$)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?$))`)
 )
 
@@ -29,6 +32,16 @@ func Redact(value string) string {
 	value = cookiePattern.ReplaceAllString(value, "${1}=[REDACTED]")
 	value = sensitiveQuery.ReplaceAllString(value, "${1}[REDACTED]")
 	return secretKeyPattern.ReplaceAllString(value, "${1}${2}[REDACTED]")
+}
+
+// Scrub redacts credentials and absolute paths from Docker's own words, which
+// can name host paths, and bounds them for a log line.
+func Scrub(value string) string {
+	value = pathPattern.ReplaceAllString(Redact(value), "${1}[path]")
+	if cut, truncated := truncate(value, maxContextValue); truncated {
+		return cut + "…"
+	}
+	return value
 }
 
 // truncate shortens text to at most limit bytes without splitting a rune.
