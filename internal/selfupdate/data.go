@@ -16,6 +16,7 @@ import (
 // the old image's `ludock restore-data`, which refuses a folder that already
 // holds data:
 //
+//	self-update-data settled <operation>           exit 3 once the restore is settled
 //	self-update-data aside <operation>             move the live data aside
 //	self-update-data back <operation>              move it back, when the restore failed
 //	self-update-data mark <operation> <outcome>    record that this is settled
@@ -44,6 +45,11 @@ func DataMain(args []string, dataDir string, stderr io.Writer) int {
 			return dataSettled
 		}
 		err = moveAside(dataDir, aside)
+	case args[0] == "settled" && len(args) == 2:
+		if _, statErr := os.Lstat(filepath.Join(aside, "settled")); statErr == nil {
+			return dataSettled
+		}
+		return 0
 	case args[0] == "back" && len(args) == 2:
 		err = moveBack(dataDir, aside)
 	case args[0] == "mark" && len(args) == 3:
@@ -66,6 +72,12 @@ func moveAside(dataDir, aside string) error {
 	newer := filepath.Join(aside, "newer")
 	if err := os.MkdirAll(newer, 0o700); err != nil {
 		return err
+	}
+	// Each new entry is synced in the folder that holds it.
+	for _, folder := range []string{aside, dataDir} {
+		if err := syncDir(folder); err != nil {
+			return err
+		}
 	}
 	if _, err := os.Lstat(filepath.Join(newer, "ludock.db")); err == nil {
 		for _, name := range dataFiles {

@@ -106,8 +106,13 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 			pulled = "sha256:" + strings.Repeat("1", 64)
 		}
 		e.images[reference] = pulled
+		repository, _, _ := strings.Cut(reference, "@")
+		if slash, colon := strings.LastIndex(repository, "/"), strings.LastIndex(repository, ":"); colon > slash {
+			repository = repository[:colon]
+		}
+		e.images[repository+"@"+ManifestDigest(pulled)] = pulled
 		e.mu.Unlock()
-		w.Write([]byte(`{"status":"Pulled"}` + "\n"))
+		w.Write([]byte(`{"status":"Pulled"}` + "\n" + `{"status":"Digest: ` + ManifestDigest(pulled) + `"}` + "\n"))
 	case container.MatchString(path):
 		parts := container.FindStringSubmatch(path)
 		e.containerRequest(w, r, parts[1], parts[2])

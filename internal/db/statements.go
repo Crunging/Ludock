@@ -19,6 +19,7 @@ const maxStatements = 256
 type statementConnector struct {
 	driver *sqlite.Driver
 	dsn    string
+	writes *writeGate
 }
 
 func (c statementConnector) Connect(context.Context) (driver.Conn, error) {
@@ -26,7 +27,7 @@ func (c statementConnector) Connect(context.Context) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &statementConn{Conn: conn, statements: map[string]*cachedStatement{}}, nil
+	return &statementConn{Conn: conn, statements: map[string]*cachedStatement{}, writes: c.writes}, nil
 }
 
 func (c statementConnector) Driver() driver.Driver { return c.driver }
@@ -38,6 +39,9 @@ func (c statementConnector) Driver() driver.Driver { return c.driver }
 type statementConn struct {
 	driver.Conn
 	statements map[string]*cachedStatement
+	writes     *writeGate
+	// inTx: a transaction admitted by the write gate is open.
+	inTx bool
 }
 
 var (
@@ -68,13 +72,21 @@ func (c *statementConn) PrepareContext(ctx context.Context, query string) (drive
 		}
 		// The same query nested inside its own open rows needs a second
 		// statement; resetting the first would end those rows.
-		return c.Conn.(driver.ConnPrepareContext).PrepareContext(ctx, query)
+		stmt, err := c.Conn.(driver.ConnPrepareContext).PrepareContext(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		return &cachedStatement{stmt: stmt, busy: true, conn: c, writes: writes(query), transient: true}, nil
 	}
 	stmt, err := c.Conn.(driver.ConnPrepareContext).PrepareContext(ctx, query)
-	if err != nil || (len(c.statements) >= maxStatements && !c.evict()) {
-		return stmt, err
+	if err != nil {
+		return nil, err
 	}
-	cached := &cachedStatement{stmt: stmt, busy: true}
+	cached := &cachedStatement{stmt: stmt, busy: true, conn: c, writes: writes(query)}
+	if len(c.statements) >= maxStatements && !c.evict() {
+		cached.transient = true
+		return cached, nil
+	}
 	c.statements[query] = cached
 	return cached, nil
 }
@@ -100,8 +112,35 @@ func (c *statementConn) Close() error {
 	return errors.Join(append(errs, c.Conn.Close())...)
 }
 
+// BeginTx admits every transaction through the write gate: each is
+// immediate, taking SQLite's write lock.
 func (c *statementConn) BeginTx(ctx context.Context, options driver.TxOptions) (driver.Tx, error) {
-	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, options)
+	leave, err := c.writes.enter(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := c.Conn.(driver.ConnBeginTx).BeginTx(ctx, options)
+	if err != nil {
+		leave()
+		return nil, err
+	}
+	c.inTx = true
+	return &gatedTx{Tx: tx, end: func() { c.inTx = false; leave() }}, nil
+}
+
+type gatedTx struct {
+	driver.Tx
+	end func()
+}
+
+func (t *gatedTx) Commit() error {
+	defer t.end()
+	return t.Tx.Commit()
+}
+
+func (t *gatedTx) Rollback() error {
+	defer t.end()
+	return t.Tx.Rollback()
 }
 
 func (c *statementConn) ResetSession(ctx context.Context) error {
@@ -117,6 +156,19 @@ func (c *statementConn) Ping(ctx context.Context) error { return c.Conn.(driver.
 type cachedStatement struct {
 	stmt driver.Stmt
 	busy bool
+	conn *statementConn
+	// writes: the statement may write, so outside a transaction it is
+	// admitted through the write gate.
+	writes bool
+	// transient statements aren't kept, so closing them finalizes them.
+	transient bool
+}
+
+func (s *cachedStatement) admit(ctx context.Context) (func(), error) {
+	if !s.writes || s.conn.inTx {
+		return func() {}, nil
+	}
+	return s.conn.writes.enter(ctx)
 }
 
 var (
@@ -126,6 +178,9 @@ var (
 
 func (s *cachedStatement) Close() error {
 	s.busy = false
+	if s.transient {
+		return s.stmt.Close()
+	}
 	return nil
 }
 
@@ -133,19 +188,55 @@ func (s *cachedStatement) NumInput() int { return s.stmt.NumInput() }
 
 // Exec and Query complete driver.Stmt; database/sql calls the Context forms.
 func (s *cachedStatement) Exec(args []driver.Value) (driver.Result, error) {
+	leave, err := s.admit(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	defer leave()
 	//lint:ignore SA1019 driver.Stmt requires Exec
 	return s.stmt.Exec(args)
 }
 
 func (s *cachedStatement) Query(args []driver.Value) (driver.Rows, error) {
+	leave, err := s.admit(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	defer leave()
 	//lint:ignore SA1019 driver.Stmt requires Query
 	return s.stmt.Query(args)
 }
 
 func (s *cachedStatement) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	leave, err := s.admit(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer leave()
 	return s.stmt.(driver.StmtExecContext).ExecContext(ctx, args)
 }
 
+// QueryContext admits a writing query, such as DELETE … RETURNING, while it
+// runs: SQLite commits it when its rows are first read.
 func (s *cachedStatement) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
-	return s.stmt.(driver.StmtQueryContext).QueryContext(ctx, args)
+	leave, err := s.admit(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.stmt.(driver.StmtQueryContext).QueryContext(ctx, args)
+	if err != nil {
+		leave()
+		return nil, err
+	}
+	return &gatedRows{Rows: rows, leave: leave}, nil
+}
+
+type gatedRows struct {
+	driver.Rows
+	leave func()
+}
+
+func (r *gatedRows) Close() error {
+	defer r.leave()
+	return r.Rows.Close()
 }

@@ -945,19 +945,18 @@
     });
   }
 
-  // data-await-restart: Ludock is replacing itself. The health check stops
-  // answering while it restarts; once it answers again, the page reloads
-  // from the new version. Polling stops if the element goes without a drop,
-  // as when the update ends before Ludock restarts.
+  // data-await-restart: Ludock is replacing itself. The page reloads, from
+  // whichever version then serves it, once the update has ended, which the
+  // polled notice shows by dropping the attribute, or once the health check
+  // answers again after it stopped answering during the restart.
   var awaiting = false;
   function awaitRestart() {
     if (awaiting || !document.querySelector("[data-await-restart]")) return;
     awaiting = true;
     var dropped = false;
-    var timer = setInterval(function () {
-      if (!dropped && !document.querySelector("[data-await-restart]")) {
-        clearInterval(timer);
-        awaiting = false;
+    setInterval(function () {
+      if (!document.querySelector("[data-await-restart]")) {
+        window.location.reload();
         return;
       }
       fetch("/api/v1/health", { cache: "no-store" }).then(function (response) {

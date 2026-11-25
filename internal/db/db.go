@@ -24,8 +24,9 @@ var Now = func() int64 { return time.Now().UnixMilli() }
 
 type DB struct {
 	*sql.DB
-	path string
-	key  []byte
+	path   string
+	key    []byte
+	writes *writeGate
 }
 
 func fileURI(path string, query url.Values) string {
@@ -105,7 +106,8 @@ func Open(path string) (result *DB, err error) {
 	} else {
 		dsn = fileURI(path, query)
 	}
-	pool := sql.OpenDB(statementConnector{driver: &sqlite.Driver{}, dsn: dsn})
+	gate := &writeGate{}
+	pool := sql.OpenDB(statementConnector{driver: &sqlite.Driver{}, dsn: dsn, writes: gate})
 	var key []byte
 	defer func() {
 		if err != nil {
@@ -154,7 +156,7 @@ func Open(path string) (result *DB, err error) {
 			return nil, err
 		}
 	}
-	return &DB{DB: pool, path: path, key: key}, nil
+	return &DB{DB: pool, path: path, key: key, writes: gate}, nil
 }
 
 // Close closes the pool and clears key material.

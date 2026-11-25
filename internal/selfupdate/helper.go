@@ -13,6 +13,7 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -21,17 +22,16 @@ import (
 
 var log = logging.New("self-update")
 
-// HealthWait is how long the new version has to report healthy.
+// HealthWait is how long the new version has to report healthy and ready.
 const HealthWait = 3 * time.Minute
 
 // Helper does one update's swap from inside its helper container. Docker
 // runs it again after it is killed or the host restarts, and it keeps no
 // state of its own: each pass reads what exists and finishes or undoes it.
-// Before it changes anything it records the original container's name and
-// restart policy in a never-started marker container, and once it decides
-// to put the original back, it records why in a second one. The original
-// stays the server until the replacement has reported healthy; only then is
-// it removed, and from there the swap only goes forward.
+// The marker containers (see Version) record what it decided: the
+// original's name and policy before anything changes, that the replacement
+// passed before the original is removed, and that the original goes back.
+// It touches only containers it created or the one it was given.
 type Helper struct {
 	Docker *docker.Client
 	// Container, Image, and Operation are the interface's arguments.
@@ -40,7 +40,13 @@ type Helper struct {
 	HealthWait                  time.Duration
 }
 
-var errBothGone = errors.New("both Ludock containers are gone")
+var (
+	errBothGone     = errors.New("both Ludock containers are gone")
+	errOriginalGone = errors.New("the previous container was removed outside Ludock while it was being put back")
+	errUnconfirmed  = errors.New("the previous container was removed outside Ludock before the new one was confirmed, and the new one doesn't work")
+	errNameTaken    = errors.New("another container has taken Ludock's name")
+	errNotReady     = errors.New("waiting for Ludock to report that it opened its data")
+)
 
 // Run settles the update, then removes the helper's own container. It
 // returns only when that removal was sent or ctx ends.
@@ -50,10 +56,13 @@ func (h *Helper) Run(ctx context.Context) {
 		if err == nil || ctx.Err() != nil {
 			return
 		}
-		if errors.Is(err, errBothGone) {
-			log.Error("Ludock's previous and new containers were both removed outside Ludock; start Ludock again with docker compose up -d")
+		switch {
+		case errors.Is(err, errBothGone), errors.Is(err, errOriginalGone), errors.Is(err, errUnconfirmed), errors.Is(err, errNameTaken):
+			log.Error("Ludock's update can't finish: " + err.Error() + ". Start Ludock again with docker compose up -d, then remove this helper")
 			delay = time.Minute
-		} else {
+		case errors.Is(err, errNotReady):
+			log.Info("Waiting for Ludock to report that it opened its data; its log says why if it doesn't")
+		default:
 			log.Warn("Could not finish Ludock's update yet; retrying", logging.Cause(err, docker.StatusCode(err))...)
 		}
 		select {
@@ -94,27 +103,51 @@ func (h *Helper) pass(ctx context.Context) error {
 	if old != nil && old.ID != h.Container {
 		return errors.New("another container answers to the previous container's ID")
 	}
+	decided, err := h.undo(ctx)
+	if err != nil {
+		return err
+	}
+	healthy, err := h.healthy(ctx)
+	if err != nil {
+		return err
+	}
 	replacement, err := h.replacement(ctx, recorded.name)
 	if err != nil {
 		return err
+	}
+	if decided != nil {
+		if old == nil {
+			return errOriginalGone
+		}
+		return h.putBack(ctx, old, replacement, recorded, decided)
 	}
 	if old == nil {
 		if replacement == nil {
 			return errBothGone
 		}
-		// The original goes only once its replacement, of the pulled image,
-		// reported healthy.
 		if replacement.Image != h.Image {
-			return errors.New("the previous container is gone and the one left doesn't run the pulled image")
+			return errUnconfirmed
 		}
-		return h.finish(ctx, replacement, recorded)
-	}
-	decided, err := h.undo(ctx)
-	if err != nil {
-		return err
-	}
-	if decided != nil {
-		return h.putBack(ctx, old, replacement, recorded, decided)
+		// Gone before the new one was confirmed: nothing is left to put
+		// back, so the new one is checked as it would have been.
+		if healthy != replacement.ID {
+			if replacement.State.Status == "created" {
+				if err := h.Docker.Start(ctx, replacement.ID); err != nil && docker.StatusCode(err) != 304 {
+					return err
+				}
+			}
+			reason, err := h.awaitHealthy(ctx, replacement.ID)
+			if err != nil {
+				return err
+			}
+			if reason != "" {
+				return errUnconfirmed
+			}
+			if err := h.markHealthy(ctx, replacement.ID); err != nil {
+				return err
+			}
+		}
+		return h.finish(ctx, replacement.ID, recorded)
 	}
 	if replacement == nil {
 		if old.Image == h.Image {
@@ -134,33 +167,40 @@ func (h *Helper) pass(ctx context.Context) error {
 	if replacement.Image != h.Image {
 		return h.decide(ctx, ReasonImage, !old.State.Running)
 	}
-	if replacement.State.Status == "created" {
-		if err := h.stopOriginal(ctx, old.ID); err != nil {
-			return err
-		}
-		if err := h.Docker.Start(ctx, replacement.ID); err != nil && docker.StatusCode(err) != 304 {
-			if docker.Unavailable(err) && docker.StatusCode(err) == 0 {
+	if healthy != replacement.ID {
+		switch {
+		case replacement.State.Status == "created":
+			if err := h.stopOriginal(ctx, old.ID); err != nil {
 				return err
 			}
-			return h.decide(ctx, ReasonStart, true)
+			if err := h.Docker.Start(ctx, replacement.ID); err != nil && docker.StatusCode(err) != 304 {
+				if docker.Unavailable(err) && docker.StatusCode(err) == 0 {
+					return err
+				}
+				return h.decide(ctx, ReasonStart, true)
+			}
+		case old.State.Running:
+			// Started again outside Ludock: only one may run on the data.
+			if err := h.stopOriginal(ctx, old.ID); err != nil {
+				return err
+			}
+		}
+		reason, err := h.awaitHealthy(ctx, replacement.ID)
+		if err != nil {
+			return err
+		}
+		if reason != "" {
+			return h.decide(ctx, reason, true)
+		}
+		// From here the swap only goes forward.
+		if err := h.markHealthy(ctx, replacement.ID); err != nil {
+			return err
 		}
 	}
-	reason, err := h.awaitHealthy(ctx, replacement.ID)
-	if err != nil {
-		return err
-	}
-	if reason != "" {
-		return h.decide(ctx, reason, true)
-	}
-	// The new version works: the original goes, and from here the swap only
-	// goes forward.
 	if err := h.removeUntilGone(ctx, old.ID, false); err != nil {
 		return err
 	}
-	if replacement, err = h.inspect(ctx, replacement.ID); err != nil || replacement == nil {
-		return cmpErr(err, errors.New("the new container disappeared"))
-	}
-	return h.finish(ctx, replacement, recorded)
+	return h.finish(ctx, replacement.ID, recorded)
 }
 
 func cmpErr(err, fallback error) error {
@@ -170,67 +210,117 @@ func cmpErr(err, fallback error) error {
 	return fallback
 }
 
+// ours reports whether spec is this update's container of kind.
+func (h *Helper) ours(spec *docker.ContainerSpec, kind string) bool {
+	found := labels(spec)
+	return found[launch.InternalLabel] == kind && found[operationLabel] == h.Operation
+}
+
+// marked inspects this update's marker called name, of kind: nil when there
+// is none, an error when another container has the name.
+func (h *Helper) marked(ctx context.Context, name, kind string) (*docker.ContainerSpec, error) {
+	spec, err := h.inspect(ctx, name)
+	if err != nil || spec == nil {
+		return nil, err
+	}
+	if !h.ours(spec, kind) {
+		return nil, errors.New("another container has the name of one of the update's markers")
+	}
+	return spec, nil
+}
+
 // marker reads the recorded name and restart policy, recording them from
 // the original first.
 func (h *Helper) marker(ctx context.Context) (marker, error) {
 	for {
-		spec, err := h.Docker.InspectSpec(ctx, stateName(h.Operation))
-		if err == nil {
-			var config struct{ Labels map[string]string }
-			if json.Unmarshal(encode(spec.Config), &config) != nil || config.Labels[operationLabel] != h.Operation || config.Labels[nameLabel] == "" {
+		spec, err := h.marked(ctx, stateName(h.Operation), stateKind)
+		if err != nil {
+			return marker{}, err
+		}
+		if spec != nil {
+			found := labels(spec)
+			if found[nameLabel] == "" {
 				return marker{}, errors.New("the update's marker is unreadable")
 			}
-			return marker{name: config.Labels[nameLabel], policy: json.RawMessage(config.Labels[policyLabel])}, nil
-		}
-		if !docker.IsNotFound(err) {
-			return marker{}, err
+			return marker{name: found[nameLabel], policy: json.RawMessage(found[policyLabel])}, nil
 		}
 		original, err := h.Docker.InspectSpec(ctx, h.Container)
 		if err != nil {
 			return marker{}, err
 		}
-		labels := map[string]string{nameLabel: strings.TrimPrefix(original.Name, "/"), policyLabel: string(original.HostConfig["RestartPolicy"])}
-		if err := h.createMarker(ctx, stateName(h.Operation), labels); err != nil {
+		if original.ID != h.Container {
+			return marker{}, errors.New("another container answers to the previous container's ID")
+		}
+		record := map[string]string{nameLabel: strings.TrimPrefix(original.Name, "/"), policyLabel: string(original.HostConfig["RestartPolicy"])}
+		if err := h.createMarker(ctx, stateName(h.Operation), stateKind, record); err != nil {
 			return marker{}, err
 		}
 	}
 }
 
 // createMarker creates a never-started container from the helper's image
-// that only holds labels.
-func (h *Helper) createMarker(ctx context.Context, name string, labels map[string]string) error {
-	all := launch.HelperLabels(markerKind)
+// that only holds labels. One already there is read by the next pass.
+func (h *Helper) createMarker(ctx context.Context, name, kind string, record map[string]string) error {
+	all := launch.HelperLabels(kind)
 	all[operationLabel] = h.Operation
-	maps.Copy(all, labels)
-	body := map[string]any{"Image": h.Image, "Entrypoint": []string{helper.Binary}, "Cmd": []string{"version"}, "Labels": all,
-		"Healthcheck": map[string]any{"Test": []string{"NONE"}}, "HostConfig": map[string]any{"NetworkMode": "none"}}
-	if _, err := h.Docker.Create(ctx, name, "", body); err != nil && docker.StatusCode(err) != 409 {
+	maps.Copy(all, record)
+	if _, err := h.Docker.Create(ctx, name, "", markerBody(h.Image, all)); err != nil && docker.StatusCode(err) != 409 {
 		return err
 	}
 	return nil
 }
 
+// markerBody creates a container that is never started.
+func markerBody(image string, labels map[string]string) map[string]any {
+	return map[string]any{"Image": image, "Entrypoint": []string{helper.Binary}, "Cmd": []string{"version"}, "Labels": labels,
+		"Healthcheck": map[string]any{"Test": []string{"NONE"}},
+		"HostConfig":  map[string]any{"NetworkMode": "none"}}
+}
+
 func (h *Helper) undo(ctx context.Context) (*undo, error) {
-	spec, err := h.Docker.InspectSpec(ctx, undoName(h.Operation))
-	if docker.IsNotFound(err) {
-		return nil, nil
-	}
-	if err != nil {
+	spec, err := h.marked(ctx, undoName(h.Operation), undoKind)
+	if err != nil || spec == nil {
 		return nil, err
 	}
-	var config struct{ Labels map[string]string }
-	json.Unmarshal(encode(spec.Config), &config)
-	if config.Labels[operationLabel] != h.Operation {
-		return nil, errors.New("the update's undo marker is unreadable")
+	found := labels(spec)
+	return &undo{reason: found[ReasonLabel], restore: found[restoreLabel] == "true"}, nil
+}
+
+// healthy is the replacement recorded as having passed, or "".
+func (h *Helper) healthy(ctx context.Context) (string, error) {
+	spec, err := h.marked(ctx, healthyName(h.Operation), healthyKind)
+	if err != nil || spec == nil {
+		return "", err
 	}
-	return &undo{reason: config.Labels[ReasonLabel], restore: config.Labels[restoreLabel] == "true"}, nil
+	return labels(spec)[containerLabel], nil
+}
+
+func (h *Helper) markHealthy(ctx context.Context, replacement string) error {
+	if err := h.createMarker(ctx, healthyName(h.Operation), healthyKind, map[string]string{containerLabel: replacement}); err != nil {
+		return err
+	}
+	if healthy, err := h.healthy(ctx); err != nil || healthy != replacement {
+		return cmpErr(err, errors.New("the update recorded another container as healthy"))
+	}
+	return nil
+}
+
+// ready reports whether the Ludock in container wrote, for its current run,
+// that it opened its data and settles this update.
+func (h *Helper) ready(ctx context.Context, container *docker.ContainerSpec) (bool, error) {
+	spec, err := h.marked(ctx, readyName(h.Operation, container.ID), readyKind)
+	if err != nil || spec == nil {
+		return false, err
+	}
+	found := labels(spec)
+	return found[containerLabel] == container.ID && found[startedLabel] == container.State.StartedAt, nil
 }
 
 // decide records that the original goes back, and why. restore: the
 // original was stopped, so the new version may have changed the data.
 func (h *Helper) decide(ctx context.Context, reason string, restore bool) error {
 	log.Warn("The new version of Ludock didn't come up; putting the previous one back", logging.F("reason", reason))
-	if err := h.createMarker(ctx, undoName(h.Operation), map[string]string{ReasonLabel: reason, restoreLabel: strconv.FormatBool(restore)}); err != nil {
+	if err := h.createMarker(ctx, undoName(h.Operation), undoKind, map[string]string{ReasonLabel: reason, restoreLabel: strconv.FormatBool(restore)}); err != nil {
 		return err
 	}
 	// The next pass puts it back.
@@ -253,11 +343,7 @@ func (h *Helper) replacement(ctx context.Context, name string) (*docker.Containe
 		if err != nil {
 			return nil, err
 		}
-		if spec == nil || spec.ID == h.Container {
-			continue
-		}
-		var config struct{ Labels map[string]string }
-		if json.Unmarshal(encode(spec.Config), &config) == nil && config.Labels[update.OperationLabel] == h.Operation {
+		if spec != nil && spec.ID != h.Container && labels(spec)[update.OperationLabel] == h.Operation {
 			return spec, nil
 		}
 	}
@@ -275,8 +361,9 @@ func (h *Helper) create(ctx context.Context, old *docker.ContainerSpec) (id, rea
 	if err != nil {
 		return "", "", err
 	}
-	// The replacement names the tag, which must still be the pulled image.
-	if current, err := pulledImage(ctx, h.Docker, plan); err != nil || current != h.Image {
+	// The replacement names the tag, which must still be the pulled image;
+	// the created container is checked again.
+	if current, err := resolveImage(ctx, h.Docker, plan.Image, plan); err != nil || current != h.Image {
 		return "", ReasonImage, nil
 	}
 	image, err := h.Docker.InspectImageConfig(ctx, h.Image)
@@ -323,9 +410,9 @@ func (h *Helper) stopOriginal(ctx context.Context, id string) error {
 	return nil
 }
 
-// awaitHealthy waits for the replacement's own health check, timed from its
-// start so a helper run again keeps the deadline. It returns why it failed,
-// or "".
+// awaitHealthy waits for the replacement's own health check and for it to
+// report it opened its data, timed from its start so a helper run again
+// keeps the deadline. It returns why it failed, or "".
 func (h *Helper) awaitHealthy(ctx context.Context, id string) (string, error) {
 	wait := h.HealthWait
 	if wait == 0 {
@@ -341,17 +428,20 @@ func (h *Helper) awaitHealthy(ctx context.Context, id string) (string, error) {
 			return ReasonStopped, nil
 		}
 		run = spec.State.StartedAt
+		// A helper resuming late judges by the deadline first.
+		if started, err := time.Parse(time.RFC3339Nano, run); err == nil && time.Since(started) >= wait {
+			return ReasonTimeout, nil
+		}
 		health := spec.State.Health
 		switch {
 		case health == nil || health.Status == "" || health.Status == "none":
 			return ReasonNoHealth, nil
-		case health.Status == "healthy":
-			return "", nil
 		case health.Status == "unhealthy":
 			return ReasonUnhealthy, nil
-		}
-		if started, err := time.Parse(time.RFC3339Nano, run); err == nil && time.Since(started) >= wait {
-			return ReasonTimeout, nil
+		case health.Status == "healthy":
+			if ready, err := h.ready(ctx, spec); err != nil || ready {
+				return "", err
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -361,22 +451,30 @@ func (h *Helper) awaitHealthy(ctx context.Context, id string) (string, error) {
 	}
 }
 
-// finish gives the replacement the original's name and restart policy.
-func (h *Helper) finish(ctx context.Context, replacement *docker.ContainerSpec, recorded marker) error {
-	if replacement.Name != "/"+recorded.name {
-		if err := h.Docker.Rename(ctx, replacement.ID, recorded.name); err != nil {
-			return err
-		}
-	}
-	if err := h.Docker.SetRestartPolicy(ctx, replacement.ID, policy(recorded)); err != nil {
-		return err
+// finish gives the replacement, which passed, the original's restart
+// policy and name; a container that took the name meanwhile is left alone.
+func (h *Helper) finish(ctx context.Context, id string, recorded marker) error {
+	replacement, err := h.inspect(ctx, id)
+	if err != nil || replacement == nil {
+		return cmpErr(err, errBothGone)
 	}
 	if !replacement.State.Running {
-		if err := h.Docker.Start(ctx, replacement.ID); err != nil && docker.StatusCode(err) != 304 {
+		if err := h.Docker.Start(ctx, id); err != nil && docker.StatusCode(err) != 304 {
 			return err
 		}
 	}
-	return h.leave(ctx, replacement.ID, recorded.name)
+	if err := h.Docker.SetRestartPolicy(ctx, id, policy(recorded)); err != nil {
+		return err
+	}
+	if replacement.Name != "/"+recorded.name {
+		if occupant, err := h.inspect(ctx, recorded.name); err != nil || (occupant != nil && occupant.ID != id) {
+			return cmpErr(err, errNameTaken)
+		}
+		if err := h.Docker.Rename(ctx, id, recorded.name); err != nil {
+			return err
+		}
+	}
+	return h.leave(ctx, id, recorded.name)
 }
 
 func policy(recorded marker) json.RawMessage {
@@ -395,11 +493,19 @@ func (h *Helper) putBack(ctx context.Context, old, replacement *docker.Container
 		}
 	}
 	if decided.restore {
-		if err := h.stopOriginal(ctx, old.ID); err != nil {
+		// Once restored, the original may be running on the restored data
+		// already; it isn't stopped again.
+		code, err := h.runData(ctx, old, h.Image, "self-update-data", "settled", h.Operation)
+		if err != nil {
 			return err
 		}
-		if err := h.restoreData(ctx, old); err != nil {
-			return err
+		if code != dataSettled {
+			if err := h.stopOriginal(ctx, old.ID); err != nil {
+				return err
+			}
+			if err := h.restoreData(ctx, old); err != nil {
+				return err
+			}
 		}
 	}
 	if err := h.Docker.SetRestartPolicy(ctx, old.ID, policy(recorded)); err != nil {
@@ -411,8 +517,9 @@ func (h *Helper) putBack(ctx context.Context, old, replacement *docker.Container
 	return h.leave(ctx, old.ID, recorded.name)
 }
 
-// leave removes the helper once exactly one Ludock runs under the name:
-// expected, with no container of this update beside it.
+// leave removes the helper once exactly one Ludock runs under the name, the
+// expected one, with no container of this update beside it, and it has
+// reported that it opened its data.
 func (h *Helper) leave(ctx context.Context, expected, name string) error {
 	current, err := h.inspect(ctx, name)
 	if err != nil {
@@ -429,11 +536,33 @@ func (h *Helper) leave(ctx context.Context, expected, name string) error {
 			return cmpErr(err, errors.New("the previous container is left"))
 		}
 	}
+	// The Ludock there says when it opened its data; a restart of it, or
+	// anything else changing, makes the pass look again.
+	for waited := 0; ; waited++ {
+		ready, err := h.ready(ctx, current)
+		if err != nil {
+			return err
+		}
+		if ready {
+			break
+		}
+		if waited%int(time.Minute/h.poll()+1) == 0 {
+			log.Info("Waiting for Ludock to report that it opened its data; its log says why if it doesn't")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(h.poll()):
+		}
+		if again, err := h.inspect(ctx, name); err != nil || again == nil || again.ID != expected || again.State.StartedAt != current.State.StartedAt {
+			return cmpErr(err, errNotReady)
+		}
+	}
 	log.Info("Ludock's update is settled; removing its helper")
 	// Removing itself ends this process, so the answer may never come; one
 	// that never reached Docker leaves it to retry.
-	self, err := h.inspect(ctx, HelperName(h.Operation))
-	if err != nil || self == nil || labels(self)[operationLabel] != h.Operation {
+	self, err := h.marked(ctx, HelperName(h.Operation), helperKind)
+	if err != nil || self == nil {
 		return cmpErr(err, errors.New("the helper can't find its own container"))
 	}
 	if err := h.Docker.Remove(ctx, self.ID, true, true); err != nil && !docker.IsNotFound(err) {
@@ -458,8 +587,9 @@ func (h *Helper) removeUntilGone(ctx context.Context, id string, volumes bool) e
 
 // restoreData puts the data save back: the new image moves the live data
 // aside, the old image's own restore-data restores the save, since only the
-// old binary can be trusted with its data, and a failed restore moves the
-// newer data back so nothing is lost.
+// old binary can be trusted with its data. A save that version can't
+// restore moves the newer data back, so nothing is lost; any other failure
+// keeps the save and tries again.
 func (h *Helper) restoreData(ctx context.Context, old *docker.ContainerSpec) error {
 	dataDir := dataDirOf(old)
 	code, err := h.runData(ctx, old, h.Image, "self-update-data", "aside", h.Operation)
@@ -471,20 +601,17 @@ func (h *Helper) restoreData(ctx context.Context, old *docker.ContainerSpec) err
 	}
 	outcome := "restored"
 	code, err = h.runData(ctx, old, old.Image, "restore-data", path.Join(dataDir, SaveName(h.Operation)))
-	if err != nil {
+	switch {
+	case err != nil:
 		return err
-	}
-	// restore-data refuses a save with 1; any other end, such as being
-	// killed, repeats the restore.
-	if code != 0 && code != 1 {
-		return errors.New("the data restore was cut short")
-	}
-	if code != 0 {
-		log.Error("The previous version couldn't restore its data save, so the newer data was kept; the previous version may refuse it")
+	case code == RestoreFinal:
+		log.Error("The previous version can't restore its data save, so the newer data was kept; the previous version may refuse it")
 		if code, err := h.runData(ctx, old, h.Image, "self-update-data", "back", h.Operation); err != nil || code != 0 {
 			return cmpErr(err, errors.New("could not move the newer data back"))
 		}
 		outcome = "kept"
+	case code != 0:
+		return errors.New("the data restore failed; trying again")
 	}
 	if code, err := h.runData(ctx, old, h.Image, "self-update-data", "mark", h.Operation, outcome); err != nil || code != 0 {
 		return cmpErr(err, errors.New("could not record the data restore"))
@@ -511,30 +638,44 @@ func dataDirOf(old *docker.ContainerSpec) string {
 	return path.Clean(dir)
 }
 
-// DataMount is the original's mount that holds dataDir, or nil.
-func DataMount(mounts []docker.MountPoint, dataDir string) *docker.MountPoint {
-	var found *docker.MountPoint
+// errDataMount: the data folder's mount can't be reproduced exactly, so a
+// data step could not reach the same files.
+var errDataMount = errors.New("ludock's data mount can't be reproduced")
+
+// DataMount is the mount settings that reproduce the container's mount
+// holding dataDir: the same volume and subpath, or the same folder.
+func DataMount(info *docker.ContainerInspect, dataDir string) (map[string]any, error) {
+	var found *identity.Mount
+	mounts := identity.DockerMounts(info)
 	for index, mount := range mounts {
 		if (mount.Type == "volume" || mount.Type == "bind") && helper.Within(dataDir, mount.Destination) &&
 			(found == nil || len(mount.Destination) > len(found.Destination)) {
 			found = &mounts[index]
 		}
 	}
-	return found
+	if found == nil || found.Unresolved {
+		return nil, errDataMount
+	}
+	settings := map[string]any{"Type": found.Type, "Source": found.Source, "Target": found.Destination, "ReadOnly": !found.Writable}
+	if found.Type == "volume" {
+		if found.Name == "" || strings.Contains(found.Name, "/") {
+			return nil, errDataMount
+		}
+		settings["Source"] = found.Name
+		settings["VolumeOptions"] = map[string]any{"NoCopy": true, "Subpath": found.Subpath}
+	}
+	return settings, nil
 }
 
 // runData runs a data step in a one-off container from image, by ID, as the
-// original's user with exactly its data mount, no network, and no socket,
-// and returns its exit code. A step left running by an earlier pass is
-// waited out first.
+// original's user and groups with exactly its data mount, no network, and
+// no socket, and returns its exit code. A step left running by an earlier
+// pass is waited out first.
 func (h *Helper) runData(ctx context.Context, old *docker.ContainerSpec, image string, cmd ...string) (int, error) {
 	name := dataName(h.Operation)
-	if leftover, err := h.inspect(ctx, name); err != nil {
+	if leftover, err := h.marked(ctx, name, dataKind); err != nil {
 		return 0, err
 	} else if leftover != nil {
-		if found := labels(leftover); found[launch.InternalLabel] != dataKind || found[operationLabel] != h.Operation {
-			return 0, errors.New("another container has the data step's name")
-		}
 		if _, err := h.Docker.Wait(ctx, leftover.ID); err != nil && !docker.IsNotFound(err) {
 			return 0, err
 		}
@@ -542,29 +683,28 @@ func (h *Helper) runData(ctx context.Context, old *docker.ContainerSpec, image s
 			return 0, err
 		}
 	}
-	dataDir := dataDirOf(old)
-	mount := DataMount(old.Mounts, dataDir)
-	if mount == nil {
-		return 0, errors.New("ludock's data folder isn't on a mount")
+	info, err := h.Docker.Inspect(ctx, old.ID)
+	if err != nil {
+		return 0, err
 	}
-	source := mount.Source
-	if mount.Type == "volume" {
-		source = mount.Name
+	dataDir := dataDirOf(old)
+	mount, err := DataMount(info, dataDir)
+	if err != nil {
+		return 0, err
 	}
 	var config struct {
 		Env  []string
 		User string
 	}
 	json.Unmarshal(encode(old.Config), &config)
-	var host struct{ CapAdd []string }
+	var host struct{ CapAdd, GroupAdd []string }
 	json.Unmarshal(encode(old.HostConfig), &host)
-	labels := launch.HelperLabels(dataKind)
-	labels[operationLabel] = h.Operation
+	stepLabels := launch.HelperLabels(dataKind)
+	stepLabels[operationLabel] = h.Operation
 	body := map[string]any{"Image": image, "Entrypoint": []string{helper.Binary}, "Cmd": cmd, "User": config.User,
-		"Env": append(config.Env, "LUDOCK_DATA_DIR="+dataDir), "Labels": labels, "Healthcheck": map[string]any{"Test": []string{"NONE"}},
+		"Env": append(config.Env, "LUDOCK_DATA_DIR="+dataDir), "Labels": stepLabels, "Healthcheck": map[string]any{"Test": []string{"NONE"}},
 		"HostConfig": map[string]any{"NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": []string{"ALL"}, "CapAdd": host.CapAdd,
-			"SecurityOpt": []string{"no-new-privileges:true"},
-			"Mounts":      []map[string]any{{"Type": mount.Type, "Source": source, "Target": mount.Destination, "ReadOnly": !mount.RW}}}}
+			"GroupAdd": host.GroupAdd, "SecurityOpt": []string{"no-new-privileges:true"}, "Mounts": []map[string]any{mount}}}
 	id, err := h.Docker.Create(ctx, name, "", body)
 	if err != nil {
 		return 0, err
@@ -581,17 +721,29 @@ func (h *Helper) runData(ctx context.Context, old *docker.ContainerSpec, image s
 	return code, err
 }
 
-// pulledImage is the image ID the plan's tag gives the container's own
-// platform, which the pull fetched.
-func pulledImage(ctx context.Context, client *docker.Client, plan *update.Plan) (string, error) {
+// resolveImage is the image ID reference gives the plan's platform, as the
+// pull fetched it. The containerd image store records the platform the
+// container runs; without that record a reference names one image, unless
+// the store holds several platforms of it, so the pulled platform is asked
+// for first.
+func resolveImage(ctx context.Context, client *docker.Client, reference string, plan *update.Plan) (string, error) {
 	if running := plan.Spec.ImageManifestDescriptor; running != nil && running.Platform != nil {
-		image, err := client.InspectImageVariant(ctx, plan.Image, *running.Platform)
+		image, err := client.InspectImageVariant(ctx, reference, *running.Platform)
 		if err != nil {
 			return "", err
 		}
 		return image.ID, nil
 	}
-	return client.InspectImage(ctx, plan.Image)
+	if parts := strings.SplitN(plan.Platform(), "/", 3); len(parts) >= 2 {
+		platform := docker.Platform{OS: parts[0], Architecture: parts[1]}
+		if len(parts) == 3 {
+			platform.Variant = parts[2]
+		}
+		if image, err := client.InspectImageVariant(ctx, reference, platform); err == nil {
+			return image.ID, nil
+		}
+	}
+	return client.InspectImage(ctx, reference)
 }
 
 func labels(spec *docker.ContainerSpec) map[string]string {

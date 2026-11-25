@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -188,12 +189,13 @@ func (c *Container) inspection() map[string]any {
 		}
 		host = map[string]any{"NetworkMode": "bridge", "Binds": binds}
 	}
+	// Answered after the lock is released, so it must not share the map a
+	// later update writes.
+	host = maps.Clone(host)
 	if c.Host.Memory > 0 {
-		host = maps.Clone(host)
 		host["Memory"] = c.Host.Memory
 	}
 	if c.Host.Privileged {
-		host = maps.Clone(host)
 		host["Privileged"] = true
 	}
 	result["HostConfig"] = host
@@ -385,7 +387,19 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 		writeJSON(w, 201, map[string]string{"Id": execID})
 	case action == "/archive" && r.Method == "GET":
 		content, ok := c.Files[r.URL.Query().Get("path")]
+		mounts := slices.Clone(c.Mounts)
 		e.mu.Unlock()
+		// Other files are read through the container's bind mounts.
+		for _, mount := range mounts {
+			if ok || mount.Type != "bind" {
+				continue
+			}
+			if relative, err := filepath.Rel(mount.Destination, r.URL.Query().Get("path")); err == nil && !strings.HasPrefix(relative, "..") {
+				if data, err := os.ReadFile(filepath.Join(mount.Source, relative)); err == nil {
+					content, ok = string(data), true
+				}
+			}
+		}
 		if !ok {
 			fail(w, 404)
 			return

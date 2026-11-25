@@ -1,0 +1,18 @@
+{
+  "name": "ludock-self-update-c4f4ca5435311deb",
+  "body": {
+    "Image": "{{image}}",
+    "Entrypoint": ["/usr/local/bin/ludock"],
+    "Cmd": ["self-update", "1", "{{container}}", "{{image}}", "0d3e7b1c-5a2f-4c6e-9b8d-1f2a3b4c5d6e"],
+    "Env": ["LUDOCK_DOCKER_SOCKET={{socket}}"],
+    "User": "",
+    "Labels": {"ludock.enable": "false", "ludock.internal": "self-update", "ludock.update.operation": "0d3e7b1c-5a2f-4c6e-9b8d-1f2a3b4c5d6e"},
+    "Healthcheck": {"Test": ["NONE"]},
+    "HostConfig": {
+      "NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": ["ALL"], "CapAdd": null,
+      "SecurityOpt": ["no-new-privileges:true"], "GroupAdd": null,
+      "RestartPolicy": {"Name": "unless-stopped"},
+      "Mounts": [{"Type": "bind", "Source": "{{socket-source}}", "Target": "{{socket}}", "ReadOnly": true}]
+    }
+  }
+}

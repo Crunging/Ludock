@@ -497,10 +497,19 @@ If the new version doesn't start, stops, or doesn't report healthy within 3
 minutes, the helper removes it, puts Ludock's data back as it was saved (the
 new version may already have changed it), and starts the previous container
 again. **Settings** and **Needs attention** then say why, until an
-administrator dismisses it in **Settings**. While an update runs no other work
-can start, and Ludock doesn't begin one while other work is queued or
-running. If the helper is stopped or the host restarts partway, Docker runs
-the helper again and it finishes or undoes the update.
+administrator dismisses it in **Settings**. If the previous version can't
+restore its save, the newer data stays in place and the save stays beside
+it, and the helper keeps running until a Ludock that can open the data comes
+up; its log says so.
+
+From the moment Ludock saves its data until the update ends, it accepts no
+change: forms, sign-ins and sign-outs, and its own background work wait,
+and are refused with "Ludock is updating itself", since putting the old
+version back would undo them. Ludock doesn't begin an update while other
+work is queued, running, or still being recovered after a restart. If the
+helper is stopped or the host restarts partway, Docker runs the helper again
+and it finishes or undoes the update. A tag moved back to an older release
+is refused, since that release can't use the newer data.
 
 The new container keeps everything the old one had: environment, mounts,
 ports, networks and addresses, restart policy, and labels, including
@@ -510,10 +519,12 @@ and removes older ones; it restores with `ludock restore-data` like any
 [save](#ludocks-own-data).
 
 Settings shows commands instead of the button when Ludock can't update
-itself: outside a container it can find, started with `--rm`, with its health
-check turned off, reaching Docker other than through a mounted socket, with
-its data outside a volume or mounted folder, or sharing a network or
-processes with another container. In the folder with its `compose.yaml`:
+itself: outside a container it can prove is its own, started with `--rm`,
+with its health check turned off, reaching Docker other than through a
+mounted socket, with its data outside a volume or mounted folder a helper can
+mount the same way, with a host port Docker picks at each start, or sharing a
+network or processes with another container. In the folder with its
+`compose.yaml`:
 
 ```bash
 docker compose pull ludock
@@ -801,7 +812,12 @@ Ludock runs short-lived helper containers from its own image:
 - **The update helper** runs from the image Ludock just pulled, with only
   Docker's socket mounted as Ludock's own is, and no network. Putting the
   previous version back runs its data steps in short containers with only
-  Ludock's data mount.
+  Ludock's data mount, mounted exactly as Ludock's, as its user and groups.
+  The helper keeps its progress in never-started containers named after it
+  (`ludock-self-update-<id>-state`, `-healthy`, `-undo`, `-ready-…`), which
+  the Ludock that comes up removes. The arguments, names, labels, data files,
+  and `restore-data` exit codes between Ludock versions are fixed; they are
+  listed where they are defined, in `internal/selfupdate/interface.go`.
 - **Console, player, and status-check helpers** share the game container's
   network and connect on `127.0.0.1`, so console and query ports needn't be
   published. A console password reaches its helper over standard input.

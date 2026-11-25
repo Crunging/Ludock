@@ -95,6 +95,27 @@ func (t *Table) Fence() (lift func()) {
 func (t *Table) Hold(reason error) (lift func()) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.holdLocked(reason)
+}
+
+// Maintain is Hold taken only when nothing is in the way: it fails while
+// startup recovery runs or foreground work holds keys, in the same step that
+// takes the hold.
+func (t *Table) Maintain(reason error) (lift func(), err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.fences > 0 {
+		return nil, ErrRecovering
+	}
+	for _, owner := range t.active {
+		if owner.background == nil {
+			return nil, ErrConflict
+		}
+	}
+	return t.holdLocked(reason), nil
+}
+
+func (t *Table) holdLocked(reason error) (lift func()) {
 	t.holds = append(t.holds, reason)
 	var once sync.Once
 	return func() {

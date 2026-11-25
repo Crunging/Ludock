@@ -88,7 +88,13 @@ type App struct {
 	// deliverAgain and pollAgain ask the running pass for another.
 	deliverAgain atomic.Bool
 	pollAgain    atomic.Bool
-	stop         chan struct{}
+	// passes counts the background passes running; while paused, none
+	// starts. idle closes when the last one ends.
+	passes  sync.Mutex
+	running int
+	paused  int
+	idle    chan struct{}
+	stop    chan struct{}
 }
 
 func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
@@ -145,12 +151,9 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 		stop:      make(chan struct{})}
 	a.SelfUpdate = &selfupdate.Service{DB: database, Docker: client, Own: own, Updates: updates, Checks: checks, Locks: table,
 		Notify: notifications.Notify, DataDir: cfg.DataDir, Socket: cfg.DockerSocket, SelfFound: cfg.SelfFound, MountID: cfg.MountID,
-		Snapshot: func(ctx context.Context) (*db.Snapshot, error) {
-			// Saves share a work folder that each new one clears.
-			a.saving.Lock()
-			defer a.saving.Unlock()
-			return database.Snapshot(ctx)
-		}}
+		// Saves share a work folder that each new one clears; the update
+		// saves only once Quiesce holds back the others.
+		Snapshot: database.Snapshot, Quiesce: a.quiesce}
 	a.Events = &events.Hub{Docker: client, Identity: store, Authz: authorization, Refresh: func(ctx context.Context) error {
 		_, err := serverService.RefreshNow(ctx)
 		return err
@@ -188,6 +191,61 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	return a, nil
 }
 
+// quiesce stops new background passes and waits for those running, so
+// nothing delivers or schedules work and then fails to record it while
+// Ludock updates itself. resume lets them run again.
+func (a *App) quiesce(ctx context.Context) (resume func(), err error) {
+	a.passes.Lock()
+	a.paused++
+	resume = sync.OnceFunc(func() {
+		a.passes.Lock()
+		a.paused--
+		a.passes.Unlock()
+	})
+	for a.running > 0 {
+		if a.idle == nil {
+			a.idle = make(chan struct{})
+		}
+		idle := a.idle
+		a.passes.Unlock()
+		select {
+		case <-idle:
+		case <-ctx.Done():
+			resume()
+			return nil, ctx.Err()
+		}
+		a.passes.Lock()
+	}
+	a.passes.Unlock()
+	return resume, nil
+}
+
+// startPass admits a background pass unless an update holds them back.
+func (a *App) startPass() bool {
+	a.passes.Lock()
+	defer a.passes.Unlock()
+	if a.paused > 0 {
+		return false
+	}
+	a.running++
+	return true
+}
+
+func (a *App) endPass() {
+	a.passes.Lock()
+	defer a.passes.Unlock()
+	if a.running--; a.running == 0 && a.idle != nil {
+		close(a.idle)
+		a.idle = nil
+	}
+}
+
+func (a *App) passesPaused() bool {
+	a.passes.Lock()
+	defer a.passes.Unlock()
+	return a.paused > 0
+}
+
 // Start removes leftover file and console helpers and reconciles interrupted
 // operations, then runs the tick every 15 s. Recovery is retried with backoff until it
 // succeeds, since no work may take locks while an earlier writer remains.
@@ -203,6 +261,9 @@ func (a *App) Start(ctx context.Context) {
 	// Requests wait for recovery to take its operations' locks; Start runs
 	// before the server listens, so none can take them first.
 	lift := a.Locks.Fence()
+	// Likewise no write is admitted before Ludock knows whether it is in the
+	// middle of updating itself.
+	a.SelfUpdate.Prepare(ctx)
 	recoverStartup := func() error {
 		// A file command interrupted by the restart may still be writing,
 		// and a console helper may still be sending a command.
@@ -334,11 +395,15 @@ func (a *App) pollPlayers(ctx context.Context) {
 	if !a.polling.TryLock() {
 		return
 	}
+	if !a.startPass() {
+		a.polling.Unlock()
+		return
+	}
 	a.background.Add(1)
 	go func() {
 		defer a.background.Done()
 		for {
-			for a.pollAgain.Swap(false) {
+			for !a.passesPaused() && a.pollAgain.Swap(false) {
 				var watched func(string) bool
 				if a.Events.Watched() {
 					watched = a.Events.Follows
@@ -346,8 +411,13 @@ func (a *App) pollPlayers(ctx context.Context) {
 				a.Players.Poll(ctx, watched)
 			}
 			a.polling.Unlock()
+			a.endPass()
 			// A call between the last pass and the unlock found the lock held.
 			if !a.pollAgain.Load() || !a.polling.TryLock() {
+				return
+			}
+			if !a.startPass() {
+				a.polling.Unlock()
 				return
 			}
 		}
@@ -362,19 +432,28 @@ func (a *App) deliver(ctx context.Context) {
 	if !a.delivering.TryLock() {
 		return
 	}
+	if !a.startPass() {
+		a.delivering.Unlock()
+		return
+	}
 	a.background.Add(1)
 	go func() {
 		defer a.background.Done()
 		for {
-			for a.deliverAgain.Swap(false) {
+			for !a.passesPaused() && a.deliverAgain.Swap(false) {
 				if err := a.Notify.Deliver(ctx); err != nil {
 					log.Warn("Notification delivery is temporarily unavailable")
 				}
 				a.noteAlertHealth(ctx)
 			}
 			a.delivering.Unlock()
+			a.endPass()
 			// A call between the last pass and the unlock found the lock held.
 			if !a.deliverAgain.Load() || !a.delivering.TryLock() {
+				return
+			}
+			if !a.startPass() {
+				a.delivering.Unlock()
 				return
 			}
 		}
@@ -424,9 +503,14 @@ func (a *App) runAlone(mu *sync.Mutex, work func()) {
 	if !mu.TryLock() {
 		return
 	}
+	if !a.startPass() {
+		mu.Unlock()
+		return
+	}
 	a.background.Add(1)
 	go func() {
 		defer a.background.Done()
+		defer a.endPass()
 		defer mu.Unlock()
 		work()
 	}()

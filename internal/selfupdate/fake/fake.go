@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/selfupdate"
+	"github.com/Crunging/Ludock/internal/update"
 )
 
 // Options adjust the fake helpers for tests.
@@ -29,13 +30,16 @@ type Options struct {
 	// Unhealthy is an image ID whose containers report unhealthy once
 	// started, as a broken release would.
 	Unhealthy string
+	// Ready has a replacement Ludock write its readiness marker once it
+	// starts, for a Ludock that isn't in the container it stands for.
+	Ready bool
 }
 
 // Dev are the options for a development daemon, whose Ludock isn't in the
 // container it stands for: that Ludock keeps its data open while its
 // container is "stopped", so putting a version back leaves the data alone.
 func Dev() Options {
-	return Options{Unhealthy: "sha256:" + strings.Repeat("b", 64), Step: func([]string) (int, bool) { return 0, true }}
+	return Options{Unhealthy: "sha256:" + strings.Repeat("b", 64), Ready: true, Step: func([]string) (int, bool) { return 0, true }}
 }
 
 // Run installs the helpers on engine.
@@ -61,10 +65,15 @@ func Run(engine *fakedocker.Engine, options Options) {
 			run.Run(ctx)
 		}()
 	}
-	if options.Unhealthy != "" {
-		engine.Starts[""] = func(c *fakedocker.Container) {
-			if c.Image == options.Unhealthy {
-				engine.Update(c.ID, func(c *fakedocker.Container) { c.State.Health = &docker.HealthState{Status: "unhealthy"} })
+	client := docker.New(engine.Socket)
+	engine.Starts[""] = func(c *fakedocker.Container) {
+		if options.Unhealthy != "" && c.Image == options.Unhealthy {
+			engine.Update(c.ID, func(c *fakedocker.Container) { c.State.Health = &docker.HealthState{Status: "unhealthy"} })
+		}
+		if operation := c.Config.Labels[update.OperationLabel]; options.Ready && operation != "" {
+			if info := engine.Container(c.ID); info != nil {
+				name, body := selfupdate.ReadyMarker(operation, info.ID, info.State.StartedAt, info.Image)
+				go client.Create(context.Background(), name, "", body)
 			}
 		}
 	}
@@ -94,7 +103,7 @@ func data(c *fakedocker.Container) int {
 		return selfupdate.DataMain(cmd[1:], dataDir, io.Discard)
 	case len(cmd) == 2 && cmd[0] == "restore-data":
 		if _, err := db.RestoreSnapshot(host(c, cmd[1]), filepath.Join(dataDir, "ludock.db")); err != nil {
-			return 1
+			return db.RestoreExitCode(err)
 		}
 		return 0
 	}

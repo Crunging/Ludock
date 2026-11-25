@@ -7,7 +7,6 @@ import (
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/auth"
-	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -77,10 +76,6 @@ func (s *Server) useLink(w http.ResponseWriter, r *http.Request) {
 	token := auth.LinkToken(r)
 	if err := readForm(w, r); err != nil {
 		s.renderLink(w, r, views.LinkForm{}, err)
-		return
-	}
-	if s.updating() {
-		s.renderLink(w, r, views.LinkForm{}, selfupdate.ErrUpdating)
 		return
 	}
 	if token != "" && subtle.ConstantTimeCompare([]byte(r.PostFormValue("link")), []byte(linkFormKey(token))) != 1 {

@@ -21,7 +21,6 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/logging"
-	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -183,21 +182,10 @@ func (s *Server) authed(handler func(http.ResponseWriter, *http.Request, *Reques
 				s.loginRedirect(w, r)
 				return
 			}
-			if s.updating() {
-				s.fail(w, r, nil, selfupdate.ErrUpdating)
-				return
-			}
 		}
 		request := &Request{Principal: principal, Client: s.client(r), CSRF: CSRFToken(principal.Token)}
 		handler(w, r.WithContext(context.WithValue(r.Context(), contextKey{}, request)), request)
 	}
-}
-
-// updating reports that Ludock is updating itself, when changes are
-// refused: putting a failed update back restores the data saved before it,
-// which would undo them, such as a sign-out or a password set.
-func (s *Server) updating() bool {
-	return s.App != nil && s.App.SelfUpdate != nil && s.App.SelfUpdate.Updating()
 }
 
 // admin additionally requires an administrator session.

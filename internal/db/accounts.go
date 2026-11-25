@@ -349,13 +349,18 @@ func (d *DB) FindSessionUser(ctx context.Context, tokenHash string, now int64) (
 	if err != nil {
 		return nil, err
 	}
+	// While Ludock updates itself these writes wait: the session is rejected
+	// or used all the same.
 	if disabled == 1 || expiresAt <= now {
-		return nil, d.DeleteSession(ctx, tokenHash)
+		if err := d.DeleteSession(ctx, tokenHash); err != nil && !errors.Is(err, ErrUpdating) {
+			return nil, err
+		}
+		return nil, nil
 	}
 	// Every authenticated request lands here, so avoid a write per request. The
 	// value only drives the session list and coarse activity display.
 	if now-lastSeenAt >= lastSeenWriteInterval {
-		if _, err := d.ExecContext(ctx, "UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?", now, tokenHash); err != nil {
+		if _, err := d.ExecContext(ctx, "UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?", now, tokenHash); err != nil && !errors.Is(err, ErrUpdating) {
 			return nil, err
 		}
 	}

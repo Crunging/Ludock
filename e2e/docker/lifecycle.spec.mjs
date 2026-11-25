@@ -129,7 +129,7 @@ test("Ludock updates itself, and puts itself back when the new version fails", a
     await publish("next");
     const notice = await updateLudock(page);
     // The page reloads once the new version answers.
-    await expect(notice).toContainText("Ludock was updated from version dev to e2e-next.", { timeout: 180_000 });
+    await expect(notice).toContainText("Ludock was updated to version e2e-next.", { timeout: 180_000 });
     await page.goto("/settings/system");
     await expect(page.locator("dd", { hasText: "e2e-next" })).toBeVisible();
     const [replaced, ...others] = ludockContainers();
@@ -150,7 +150,7 @@ test("Ludock updates itself, and puts itself back when the new version fails", a
     expect(plan.stdout + plan.stderr).not.toMatch(/Recreat/);
     await page.goto("/activity?show=everything&action=Updated Ludock");
     const entry = page.locator(".audit-entry").first();
-    await expect(entry).toContainText("Updated Ludock from dev to e2e-next");
+    await expect(entry).toContainText("Updated Ludock from version dev to version e2e-next");
     await expect(entry).toContainText("Succeeded");
     await expect(entry).toContainText(admin.username);
 
@@ -159,7 +159,7 @@ test("Ludock updates itself, and puts itself back when the new version fails", a
     docker("push", `${registry}:unhealthy`);
     await publish("unhealthy");
     const failing = await updateLudock(page);
-    await expect(failing).toContainText("Ludock couldn’t update itself: the new version reported itself unhealthy. It is still on version e2e-next.",
+    await expect(failing).toContainText("Ludock’s update didn’t finish: the new version reported itself unhealthy. Ludock put version e2e-next back, with its data as it was.",
       { timeout: 180_000 });
     const [kept, ...extra] = ludockContainers();
     expect(extra).toEqual([]);

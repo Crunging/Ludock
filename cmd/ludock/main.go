@@ -296,7 +296,7 @@ func restoreData(args []string) int {
 	savedAt, err := db.RestoreSnapshot(args[0], cfg.DBPath())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, startupError(err, "Could not restore Ludock's data. Check that the file can be read and the data folder is writable."))
-		return 1
+		return db.RestoreExitCode(err)
 	}
 	fmt.Printf("Restored Ludock's data as it was saved at %s. Start Ludock to use it.\n", savedAt.Local().Format("2006-01-02 15:04 MST"))
 	return 0

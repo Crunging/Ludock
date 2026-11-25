@@ -214,6 +214,20 @@ var (
 	errRestoreBeta  = apperr.New("RESTORE_BETA", 400, "This copy was saved by a Ludock beta, and Ludock 1.0 starts fresh, so it can’t restore it. Start Ludock with the empty data folder and set up the first administrator. Nothing was changed: the copy, your game servers, and your backup archives are as they were.")
 )
 
+// RestoreExitCode is `ludock restore-data`'s exit code for a failed
+// restore, which an update's helper of a later version reads (selfupdate's
+// RestoreFinal and RestoreExists): 3 for a copy this version can't restore,
+// 4 for a data folder that already holds data, 1 for any other error.
+func RestoreExitCode(err error) int {
+	switch {
+	case errors.Is(err, errRestoreArchive), errors.Is(err, errRestoreNewer), errors.Is(err, errRestoreBeta):
+		return 3
+	case errors.Is(err, errRestoreInUse):
+		return 4
+	}
+	return 1
+}
+
 // RestoreSnapshot restores a saved copy into the data folder of dbPath, which
 // must not hold a database or key yet. The archive is checked first: only
 // the database and its key, a database this version can open, and a key
