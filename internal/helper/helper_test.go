@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,9 +21,14 @@ import (
 
 func runFile(t *testing.T, request FileRequest, stdin []byte) (string, int) {
 	t.Helper()
+	return runFileFrom(t, request, bytes.NewReader(stdin))
+}
+
+func runFileFrom(t *testing.T, request FileRequest, stdin io.Reader) (string, int) {
+	t.Helper()
 	argument, _ := json.Marshal(request)
 	var stdout, stderr bytes.Buffer
-	code := RunFile(string(argument), bytes.NewReader(stdin), &stdout, &stderr)
+	code := RunFile(string(argument), stdin, &stdout, &stderr)
 	if code != 0 && stderr.String() != FileFailure {
 		t.Fatalf("stderr %q", stderr.String())
 	}
@@ -30,6 +36,31 @@ func runFile(t *testing.T, request FileRequest, stdin []byte) (string, int) {
 		t.Fatal("failure leaked a path")
 	}
 	return stdout.String(), code
+}
+
+// trailerHook is an upload's stdin that runs before once the helper has the
+// body and reads on for the trailer.
+type trailerHook struct {
+	body, trailer []byte
+	before        func() error
+	err           error
+}
+
+func (h *trailerHook) Read(p []byte) (int, error) {
+	if len(h.body) > 0 {
+		n := copy(p, h.body)
+		h.body = h.body[n:]
+		return n, nil
+	}
+	if h.before != nil {
+		h.err, h.before = h.before(), nil
+	}
+	if len(h.trailer) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, h.trailer)
+	h.trailer = h.trailer[n:]
+	return n, nil
 }
 
 func dataRoot(t *testing.T) (string, string) {
@@ -132,6 +163,42 @@ func TestMutationsAndUploads(t *testing.T) {
 		if strings.HasPrefix(entry.Name(), ".ludock-upload-") {
 			t.Fatal("staging file left behind")
 		}
+	}
+	// What happens once the body is in, when the helper asks for the trailer:
+	// the staged file is still root's alone, and a folder moved out of the
+	// root or a staging name swapped meanwhile publishes nothing.
+	os.Mkdir(filepath.Join(root, "moving"), 0o755)
+	os.WriteFile(filepath.Join(root, "other"), []byte("other"), 0o644)
+	staging := ".ludock-upload-" + id + ".tmp"
+	for _, test := range []struct {
+		path   string
+		before func() error
+		ok     bool
+	}{
+		{"staged.txt", func() error {
+			if info, err := os.Lstat(filepath.Join(root, staging)); err != nil || info.Mode().Perm() != 0o600 {
+				return fmt.Errorf("staged file readable: %v %v", info.Mode(), err)
+			}
+			return nil
+		}, true},
+		{"moving/moved.txt", func() error { return os.Rename(filepath.Join(root, "moving"), filepath.Join(outside, "moving")) }, false},
+		{"swapped.txt", func() error { return os.Rename(filepath.Join(root, "other"), filepath.Join(root, staging)) }, false},
+	} {
+		request := FileRequest{Operation: "upload", Root: root, Path: test.path, Size: &size, UploadID: id}
+		stdin := &trailerHook{body: []byte("12345"), trailer: []byte(id), before: test.before}
+		if _, code := runFileFrom(t, request, stdin); (code == 0) != test.ok || stdin.err != nil {
+			t.Fatal(test.path, code, stdin.err)
+		}
+		published := filepath.Join(root, test.path)
+		if test.path == "moving/moved.txt" {
+			published = filepath.Join(outside, test.path)
+		}
+		if data, err := os.ReadFile(published); test.ok != (err == nil) || (test.ok && string(data) != "12345") {
+			t.Fatal(test.path, "published", string(data), err)
+		}
+	}
+	if info, _ := os.Stat(filepath.Join(root, "staged.txt")); info.Mode().Perm() != 0o666&^fs.FileMode(currentUmask()) {
+		t.Fatal("published with mode", info.Mode())
 	}
 	created := FileRequest{Operation: "upload", Root: root, Path: "new.txt", Size: &size, UploadID: id}
 	if _, code := runFile(t, created, []byte("12345"+id)); code != 0 {

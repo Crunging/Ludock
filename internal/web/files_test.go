@@ -175,13 +175,16 @@ func manifest(names ...string) string {
 
 // A batch of files goes through one helper, which writes for a member only
 // while they may still write: a grant removed while a batch is sent stops its
-// next file, and the helper is removed with it.
+// next file, and the helper is removed with it; without the grant, the list
+// of files isn't even read. An upload first removes staging files cut-off
+// uploads left in its folder, and the audit records the folder it used.
 func TestUploadFollowsGrant(t *testing.T) {
 	p, member, root, data := uploadPages(t)
 	server := httptest.NewServer(p.handler)
 	defer server.Close()
+	folder := ".//."
 	send := func(body io.Reader, length int64) (int, string) {
-		request, _ := http.NewRequest("PUT", server.URL+"/files/"+p.server+"/upload?root="+url.QueryEscape(root), body)
+		request, _ := http.NewRequest("PUT", server.URL+"/files/"+p.server+"/upload?root="+url.QueryEscape(root)+"&path="+url.QueryEscape(folder), body)
 		request.ContentLength = length
 		request.AddCookie(&http.Cookie{Name: auth.SessionCookie, Value: member.Token})
 		request.Header.Set("Content-Type", "application/octet-stream")
@@ -207,6 +210,8 @@ func TestUploadFollowsGrant(t *testing.T) {
 		}
 		return started, running
 	}
+	stale := filepath.Join(data, ".ludock-upload-6f9619ff-8b86-4011-b42d-00c04fc964ff.tmp")
+	os.WriteFile(stale, []byte("cut off"), 0o600)
 	var batch []string
 	for index := range 20 {
 		batch = append(batch, fmt.Sprintf("mod-%d.jar", index))
@@ -218,6 +223,14 @@ func TestUploadFollowsGrant(t *testing.T) {
 	// The helper and the validator that proved its mount.
 	if started, _ := helpers(); started != 2 {
 		t.Fatal(started, "containers started for 20 files")
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatal("left a cut-off upload's staging file", err)
+	}
+	var details string
+	p.app.DB.QueryRow(`SELECT details_json FROM audit_log WHERE action = 'server.file.uploaded' LIMIT 1`).Scan(&details)
+	if !strings.Contains(details, `"path":""`) {
+		t.Fatal("audited the folder as sent", details)
 	}
 
 	head := manifest("d.txt", "e.txt")
@@ -244,9 +257,11 @@ func TestUploadFollowsGrant(t *testing.T) {
 	if _, running := helpers(); running != 0 {
 		t.Fatal(running, "helpers left")
 	}
-	body = manifest("f.txt") + "hello"
-	if code, _ := send(strings.NewReader(body), int64(len(body))); code != http.StatusForbidden {
-		t.Fatal("uploaded without the grant", code)
+	// The list never arrives, and isn't waited for.
+	never, _ := io.Pipe()
+	started := time.Now()
+	if code, _ := send(never, 1000); code != http.StatusForbidden || time.Since(started) > 5*time.Second {
+		t.Fatal("waited for the list of someone who can't write", code, time.Since(started))
 	}
 	if entries, _ := os.ReadDir(data); len(entries) != 21 {
 		t.Fatal(len(entries), "files")

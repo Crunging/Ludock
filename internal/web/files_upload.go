@@ -2,6 +2,7 @@ package web
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/files"
+	"github.com/Crunging/Ludock/internal/helper"
 )
 
 // uploadStall is how long an upload may go without a byte arriving before
@@ -21,14 +23,13 @@ import (
 // large file over a slow link still arrives.
 var uploadStall = 30 * time.Second
 
-// manifestLimit bounds an upload's list of files.
-const manifestLimit = 512 * 1024
+// manifestLimit bounds an upload's list of files: 100 names of up to 255
+// four-byte characters fit.
+const manifestLimit = 128 * 1024
 
-type uploadManifest struct {
-	Files []struct {
-		Name string `json:"name"`
-		Size int64  `json:"size"`
-	} `json:"files"`
+type manifestFile struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
 }
 
 type uploadResult struct {
@@ -53,8 +54,21 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 	}
 	invalid := apperr.New("INVALID_REQUEST", 400, "Invalid upload request")
 	query := r.URL.Query()
-	root, folder := query.Get("root"), query.Get("path")
-	body := &progressBody{body: r.Body, controller: http.NewResponseController(w)}
+	root := query.Get("root")
+	folder, err := files.NormalizeRelativePath(query.Get("path"))
+	if err == nil && root == "" {
+		err = invalid
+	}
+	// The list is read only for someone who may write here; startAction
+	// rechecks it, with the locks, once the list is in.
+	if err == nil {
+		var allowed bool
+		if allowed, err = s.App.Authz.Has(r.Context(), request.User(), r.PathValue("id"), authz.FilesWrite); err == nil && !allowed {
+			err = apperr.New("FORBIDDEN", 403, "You can’t do that on this server")
+		}
+	}
+	// The list must arrive within one uploadStall in all.
+	body := &progressBody{body: r.Body, controller: http.NewResponseController(w), until: time.Now().Add(uploadStall)}
 	defer body.close()
 	// Writing a response reads what is left of a short body first, which
 	// waits on a stalled client unless reading has ended.
@@ -62,15 +76,27 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 		body.close()
 		s.fail(w, r, request, err)
 	}
+	if err != nil {
+		fail(err)
+		return
+	}
 	reader := bufio.NewReader(body)
 	line, err := readManifest(reader)
-	var manifest uploadManifest
-	if err != nil || root == "" || json.Unmarshal(line, &manifest) != nil || len(manifest.Files) == 0 {
+	var manifest []manifestFile
+	if err == nil {
+		manifest, err = decodeManifest(line)
+	}
+	if errors.Is(err, files.ErrBatchTooLarge) {
+		fail(err)
+		return
+	}
+	if err != nil || len(manifest) == 0 {
 		fail(invalid)
 		return
 	}
-	sizes := make([]int64, len(manifest.Files))
-	for index, file := range manifest.Files {
+	body.unbound()
+	sizes := make([]int64, len(manifest))
+	for index, file := range manifest {
 		if file.Size < 0 || file.Size > 1<<53-1 {
 			fail(invalid)
 			return
@@ -84,9 +110,9 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 		return
 	}
 	limit, _ := s.App.Advanced.UploadLimit(r.Context())
-	entries := make([]files.UploadEntry, len(manifest.Files))
+	entries := make([]files.UploadEntry, len(manifest))
 	total := int64(len(line))
-	for index, file := range manifest.Files {
+	for index, file := range manifest {
 		entries[index] = files.UploadEntry{Name: file.Name, Size: file.Size}
 		if limit > 0 && file.Size > limit {
 			entries[index].Err = apperr.New("UPLOAD_TOO_LARGE", 413, "File exceeds the upload size limit of "+datasize.Format(limit))
@@ -131,6 +157,37 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 	writeJSON(w, http.StatusOK, answer)
 }
 
+// decodeManifest reads {"files":[…]}, stopping at the first file past a
+// batch.
+func decodeManifest(line []byte) ([]manifestFile, error) {
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	expect := func(want json.Token) error {
+		token, err := decoder.Token()
+		if err == nil && token != want {
+			err = errors.New("unexpected upload list")
+		}
+		return err
+	}
+	if err := errors.Join(expect(json.Delim('{')), expect("files"), expect(json.Delim('['))); err != nil {
+		return nil, err
+	}
+	var list []manifestFile
+	for decoder.More() {
+		if len(list) == helper.UploadBatchFiles {
+			return nil, files.ErrBatchTooLarge
+		}
+		var file manifestFile
+		if err := decoder.Decode(&file); err != nil {
+			return nil, err
+		}
+		list = append(list, file)
+	}
+	if err := errors.Join(expect(json.Delim(']')), expect(json.Delim('}'))); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
 func readManifest(reader *bufio.Reader) ([]byte, error) {
 	var line []byte
 	for {
@@ -154,6 +211,14 @@ type progressBody struct {
 	mu         sync.Mutex
 	closed     bool
 	ended      bool
+	// until, when set, is the latest any read may end.
+	until time.Time
+}
+
+func (b *progressBody) unbound() {
+	b.mu.Lock()
+	b.until = time.Time{}
+	b.mu.Unlock()
 }
 
 var errUploadClosed = errors.New("upload request closed")
@@ -164,7 +229,11 @@ func (b *progressBody) Read(p []byte) (int, error) {
 		b.mu.Unlock()
 		return 0, errUploadClosed
 	}
-	b.controller.SetReadDeadline(time.Now().Add(uploadStall))
+	deadline := time.Now().Add(uploadStall)
+	if !b.until.IsZero() && b.until.Before(deadline) {
+		deadline = b.until
+	}
+	b.controller.SetReadDeadline(deadline)
 	b.mu.Unlock()
 	n, err := b.body.Read(p)
 	if errors.Is(err, io.EOF) {

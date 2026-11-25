@@ -122,6 +122,10 @@ type fileHelper struct {
 	// part is the upload part being read, which a refused file of a batch
 	// is skipped to the end of.
 	part *uploadPart
+	// folder is the path, below the root, of the folder an upload writes in.
+	folder string
+	// leftover: the last upload's staging file could not be removed.
+	leftover bool
 
 	exit     func(int)
 	stop     atomic.Bool
@@ -624,9 +628,8 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	defer func() {
 		h.t.close(file)
 		if err := unix.Unlinkat(int(parent), temporary, 0); err != nil && !isNotExist(err) {
-			// The staging name is fixed; leaving it is reported by the backend's
-			// cleanup request.
-			_ = err
+			// The backend's cleanup request removes it.
+			h.leftover = true
 		}
 	}()
 	idle := time.AfterFunc(60*time.Second, func() { h.abortUpload(errors.New("upload interrupted")) })
@@ -653,18 +656,8 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 		}
 		idle.Reset(60 * time.Second)
 	}
-	// Set permissions while the helper still owns the new inode; CHOWN is
-	// enough to restore game ownership without granting FOWNER.
-	mode := uint32(0o666 &^ currentUmask())
-	if original != nil {
-		mode = original.Mode & 0o777
-	}
-	if err := unix.Fchmod(int(file), mode); err != nil {
-		return err
-	}
-	if err := unix.Fchown(int(file), int(owner.Uid), int(owner.Gid)); err != nil {
-		return err
-	}
+	// The staged file stays root's, mode 0600, until its trailer arrives, so
+	// nothing else reads it before the backend has authorized it.
 	if err := unix.Fsync(int(file)); err != nil {
 		return err
 	}
@@ -687,6 +680,21 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 			return err
 		}
 	}
+	// Set permissions while the helper still owns the new inode; CHOWN is
+	// enough to restore game ownership without granting FOWNER.
+	mode := uint32(0o666 &^ currentUmask())
+	if original != nil {
+		mode = original.Mode & 0o777
+	}
+	if err := unix.Fchmod(int(file), mode); err != nil {
+		return err
+	}
+	if err := unix.Fchown(int(file), int(owner.Uid), int(owner.Gid)); err != nil {
+		return err
+	}
+	if err := unix.Fsync(int(file)); err != nil {
+		return err
+	}
 	current, err := uploadTarget(parent, name)
 	if err != nil {
 		return err
@@ -695,6 +703,22 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 		original.Mode != current.Mode || original.Uid != current.Uid || original.Gid != current.Gid ||
 		original.Size != current.Size || mtimeMs(original) != mtimeMs(current) || ctimeMs(original) != ctimeMs(current))) {
 		return errors.New("the upload target changed")
+	}
+	written, err := fstat(file)
+	if err != nil {
+		return err
+	}
+	// The folder, found again from the root by its path, must still be the one
+	// written into: a rename while the file arrived could have moved it out of
+	// the root. A move between this check and the publish below can't be
+	// caught from here.
+	if err := h.sameFolder(parent); err != nil {
+		return err
+	}
+	// Publishing goes by the staging name, which must still be the inode
+	// written.
+	if staged, err := lstatAt(parent, temporary); err != nil || staged.Dev != written.Dev || staged.Ino != written.Ino {
+		return errors.New("the staged file changed")
 	}
 	if h.uploadAborted() {
 		return errors.New("upload interrupted")
@@ -712,8 +736,61 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 			return errPublished
 		}
 	}
+	// What took the name between the check and the publish is unknown.
+	if published, err := lstatAt(parent, name); err != nil || published.Dev != written.Dev || published.Ino != written.Ino {
+		return errPublished
+	}
 	if err := unix.Fsync(int(parent)); err != nil {
 		return errPublished
+	}
+	return nil
+}
+
+// sameFolder confirms that folder, walked again from the root without
+// following links, is still the directory parent holds.
+func (h *fileHelper) sameFolder(parent fd) error {
+	opened := len(h.t.open)
+	defer h.t.closeFrom(opened)
+	root, err := h.pinRoot()
+	if err != nil {
+		return err
+	}
+	folder, err := h.pinDirectory(root, h.folder)
+	if err != nil {
+		return err
+	}
+	now, err := fstat(folder)
+	if err != nil {
+		return err
+	}
+	held, err := fstat(parent)
+	if err != nil {
+		return err
+	}
+	if now.Dev != held.Dev || now.Ino != held.Ino {
+		return errors.New("the folder moved")
+	}
+	return nil
+}
+
+// sweepStaging removes the staging files left in folder by uploads cut off
+// earlier. The server's file lock is held, so no other upload is writing.
+func (h *fileHelper) sweepStaging(folder fd) error {
+	children, err := names(folder)
+	if err != nil {
+		return err
+	}
+	for _, name := range children {
+		id, found := strings.CutPrefix(name, ".ludock-upload-")
+		id, staged := strings.CutSuffix(id, ".tmp")
+		if !found || !staged || !uploadIDPattern.MatchString(id) {
+			continue
+		}
+		if info, err := lstatAt(folder, name); err == nil && isRegular(info) {
+			if err := unix.Unlinkat(int(folder), name, 0); err != nil && !isNotExist(err) {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -766,6 +843,8 @@ type UploadResult struct {
 	Space *FileSpace `json:"space,omitempty"`
 	// Ready asks for the file's trailer, ahead of its result.
 	Ready bool `json:"ready,omitempty"`
+	// Leftover: the file's staging file could not be removed.
+	Leftover bool `json:"leftover,omitempty"`
 }
 
 // uploadFiles writes a batch into one folder: each file's body and trailer
@@ -799,7 +878,7 @@ func (h *fileHelper) uploadFiles(relative string) error {
 	}
 	h.buffer = make([]byte, 64*1024)
 	for _, file := range h.request.Files {
-		h.part = nil
+		h.part, h.leftover = nil, false
 		opened := len(h.t.open)
 		err := h.check(path.Join(relative, file.Name), false)
 		if parts, partsErr := ownParts(file.Name); err == nil && (partsErr != nil || len(parts) != 1 || parts[0] != file.Name) {
@@ -821,7 +900,7 @@ func (h *fileHelper) uploadFiles(relative string) error {
 		if errors.Is(err, errUploadStream) || h.uploadAborted() {
 			return errUploadStream
 		}
-		result := UploadResult{OK: err == nil}
+		result := UploadResult{OK: err == nil, Leftover: h.leftover}
 		var full *noSpaceError
 		switch {
 		case err == nil:
@@ -1034,6 +1113,14 @@ func (h *fileHelper) run() error {
 	case "delete-paths", "move", "download-paths":
 		return h.selection(root, operation)
 	case "upload-files":
+		h.folder = relative
+		folder, err := h.pinDirectory(root, relative)
+		if err != nil {
+			return err
+		}
+		if err := h.sweepStaging(folder); err != nil {
+			return err
+		}
 		return h.uploadFiles(relative)
 	case "upload-files-cleanup":
 		folder, err := h.pinDirectory(root, relative)
@@ -1130,6 +1217,10 @@ func (h *fileHelper) run() error {
 	case "upload":
 		if h.request.Size == nil {
 			return errors.New("invalid upload size")
+		}
+		h.folder = path.Dir(relative)
+		if err := h.sweepStaging(parent); err != nil {
+			return err
 		}
 		if err := h.upload(parent, name, *h.request.Size, h.request.UploadID, h.request.Expected); err != nil {
 			return err

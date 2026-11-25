@@ -742,7 +742,7 @@ Every name that starts with `.ludock-`, in any letter case, is Ludock's:
 | --- | --- | --- |
 | `.ludock-restore-<id>` | A restore's staging folder, at the top of a data folder: the backup's data before it moves in, then the data it replaced | When the restore ends, or once [one that stopped partway](#a-restore-that-stopped-partway) is finished or undone |
 | `.ludock-unpack-<id>` | An unpack in progress, beside the archive | When the unpack ends, or at Ludock's next start |
-| `.ludock-upload-<id>.tmp` | An upload or edit in progress, beside the file | When the upload ends |
+| `.ludock-upload-<id>.tmp` | An upload or edit in progress, beside the file | When the upload ends, or by the next upload to that folder if Ludock stopped meanwhile |
 
 Files doesn't show these names, and no one can create, rename, move, upload,
 unpack, download, or delete one there. A folder holding one can be deleted as

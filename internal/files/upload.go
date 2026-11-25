@@ -163,32 +163,44 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 			results[index] = errNotUploaded
 		}
 	}
+	// The helper removes a file's staging file unless it was cut off or
+	// reports it could not, and answers that may be lost don't say how far it
+	// got, so every unanswered file's is removed too. Cleanup has no
+	// user-controlled input and runs even after cancellation or revocation.
+	var staged []helper.UploadFile
+	for position, file := range files {
+		if position >= len(acks.results) || acks.results[position].Leftover {
+			staged = append(staged, helper.UploadFile{UploadID: file.UploadID})
+		}
+	}
+	removeStaged := func(access *Access) error {
+		_, err := access.request(context.WithoutCancel(ctx), helper.FileRequest{Operation: "upload-files-cleanup", Root: root.Path,
+			Path: normalized, Files: staged}, nil, nil)
+		if err != nil {
+			log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
+		}
+		return err
+	}
 	if err == nil {
-		access.Cleanup(false)
+		var cleanupErr error
+		if len(staged) > 0 {
+			cleanupErr = removeStaged(access)
+		}
+		access.Cleanup(cleanupErr != nil)
 		return results, nil
 	}
 	// A failed upload may still be writing, so its helper is removed before
-	// the locks are released, as for Delete. The helper removes its staging
-	// file unless it was cut off, and answers that may be lost don't say how
-	// far it got, so a fresh helper then removes every unanswered file's.
-	// Cleanup has no user-controlled input and runs even after cancellation or
-	// revocation.
+	// the locks are released, as for Delete, and a fresh one cleans up.
 	access.Cleanup(true)
-	if len(acks.results) < len(accepted) {
-		var staged []helper.UploadFile
-		for _, file := range files[len(acks.results):] {
-			staged = append(staged, helper.UploadFile{UploadID: file.UploadID})
-		}
+	if len(staged) > 0 {
 		settled := context.WithoutCancel(ctx)
-		cleanup, cleanupErr := s.Acquire(settled, target, root, false, nil)
-		if cleanupErr == nil {
-			_, cleanupErr = cleanup.request(settled, helper.FileRequest{Operation: "upload-files-cleanup", Root: root.Path, Path: normalized,
-				Files: staged}, nil, nil)
-			cleanup.Cleanup(cleanupErr != nil)
-		}
-		if cleanupErr != nil {
+		if cleanup, cleanupErr := s.Acquire(settled, target, root, false, nil); cleanupErr == nil {
+			cleanup.Cleanup(removeStaged(cleanup) != nil)
+		} else {
 			log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
 		}
+	}
+	if len(acks.results) < len(accepted) {
 		return results, err
 	}
 	// Every file was answered, such as a large one the helper refused and

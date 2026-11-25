@@ -76,7 +76,7 @@ func (s *Server) fileMove(w http.ResponseWriter, r *http.Request, request *Reque
 	} else {
 		destination = "“" + destination + "”"
 	}
-	details := map[string]any{"root": m.Root.ID, "path": m.Path, "names": m.Names, "destination": m.To}
+	details := map[string]any{"root": m.Root.ID, "path": canonicalPath(m.Path), "names": m.Names, "destination": canonicalPath(m.To)}
 	s.fileOutcome(w, r, request, action, err, "server.file.moved", details, "Moved "+views.ItemCount(len(m.Names))+" to "+destination+".",
 		"the selected items", func(message string) templ.Component {
 			s.moveView(action, &m)
@@ -101,6 +101,6 @@ func (s *Server) fileSelectionDownload(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	defer download.Close()
-	s.audit(r, request, "server.file.downloaded", action.Logical.ID, map[string]any{"root": root, "path": path, "names": names})
+	s.audit(r, request, "server.file.downloaded", action.Logical.ID, map[string]any{"root": root, "path": canonicalPath(path), "names": names})
 	s.streamDownload(w, action, download)
 }

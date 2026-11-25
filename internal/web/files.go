@@ -227,6 +227,13 @@ func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Req
 	render(w, r, http.StatusOK, views.FileActionDialog(d))
 }
 
+// canonicalPath is the path a file change used, which the audit records
+// instead of the request's spelling of it.
+func canonicalPath(value string) string {
+	normalized, _ := files.NormalizeRelativePath(value)
+	return normalized
+}
+
 var fileAudit = map[string]string{"create": "server.file.directory.created", "rename": "server.file.renamed", "delete": "server.file.deleted",
 	"delete-selection": "server.file.deleted", "unpack": "server.file.unpacked"}
 
@@ -260,7 +267,7 @@ func (s *Server) fileChange(kind string) func(http.ResponseWriter, *http.Request
 		}
 		target := fileTarget(action)
 		var message string
-		details := map[string]any{"root": root, "path": path}
+		details := map[string]any{"root": root, "path": canonicalPath(path)}
 		switch kind {
 		case "create":
 			err = s.App.Files.Mkdir(action.Ctx, target, root, path, name, action.Assert)
@@ -445,7 +452,7 @@ func (s *Server) fileSave(w http.ResponseWriter, r *http.Request, request *Reque
 			s.fail(w, r, request, err)
 			return
 		}
-		details := map[string]any{"root": root, "path": path, "size": len(content)}
+		details := map[string]any{"root": root, "path": canonicalPath(path), "size": len(content)}
 		if unconfirmed(err) {
 			// The draft stays in the editor in case the write did not happen.
 			details["confirmed"] = false
@@ -458,7 +465,7 @@ func (s *Server) fileSave(w http.ResponseWriter, r *http.Request, request *Reque
 		render(w, r, public.Status, views.FilePreviewContent(p))
 		return
 	}
-	s.audit(r, request, "server.file.edited", action.Logical.ID, map[string]any{"root": root, "path": path, "size": len(content)})
+	s.audit(r, request, "server.file.edited", action.Logical.ID, map[string]any{"root": root, "path": canonicalPath(path), "size": len(content)})
 	saved, _ := files.ReadPreview(bytes.NewReader(content))
 	saved.Name, saved.Size = p.Name, int64(len(content))
 	p = s.previewView(action, id, root, path)
@@ -500,7 +507,7 @@ func (s *Server) fileDownload(w http.ResponseWriter, r *http.Request, request *R
 		return
 	}
 	defer download.Close()
-	s.audit(r, request, "server.file.downloaded", action.Logical.ID, map[string]any{"root": root, "path": path})
+	s.audit(r, request, "server.file.downloaded", action.Logical.ID, map[string]any{"root": root, "path": canonicalPath(path)})
 	s.streamDownload(w, action, download)
 }
 

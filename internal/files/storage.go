@@ -98,8 +98,12 @@ type lister struct {
 	timer  *time.Timer
 }
 
+// MaxPath bounds a path below a root, as Linux's PATH_MAX bounds a whole
+// path, so no request carries a longer one into a helper or the audit log.
+const MaxPath = 4096
+
 func NormalizeRelativePath(value string) (string, error) {
-	if strings.Contains(value, "\x00") || strings.HasPrefix(value, "/") || slices.Contains(strings.Split(value, "/"), "..") {
+	if len(value) > MaxPath || strings.Contains(value, "\x00") || strings.HasPrefix(value, "/") || slices.Contains(strings.Split(value, "/"), "..") {
 		return "", Error("INVALID_PATH", 400)
 	}
 	if value == "" {
