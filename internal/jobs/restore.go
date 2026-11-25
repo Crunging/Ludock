@@ -1075,7 +1075,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 		defer j.notifyInterrupted(ctx, job, notify.Results, "restore-result:"+job.Job.ID,
 			"Ludock restarted during a restore. Its Activity says what the data was left as.")
 	}
-	seen := keptSeen{}
+	seen, read := keptSeen{}, false
 	if state, _ := restoreState(job); state != nil {
 		seen.kept = state.Kept
 	}
@@ -1108,7 +1108,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 					return j.cleanupRestore(ctx, server, job, data, nil)
 				}
 				heard := &restoreFinish{note: func(final restoreRecovery) string {
-					seen = keptSeen{kept: final.Kept, unknown: final.keptUnknown}
+					seen, read = keptSeen{kept: final.Kept, unknown: final.keptUnknown}, true
 					return keptOutcome(job, outcome, seen)
 				}}
 				return j.rollbackRestore(ctx, server, job, data, nil, heard)
@@ -1116,7 +1116,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 			// Any recovery that can't finish, such as one of a server already
 			// running again, says what the folders show now.
 			if state, _ := restoreState(job); err != nil && touchedLive(state) {
-				seen = j.reconcileKept(ctx, server, job)
+				seen, read = j.reconcileKept(ctx, server, job), true
 			}
 			if err != nil {
 				return err
@@ -1128,8 +1128,8 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 	})
 	result := job.Job.Result
 	// A recovery cut after its final journal said there what couldn't be
-	// read; that stays.
-	if strings.Contains(result.Guidance, unknownKeptNote(job)) {
+	// read; that stays unless this run read the folders again.
+	if !read && strings.Contains(result.Guidance, unknownKeptNote(job)) {
 		seen.unknown = true
 	}
 	if err == nil {

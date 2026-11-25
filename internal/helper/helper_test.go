@@ -714,6 +714,36 @@ func TestRenamesNeverClobber(t *testing.T) {
 		t.Fatal("set aside before refusing:", string(data))
 	}
 	os.Remove(filepath.Join(root, stage, "snapshot"))
+	// Nor is one with a mount on it, which would fail its return after what
+	// is in its way moved.
+	staging := filepath.Join(root, stage, "old", "ops.json")
+	previousTable := mountinfo.Table
+	mountinfo.Table = func() ([]byte, error) { return []byte("40 22 0:45 / " + staging + " rw - ext4 /dev/sdb rw\n"), nil }
+	if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
+		t.Fatal("set aside past a mount on the original")
+	}
+	mountinfo.Table = previousTable
+	if data, _ := os.ReadFile(filepath.Join(root, "ops.json")); string(data) != "game made" {
+		t.Fatal("set aside before refusing:", string(data))
+	}
+	// The check before the stop refuses an original it can't return as one,
+	// whatever is in another's way, in whichever order the folder lists.
+	os.Symlink("nowhere", filepath.Join(root, stage, "old", "a-link"))
+	for index := range 30 {
+		name := "clash" + strconv.Itoa(index)
+		os.WriteFile(filepath.Join(root, stage, "old", name), nil, 0o644)
+		os.Symlink("nowhere", filepath.Join(root, name))
+	}
+	check, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreCheckReturn, Base: root})
+	if code := RunRestore(string(check), io.Discard, io.Discard); code != RestoreUnsafeEntry {
+		t.Fatalf("check said %d, not that an original can't be returned", code)
+	}
+	os.Remove(filepath.Join(root, stage, "old", "a-link"))
+	for index := range 30 {
+		name := "clash" + strconv.Itoa(index)
+		os.Remove(filepath.Join(root, stage, "old", name))
+		os.Remove(filepath.Join(root, name))
+	}
 	tree := func(top string) string {
 		var all []string
 		filepath.WalkDir(top, func(path string, entry os.DirEntry, err error) error {
@@ -1007,7 +1037,7 @@ func TestRestoreItemRollbackOwnership(t *testing.T) {
 	os.WriteFile(filepath.Join(root, stage, "new", "world", "level.dat"), []byte("backup"), 0o644)
 	os.WriteFile(filepath.Join(root, "world", "level.dat"), []byte("someone else"), 0o644)
 	step := func(operation string) int {
-		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: operation, Item: "world/level.dat"})
+		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: operation, Item: "world/level.dat", Base: root})
 		return RunRestore(string(request), io.Discard, io.Discard)
 	}
 	if step(RestoreRollbackClean) == 0 {

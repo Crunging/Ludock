@@ -293,6 +293,7 @@ func (h *restoreHelper) knowNoReplace(root, stage fd) error {
 	if err := unix.Mkdirat(int(stage), scratch, 0o700); err != nil {
 		return errUnsafe
 	}
+	defer unix.Unlinkat(int(stage), scratch, unix.AT_REMOVEDIR)
 	dir, err := h.t.openAt(stage, scratch, directoryFlags, 0)
 	if err != nil {
 		return errUnsafe
@@ -311,7 +312,6 @@ func (h *restoreHelper) knowNoReplace(root, stage fd) error {
 	for _, name := range []string{"from", "to"} {
 		unix.Unlinkat(int(dir), name, 0)
 	}
-	unix.Unlinkat(int(stage), scratch, unix.AT_REMOVEDIR)
 	if err != nil {
 		h.noReplace = noReplaceUnknown
 		return errUnsafe
@@ -470,6 +470,13 @@ func (h *restoreHelper) checkReturn(root, stage fd) error {
 	if err != nil {
 		return err
 	}
+	// Every original first, so one the undo can't return is refused before
+	// the stop whatever is in another's way.
+	for _, name := range children {
+		if err := h.stagedEntry(old, name); err != nil {
+			return err
+		}
+	}
 	for _, name := range children {
 		if Reserved(name) {
 			continue
@@ -481,10 +488,22 @@ func (h *restoreHelper) checkReturn(root, stage fd) error {
 	return nil
 }
 
+// stagedEntry checks one staged original, also that no mount is on or
+// inside it: renaming it back would fail after what is in its way moved.
+func (h *restoreHelper) stagedEntry(old fd, name string) error {
+	if Reserved(name) {
+		return nil
+	}
+	if err := stagedMovable(old, []string{name}); err != nil {
+		return err
+	}
+	return ownMount(h.request.Base, h.request.Root+"/"+h.request.Stage+"/old/"+name)
+}
+
 // checkEntry checks one staged original and, if something is in its way,
 // that it can be set aside, and returns what is in the way.
 func (h *restoreHelper) checkEntry(old, root fd, device uint64, name string) (*unix.Stat_t, error) {
-	if err := stagedMovable(old, []string{name}); err != nil {
+	if err := h.stagedEntry(old, name); err != nil {
 		return nil, err
 	}
 	if _, err := lstatAt(root, name); isNotExist(err) {
@@ -1393,6 +1412,9 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		if info != nil {
+			if err := h.stagedEntry(old, "item"); err != nil {
+				return err
+			}
 			live, err := movable(parent, name, rootInfo.Dev)
 			if err != nil {
 				return err
@@ -1423,6 +1445,9 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		if info, err := movable(old, "item", rootInfo.Dev); err != nil || info == nil {
+			return err
+		}
+		if err := h.stagedEntry(old, "item"); err != nil {
 			return err
 		}
 		// A mount on the item or a folder on its way is reported as one.

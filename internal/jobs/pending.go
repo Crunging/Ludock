@@ -239,6 +239,7 @@ func touchedLive(state *restoreRecovery) bool {
 // back and whether any had none.
 func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *backups.DataHelper, restore *ops.Context, state *restoreRecovery,
 	assertAccess func() error, stopped bool) (live, missing bool, err error) {
+	var readOnly *backups.DataHelper
 	// A root whose stage folder is gone has nothing to put back, for
 	// whatever removed it, such as the restore finishing after
 	// Ludock's data was saved.
@@ -264,7 +265,21 @@ func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *bac
 			// go as it shuts down. A check that couldn't run refuses nothing:
 			// returning the originals checks again before it moves anything.
 			if entry.Phase == "moving_old" || entry.Phase == "rolling_back" {
-				_, err := j.restoreStep(ctx, data, rootPath, entry.Item, restore, helper.RestoreCheckReturn, assertAccess)
+				// Once stopped, the check runs in a helper of its own: one cut
+				// by its time limit must not take the return's helper with it.
+				check := data
+				if stopped {
+					if readOnly == nil {
+						started, err := j.Backups.Helpers.NewDataHelper(ctx, server, true, restore.Job.ID)
+						if err != nil {
+							continue
+						}
+						readOnly = started
+						defer readOnly.Cleanup()
+					}
+					check = readOnly
+				}
+				_, err := j.restoreStep(ctx, check, rootPath, entry.Item, restore, helper.RestoreCheckReturn, assertAccess)
 				if apperr.Is(err, backups.ErrUndoEntryUnsafe.Code) || (stopped && (apperr.Is(err, backups.ErrUndoClashUnsafe.Code) ||
 					apperr.Is(err, backups.ErrHostMount.Code) || apperr.Is(err, backups.StageInside("").Code))) {
 					return false, false, err

@@ -632,8 +632,9 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 		lostHelper bool
 		// unreadable: the set-aside folder can't be read, so Activity says
 		// where to look; checkFails: the checks of what is in the way can't
-		// run, which refuses nothing.
-		unreadable, checkFails bool
+		// run, which refuses nothing; checkCut: the one after the stop is cut
+		// with its helper.
+		unreadable, checkFails, checkCut bool
 		// finalFails: the final journal's write fails; helperFails: no
 		// helper can start once the server stops; cutAfterFinal: startup is
 		// cut right after its final journal and runs again; rereadUnsaved:
@@ -691,6 +692,24 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
 			}, plain: true, trace: []string{"cleanup game: rolling_back rolled_back unsafe", "kept game: rolling_back rolled_back unsafe"}},
+		// Likewise, and an earlier start couldn't read the folder: startup reads
+		// it now and doesn't repeat that.
+		{name: "kept copies moved away, earlier read failed", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}, Kept: true},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+				encoded, _ := json.Marshal(ops.Result{Guidance: "The restore was undone. Ludock couldn’t check the folder " + aside +
+					" in the server’s data, where it moves anything in the way of the previous data."})
+				f.jobs.DB.Exec(`UPDATE operations SET result_json=? WHERE id=?`, string(encoded), strings.TrimPrefix(filepath.Base(stage), helper.StagePrefix))
+			}, plain: true, trace: []string{"cleanup game: rolling_back rolled_back unsafe", "kept game: rolling_back rolled_back unsafe"}},
+		// The check after the stop is cut by its time limit, which takes its
+		// helper with it: the return still runs.
+		{name: "check after the stop cut", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, checkCut: true, aside: map[string]string{"world/level.dat": "new run"},
+			trace: []string{"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe",
+				"stageExists game: replacing moving_old unsafe", "checkReturn game: replacing moving_old unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
+				"cleanup game: rolling_back rolled_back kept unsafe", "kept game: rolling_back rolled_back kept unsafe"}},
 		// Likewise, and the owner left a note in its place: Activity says what
 		// Ludock moved, not what the folder holds now.
 		{name: "owner left a note", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}, Kept: true},
@@ -945,7 +964,8 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				return
 			}
 			// Startup, finding the server running, reads the folders for what
-			// it says: a copy saved as kept and moved away since isn't named.
+			// it says: a copy saved as kept and moved away since isn't named,
+			// nor is an earlier read's failure.
 			if c.state.Kept && c.aside == nil && strings.Contains(job.Result.Guidance, aside) {
 				t.Errorf("startup says %q", job.Result.Guidance)
 			}
@@ -953,7 +973,18 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				t.Fatalf("recovered before the undo: %s", f.savedJournal(job.ID))
 			}
 			var trace *restoreTrace
-			if c.checkFails {
+			if c.checkCut {
+				checks := 0
+				trace = f.traceRestore(func(helperContainer *fakedocker.Container, op, _ string, code int) int {
+					if op == helper.RestoreCheckReturn {
+						if checks++; checks == 2 {
+							f.engine.RemoveContainer(helperContainer.ID)
+							return 1
+						}
+					}
+					return code
+				})
+			} else if c.checkFails {
 				trace = f.traceRestore(func(_ *fakedocker.Container, op, _ string, code int) int {
 					if op == helper.RestoreCheckReturn {
 						return 1
