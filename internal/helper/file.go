@@ -1213,7 +1213,8 @@ func (h *fileHelper) expectVersion(parent fd, name string, original *unix.Stat_t
 // game whose umask leaves group write, such as 0002, so the entry gets group
 // write and no more for group and others than the folder gives; any other
 // folder keeps the helper's umask. With an access ACL the mode's group bits
-// are its mask, so the owning group's own entry stands in for them.
+// are its mask, so the owning group's entry, as the mask limits it, stands in
+// for them.
 func followMode(like fd, mode uint32, umask int) (uint32, error) {
 	info, err := fstat(like)
 	if err != nil {
@@ -1225,6 +1226,9 @@ func followMode(like fd, mode uint32, umask int) (uint32, error) {
 	}
 	folder := info.Mode
 	if group, ok := aclPerm(entries, aclGroupObj); ok {
+		if mask, masked := aclPerm(entries, aclMask); masked {
+			group &= mask
+		}
 		folder = folder&^0o070 | group<<3
 	}
 	created := mode &^ uint32(umask)
@@ -1238,8 +1242,9 @@ func followMode(like fd, mode uint32, umask int) (uint32, error) {
 // new folder there would be made: with folder's default ACL if it has one,
 // and otherwise with followMode of like. Where the kernel passes on folder's
 // setgid bit and group, the mode is set at creation, since a chmod by a
-// helper outside that group drops the bit; elsewhere group access waits
-// until the group is set.
+// helper outside that group drops the bit; elsewhere group and other access
+// wait until the group is set, since until then the future group's members
+// hold the other bits.
 func (h *fileHelper) makeFolder(folder, like fd, name string, owner *unix.Stat_t) (fd, error) {
 	inherited, err := readACL(folder, defaultACL)
 	if err != nil {
@@ -1255,7 +1260,7 @@ func (h *fileHelper) makeFolder(folder, like fd, name string, owner *unix.Stat_t
 			return -1, err
 		}
 		if mode = final; info.Mode&unix.S_ISGID == 0 {
-			mode &^= 0o070
+			mode &^= 0o077
 		}
 	}
 	// The helper does one operation at a time, so nothing else creates an

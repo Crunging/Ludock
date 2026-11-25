@@ -319,6 +319,7 @@
   async function upload(read) {
     if (disabled()) return;
     busy = true;
+    buttons(true);
     var chosen = [], message = "";
     try {
       chosen = ordered(await read());
@@ -331,6 +332,7 @@
       if (input) input.value = "";
       if (folderInput) folderInput.value = "";
       busy = false;
+      buttons(false);
       return;
     }
     controller = new AbortController();

@@ -1454,13 +1454,14 @@ func TestNewEntriesFollowFolderMode(t *testing.T) {
 	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
 	size := int64(5)
 	defer syscall.Umask(syscall.Umask(0o022))
-	for _, test := range []struct {
+	for index, test := range []struct {
 		folder    uint32
 		gameUmask int
 		acl       string
 	}{{0o755, 0o022, ""}, {0o700, 0o022, ""}, {0o775, 0o002, ""}, {0o770, 0o007, ""}, {0o2775, 0o002, ""},
-		{0o755, 0o022, "user::rwx,user:4242:rwx,group::r-x,mask::rwx,other::r-x"}} {
-		name := fmt.Sprintf("%o-%o%s", test.folder, test.gameUmask, map[bool]string{true: "-acl"}[test.acl != ""])
+		{0o755, 0o022, "user::rwx,user:4242:rwx,group::r-x,mask::rwx,other::r-x"},
+		{0o755, 0o022, "user::rwx,user:4242:rwx,group::rwx,mask::r-x,other::r-x"}} {
+		name := fmt.Sprintf("%d-%o-%o", index, test.folder, test.gameUmask)
 		folder := filepath.Join(root, name)
 		os.Mkdir(folder, 0o700)
 		unix.Chmod(folder, test.folder)
