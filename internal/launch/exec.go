@@ -94,6 +94,9 @@ type ExecOptions struct {
 	Settle bool
 	// Poll is how often a settling command is inspected; zero means 250ms.
 	Poll time.Duration
+	// Watch runs every second while a settling command runs. An error from
+	// it stops the helper, as the Limit does, and Exec returns that error.
+	Watch func() error
 }
 
 var errOutputLimit = errors.New("helper output exceeded its limit")
@@ -181,6 +184,11 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	// Docker can accept the connection and never answer it.
 	deadline, cancelDeadline := context.WithTimeoutCause(parent, limit, errs.Timeout)
 	defer cancelDeadline()
+	var watched context.CancelCauseFunc
+	if options.Settle && options.Watch != nil {
+		deadline, watched = context.WithCancelCause(deadline)
+		defer watched(nil)
+	}
 	var conn *docker.Conn
 	if options.Settle {
 		conn, err = Start(deadline, client, container, execID, options.Poll)
@@ -219,7 +227,7 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		if ctx.Err() != nil {
 			fail(ctx.Err())
 		} else {
-			fail(errs.Timeout)
+			fail(context.Cause(deadline))
 		}
 		if options.Input != nil {
 			// Omit the trailer and send EOF; keep stdout while the helper
@@ -231,6 +239,23 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		}
 	})
 	defer stop()
+	if watched != nil {
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-deadline.Done():
+					return
+				case <-ticker.C:
+					if err := options.Watch(); err != nil {
+						watched(err)
+						return
+					}
+				}
+			}
+		}()
+	}
 	if options.Input == nil && options.Limit > 0 && !options.Settle {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
@@ -315,6 +340,9 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	if options.Settle {
 		conn.Close()
 		info = WaitForExit(client, container, execID, options.Poll, func() bool { return deadline.Err() != nil })
+		if cause := context.Cause(deadline); watched != nil && cause != nil && !errors.Is(cause, errs.Timeout) {
+			return nil, cause
+		}
 	} else {
 		// The helper only succeeds after the whole input and its trailer, so an
 		// input still being read has already failed; don't wait for it.

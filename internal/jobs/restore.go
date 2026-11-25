@@ -202,6 +202,11 @@ func stageName(job *ops.Context) string { return helper.StageName(job.Job.ID) }
 const removalLimit = 30 * time.Minute
 
 func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, item string, job *ops.Context, operation string, assertAccess func() error) (map[string]any, error) {
+	return j.watchedStep(ctx, data, root, item, job, operation, assertAccess, nil)
+}
+
+// watchedStep is restoreStep, stopped early once watch fails.
+func (j *Jobs) watchedStep(ctx context.Context, data *backups.DataHelper, root, item string, job *ops.Context, operation string, assertAccess, watch func() error) (map[string]any, error) {
 	limit := 2 * time.Minute
 	if operation == helper.RestoreCleanup || operation == helper.RestoreRollbackClean || operation == helper.RestoreSetAside {
 		limit = removalLimit
@@ -210,7 +215,7 @@ func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, 
 	if operation == helper.RestoreSetAside || operation == helper.RestoreRollbackOld {
 		request.Aside = helper.SetAsideName(job.Job.ID)
 	}
-	out, err := j.Backups.Helpers.ExecWithin(ctx, data.Container, helper.Command("restore", request), assertAccess, limit)
+	out, err := j.Backups.Helpers.ExecWatching(ctx, data.Container, helper.Command("restore", request), assertAccess, limit, watch)
 	if err != nil {
 		return nil, err
 	}
@@ -611,6 +616,16 @@ func (r *restoreRun) stillSafe() error {
 	return r.assertAccess()
 }
 
+// notStarted stops a move once something outside Ludock starts the server,
+// so the game doesn't run on data still moving. Other errors wait for the
+// check after the move.
+func (r *restoreRun) notStarted() error {
+	if err := r.j.assertStillStopped(r.ctx, r.server, r.job); errors.Is(err, errServerChanged) {
+		return err
+	}
+	return nil
+}
+
 func (r *restoreRun) warn() error {
 	if err := r.j.warnFirst(r.ctx, r.job, authz.BackupsRestore, true); err != nil || !warnRequested(r.job) {
 		return err
@@ -790,7 +805,7 @@ func (r *restoreRun) replace(index int, root backups.Root) error {
 	if err := persistJournal(r.job, index, "moving_old"); err != nil {
 		return err
 	}
-	if _, err := r.j.restoreStep(r.ctx, r.data, destination, r.item, r.job, helper.RestoreMoveOld, r.assertAccess); err != nil {
+	if _, err := r.j.watchedStep(r.ctx, r.data, destination, r.item, r.job, helper.RestoreMoveOld, r.assertAccess, r.notStarted); err != nil {
 		return err
 	}
 	if err := persistJournal(r.job, index, "old_moved"); err != nil {
@@ -801,7 +816,7 @@ func (r *restoreRun) replace(index int, root backups.Root) error {
 	if err := r.stillSafe(); err != nil {
 		return err
 	}
-	if _, err := r.j.restoreStep(r.ctx, r.data, destination, r.item, r.job, helper.RestoreMoveNew, r.assertAccess); err != nil {
+	if _, err := r.j.watchedStep(r.ctx, r.data, destination, r.item, r.job, helper.RestoreMoveNew, r.assertAccess, r.notStarted); err != nil {
 		return err
 	}
 	return persistJournal(r.job, index, "replaced")

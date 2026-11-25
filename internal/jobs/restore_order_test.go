@@ -147,6 +147,8 @@ type restoreScenario struct {
 	name  string
 	item  bool
 	after func(*testing.T, *fixture) afterHook
+	// during runs before the helper commands are traced.
+	during func(*testing.T, *fixture)
 	// status and journal describe the job when it ends.
 	status, journal string
 	// left says a stage folder is left behind; restored, that the backup's
@@ -173,6 +175,37 @@ func failedAt(operation, root string) func(*testing.T, *fixture) afterHook {
 func startedAfter(operation, root string) func(*testing.T, *fixture) afterHook {
 	return func(t *testing.T, f *fixture) afterHook {
 		return once(operation, root, func(_ *fakedocker.Container, code int) int { f.startElsewhere(); return code })
+	}
+}
+
+// startedDuring starts the server elsewhere as a step begins, and the step
+// runs on, as a long move does, until its helper is stopped.
+func startedDuring(operation, root string) func(*testing.T, *fixture) {
+	return func(t *testing.T, f *fixture) {
+		run, hit := f.engine.Exec, false
+		f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+			var request struct{ Operation, Root string }
+			if len(cmd) > 3 && cmd[2] == "restore" {
+				json.Unmarshal([]byte(cmd[3]), &request)
+			}
+			if hit || request.Operation != operation || filepath.Base(request.Root) != root {
+				return run(c, cmd, stdin, stdout, stderr)
+			}
+			hit = true
+			f.startElsewhere()
+			started := time.Now()
+			for time.Since(started) < 5*time.Second {
+				if helper := f.engine.Container(c.ID); helper == nil || !helper.State.Running {
+					if took := time.Since(started); took > 2*time.Second {
+						t.Errorf("the step ran on for %v with the server running", took)
+					}
+					return 137
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Error("the step ran on with the server running")
+			return run(c, cmd, stdin, stdout, stderr)
+		}
 	}
 }
 
@@ -282,6 +315,14 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 			left: true, elsewhere: true, guidance: "The restore was stopped partway.", trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe",
 				"cleanup config: rolling_back old_moved,staging unsafe", "kept world: rolling_back old_moved,staging unsafe",
 				"kept config: rolling_back old_moved,staging unsafe"})},
+		// One started during a move stops it within about a second, with
+		// nothing more moved.
+		{name: "started during a move out", during: startedDuring(helper.RestoreMoveOld, "world"), status: ops.Failed, journal: "replacing moving_old,staging unsafe",
+			left: true, elsewhere: true, guidance: "The restore was stopped partway.", trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe",
+				"kept world: replacing moving_old,staging unsafe", "kept config: replacing moving_old,staging unsafe"})},
+		{name: "started during a move in", during: startedDuring(helper.RestoreMoveNew, "world"), status: ops.Failed, journal: "replacing old_moved,staging unsafe",
+			left: true, elsewhere: true, guidance: "The restore was stopped partway.", trace: slices.Concat(worldSwapped,
+				[]string{"kept world: replacing old_moved,staging unsafe", "kept config: replacing old_moved,staging unsafe"})},
 		{name: "started before commit", after: startedAfter(helper.RestoreMoveNew, "config"), status: ops.Failed, journal: "rolling_back replaced,replaced unsafe",
 			left: true, elsewhere: true, restored: true, guidance: "The restore was stopped partway.", trace: slices.Concat(swapped,
 				[]string{"kept world: rolling_back replaced,replaced unsafe", "kept config: rolling_back replaced,replaced unsafe"})},
@@ -326,6 +367,9 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 					// The backup has the roots' own permissions, 0755.
 					os.Chmod(filepath.Join(f.data, root), 0o750)
 				}
+			}
+			if scenario.during != nil {
+				scenario.during(t, f)
 			}
 			var after afterHook
 			if scenario.after != nil {

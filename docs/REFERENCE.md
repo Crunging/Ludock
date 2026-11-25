@@ -854,13 +854,15 @@ resumed or checked on the next start.
 
 A restore that stops partway, because something outside Ludock started the
 server or a step failed, always ends in one of these states, which its entry
-in **Activity** names:
+in **Activity** names. While data moves, Ludock checks about once a second
+whether the server was started, and stops moving it within about a second if
+so:
 
 | Where it stopped | What it leaves | How it is finished |
 | --- | --- | --- |
 | Before any data moved (staging, unpacking) | Nothing: the unpacked copy is removed even if the server is running | Nothing to finish |
 | After data moved, with the server stopped | The restore undone | Nothing to finish |
-| After data moved, with the server started elsewhere | The previous data in the root's `.ludock-restore-<id>/old`, not in place; the server left running | See below |
+| After data moved, with the server started elsewhere | The previous data, or the part of it that had moved, in the root's `.ludock-restore-<id>/old`, not in place; the server left running | See below |
 | After the backup's data was in place, cleanup failing | The data it replaced in `.ludock-restore-<id>` | Removed at the next backup, restore, or update |
 
 A restore left with previous data out of place is listed in **Needs

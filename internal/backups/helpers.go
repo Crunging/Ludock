@@ -277,8 +277,13 @@ func (h *Helpers) Exec(ctx context.Context, id string, command []string, assertA
 // ExecWithin is Exec with its own time limit, for commands that walk a whole
 // data root.
 func (h *Helpers) ExecWithin(ctx context.Context, id string, command []string, assertAccess func() error, limit time.Duration) ([]byte, error) {
+	return h.ExecWatching(ctx, id, command, assertAccess, limit, nil)
+}
+
+// ExecWatching is ExecWithin, stopped early once watch fails.
+func (h *Helpers) ExecWatching(ctx context.Context, id string, command []string, assertAccess func() error, limit time.Duration, watch func() error) ([]byte, error) {
 	return launch.Exec(ctx, h.Docker, id, launch.ExecOptions{Cmd: command, AssertAccess: assertAccess, Limit: limit,
-		Errors: helperErrors, Settle: true, Poll: h.pollInterval})
+		Errors: helperErrors, Settle: true, Poll: h.pollInterval, Watch: watch})
 }
 
 var helperErrors = &launch.ExecErrors{Timeout: errTimeout, Failed: errFailed, Unsafe: errFailed,
