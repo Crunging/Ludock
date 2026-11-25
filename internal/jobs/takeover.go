@@ -57,27 +57,28 @@ func adoptRestores(ctx context.Context, tx *sql.Tx, from *identity.Server, targe
 	if err != nil {
 		return err
 	}
-	saved, theirs := map[string]ops.Recovery{}, map[string]ops.Recovery{}
+	raw := map[string]map[string]string{from.ID: {}, target.Logical.ID: {}}
 	for rows.Next() {
-		var id, server, raw string
-		var recovery ops.Recovery
-		if err := rows.Scan(&id, &server, &raw); err != nil {
+		var id, server, value string
+		if err := rows.Scan(&id, &server, &value); err != nil {
 			rows.Close()
 			return err
 		}
-		if json.Unmarshal([]byte(raw), &recovery) != nil {
-			rows.Close()
-			return errJournal
-		}
-		if server == from.ID {
-			saved[id] = recovery
-		} else {
-			theirs[id] = recovery
-		}
+		raw[server][id] = value
 	}
 	rows.Close()
-	if err := rows.Err(); err != nil {
+	if err := rows.Err(); err != nil || len(raw[from.ID]) == 0 {
 		return err
+	}
+	saved, theirs := map[string]ops.Recovery{}, map[string]ops.Recovery{}
+	for server, decoded := range map[string]map[string]ops.Recovery{from.ID: saved, target.Logical.ID: theirs} {
+		for id, value := range raw[server] {
+			var recovery ops.Recovery
+			if json.Unmarshal([]byte(value), &recovery) != nil {
+				return errJournal
+			}
+			decoded[id] = recovery
+		}
 	}
 	fits := func(recovery ops.Recovery) bool {
 		state, err := restoreState(&ops.Context{Job: &ops.Job{Recovery: recovery}})
@@ -88,7 +89,7 @@ func adoptRestores(ctx context.Context, tx *sql.Tx, from *identity.Server, targe
 	// Recovery finishes a server's restores in turn, so one of the target's
 	// own that can't be finished there would hold back the moved ones.
 	for _, recovery := range theirs {
-		if len(saved) > 0 && (!fits(recovery) || recovery.ContainerID != target.Logical.ContainerID) {
+		if !fits(recovery) || recovery.ContainerID != target.Logical.ContainerID {
 			return errTakeOver("A restore of " + target.Logical.DisplayName + " stopped partway and can’t be finished on it as it is now. " +
 				"Sort that out first, then try again.")
 		}
