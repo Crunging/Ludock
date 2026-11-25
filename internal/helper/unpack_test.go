@@ -167,13 +167,21 @@ func TestUnpackFormatsAndNames(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "bundle files")); err != nil {
 		t.Fatal("a zip without an extension unpacks by content", listTree(t, root))
 	}
-	// Deep enough that the archive's own folder name would pass MaxPath, the
-	// folder is named after the archive instead.
+	// Deep enough that the archive's own folder name would put a file past
+	// MaxPath, the folder is named after the archive instead.
 	deep := strings.Repeat(strings.Repeat("d", 255)+"/", 15) + strings.Repeat("d", 160)
 	os.MkdirAll(filepath.Join(root, deep), 0o755)
 	long := strings.Repeat("m", 250)
 	if result, code := unpackFile(t, root, deep+"/w.tar", tarArchive(t, []archived{{name: long + "/", flag: tar.TypeDir}, {name: long + "/a", body: "a"}})); code != 0 || result.Name != "w" {
 		t.Fatal(result, code)
+	}
+	// One whose files would pass it even so is refused, and leaves nothing.
+	deeper := long + "/" + strings.Repeat("f", 100)
+	if _, code := unpackFile(t, root, deep+"/x.tar", tarArchive(t, []archived{{name: long + "/", flag: tar.TypeDir}, {name: deeper, body: "f"}})); code != FileArchiveDeep {
+		t.Fatal("unpacked files Files can't open", code)
+	}
+	if got := listTree(t, filepath.Join(root, deep)); !reflect.DeepEqual(got, []string{"w", "w/a", "w.tar", "x.tar"}) {
+		t.Fatal(got)
 	}
 }
 

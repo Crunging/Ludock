@@ -45,6 +45,7 @@ type UnpackResult struct {
 var (
 	errArchiveUnsafe = errors.New("the archive has an unsafe entry")
 	errArchiveLimit  = errors.New("the archive is over a limit")
+	errArchiveDeep   = errors.New("the archive's files would be too deep")
 	errArchiveFull   = errors.New("the free-space reserve was reached")
 	errNotArchive    = errors.New("the file is not a supported archive or is damaged")
 	errStopped       = errors.New("the unpack was stopped")
@@ -107,6 +108,8 @@ type unpacker struct {
 	umask   int
 	result  UnpackResult
 	buffer  []byte
+	// longest is the longest path an entry makes inside the stage.
+	longest int
 }
 
 func (u *unpacker) stopped() error {
@@ -180,7 +183,11 @@ func (u *unpacker) entry(name string) ([]string, error) {
 	if err := u.stopped(); err != nil {
 		return nil, err
 	}
-	return archiveParts(name, u.limits.Depth)
+	parts, err := archiveParts(name, u.limits.Depth)
+	if err == nil {
+		u.longest = max(u.longest, len(strings.Join(parts, "/")))
+	}
+	return parts, err
 }
 
 func (u *unpacker) mkdir(parts []string) error {
@@ -483,7 +490,7 @@ func (h *fileHelper) unpack(parent fd, name string) error {
 	if err := unix.Syncfs(int(stage)); err != nil {
 		return err
 	}
-	result, err := h.finishUnpack(parent, name, stageName, stage, stageInfo, owner, u.umask, u.result)
+	result, err := h.finishUnpack(parent, name, stageName, stage, stageInfo, owner, u.umask, u.longest, u.result)
 	if err != nil {
 		return err
 	}
@@ -498,15 +505,17 @@ func (h *fileHelper) isStage(parent fd, name string, stage *unix.Stat_t) bool {
 
 // finishUnpack publishes the result. Once it has a name the unpack has
 // happened, so later steps are best effort.
-func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd, stageInfo, owner *unix.Stat_t, umask int, result UnpackResult) (UnpackResult, error) {
+func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd, stageInfo, owner *unix.Stat_t, umask, longest int,
+	result UnpackResult) (UnpackResult, error) {
 	children, err := names(stage)
 	if err != nil {
 		return result, err
 	}
-	source, sourceName, base := parent, stageName, unpackBase(archive)
+	// inside is the longest path an entry makes inside the new folder.
+	source, sourceName, base, inside := parent, stageName, unpackBase(archive), longest
 	if len(children) == 1 {
 		if info, err := lstatAt(stage, children[0]); err == nil && isDir(info) {
-			source, sourceName, base = stage, children[0], children[0]
+			source, sourceName, base, inside = stage, children[0], children[0], max(longest-len(children[0])-1, 0)
 		}
 	}
 	if source == parent {
@@ -526,12 +535,21 @@ func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd
 		if attempt > 1 {
 			candidate = base + " (" + strconv.Itoa(attempt) + ")"
 		}
-		// The folder keeps within MaxPath, so Files can open it: an archive's
-		// own folder name gives way to the archive's.
-		if long := len(path.Join(path.Dir(h.request.Path), candidate)) > MaxPath; long && base != unpackBase(archive) {
+		// Every unpacked path keeps within MaxPath, so Files can open it: an
+		// archive's own folder name gives way to the archive's, and if that is
+		// still too deep, nothing is unpacked here.
+		deepest := len(path.Join(path.Dir(h.request.Path), candidate))
+		if inside > 0 {
+			deepest += 1 + inside
+		}
+		if deepest > MaxPath && base != unpackBase(archive) {
 			base, attempt = unpackBase(archive), 0
 			continue
-		} else if long || len(candidate) > 255 || attempt > 50 {
+		}
+		if deepest > MaxPath {
+			return result, errArchiveDeep
+		}
+		if len(candidate) > 255 || attempt > 50 {
 			return result, errNameTaken
 		}
 		if _, err := lstatAt(parent, candidate); err == nil {

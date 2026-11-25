@@ -110,6 +110,8 @@ const (
 	FileNoSpace = 12
 	// FileUncertain is an upload that failed after its file took its name.
 	FileUncertain = 13
+	// FileArchiveDeep refuses an unpack whose files would pass MaxPath.
+	FileArchiveDeep = 14
 )
 
 type fileHelper struct {
@@ -689,11 +691,11 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// which publishing goes by, still the inode written. Checked before the
 	// game may read the file and again right before publishing; a move
 	// between the last check and the publish goes unseen. When the root is
-	// its own mount, moving a folder out of it needs a rename across the
-	// container's mount, which a process in the game's container can't do (it
-	// gets EXDEV); it takes someone acting on the host's filesystem, who can
-	// already write anywhere the helper can. When the root is a folder inside
-	// a larger mount, the game can move a folder out of the root within that
+	// its own mount, the game can't move a folder out of it through that
+	// mount (a rename across it gets EXDEV); only another mount of the same
+	// storage can, on the host or in another container, and whoever holds
+	// that can already write there. When the root is a folder inside a
+	// larger mount, the game can move a folder out of the root within that
 	// mount, but only to where the game itself can already write. So this
 	// catches a move during a long transfer and reports it; it is not a
 	// boundary against either.
@@ -721,8 +723,8 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// Only now may the game read the staged inode. Once it has its owner the
 	// game may also write to it, as it may a moment later once it has its
 	// name, so nothing is gained by changing it in between. The owner is set
-	// before the publish, so the inode the helper publishes has it; what
-	// holds the name afterwards is checked below. Set permissions while the
+	// on the staged inode before the publish; whether that inode took the
+	// name is checked below. Set permissions while the
 	// helper still owns the new inode; CHOWN is enough to restore game
 	// ownership without granting FOWNER.
 	mode := uint32(0o666 &^ currentUmask())
@@ -752,16 +754,11 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 		publishErr = linkat(int(parent), temporary, int(parent), name, 0)
 	}
 	// A publish can take effect and still fail, as on NFS when its reply is
-	// lost: the file is published if it has the name; a link refused because
-	// the name exists did nothing; any other failure is unknown, since the
-	// game could have moved a published file away before the name was read.
+	// lost, and a replayed link then even says the name exists: the file is
+	// published if it has the name, and otherwise unknown, since the game
+	// could have moved a published file away before the name was read.
 	if publishErr != nil {
-		published, err := lstatAt(parent, name)
-		switch {
-		case err == nil && published.Dev == written.Dev && published.Ino == written.Ino:
-		case original == nil && errors.Is(publishErr, unix.EEXIST):
-			return publishErr
-		default:
+		if published, err := lstatAt(parent, name); err != nil || published.Dev != written.Dev || published.Ino != written.Ino {
 			return errPublished
 		}
 	}
@@ -1457,6 +1454,8 @@ func fileExit(err error) int {
 		return FileHoldsRestore
 	case errors.Is(err, errPublished):
 		return FileUncertain
+	case errors.Is(err, errArchiveDeep):
+		return FileArchiveDeep
 	}
 	return 1
 }
