@@ -242,13 +242,14 @@ func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *bac
 }
 
 // assertPendingUndoable refuses, before players are warned or the server
-// stops, work whose stop would finish a restore that ended partway when its
-// undo would move another restore's stage. finishPending checks the same
-// once the server is stopped; anything else it refuses is left to it.
+// stops, work whose stop would finish a restore that ended partway that
+// finishPending would refuse: its journal no longer matches the server, or
+// its undo would move another restore's stage. finishPending checks again
+// once the server is stopped; a check that can't run here is left to it.
 func (j *Jobs) assertPendingUndoable(ctx context.Context, server *servers.Context, job *ops.Context, assertAccess func() error) error {
 	pending, err := j.pendingRestores(ctx, server.Logical.ID)
 	if err != nil {
-		return nil
+		return err
 	}
 	var data *backups.DataHelper
 	defer func() {
@@ -259,7 +260,7 @@ func (j *Jobs) assertPendingUndoable(ctx context.Context, server *servers.Contex
 	for _, restore := range pending {
 		state, err := restoreState(restore)
 		if err != nil || state == nil || !journalMatches(state.Roots, server) || restore.Job.Recovery.Fingerprint != server.Logical.BindingFingerprint {
-			return nil
+			return errPendingBlocked
 		}
 		if state.Status == "committed" {
 			continue
