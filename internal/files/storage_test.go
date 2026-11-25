@@ -797,24 +797,30 @@ func TestUploadFolderLimits(t *testing.T) {
 }
 
 // The backend holds the helper to the batch: a folder is approved only for
-// the file the helper is on, inside that file's path, and once; a body,
-// trailer, or result only in its file's turn, and a success only after its
-// trailer. Anything else ends the upload before the helper gets an answer.
+// the file the helper is on, inside that file's path, and once; a body is
+// sent only in its file's turn, and a success counts only after its
+// trailer. The fake helper reads the backend's answer to each line before
+// the next, and the last line of each case is the one out of place, which
+// must end the upload unanswered.
 func TestUploadHoldsHelperToItsFiles(t *testing.T) {
 	f := setup(t)
 	entries := []UploadEntry{{Name: "a/b/x.txt", Size: 1}, {Name: "y.txt", Size: 1}}
-	for _, lines := range [][]string{
-		{`{"file":0,"folder":"c"}`},
-		{`{"file":0,"folder":"a/b/x.txt"}`},
-		{`{"file":0,"folder":"a"}`, `{"file":0,"folder":"a"}`},
-		{`{"file":1,"body":true}`},
-		{`{"file":0,"ready":true}`},
-		{`{"file":0,"body":true}`, `{"file":0,"body":true}`},
-		{`{"file":0,"body":true}`, `{"file":1,"ok":true}`},
-		{`{"file":0,"body":true}`, `{"file":0,"ok":true}`},
-		{`{"file":0,"body":true}`, `{"file":0,"ready":true}`, `{"file":0,"ok":true}`, `{"file":1,"folder":"a"}`},
+	// A line and how many bytes the backend sends back for it: a folder's
+	// approval, a 1-byte body, or a 36-byte trailer.
+	type line struct {
+		text   string
+		answer int
+	}
+	folder, body, ready, result := 1, 1, 36, 0
+	for _, test := range [][]line{
+		{{`{"file":0,"folder":"c"}`, folder}},
+		{{`{"file":0,"folder":"a/b/x.txt"}`, folder}},
+		{{`{"file":0,"folder":"a"}`, folder}, {`{"file":0,"folder":"a"}`, folder}},
+		{{`{"file":1,"body":true}`, body}},
+		{{`{"file":0,"body":true}`, body}, {`{"file":0,"ok":true}`, result}},
+		{{`{"file":0,"body":true}`, body}, {`{"file":0,"ready":true}`, ready}, {`{"file":0,"ok":true}`, result}, {`{"file":1,"folder":"a"}`, folder}},
 	} {
-		answered := 0
+		answered := make(chan bool, 1)
 		f.engine.RunHelpers(func(_ *fakedocker.Container, _, args []string, stdin *bufio.Reader, stdout, _ func([]byte)) (int, bool) {
 			if len(args) < 2 || !strings.Contains(args[1], `"operation":"upload-files"`) {
 				return 0, false
@@ -822,23 +828,34 @@ func TestUploadHoldsHelperToItsFiles(t *testing.T) {
 			var length [8]byte
 			io.ReadFull(stdin, length[:])
 			io.ReadFull(stdin, make([]byte, binary.BigEndian.Uint64(length[:])))
-			for index, line := range lines {
-				stdout([]byte(line + "\n"))
-				if strings.Contains(line, `"folder"`) && index < len(lines)-1 {
-					if answer, err := stdin.ReadByte(); err == nil && answer == helper.FolderGo {
-						answered++
-					}
+			last := test[len(test)-1]
+			for _, step := range test[:len(test)-1] {
+				stdout([]byte(step.text + "\n"))
+				if _, err := io.ReadFull(stdin, make([]byte, step.answer)); err != nil {
+					answered <- false
+					return 1, true
 				}
 			}
-			// The upload must end without answering the last line.
-			if _, err := stdin.ReadByte(); err == nil && strings.Contains(lines[len(lines)-1], `"folder"`) {
-				answered += 100
+			stdout([]byte(last.text + "\n"))
+			// Refused, the input ends with nothing more; accepted, its answer
+			// comes.
+			got := last.answer > 0
+			if got {
+				_, err := stdin.ReadByte()
+				got = err == nil
 			}
+			answered <- got
 			return 1, true
 		})
 		results, err := f.service.UploadFiles(ctx, f.target, f.root, "", entries, strings.NewReader("ab"), nil)
-		if err == nil || answered >= 100 {
-			t.Error(lines, results, err, answered)
+		var got bool
+		select {
+		case got = <-answered:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the helper never ran", results, err)
+		}
+		if err == nil || got || (test[len(test)-1].answer == result && results[0] == nil) {
+			t.Error(test[len(test)-1].text, results, err, got)
 		}
 	}
 }
