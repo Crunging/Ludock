@@ -18,6 +18,9 @@ type SchedulesView struct {
 	Selected        string
 	SelectedMissing bool
 	Editing         string
+	// NotEditable says whose a schedule opened for editing is, when it isn't
+	// the viewer's to change.
+	NotEditable string
 	// CanResume lists schedules the viewer may resume with their settings;
 	// CanCancelWait, those whose waiting run the viewer may cancel.
 	CanResume     map[string]bool
@@ -236,6 +239,11 @@ func toggleDisabled(v SchedulesView, item schedules.Schedule) bool {
 	return v.Editing != "" || !item.Enabled && (v.Blocked || !v.CanResume[item.ID])
 }
 
+// NotEditableText answers an edit link to a schedule the viewer can't change.
+func NotEditableText(item schedules.Schedule) string {
+	return ownerText(item) + ". " + lockedText(item)
+}
+
 // lockedText stands in for the controls of a schedule the viewer can't change.
 func lockedText(item schedules.Schedule) string {
 	if item.OwnerName == "" {
@@ -252,6 +260,9 @@ templ SchedulesTab(v SchedulesView) {
 	}
 	if v.SelectedMissing {
 		<p role="status" class="section-note">This schedule was deleted, or you can no longer see it.</p>
+	}
+	if v.NotEditable != "" {
+		<p role="status" class="section-note">{ v.NotEditable }</p>
 	}
 	@ScheduleList(v)
 	if v.Form.EditID != "" || len(v.Form.Actions) > 0 {
