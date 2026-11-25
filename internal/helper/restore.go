@@ -443,8 +443,8 @@ func (h *restoreHelper) moveNew(root, stage fd) error {
 		return err
 	}
 	// The extractor gave new the archived root's owner, mode, and ACL. The
-	// root keeps its own ACL; one without must not take the archived mask as
-	// its group's rights.
+	// root keeps its own ACL; one without takes the archived ACL's fallback
+	// mode, not its mask as the group's rights.
 	archived, err := fstat(next)
 	if err != nil {
 		return err
@@ -463,7 +463,7 @@ func (h *restoreHelper) moveNew(root, stage fd) error {
 			if err != nil {
 				return err
 			}
-			archived.Mode = ownGroupMode(archived.Mode, entries)
+			archived.Mode = fallbackMode(archived.Mode, entries)
 		}
 	}
 	return ownRoot(root, archived)
@@ -1116,8 +1116,8 @@ func (x *extractor) metadata(descriptor fd, uid, gid, mode int64, mtime *float64
 	if directory {
 		permissions = uint32(mode & 0o3777)
 	}
-	// An ACL the destination refuses leaves the archive's mode, whose group
-	// bits are the owning group's own, and none inherited from the stage's
+	// An ACL the destination refuses leaves the archive's mode, which gives
+	// no one more than the ACL did, and none inherited from the stage's
 	// folders, which could grant what the entry's own didn't. The mode is
 	// set after the ACL, whose own bits it then matches, since setting an
 	// ACL can clear a folder's setgid.

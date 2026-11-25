@@ -145,9 +145,6 @@ func encodeACL(entries []aclEntry) []byte {
 // checkACL requires sorted entries without a repeated one, one owner, owning
 // group, and other entry, and a mask once there is a named entry.
 func checkACL(entries []aclEntry) error {
-	if len(entries) > MaxACLEntries {
-		return errInvalidACL
-	}
 	count := map[uint16]int{}
 	for index, entry := range entries {
 		named := entry.tag == aclUser || entry.tag == aclGroup
@@ -193,12 +190,28 @@ func aclMode(entries []aclEntry) uint32 {
 	return owner<<6 | group<<3 | other
 }
 
-// ownGroupMode replaces the group bits of a file's mode, which are the mask
-// of its ACL, with the owning group's own rights: a reader that ignores the
-// ACL must not give the whole group what only named entries had.
-func ownGroupMode(mode uint32, entries []aclEntry) uint32 {
+// fallbackMode is the mode a file with the ACL keeps when the ACL is
+// dropped, which gives no one more than the ACL did: the mode's group bits
+// are the ACL's mask, and the owning group's members may include any named
+// user, while others may include any named user or member of a named group.
+func fallbackMode(mode uint32, entries []aclEntry) uint32 {
+	mask, masked := aclPerm(entries, aclMask)
+	if !masked {
+		mask = 7
+	}
 	group, _ := aclPerm(entries, aclGroupObj)
-	return mode&^0o070 | group<<3
+	other, _ := aclPerm(entries, aclOther)
+	group &= mask
+	for _, entry := range entries {
+		switch entry.tag {
+		case aclUser:
+			group &= uint32(entry.perm) & mask
+			other &= uint32(entry.perm) & mask
+		case aclGroup:
+			other &= uint32(entry.perm) & mask
+		}
+	}
+	return mode&^0o077 | group<<3 | other
 }
 
 // ACLText writes an ACL in the kernel's form as Ludock stores it in an
@@ -286,6 +299,9 @@ func ParseACLText(text string) ([]byte, error) {
 		entries = append(entries, entry)
 	}
 	sortACL(entries)
+	if len(entries) > MaxACLEntries {
+		return nil, errInvalidACL
+	}
 	if err := checkACL(entries); err != nil {
 		return nil, err
 	}

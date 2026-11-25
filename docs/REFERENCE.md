@@ -463,10 +463,11 @@ Recreate it without `--rm` to manage it fully.
   `--acls`: in `SCHILY.acl.access` and `SCHILY.acl.default` records, as
   `user::rw-,user:1001:rw-,group::r--,mask::rw-,other::---`, with numeric
   user and group IDs, since names differ between the host and containers. The
-  mode in the archive holds the owning group's own permissions, not the ACL's
-  mask, so a tool that ignores ACLs, or storage that can't hold them, restores
-  a file with the same permissions or fewer, never more; only the entries for
-  specific users and groups are lost then. A restore onto such storage says
+  mode in the archive gives no one more than the ACL did: the owning group
+  gets only what it and every user the ACL names may do, and others only what
+  every named user and group may do. So a tool that ignores ACLs, or storage
+  that can't hold them, restores a file with the same permissions or fewer,
+  never more; only the entries for specific users and groups are lost then. A restore onto such storage says
   so in its **Activity** entry. A data folder keeps the ACL it has now; only
   its owner and permissions come back. An ACL of more than 1024 entries stops
   the backup.

@@ -303,7 +303,7 @@ func (h *fileHelper) header(name string, file fd, stat *unix.Stat_t, directory b
 		return err
 	}
 	if access != nil {
-		mode = ownGroupMode(mode, access)
+		mode = fallbackMode(mode, access)
 	}
 	if backup {
 		entry.UID, entry.GID = int64(stat.Uid), int64(stat.Gid)
@@ -325,6 +325,9 @@ func (h *fileHelper) header(name string, file fd, stat *unix.Stat_t, directory b
 		}
 		if def != nil {
 			entry.PAX[ACLDefaultRecord] = aclText(def)
+		}
+		if len(access) > MaxACLEntries || len(def) > MaxACLEntries {
+			return errors.New("an ACL has too many entries to back up")
 		}
 	}
 	entry.Mode = int64(mode)

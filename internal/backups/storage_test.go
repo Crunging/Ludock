@@ -118,12 +118,13 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	os.MkdirAll(filepath.Join(data, "world"), 0o755)
 	os.WriteFile(filepath.Join(data, "world", "level.dat"), []byte("level"), 0o644)
 	os.WriteFile(filepath.Join(data, "server.properties"), []byte("motd=hi"), 0o640)
-	// whitelist.json's ACL lets user 4242 write and keeps the owning group
-	// read-only, so its mode shows the mask, 0660. world's default ACL is
-	// what files made in it get.
+	// whitelist.json's ACL lets user 4242 read, holds the owning group's
+	// rw- to read by its mask, and shuts out group 4343, which others may
+	// read: its mode shows 0644. world's default ACL is what files made in
+	// it get.
 	whitelist := filepath.Join(data, "whitelist.json")
 	os.WriteFile(whitelist, []byte("[]"), 0o600)
-	access := aclValue([3]uint32{1, 6}, [3]uint32{2, 6, 4242}, [3]uint32{4, 4}, [3]uint32{16, 6}, [3]uint32{32, 0})
+	access := aclValue([3]uint32{1, 6}, [3]uint32{2, 4, 4242}, [3]uint32{4, 6}, [3]uint32{8, 0, 4343}, [3]uint32{16, 4}, [3]uint32{32, 4})
 	def := aclValue([3]uint32{1, 7}, [3]uint32{2, 7, 4242}, [3]uint32{4, 5}, [3]uint32{16, 7}, [3]uint32{32, 5})
 	acls := unix.Setxattr(whitelist, "system.posix_acl_access", access, 0) == nil &&
 		unix.Setxattr(filepath.Join(data, "world"), "system.posix_acl_default", def, 0) == nil
@@ -171,8 +172,8 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if _, err := storage.Validate(destination, id, roots, 1<<30, checksum, nil); err != nil {
 		t.Fatal(err)
 	}
-	// The archive keeps the ACLs as GNU tar and bsdtar do, and gives a
-	// reader that ignores them the owning group's own rights. A folder with
+	// The archive keeps the ACLs as GNU tar and bsdtar do, and its mode
+	// gives a reader that ignores them no more than they did. A folder with
 	// a default ACL has its access ACL too, as GNU tar writes it: bsdtar
 	// restores one without as mode 0000.
 	if acls {
@@ -181,7 +182,7 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 		tarstream.Walk(archive, func(header *tarstream.Header, _ io.Reader) error { stored[header.Name] = header; return nil }, nil)
 		archive.Close()
 		file, folder := stored["snapshot/root-0/whitelist.json"], stored["snapshot/root-0/world/"]
-		if file == nil || file.Mode != 0o640 || file.PAX["SCHILY.acl.access"] != "user::rw-,user:4242:rw-,group::r--,mask::rw-,other::---" ||
+		if file == nil || file.Mode != 0o640 || file.PAX["SCHILY.acl.access"] != "user::rw-,user:4242:r--,group::rw-,group:4343:---,mask::r--,other::r--" ||
 			folder == nil || folder.PAX["SCHILY.acl.access"] != "user::rwx,group::r-x,other::r-x" ||
 			folder.PAX["SCHILY.acl.default"] != "user::rwx,user:4242:rwx,group::r-x,mask::rwx,other::r-x" {
 			t.Fatalf("stored %+v %+v", file, folder)
@@ -223,7 +224,7 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 				}
 			}
 		}
-		if info, _ := os.Stat(filepath.Join(staged, "whitelist.json")); info == nil || info.Mode().Perm() != 0o660 {
+		if info, _ := os.Stat(filepath.Join(staged, "whitelist.json")); info == nil || info.Mode().Perm() != 0o644 {
 			t.Fatal("whitelist.json staged as", info)
 		}
 	}
