@@ -729,7 +729,7 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// on the staged inode before the publish; whether that inode took the
 	// name is checked below. The owner and group come first, while the mode
 	// is still 0600, so the final mode never applies to the helper's group,
-	// as restores do; that needs FOWNER.
+	// as restores do; an upload's helper holds FOWNER for it.
 	mode := uint32(0o666 &^ currentUmask())
 	if original != nil {
 		mode = original.Mode & 0o777
@@ -831,23 +831,31 @@ var (
 // within that keeps its stale staging files until it shrinks.
 func (h *fileHelper) sweepStaging(folder fd) (int, error) {
 	started, seen := time.Now(), 0
+	// A folder that can't be read is left unswept; only a moved one is an
+	// error.
 	duplicate, err := unix.Dup(int(folder))
 	if err != nil {
-		return 0, err
+		return 0, nil
 	}
 	directory := os.NewFile(uintptr(duplicate), "directory")
 	defer directory.Close()
 	if _, err := directory.Seek(0, 0); err != nil {
-		return 0, err
+		return 0, nil
 	}
+	spent := func() bool { return seen >= sweepEntries || time.Since(started) >= sweepTime }
 	stuck := 0
 	for {
-		if seen >= sweepEntries || time.Since(started) >= sweepTime {
+		if spent() {
 			return stuck, nil
 		}
 		children, readErr := readNames(directory, min(sweepChunk, sweepEntries-seen))
 		seen += len(children)
 		for _, name := range children {
+			// Checked before each candidate's calls, which can each be slow on
+			// network storage.
+			if time.Since(started) >= sweepTime {
+				return stuck, nil
+			}
 			id, found := strings.CutPrefix(name, ".ludock-upload-")
 			id, staged := strings.CutSuffix(id, ".tmp")
 			// What an excluded mount hides from the game is never touched.
@@ -859,6 +867,9 @@ func (h *fileHelper) sweepStaging(folder fd) (int, error) {
 				continue
 			}
 			// The folder must still be the approved one, in case it moved.
+			if time.Since(started) >= sweepTime {
+				return stuck, nil
+			}
 			if err := h.sameFolder(folder); err != nil {
 				return stuck, err
 			}
@@ -866,11 +877,8 @@ func (h *fileHelper) sweepStaging(folder fd) (int, error) {
 				stuck++
 			}
 		}
-		if readErr == io.EOF {
-			return stuck, nil
-		}
 		if readErr != nil {
-			return stuck, readErr
+			return stuck, nil
 		}
 	}
 }

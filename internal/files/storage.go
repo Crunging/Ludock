@@ -253,6 +253,18 @@ func (s *Service) managed(ctx context.Context, info *docker.ContainerInspect) (b
 // exact binding that was inspected, since an external manager could have
 // replaced it and reused its volume names meanwhile.
 func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnly bool, assertAccess func() error) (*Access, error) {
+	return s.acquire(ctx, target, root, readOnly, false, assertAccess)
+}
+
+// acquireUploader is Acquire for an upload or a save, whose helper also holds
+// FOWNER to set a file's mode after giving it the game's owner, so no wider
+// mode exists before the right owner does. Other changes go without it,
+// which keeps them from overriding a sticky folder's protection.
+func (s *Service) acquireUploader(ctx context.Context, target Target, root Root, assertAccess func() error) (*Access, error) {
+	return s.acquire(ctx, target, root, false, true, assertAccess)
+}
+
+func (s *Service) acquire(ctx context.Context, target Target, root Root, readOnly, uploading bool, assertAccess func() error) (*Access, error) {
 	inspection, err := s.Docker.Inspect(ctx, target.ContainerID)
 	if err != nil {
 		return nil, err
@@ -331,9 +343,10 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 	if err != nil {
 		return nil, err
 	}
-	// FOWNER lets an upload set a file's mode after giving it the game's
-	// owner, so no wider mode exists before the right owner does.
-	capabilities := []string{"DAC_OVERRIDE", "CHOWN", "FOWNER"}
+	capabilities := []string{"DAC_OVERRIDE", "CHOWN"}
+	if uploading {
+		capabilities = append(capabilities, "FOWNER")
+	}
 	if readOnly {
 		capabilities = []string{"DAC_OVERRIDE"}
 	}
@@ -634,7 +647,7 @@ func (s *Service) Save(ctx context.Context, target Target, rootID, relative stri
 
 func (s *Service) write(ctx context.Context, target Target, root Root, normalized string, size int64, body io.Reader,
 	expected *helper.FileVersion, assertAccess func() error) error {
-	access, err := s.Acquire(ctx, target, root, false, assertAccess)
+	access, err := s.acquireUploader(ctx, target, root, assertAccess)
 	if err != nil {
 		return err
 	}

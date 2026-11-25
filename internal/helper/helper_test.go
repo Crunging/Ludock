@@ -270,7 +270,7 @@ func TestUploadSweepsStaleStaging(t *testing.T) {
 		largest = max(largest, len(names))
 		return names, err
 	}
-	defer func() { sweepChunk, readNames = 1024, (*os.File).Readdirnames }()
+	defer func() { sweepChunk, sweepTime, readNames = 1024, 2*time.Second, (*os.File).Readdirnames }()
 	stage := func(index int) string {
 		return fmt.Sprintf(".ludock-upload-6f9619ff-8b86-4011-b42d-00c04fc964%02d.tmp", index)
 	}
@@ -305,6 +305,29 @@ func TestUploadSweepsStaleStaging(t *testing.T) {
 		t.Fatal("prepare past the budget", code, seen)
 	}
 	sweepEntries = 10000
+	// Time runs out mid-chunk, as on slow storage: no candidate after that is
+	// touched, and the upload still goes ahead.
+	old2 := filepath.Join(root, stage(30))
+	os.WriteFile(old2, nil, 0o600)
+	os.Chtimes(old2, old, old)
+	sweepTime = 20 * time.Millisecond
+	readNames = func(directory *os.File, count int) ([]string, error) {
+		names, err := directory.Readdirnames(count)
+		time.Sleep(30 * time.Millisecond)
+		return names, err
+	}
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root, Blocked: []string{hidden}}, nil); code != 0 {
+		t.Fatal("prepare past its time", code)
+	}
+	if _, err := os.Lstat(old2); err != nil {
+		t.Fatal("swept on past its time", err)
+	}
+	sweepTime = 2 * time.Second
+	// A folder that can't be read is left unswept, and the upload goes ahead.
+	readNames = func(*os.File, int) ([]string, error) { return nil, unix.EIO }
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root}, nil); code != 0 {
+		t.Fatal("a sweep that couldn't read the folder stopped the upload", code)
+	}
 	for _, request := range []FileRequest{
 		{Operation: "upload-files-cleanup", Root: root, Files: []UploadFile{{UploadID: stage(3)[15:51]}}, Blocked: []string{hidden}},
 		{Operation: "upload-cleanup", Root: root, Path: "server.properties", UploadID: stage(3)[15:51], Blocked: []string{hidden}},
