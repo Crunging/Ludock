@@ -616,14 +616,20 @@ func (r *restoreRun) stillSafe() error {
 	return r.assertAccess()
 }
 
-// notStarted stops a move once something outside Ludock starts the server
-// or it is no longer the server this restore stopped, so no game runs on
-// data still moving. A check that can't run waits for the one after the move.
+var errWriterStarted = fail("EXTERNAL_WRITER_STARTED", "Another container that can write to this server’s data started meanwhile. Check it before trying again.")
+
+// notStarted stops a move once something outside Ludock starts the server,
+// it is no longer the server this restore stopped, or another container
+// that can write to its data starts, so nothing runs on data still moving.
+// A check that can't run waits for the one after the move.
 func (r *restoreRun) notStarted(ctx context.Context) error {
 	err := r.j.assertStillStopped(ctx, r.server, r.job)
 	if errors.Is(err, errServerChanged) || apperr.Is(err, "SERVER_BINDING_CHANGED") || apperr.Is(err, "SERVER_BINDING_UNAVAILABLE") ||
 		apperr.Is(err, "SERVER_NOT_FOUND") {
 		return err
+	}
+	if apperr.Is(r.j.Backups.AssertNoOtherWriters(ctx, r.server, r.job.Job.Recovery.DataHelperID), "SHARED_DATA_WRITER") {
+		return errWriterStarted
 	}
 	return nil
 }

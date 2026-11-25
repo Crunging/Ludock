@@ -855,7 +855,8 @@ resumed or checked on the next start.
 A restore that stops partway, because something outside Ludock started the
 server or a step failed, always ends in one of these states, which its entry
 in **Activity** names. While data moves, Ludock checks about once a second
-whether the server was started, and stops moving it as soon as it sees that:
+whether the server or another container that can write to its data was
+started, and stops moving it as soon as it sees that:
 
 | Where it stopped | What it leaves | How it is finished |
 | --- | --- | --- |
