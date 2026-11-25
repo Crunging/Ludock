@@ -73,7 +73,7 @@ func TestAttentionListsAResultWithoutForceStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := d.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,result_json,binding_revision,created_at,updated_at)
-    VALUES ('00000000-0000-4000-8000-000000000001',?,?,'backup','interrupted','interrupted','{}','{}','{"action":"backup","saveStatus":"sent"}',1,1,1)`,
+    VALUES ('00000000-0000-4000-8000-000000000001',?,?,'backup','interrupted','interrupted','{}','{}','{"saveStatus":"sent"}',1,1,1)`,
 		list[0].ID, admin.ID); err != nil {
 		t.Fatal(err)
 	}

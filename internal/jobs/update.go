@@ -32,7 +32,7 @@ func AssertRunningForBackupRestart(state string) error {
 
 // runBackupRestart restarts with a backup taken while the server is
 // stopped, starting it once if it was running when Ludock stopped it.
-func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[string]any, error) {
+func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 	server, err := j.resolve(ctx, job, authz.ServerRestart, true)
 	if err != nil {
 		return nil, err
@@ -43,7 +43,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 		}
 		return j.assertCapability(ctx, job, authz.BackupsCreate)
 	}
-	return job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), func() (result map[string]any, err error) {
+	return job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), func() (result *ops.Result, err error) {
 		current, err := j.resolve(ctx, job, authz.ServerRestart, true)
 		if err != nil {
 			return nil, err
@@ -71,7 +71,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			}
 			j.noteAvailability(j.Monitor.Suppress(background, server.Logical.ID, nil))
 		}()
-		result, err = func() (map[string]any, error) {
+		result, err = func() (*ops.Result, error) {
 			if err := j.saveWorld(ctx, job, current, func() error {
 				if err := assertAccess(); err != nil {
 					return err
@@ -94,7 +94,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			// One stopped outside Ludock after the check above stays stopped,
 			// as its owner left it.
 			if !wasRunning(job) {
-				return withSave(job, map[string]any{"action": "restart", "backupId": backup.ID, "guidance": stoppedElsewhere}), nil
+				return withSave(job, &ops.Result{BackupID: backup.ID, Guidance: stoppedElsewhere}), nil
 			}
 			selected, err := j.resolve(ctx, job, authz.ServerRestart, true)
 			if err != nil {
@@ -121,7 +121,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 				return nil, err
 			}
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
-			return withSave(job, map[string]any{"action": "restart", "backupId": job.Job.Recovery.BackupID}), nil
+			return withSave(job, &ops.Result{BackupID: job.Job.Recovery.BackupID}), nil
 		}()
 		// Work cut by shutdown is recovered, and reported, on the next start.
 		if err != nil && ctx.Err() == nil {
@@ -141,7 +141,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 // Ludock stopped it. Ludock restarting is not a failed backup, so it is
 // started even if the backup didn't complete, and the backup is not taken
 // again.
-func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[string]any, error) {
+func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 	completed := j.backupCompleted(ctx, job)
 	if !completed {
 		defer j.notifyInterrupted(ctx, job, notify.FailedWork, "backup-failed:"+job.Job.ID, backupInterrupted)
@@ -154,18 +154,18 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[
 	if err := j.recoverBackup(ctx, job); err != nil {
 		return nil, err
 	}
-	result := map[string]any{"action": "restart"}
+	result := &ops.Result{}
 	running := wasRunning(job)
 	switch {
 	case completed && !running:
-		result["guidance"] = stoppedElsewhere
+		result.Guidance = stoppedElsewhere
 	case !completed && running:
-		result["guidance"] = "Ludock restarted before the backup finished, so there’s no new backup. The server was started again."
+		result.Guidance = "Ludock restarted before the backup finished, so there’s no new backup. The server was started again."
 	case !completed:
-		result["guidance"] = "Ludock restarted before the backup finished, so there’s no new backup. Something outside Ludock had stopped the server before the backup, so Ludock didn’t start it."
+		result.Guidance = "Ludock restarted before the backup finished, so there’s no new backup. Something outside Ludock had stopped the server before the backup, so Ludock didn’t start it."
 	}
 	if completed {
-		result["backupId"] = job.Job.Recovery.BackupID
+		result.BackupID = job.Job.Recovery.BackupID
 	}
 	return withSave(job, result), nil
 }
@@ -177,7 +177,7 @@ const stoppedElsewhere = "Something outside Ludock stopped the server before the
 // removal began, finished after. An undone swap leaves the original stopped
 // if the replacement may have run, since the new game version may have
 // changed the world.
-func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]any, error) {
+func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 	swap, err := savedSwap(job)
 	if err != nil {
 		return nil, err
@@ -214,7 +214,7 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 	// Pulling changes no state. Backup recovery applies only after the
 	// initial state and binding were recorded before stopping.
 	if job.Job.Recovery.InitialRunning == nil {
-		return map[string]any{"guidance": "Ludock restarted before the update changed anything, so the update didn’t happen."}, j.removeOperationHelpers(ctx, job)
+		return &ops.Result{Guidance: "Ludock restarted before the update changed anything, so the update didn’t happen."}, j.removeOperationHelpers(ctx, job)
 	}
 	if swap != nil && swap.reached(swapStarting) {
 		err := j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
@@ -224,10 +224,10 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 			return nil, err
 		}
 		if info, err := j.Docker.Inspect(ctx, job.Job.Recovery.ContainerID); err == nil && info.State.Running {
-			return map[string]any{"guidance": "Ludock restarted while it checked the updated container, so the update was undone and the previous container kept. " +
+			return &ops.Result{Guidance: "Ludock restarted while it checked the updated container, so the update was undone and the previous container kept. " +
 				"Something outside Ludock started it again meanwhile."}, nil
 		}
-		return map[string]any{"guidance": "Ludock restarted while it checked the updated container, so the update was undone and the previous container kept. " +
+		return &ops.Result{Guidance: "Ludock restarted while it checked the updated container, so the update was undone and the previous container kept. " +
 			"The server was left stopped, since the new version may already have run and changed the game data. Check the server, then start it."}, nil
 	}
 	// Ludock restarting is not a failed update: the server is returned to
@@ -236,14 +236,14 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (map[string]
 		return nil, err
 	}
 	if wasRunning(job) {
-		return withSave(job, map[string]any{"guidance": "Ludock restarted during the update, so the update didn’t happen. The server was started again as it was."}), nil
+		return withSave(job, &ops.Result{Guidance: "Ludock restarted during the update, so the update didn’t happen. The server was started again as it was."}), nil
 	}
-	return withSave(job, map[string]any{"guidance": "Ludock restarted during the update, so the update didn’t happen. The server stays stopped, as it was."}), nil
+	return withSave(job, &ops.Result{Guidance: "Ludock restarted during the update, so the update didn’t happen. The server stays stopped, as it was."}), nil
 }
 
 // finishedUpdate reports an update recovery finished, from the
 // replacement's state that startReplacement confirmed.
-func (j *Jobs) finishedUpdate(ctx context.Context, job *ops.Context, started error) map[string]any {
+func (j *Jobs) finishedUpdate(ctx context.Context, job *ops.Context, started error) *ops.Result {
 	finished := "Ludock restarted while the updated container replaced the previous one, so it finished the update."
 	alert := func(message string) {
 		j.notify(notify.Results, "operation:"+job.Job.ID, "An update finished after Ludock restarted, but "+message)
@@ -253,23 +253,23 @@ func (j *Jobs) finishedUpdate(ctx context.Context, job *ops.Context, started err
 		// A server that was stopped stays stopped on purpose, as when the
 		// update finishes without a restart.
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, !wasRunning(job)))
-		return map[string]any{"guidance": finished}
+		return &ops.Result{Guidance: finished}
 	case apperr.Is(started, errReplacementNotStarted.Code):
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, true))
 		alert("the server’s new container is stopped and couldn’t be started. Check it, then start it.")
-		return map[string]any{"guidance": finished + " Its new container had stopped, and Docker couldn’t start it again, so the server is stopped. Check it, then start it."}
+		return &ops.Result{Guidance: finished + " Its new container had stopped, and Docker couldn’t start it again, so the server is stopped. Check it, then start it."}
 	case apperr.Is(started, errReplacementDown.Code):
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, true))
 		alert("the server’s new container is stopped. Check its logs, then start it.")
-		return map[string]any{"guidance": finished + " Its new container is stopped, so the server is stopped. Check its logs, then start it."}
+		return &ops.Result{Guidance: finished + " Its new container is stopped, so the server is stopped. Check its logs, then start it."}
 	case apperr.Is(started, errReplacementRemoved.Code):
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, true))
 		alert("the server’s new container was then removed outside Ludock. Recreate the server through the tool that created it.")
-		return map[string]any{"guidance": finished + " Its new container was then removed outside Ludock, so the server no longer exists. Recreate it through the tool that created it."}
+		return &ops.Result{Guidance: finished + " Its new container was then removed outside Ludock, so the server no longer exists. Recreate it through the tool that created it."}
 	case apperr.Is(started, errReplacementRestarted.Code):
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, false))
 		alert("the server’s new container restarted right after it started. Check its logs.")
-		return map[string]any{"guidance": finished + " Its new container restarted right after it started. Check its logs."}
+		return &ops.Result{Guidance: finished + " Its new container restarted right after it started. Check its logs."}
 	default:
 		// Not known to be stopped: outage tracking reports it if it is. A
 		// server that was stopped was only checked for its new container.
@@ -282,7 +282,7 @@ func (j *Jobs) finishedUpdate(ctx context.Context, job *ops.Context, started err
 			what = "exists"
 		}
 		alert("Ludock couldn’t " + check + " that the server’s new container " + what + ". Check it.")
-		return map[string]any{"guidance": finished + " Ludock couldn’t " + check + " that its new container " + what + ". Check the server."}
+		return &ops.Result{Guidance: finished + " Ludock couldn’t " + check + " that its new container " + what + ". Check the server."}
 	}
 }
 
@@ -386,7 +386,7 @@ var (
 		"The updated container reported itself unhealthy. The previous container is restored and left stopped, since the new version may have changed the game data.")
 )
 
-func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (map[string]any, error) {
+func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 	request, err := updateRequest(job.Job.Input)
 	if err != nil {
 		return nil, err
@@ -403,7 +403,7 @@ func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (map[string]any,
 	if request.CreateBackup {
 		keys = append(keys, locks.StorageKey)
 	}
-	return job.WithLocks(keys, func() (result map[string]any, err error) {
+	return job.WithLocks(keys, func() (result *ops.Result, err error) {
 		plan, err := j.Updates.Check(ctx, server)
 		if err != nil {
 			return nil, err
@@ -458,7 +458,7 @@ func (j *Jobs) undoUpdate(ctx context.Context, server *servers.Context, job *ops
 // temporary name that discovery ignores, while the stopped original stays
 // the server. Only a replacement that started cleanly replaces it.
 func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Context, request UpdateRequest, capability authz.Capability,
-	plan *update.Plan, paused *bool) (map[string]any, error) {
+	plan *update.Plan, paused *bool) (*ops.Result, error) {
 	if err := j.assertCapability(ctx, job, capability); err != nil {
 		return nil, err
 	}
@@ -493,7 +493,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	pulled := image.ID
 	imageChanged := pulled != plan.Spec.Image
 	if !imageChanged && !request.ForceRecreate {
-		return map[string]any{"alreadyCurrent": true, "imageChanged": false, "recreated": false}, nil
+		return &ops.Result{AlreadyCurrent: true}, nil
 	}
 	if _, err := j.resolve(ctx, job, capability, true); err != nil {
 		return nil, err
@@ -581,10 +581,10 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 		log.Warn("Could not refresh servers after an update")
 	}
 	j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, !initiallyRunning))
-	result := map[string]any{"imageChanged": imageChanged, "recreated": true, "forced": request.ForceRecreate,
-		"running": initiallyRunning, "verification": verification}
+	result := &ops.Result{ImageChanged: imageChanged, Recreated: true, ForceRecreate: request.ForceRecreate,
+		Running: initiallyRunning, Verification: verification}
 	if stopped.NamesUnnamedVolumes() {
-		result["guidance"] = unnamedVolumeGuidance
+		result.Guidance = unnamedVolumeGuidance
 	}
 	return withSave(job, result), nil
 }

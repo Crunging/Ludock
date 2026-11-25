@@ -138,7 +138,7 @@ type registrar struct {
 
 func (r registrar) Register(kind string, handler ops.Handler) {
 	run := handler.Run
-	handler.Run = func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	handler.Run = func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		// A refusal is final: the handler never runs after players hear
 		// it's off, even if access returns meanwhile.
 		_, scheduled := job.Job.Input["scheduleId"].(string)

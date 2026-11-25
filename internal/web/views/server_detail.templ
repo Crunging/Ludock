@@ -847,12 +847,11 @@ templ ActivityList(a ActivityView) {
 
 // guidance is what an operation's result tells the owner, starting with
 // any restore it finished undoing first.
-func guidance(result map[string]any) string {
-	text, _ := result["guidance"].(string)
-	if undone, _ := result["undone"].(string); undone != "" {
-		text = strings.TrimSpace(undone + " " + text)
+func guidance(result ops.Result) string {
+	if result.UndoNote != "" {
+		return strings.TrimSpace(result.UndoNote + " " + result.Guidance)
 	}
-	return text
+	return result.Guidance
 }
 
 // SelectedOperation reloads itself while the operation is active.
@@ -929,10 +928,8 @@ templ SelectedOperation(a ActivityView) {
 			if text := guidance(operation.Result); text != "" {
 				<p class="section-note">{ text }</p>
 			}
-			if id := newBackup(operation); id != "" && a.Archives {
-				<p class="inline-actions">
-					<a class="secondary-btn" href={ templ.SafeURL("/servers/" + a.ServerID + "/backups/" + id + "/download") } download>Download backup</a>
-				</p>
+			if a.Archives {
+				@backupDownload(operation)
 			}
 		}
 	</section>
@@ -940,13 +937,23 @@ templ SelectedOperation(a ActivityView) {
 
 func ActiveStatus(status string) bool { return status == "queued" || status == "running" }
 
-// newBackup is the backup a finished operation made, if any.
-func newBackup(operation *ops.Job) string {
-	id, _ := operation.Result["backupId"].(string)
-	if operation.Status != "succeeded" {
-		return ""
+// backupDownload offers the backup a finished operation made, if any.
+templ backupDownload(operation *ops.Job) {
+	if id, label := newBackup(operation); id != "" {
+		<p class="inline-actions">
+			<a class="secondary-btn" href={ templ.SafeURL("/servers/" + operation.ServerID + "/backups/" + id + "/download") } download>{ label }</a>
+		</p>
 	}
-	return id
+}
+
+func newBackup(operation *ops.Job) (id, label string) {
+	switch {
+	case operation.Status != "succeeded":
+		return "", ""
+	case operation.Result.SafetyBackupID != "":
+		return operation.Result.SafetyBackupID, "Download the backup taken before this restore"
+	}
+	return operation.Result.BackupID, "Download backup"
 }
 
 // OperationList is a table of operations; showContext adds the server and

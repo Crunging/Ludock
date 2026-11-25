@@ -40,7 +40,7 @@ func TestWorkRidesOutDockerRestart(t *testing.T) {
 			}
 		}
 		job := f.run(t, c.kind, c.input)
-		if job.Status != ops.Succeeded || job.Result["waitedForDocker"] != true {
+		if job.Status != ops.Succeeded || !job.Result.WaitedForDocker {
 			t.Fatalf("%s %v: %+v", c.kind, c.input, job)
 		}
 		if server := f.containerNamed("mc"); server == nil || server.State.Running != c.running {
@@ -85,7 +85,7 @@ func TestUpdateStopWaitsForDocker(t *testing.T) {
 	f := setup(t)
 	f.refuseBeforeStop(2 * time.Second)
 	job := f.run(t, "update", skipBackup)
-	if job.Status != ops.Succeeded || job.Result["waitedForDocker"] != true {
+	if job.Status != ops.Succeeded || !job.Result.WaitedForDocker {
 		t.Fatalf("%+v", job)
 	}
 }
@@ -129,7 +129,7 @@ func TestBackupCopyRidesOutDockerRestart(t *testing.T) {
 		return exec(c, cmd, stdin, stdout, stderr)
 	}
 	job := f.run(t, "backup", nil)
-	if job.Status != ops.Succeeded || job.Result["waitedForDocker"] != true || !f.running() {
+	if job.Status != ops.Succeeded || !job.Result.WaitedForDocker || !f.running() {
 		t.Fatalf("%+v", job)
 	}
 	if backups, err := f.jobs.Backups.List(ctx, f.serverID); err != nil || len(backups) != 1 {
@@ -158,7 +158,7 @@ func TestBackupCopyRidesOutDroppedConnection(t *testing.T) {
 		return exec(c, cmd, stdin, stdout, stderr)
 	}
 	job := f.run(t, "backup", nil)
-	if job.Status != ops.Succeeded || job.Result["waitedForDocker"] != true || !f.running() {
+	if job.Status != ops.Succeeded || !job.Result.WaitedForDocker || !f.running() {
 		t.Fatalf("%+v", job)
 	}
 	if backups, err := f.jobs.Backups.List(ctx, f.serverID); err != nil || len(backups) != 1 {
@@ -201,7 +201,7 @@ func TestRestoreUnpackCutByDroppedConnection(t *testing.T) {
 			}
 			backup := f.run(t, "backup", nil)
 			os.WriteFile(filepath.Join(f.data, "large.dat"), []byte("changed"), 0o644)
-			input := map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc"}
+			input := map[string]any{"backupId": backup.Result.BackupID, "confirmation": "mc"}
 			var mu sync.Mutex
 			cuts, extracts := 0, 0
 			trace := f.traceRestore(nil)
@@ -235,7 +235,7 @@ func TestRestoreUnpackCutByDroppedConnection(t *testing.T) {
 				restored = info.Size() == 16<<20
 			}
 			if c.want == "" {
-				if job.Status != ops.Succeeded || !restored || !f.running() || f.staged() || extracts != 2 || (job.Result["waitedForDocker"] == true) != c.disconnect {
+				if job.Status != ops.Succeeded || !restored || !f.running() || f.staged() || extracts != 2 || job.Result.WaitedForDocker != c.disconnect {
 					t.Fatalf("%+v, %d unpacks", job, extracts)
 				}
 				if lines := strings.Join(trace.lines(), "\n"); !strings.Contains(lines, "cleanup game: staging staging\nstage game: staging staging") {
@@ -262,7 +262,7 @@ func TestUpdateReplacementStartWaitsForDocker(t *testing.T) {
 	// The last read before the start looks for other writers.
 	f.refuseAfter(2*time.Second, "/containers/json", "'creating'", `%"replacement":%`)
 	job := f.run(t, "update", skipBackup)
-	if job.Status != ops.Succeeded || job.Result["waitedForDocker"] != true {
+	if job.Status != ops.Succeeded || !job.Result.WaitedForDocker {
 		t.Fatalf("%+v", job)
 	}
 	if server := f.containerNamed("mc"); server == nil || server.ID == f.game || !server.State.Running {

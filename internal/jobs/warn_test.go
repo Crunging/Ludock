@@ -167,7 +167,7 @@ func TestWarnedRestoreIsRecoveredOncePastItsWait(t *testing.T) {
 			mu.Unlock()
 		}
 	}
-	restore := f.run(t, "restore", map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc", WarnInput: true})
+	restore := f.run(t, "restore", map[string]any{"backupId": backup.Result.BackupID, "confirmation": "mc", WarnInput: true})
 	mu.Lock()
 	defer mu.Unlock()
 	if restore.Status != ops.Succeeded || len(phases) == 0 {
@@ -203,7 +203,7 @@ func TestWarnedRestoreWarnsAfterValidating(t *testing.T) {
 			record("helper")
 		}
 	}
-	restore := f.run(t, "restore", map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc", WarnInput: true})
+	restore := f.run(t, "restore", map[string]any{"backupId": backup.Result.BackupID, "confirmation": "mc", WarnInput: true})
 	mu.Lock()
 	defer mu.Unlock()
 	reads, unheld := source.counts()
@@ -297,12 +297,12 @@ func TestWarningReadsPlayersWhenItRuns(t *testing.T) {
 					t.Fatalf("%+v, %d readings, %d without the lock", job, reads, unheld)
 				}
 				if c.warns {
-					if job.Recovery.WarnUntil == 0 || job.Recovery.WarnSkipped || !waited || job.Result["warnSkipped"] != nil {
+					if job.Recovery.WarnUntil == 0 || job.Recovery.WarnSkipped || !waited || job.Result.WarnSkipped {
 						t.Fatalf("didn't warn and wait: %+v", job)
 					}
 					return
 				}
-				if job.Recovery.WarnUntil != 0 || job.Recovery.WarnSent || !job.Recovery.WarnSkipped || waited || job.Result["warnSkipped"] != true {
+				if job.Recovery.WarnUntil != 0 || job.Recovery.WarnSent || !job.Recovery.WarnSkipped || waited || !job.Result.WarnSkipped {
 					t.Fatalf("warned or waited with nobody online: %+v", job)
 				}
 			})
@@ -336,7 +336,7 @@ func TestResumedWarningIgnoresAnEmptyServer(t *testing.T) {
 			var input map[string]any
 			if kind == "restore" {
 				backup := f.run(t, "backup", nil)
-				input = map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc"}
+				input = map[string]any{"backupId": backup.Result.BackupID, "confirmation": "mc"}
 			}
 			source := f.withPlayers(0)
 			until := time.Now().Add(300 * time.Millisecond).UnixMilli()

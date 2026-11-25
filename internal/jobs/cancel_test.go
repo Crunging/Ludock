@@ -76,7 +76,7 @@ func TestCancelledStaysCancelledAcrossRestarts(t *testing.T) {
 	if err := f.jobs.Cancel(ctx, f.admin, token, f.serverID, id); err != nil {
 		t.Fatal(err)
 	}
-	if job := finished(t, runner, id); job.Status != ops.Cancelled || job.Result["cancelledBy"] != "admin" {
+	if job := finished(t, runner, id); job.Status != ops.Cancelled || job.Result.CancelledBy != "admin" {
 		t.Fatalf("%+v", job)
 	}
 	runner.Stop()

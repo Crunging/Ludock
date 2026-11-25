@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -77,14 +78,14 @@ func TestEnqueueIdempotencyAndConflicts(t *testing.T) {
 
 func TestRunsHandlersAndRecordsOutcomes(t *testing.T) {
 	r, servers := setup(t, 3)
-	r.Register("start", Handler{Run: func(_ context.Context, c *Context) (map[string]any, error) {
+	r.Register("start", Handler{Run: func(_ context.Context, c *Context) (*Result, error) {
 		c.Progress("starting", func(r *Recovery) { r.ContainerID = "x" }, nil)
-		return map[string]any{"action": "start"}, nil
+		return &Result{Guidance: "started"}, nil
 	}})
-	r.Register("update", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
-		return map[string]any{"alreadyCurrent": true}, nil
+	r.Register("update", Handler{Run: func(context.Context, *Context) (*Result, error) {
+		return &Result{AlreadyCurrent: true}, nil
 	}})
-	r.Register("stop", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
+	r.Register("stop", Handler{Run: func(context.Context, *Context) (*Result, error) {
 		return nil, errors.New("internal detail /srv/secret")
 	}})
 	r.Start(ctx, nil)
@@ -92,7 +93,7 @@ func TestRunsHandlersAndRecordsOutcomes(t *testing.T) {
 	b, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[1], ActorID: "admin", Kind: "update"})
 	c, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[2], ActorID: "admin", Kind: "stop"})
 	job := waitStatus(t, r, a.ID, Succeeded)
-	if job.Recovery.ContainerID != "x" || job.Result["action"] != "start" {
+	if job.Recovery.ContainerID != "x" || job.Result.Guidance != "started" {
 		t.Fatal(job)
 	}
 	waitStatus(t, r, b.ID, AlreadyCurrent)
@@ -113,7 +114,7 @@ func TestFinishTellsPages(t *testing.T) {
 	r, servers := setup(t, 1)
 	changed := make(chan string, 1)
 	r.Changed = func(serverID string) { changed <- serverID }
-	r.Register("start", Handler{Run: func(context.Context, *Context) (map[string]any, error) { return nil, nil }})
+	r.Register("start", Handler{Run: func(context.Context, *Context) (*Result, error) { return nil, nil }})
 	r.Start(ctx, nil)
 	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
 	select {
@@ -141,7 +142,7 @@ func TestRetriesStateItCouldNotSave(t *testing.T) {
 	unblock := func() { r.DB.Exec("DELETE FROM blocked_status") }
 	var mu sync.Mutex
 	runs := 0
-	r.Register("start", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
+	r.Register("start", Handler{Run: func(context.Context, *Context) (*Result, error) {
 		mu.Lock()
 		runs++
 		mu.Unlock()
@@ -229,8 +230,8 @@ func TestDataLaneIsSerialAndLifecycleParallel(t *testing.T) {
 	active := map[string]int{}
 	peak := map[string]int{}
 	gate := make(chan struct{})
-	track := func(lane string) func(context.Context, *Context) (map[string]any, error) {
-		return func(context.Context, *Context) (map[string]any, error) {
+	track := func(lane string) func(context.Context, *Context) (*Result, error) {
+		return func(context.Context, *Context) (*Result, error) {
 			mu.Lock()
 			active[lane]++
 			peak[lane] = max(peak[lane], active[lane])
@@ -278,8 +279,8 @@ func TestJobsYieldHeldResourcesAndRetry(t *testing.T) {
 	r, servers := setup(t, 2)
 	gate := make(chan struct{})
 	order := make(chan string, 2)
-	r.Register("start", Handler{Run: func(_ context.Context, c *Context) (map[string]any, error) {
-		return c.WithLocks([]string{"path:/srv/shared"}, func() (map[string]any, error) {
+	r.Register("start", Handler{Run: func(_ context.Context, c *Context) (*Result, error) {
+		return c.WithLocks([]string{"path:/srv/shared"}, func() (*Result, error) {
 			order <- c.Job.ServerID
 			if c.Job.ServerID == servers[0] {
 				<-gate
@@ -322,8 +323,8 @@ func TestBackgroundHoldersAreCancelled(t *testing.T) {
 	cancelled := make(chan struct{})
 	var release func()
 	release, _ = r.Locks.Acquire([]string{locks.ServerKey(servers[0])}, func() { close(cancelled); go release() })
-	r.Register("stop", Handler{Run: func(_ context.Context, c *Context) (map[string]any, error) {
-		return c.WithLocks([]string{locks.ServerKey(servers[0])}, func() (map[string]any, error) { return nil, nil })
+	r.Register("stop", Handler{Run: func(_ context.Context, c *Context) (*Result, error) {
+		return c.WithLocks([]string{locks.ServerKey(servers[0])}, func() (*Result, error) { return nil, nil })
 	}})
 	r.Start(ctx, nil)
 	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "stop"})
@@ -336,9 +337,12 @@ func TestInterruptedOperationsReconciled(t *testing.T) {
 	r, servers := setup(t, 2)
 	ran := false
 	r.Register("stop", Handler{
-		Run: func(context.Context, *Context) (map[string]any, error) { ran = true; return nil, nil },
-		Recover: func(_ context.Context, c *Context) (map[string]any, error) {
-			return map[string]any{"reconciled": c.Job.Recovery.StopStarted}, nil
+		Run: func(context.Context, *Context) (*Result, error) { ran = true; return nil, nil },
+		Recover: func(_ context.Context, c *Context) (*Result, error) {
+			if c.Job.Recovery.StopStarted {
+				return &Result{Guidance: "reconciled"}, nil
+			}
+			return &Result{}, nil
 		},
 	})
 	r.DB.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at)
@@ -348,7 +352,7 @@ func TestInterruptedOperationsReconciled(t *testing.T) {
 		t.Fatal(err)
 	}
 	job, _ := r.Get(ctx, "00000000-0000-4000-8000-000000000001")
-	if job.Status != Interrupted || job.Result["reconciled"] != true || ran {
+	if job.Status != Interrupted || job.Result.Guidance != "reconciled" || ran {
 		t.Fatalf("%+v ran=%v", job, ran)
 	}
 	var damaged string
@@ -361,8 +365,8 @@ func TestInterruptedOperationsReconciled(t *testing.T) {
 // Work queued at startup runs once recovery lifts the fence.
 func TestQueuedWorkRunsAfterRecovery(t *testing.T) {
 	r, servers := setup(t, 1)
-	r.Register("start", Handler{Run: func(_ context.Context, c *Context) (map[string]any, error) {
-		return c.WithLocks([]string{"path:/srv/shared"}, func() (map[string]any, error) { return nil, nil })
+	r.Register("start", Handler{Run: func(_ context.Context, c *Context) (*Result, error) {
+		return c.WithLocks([]string{"path:/srv/shared"}, func() (*Result, error) { return nil, nil })
 	}})
 	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
 	lift := r.Locks.Fence()
@@ -375,7 +379,7 @@ func TestQueuedWorkRunsAfterRecovery(t *testing.T) {
 
 func TestStopLeavesQueuedWork(t *testing.T) {
 	r, servers := setup(t, 1)
-	r.Register("start", Handler{Run: func(context.Context, *Context) (map[string]any, error) { return nil, nil }})
+	r.Register("start", Handler{Run: func(context.Context, *Context) (*Result, error) { return nil, nil }})
 	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
 	r.Start(ctx, nil)
 	r.Stop()
@@ -390,8 +394,8 @@ func TestLockReleasedDuringConflict(t *testing.T) {
 		t.Run(point, func(t *testing.T) {
 			r, servers := setup(t, 2)
 			held, gate := make(chan struct{}), make(chan struct{})
-			r.Register("start", Handler{Run: func(_ context.Context, c *Context) (map[string]any, error) {
-				return c.WithLocks([]string{"path:/srv/shared"}, func() (map[string]any, error) {
+			r.Register("start", Handler{Run: func(_ context.Context, c *Context) (*Result, error) {
+				return c.WithLocks([]string{"path:/srv/shared"}, func() (*Result, error) {
 					if c.Job.ServerID == servers[0] {
 						close(held)
 						<-gate
@@ -434,7 +438,7 @@ func TestLockReleasedDuringConflict(t *testing.T) {
 func TestStaleQueuedRowDoesNotRunAgain(t *testing.T) {
 	r, servers := setup(t, 1)
 	runs := 0
-	r.Register("stop", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
+	r.Register("stop", Handler{Run: func(context.Context, *Context) (*Result, error) {
 		runs++
 		return nil, nil
 	}})
@@ -511,7 +515,7 @@ func TestCancelRefusesWorkThatActed(t *testing.T) {
 // never its message, which can hold a host path.
 func TestUnexpectedFailureIsLogged(t *testing.T) {
 	r, servers := setup(t, 1)
-	r.Register("backup", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
+	r.Register("backup", Handler{Run: func(context.Context, *Context) (*Result, error) {
 		return nil, fmt.Errorf("open /srv/secret/world: %w", &docker.APIError{Status: 409})
 	}})
 	var stdout, stderr bytes.Buffer
@@ -537,7 +541,7 @@ func TestUnexpectedFailureIsLogged(t *testing.T) {
 func TestCancelledWorkIsNotLoggedAsFailure(t *testing.T) {
 	r, servers := setup(t, 1)
 	warning := make(chan struct{})
-	r.Register("backup", Handler{Run: func(_ context.Context, job *Context) (map[string]any, error) {
+	r.Register("backup", Handler{Run: func(_ context.Context, job *Context) (*Result, error) {
 		if err := job.Progress(PhaseWarning, nil, nil); err != nil {
 			return nil, err
 		}
@@ -576,7 +580,7 @@ func TestDockerFailureSaysSo(t *testing.T) {
 	defer logging.SetOutput(os.Stdout, os.Stderr)
 	failures := map[string]error{"backup": docker.ErrRequestFailed, "restore": &docker.APIError{Status: 500}}
 	for kind, failure := range failures {
-		r.Register(kind, Handler{Run: func(context.Context, *Context) (map[string]any, error) { return nil, failure }})
+		r.Register(kind, Handler{Run: func(context.Context, *Context) (*Result, error) { return nil, failure }})
 	}
 	r.Start(ctx, nil)
 	for kind, want := range map[string]string{"backup": "Ludock couldn’t reach Docker", "restore": "Docker reported an error"} {
@@ -592,5 +596,20 @@ func TestDockerFailureSaysSo(t *testing.T) {
 	if logged := stdout.String() + stderr.String(); strings.Contains(logged, "failed unexpectedly") ||
 		strings.Count(logged, "WARN [operations] Operation stopped by a Docker error") != 2 || !strings.Contains(logged, `"dockerStatus":500`) {
 		t.Fatal(logged)
+	}
+}
+
+// The JSON paths SQL reads or sets name fields of Result, so a renamed field
+// can't leave a query reading nothing.
+func TestResultPathsNameFields(t *testing.T) {
+	names := map[string]bool{}
+	for field := range reflect.TypeFor[Result]().Fields() {
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		names["$."+name] = true
+	}
+	for _, path := range []string{PathCancelledBy, PathForceStopped, PathWaitedForDocker, db.GuidancePath} {
+		if !names[path] {
+			t.Error(path)
+		}
 	}
 }

@@ -137,7 +137,7 @@ type Operation struct {
 	CancelledBy          *Actor
 	CreatedAt, UpdatedAt int64
 	Error                string
-	Result               map[string]any
+	Result               ops.Result
 }
 
 type Service struct {
@@ -198,7 +198,7 @@ func (s *Service) Operations(ctx context.Context, actor *db.SessionUser, q Query
 	rows, err := s.DB.QueryContext(ctx, `SELECT o.id, o.server_id, o.actor_id, u.username,
     o.kind, o.status, o.phase, o.created_at, o.updated_at, o.error, o.result_json, c.username
     FROM operations o LEFT JOIN users u ON u.id = o.actor_id
-    LEFT JOIN users c ON o.status = 'cancelled' AND json_valid(o.result_json) AND c.id = json_extract(o.result_json, '$.cancelledBy')
+    LEFT JOIN users c ON o.status = 'cancelled' AND json_valid(o.result_json) AND c.id = json_extract(o.result_json, '`+ops.PathCancelledBy+`')
     WHERE `+strings.Join(conditions, " AND ")+` ORDER BY o.created_at DESC, o.id DESC LIMIT ?`, values...)
 	if err != nil {
 		return nil, "", err
@@ -219,8 +219,7 @@ func (s *Service) Operations(ctx context.Context, actor *db.SessionUser, q Query
 			json.Unmarshal([]byte(resultJSON.String), &operation.Result)
 		}
 		if operation.Status == ops.Cancelled {
-			by, _ := operation.Result["cancelledBy"].(string)
-			operation.CancelledBy = PublicActor(by, canceller.String)
+			operation.CancelledBy = PublicActor(operation.Result.CancelledBy, canceller.String)
 		}
 		result = append(result, operation)
 	}

@@ -64,7 +64,7 @@ func (s *Server) cancellable(r *http.Request, user *db.SessionUser, operations [
 
 // canceller is who cancelled job, if anyone did.
 func (s *Server) canceller(r *http.Request, job *ops.Job) *history.Actor {
-	id, _ := job.Result["cancelledBy"].(string)
+	id := job.Result.CancelledBy
 	if job.Status != ops.Cancelled || id == "" {
 		return nil
 	}

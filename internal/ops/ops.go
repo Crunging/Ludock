@@ -79,7 +79,7 @@ type Job struct {
 	CreatedAt       int64
 	UpdatedAt       int64
 	Error           string // "" when none
-	Result          map[string]any
+	Result          Result
 	ActorID         string
 	Input           map[string]any
 	Recovery        Recovery
@@ -177,9 +177,9 @@ func (c *Context) Active(ctx context.Context) error {
 }
 
 // Progress atomically persists the phase, the recovery state after change
-// (when not nil), and an optional public result. The in-memory job changes only
-// once the write succeeds, so it matches what a restart would see.
-func (c *Context) Progress(phase string, change func(*Recovery), result map[string]any) error {
+// (when not nil), and the public result unless it is nil. The in-memory job
+// changes only once the write succeeds, so it matches what a restart would see.
+func (c *Context) Progress(phase string, change func(*Recovery), result *Result) error {
 	saved, err := c.progress(c.runner.DB, phase, change, result)
 	if err == nil {
 		saved()
@@ -188,32 +188,29 @@ func (c *Context) Progress(phase string, change func(*Recovery), result map[stri
 }
 
 // ProgressIn is Progress through tx. saved updates the job once tx commits.
-func (c *Context) ProgressIn(tx *sql.Tx, phase string, change func(*Recovery), result map[string]any) (saved func(), err error) {
+func (c *Context) ProgressIn(tx *sql.Tx, phase string, change func(*Recovery), result *Result) (saved func(), err error) {
 	return c.progress(tx, phase, change, result)
 }
 
 func (c *Context) progress(q interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, phase string, change func(*Recovery), result map[string]any) (func(), error) {
+}, phase string, change func(*Recovery), result *Result) (func(), error) {
 	merged := c.Job.Recovery
 	merged.LockKeys = slices.Clone(merged.LockKeys)
 	if change != nil {
 		change(&merged)
 	}
-	if result == nil {
-		result = c.Job.Result
+	kept := c.Job.Result
+	if result != nil {
+		kept = *result
 	}
 	recoveryJSON, err := json.Marshal(merged)
 	if err != nil {
 		return nil, err
 	}
 	var resultJSON any
-	if result != nil {
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			return nil, err
-		}
-		resultJSON = string(encoded)
+	if result != nil || kept != (Result{}) {
+		resultJSON = encodeResult(&kept)
 	}
 	// A cancelled job is no longer running, so it saves nothing more, and
 	// whichever of the cancel and this write commits first wins.
@@ -233,7 +230,7 @@ func (c *Context) progress(q interface {
 	} else if changed == 0 {
 		return nil, ErrCancelled
 	}
-	return func() { c.Job.Recovery, c.Job.Result, c.Job.Phase = merged, result, phase }, nil
+	return func() { c.Job.Recovery, c.Job.Result, c.Job.Phase = merged, kept, phase }, nil
 }
 
 // ErrResume, returned by Recover, queues an interrupted job again: it had not
@@ -242,8 +239,8 @@ var ErrResume = errors.New("operation resumes")
 
 // Handler runs and reconciles one operation kind.
 type Handler struct {
-	Run     func(ctx context.Context, job *Context) (map[string]any, error)
-	Recover func(ctx context.Context, job *Context) (map[string]any, error)
+	Run     func(ctx context.Context, job *Context) (*Result, error)
+	Recover func(ctx context.Context, job *Context) (*Result, error)
 }
 
 // Lanes: start, stop, and plain restart are short and never touch backup
@@ -317,6 +314,11 @@ func parseObject(value string) (map[string]any, error) {
 	return result, nil
 }
 
+func encodeResult(result *Result) string {
+	encoded, _ := json.Marshal(result)
+	return string(encoded)
+}
+
 type row struct {
 	id, serverID, actorID, kind, status, phase, input, recovery string
 	revision, createdAt, updatedAt                              int64
@@ -339,9 +341,11 @@ func (r *row) job() (*Job, error) {
 		UpdatedAt: r.updatedAt, Error: r.errorText.String, ActorID: r.actorID, BindingRevision: r.revision}
 	var err error
 	if r.result.Valid {
-		if job.Result, err = parseObject(r.result.String); err != nil {
-			return nil, err
+		var result *Result
+		if json.Unmarshal([]byte(r.result.String), &result) != nil || result == nil {
+			return nil, errInvalidState
 		}
+		job.Result = *result
 	}
 	if job.Input, err = parseObject(r.input); err != nil {
 		return nil, err
@@ -466,18 +470,17 @@ func (r *Runner) Enqueue(ctx context.Context, tx *sql.Tx, options EnqueueOptions
 
 // finish records a running job's outcome, reporting false when it was
 // cancelled instead. waited notes in its result that it waited for Docker.
-func (r *Runner) finish(ctx context.Context, job *Job, status string, result map[string]any, errorText string, waited bool) (bool, error) {
+func (r *Runner) finish(ctx context.Context, job *Job, status string, result *Result, errorText string, waited bool) (bool, error) {
 	return r.finishAlerting(ctx, job, status, result, errorText, waited, nil)
 }
 
 // finishAlerting is finish for the job of rw, which queues the alert of a
 // failed scheduled job with its outcome.
-func (r *Runner) finishAlerting(ctx context.Context, job *Job, status string, result map[string]any, errorText string, waited bool,
+func (r *Runner) finishAlerting(ctx context.Context, job *Job, status string, result *Result, errorText string, waited bool,
 	scheduled *row) (bool, error) {
 	var resultJSON, errorValue any
 	if result != nil {
-		encoded, _ := json.Marshal(result)
-		resultJSON = string(encoded)
+		resultJSON = encodeResult(result)
 	}
 	if errorText != "" {
 		errorValue = errorText
@@ -496,7 +499,7 @@ func (r *Runner) finishAlerting(ctx context.Context, job *Job, status string, re
 	finished, alerted := false, false
 	if err := r.DB.Tx(ctx, func(tx *sql.Tx) error {
 		updated, err := tx.ExecContext(ctx, `UPDATE operations SET status=?1,phase=?1,result_json=CASE
-			WHEN ?2 AND json_valid(COALESCE(?3,result_json,'{}')) THEN json_set(COALESCE(?3,result_json,'{}'),'$.waitedForDocker',json('true'))
+			WHEN ?2 AND json_valid(COALESCE(?3,result_json,'{}')) THEN json_set(COALESCE(?3,result_json,'{}'),'`+PathWaitedForDocker+`',json('true'))
 			ELSE COALESCE(?3,result_json) END,error=?4,updated_at=?5 WHERE id=?6 AND status='running'`,
 			status, waited, resultJSON, errorValue, db.Now(), job.ID)
 		if err != nil {
@@ -599,7 +602,7 @@ func (e *resourcesBusy) Error() string { return "Operation resources are busy" }
 // background work holding its resources and waits for its cleanup, and waits
 // for a request holding them, such as a download, without holding back other
 // jobs.
-func (c *Context) WithLocks(keys []string, action func() (map[string]any, error)) (map[string]any, error) {
+func (c *Context) WithLocks(keys []string, action func() (*Result, error)) (*Result, error) {
 	r := c.runner
 	id := c.Job.ID
 	// Taken before trying, so a release or finish right after a conflict
@@ -859,12 +862,12 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 				return
 			}
 			if result == nil {
-				result = map[string]any{}
+				result = &Result{}
 			}
 			status := Succeeded
-			if result["alreadyCurrent"] == true {
+			if result.AlreadyCurrent {
 				status = AlreadyCurrent
-			} else if result["skipped"] == true {
+			} else if result.Skipped {
 				status = Skipped
 			}
 			r.persist(ctx, "finish", func() error {
@@ -981,7 +984,7 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 	}
 	for _, rw := range running {
 		job, err := rw.job()
-		var result map[string]any
+		var result *Result
 		startedBefore := false
 		if err == nil {
 			startedBefore = job.Recovery.StartRequested
@@ -1089,7 +1092,7 @@ func (r *Runner) Cancel(ctx context.Context, id, userID string, within func(func
 			return errEnded
 		}
 		updated, err := tx.ExecContext(ctx, `UPDATE operations SET status=?, phase=?, error=NULL,
-      result_json=json_set(COALESCE(result_json,'{}'),'$.cancelledBy',?), updated_at=? WHERE id=? AND status=? AND phase=?`,
+      result_json=json_set(COALESCE(result_json,'{}'),'`+PathCancelledBy+`',?), updated_at=? WHERE id=? AND status=? AND phase=?`,
 			Cancelled, Cancelled, userID, db.Now(), id, rw.status, rw.phase)
 		if err != nil {
 			return err

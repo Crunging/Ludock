@@ -10,7 +10,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"maps"
 	"math"
 	"slices"
 	"sync"
@@ -80,7 +79,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 	runner := registrar{queue, j}
 	for _, action := range []servers.Action{servers.Start, servers.Stop} {
 		runner.Register(string(action), ops.Handler{
-			Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+			Run: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 				if action == servers.Stop {
 					if err := j.warnFirst(ctx, job, capabilityFor(action), false); err != nil {
 						return nil, calledOff(job, err)
@@ -89,7 +88,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 				result, err := j.runLifecycle(ctx, job, action)
 				return warnedResult(job, result, err)
 			},
-			Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+			Recover: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 				if resumable(job) {
 					return nil, ops.ErrResume
 				}
@@ -98,7 +97,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 		})
 	}
 	runner.Register(ops.KindRestart, ops.Handler{
-		Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+		Run: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 			if err := j.warnFirst(ctx, job, authz.ServerRestart, false); err != nil {
 				return nil, calledOff(job, err)
 			}
@@ -116,7 +115,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 			result, err := j.runLifecycle(ctx, job, servers.Restart)
 			return warnedResult(job, result, err)
 		},
-		Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+		Recover: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 			if resumable(job) {
 				return nil, ops.ErrResume
 			}
@@ -126,7 +125,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 			return j.recoverLifecycle(ctx, job)
 		},
 	})
-	runner.Register(ops.KindBackup, ops.Handler{Run: j.warnedFirst(authz.BackupsCreate, j.runBackup), Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register(ops.KindBackup, ops.Handler{Run: j.warnedFirst(authz.BackupsCreate, j.runBackup), Recover: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		if resumable(job) {
 			return nil, ops.ErrResume
 		}
@@ -134,17 +133,14 @@ func (j *Jobs) Register(queue *ops.Runner) {
 		if !completed {
 			defer j.notifyInterrupted(ctx, job, notify.FailedWork, "backup-failed:"+job.Job.ID, backupInterrupted)
 		}
-		outcome := func() map[string]any {
-			result := maps.Clone(job.Job.Result)
-			if result == nil {
-				result = map[string]any{}
-			}
-			result["guidance"] = "Ludock restarted before the backup finished, so there’s no new backup."
+		outcome := func() *ops.Result {
+			result := job.Job.Result
+			result.Guidance = "Ludock restarted before the backup finished, so there’s no new backup."
 			if completed {
-				result["guidance"], result["backupId"] = "The backup had finished.", job.Job.Recovery.BackupID
-				result = withSave(job, result)
+				result.Guidance, result.BackupID = "The backup had finished.", job.Job.Recovery.BackupID
+				withSave(job, &result)
 			}
-			return result
+			return &result
 		}
 		if err := j.recoverBackup(ctx, job); err != nil {
 			// The outcome keeps what is known of the backup.
@@ -155,15 +151,15 @@ func (j *Jobs) Register(queue *ops.Runner) {
 	}})
 	// An interrupted command is reported as interrupted and never sent again.
 	// It is sent on time or not at all, so it doesn't wait for Docker.
-	runner.Register(ops.KindCommand, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register(ops.KindCommand, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		return j.runCommand(docker.Promptly(ctx), job)
-	}, Recover: func(context.Context, *ops.Context) (map[string]any, error) {
-		return map[string]any{"action": "command"}, nil
+	}, Recover: func(context.Context, *ops.Context) (*ops.Result, error) {
+		return &ops.Result{}, nil
 	}})
-	runner.Register(ops.KindRestore, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register(ops.KindRestore, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		result, err := j.runRestore(ctx, job)
 		return warnedResult(job, result, err)
-	}, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	}, Recover: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		if resumable(job) {
 			return nil, ops.ErrResume
 		}
@@ -172,19 +168,20 @@ func (j *Jobs) Register(queue *ops.Runner) {
 	// Undoing a restore that stopped partway stops the server, which another
 	// manager may have started, finishes the undo, and returns the server to
 	// how it was.
-	runner.Register(ops.KindUndoRestore, ops.Handler{Run: j.warnedFirst(authz.BackupsRestore, j.runUndoRestore), Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register(ops.KindUndoRestore, ops.Handler{Run: j.warnedFirst(authz.BackupsRestore, j.runUndoRestore), Recover: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		if resumable(job) {
 			return nil, ops.ErrResume
 		}
 		if err := j.recoverBackup(ctx, job); err != nil {
 			return nil, err
 		}
-		return withServerAfterRecovery(job, maps.Clone(job.Job.Result)), nil
+		result := job.Job.Result
+		return withServerAfterRecovery(job, &result), nil
 	}})
-	runner.Register(ops.KindUpdate, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register(ops.KindUpdate, ops.Handler{Run: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		result, err := j.runUpdate(ctx, job)
 		return warnedResult(job, result, err)
-	}, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	}, Recover: func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		if resumable(job) {
 			// A check before the stop may have left a helper.
 			if err := j.removeOperationHelpers(ctx, job); err != nil {
@@ -386,18 +383,18 @@ func (j *Jobs) assertCapability(ctx context.Context, job *ops.Context, capabilit
 
 const forceStopGuidance = "Force-stopped, recent progress may not have been saved."
 
-func lifecycleResult(kind string, recovery ops.Recovery) map[string]any {
-	result := map[string]any{"action": kind}
+func lifecycleResult(recovery ops.Recovery) *ops.Result {
+	result := &ops.Result{}
 	if recovery.SaveStatus != "" {
-		result["saveStatus"], result["saveReason"] = recovery.SaveStatus, recovery.SaveReason
+		result.SaveStatus, result.SaveReason = recovery.SaveStatus, recovery.SaveReason
 	}
 	if recovery.StopRecoveryTimedOut {
-		result["stopRecoveryTimedOut"] = true
-		result["guidance"] = "Shutdown could not be confirmed before the recovery deadline. Review the server state before retrying."
+		result.StopRecoveryTimedOut = true
+		result.Guidance = "Shutdown could not be confirmed before the recovery deadline. Review the server state before retrying."
 	}
 	if recovery.ForceStopped {
-		result["forceStopped"] = true
-		result["guidance"] = forceStopGuidance
+		result.ForceStopped = true
+		result.Guidance = forceStopGuidance
 	}
 	return result
 }
@@ -417,7 +414,7 @@ func record(job *ops.Context, phase string, change func(*ops.Recovery)) error {
 	if change != nil {
 		change(&next)
 	}
-	return job.Progress(phase, func(r *ops.Recovery) { *r = next }, lifecycleResult(job.Job.Kind, next))
+	return job.Progress(phase, func(r *ops.Recovery) { *r = next }, lifecycleResult(next))
 }
 
 // saveWorld sends the game's save command, best effort. Revoked authority
@@ -482,20 +479,20 @@ func capabilityFor(action servers.Action) authz.Capability {
 	return authz.Capability("server." + string(action))
 }
 
-func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action servers.Action) (map[string]any, error) {
+func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action servers.Action) (*ops.Result, error) {
 	permission := capabilityFor(action)
 	initial, err := j.resolve(ctx, job, permission, true)
 	if err != nil {
 		return nil, err
 	}
 	recovery := job.Job.ActorID == ops.RecoveryActor
-	return job.WithLocks(initial.LockKeys, func() (map[string]any, error) {
+	return job.WithLocks(initial.LockKeys, func() (*ops.Result, error) {
 		server, err := j.resolve(ctx, job, permission, true)
 		if err != nil {
 			return nil, err
 		}
 		if recovery && !j.stillHung(job, server) {
-			return recoverySkipped, nil
+			return new(recoverySkipped), nil
 		}
 		var accessMu sync.Mutex
 		var accessFailure error
@@ -600,7 +597,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 				return nil, err
 			}
 			if err := mutate(servers.Stop); errors.Is(err, errRecoveryStopped) {
-				return recoverySkipped, nil
+				return new(recoverySkipped), nil
 			} else if err != nil {
 				return nil, err
 			}
@@ -618,7 +615,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 		}
 		if action != servers.Stop {
 			if err := mutate(servers.Start); errors.Is(err, errRecoveryStopped) {
-				return recoverySkipped, nil
+				return new(recoverySkipped), nil
 			} else if err != nil {
 				return nil, err
 			}
@@ -627,7 +624,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 		if err := assertAccess(); err != nil {
 			return nil, err
 		}
-		return lifecycleResult(job.Job.Kind, job.Job.Recovery), nil
+		return lifecycleResult(job.Job.Recovery), nil
 	})
 }
 
@@ -645,8 +642,7 @@ func (j *Jobs) suppressAfter(ctx context.Context, job *ops.Context, serverID str
 }
 
 var (
-	recoverySkipped = map[string]any{"action": "restart", "skipped": true,
-		"guidance": "Skipped: the game answered again, or the server was no longer running"}
+	recoverySkipped    = ops.Result{Skipped: true, Guidance: "Skipped: the game answered again, or the server was no longer running"}
 	errRecoveryStopped = errors.New("server stopped before its recovery restart")
 )
 
@@ -698,7 +694,7 @@ func recordStop(r *ops.Recovery, info *docker.ContainerInspect) {
 // recoverLifecycle only observes: Docker may still be handling the
 // original stop, so the lock is kept until it settles, without starting or
 // stopping again.
-func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[string]any, error) {
+func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 	permission := capabilityFor(servers.Action(job.Job.Kind))
 	if job.Job.Kind != ops.KindStart && job.Job.Kind != ops.KindStop && job.Job.Kind != ops.KindRestart {
 		return nil, apperr.New("INVALID_OPERATION_STATE", 409, "Invalid lifecycle action")
@@ -779,5 +775,5 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 			}
 		}
 	}
-	return lifecycleResult(job.Job.Kind, job.Job.Recovery), nil
+	return lifecycleResult(job.Job.Recovery), nil
 }
