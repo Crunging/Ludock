@@ -1297,16 +1297,18 @@ func (h *fileHelper) uploadPin(relative string, dirs []string, size int64, asked
 	folder, err := pin(0)
 	for depth := 0; err == nil && depth < len(dirs); depth++ {
 		at := path.Join(append([]string{relative}, dirs[:depth+1]...)...)
+		// One that failed after approval, even once made, isn't used.
+		failed, approved := asked[at]
+		if failed != nil {
+			return -1, failed
+		}
 		next, openErr := h.openFolders(folder, dirs[depth:depth+1])
 		if openErr == nil || !isNotExist(openErr) {
 			folder, err = next, openErr
 			continue
 		}
-		if failed, approved := asked[at]; approved {
-			if failed == nil {
-				failed = errUnsafe
-			}
-			return -1, failed
+		if approved {
+			return -1, errUnsafe
 		}
 		// Every missing folder is on the disk of the deepest that exists; one
 		// that doesn't fit the file isn't asked for.
@@ -1335,7 +1337,11 @@ func (h *fileHelper) uploadPin(relative string, dirs []string, size int64, asked
 				next, err = h.openFolders(folder, dirs[depth:depth+1])
 			}
 		}
-		if !errors.Is(err, errUploadStream) {
+		switch full := (*noSpaceError)(nil); {
+		case errors.As(err, &full):
+			// Its measure was this file's; a later one is told only the disk is short.
+			asked[at] = unix.ENOSPC
+		case !errors.Is(err, errUploadStream):
 			asked[at] = err
 		}
 		folder = next
