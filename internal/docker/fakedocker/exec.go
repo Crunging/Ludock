@@ -119,7 +119,7 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 				// A lost result loses the helper's answers too, but not a batch
 				// upload's requests to go on: for a file's body or trailer, or to
 				// make a folder.
-				if !lose || channel != 1 || bytes.Contains(data, []byte(`"ready":true`)) || bytes.Contains(data, []byte(`"folder":true`)) ||
+				if !lose || channel != 1 || bytes.Contains(data, []byte(`"ready":true`)) || bytes.Contains(data, []byte(`"folder":"`)) ||
 					bytes.Contains(data, []byte(`"body":true`)) {
 					conn.Write(Frame(channel, data))
 				}

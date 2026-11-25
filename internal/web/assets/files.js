@@ -93,7 +93,9 @@
   var feedback = document.getElementById("file-feedback");
   var csrf = document.querySelector('meta[name="csrf-token"]');
   var maxUpload = Number(page.getAttribute("data-max-upload")) || 0;
-  var batchFiles = 100, batchBytes = 16 * 1024 * 1024, batchFolders = 256;
+  // As the server: a batch's files and bytes, the folders its files are in,
+  // and how deep below the shown folder one may be.
+  var batchFiles = 100, batchBytes = 16 * 1024 * 1024, batchFolders = 256, maxDepth = 32;
   // busy holds the uploader from reading what was chosen to the end of the
   // upload; controller cancels the upload.
   var busy = false, controller = null;
@@ -371,6 +373,11 @@
     cancel.disabled = false;
     if (feedback) feedback.replaceChildren();
     var files = chosen.filter(function (item) {
+      if (item.folder && item.folder.split("/").length > maxDepth) {
+        lines.push("Could not upload “" + label(item) + "”: This file is more than " + maxDepth +
+          " folders below the folder you upload into, so it wasn’t uploaded.");
+        return false;
+      }
       if (!maxUpload || item.file.size <= maxUpload) return true;
       lines.push("Could not upload “" + label(item) + "”: File exceeds the upload size limit of " + page.getAttribute("data-max-upload-text"));
       return false;
