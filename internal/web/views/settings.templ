@@ -191,7 +191,7 @@ templ saveRow(label, errorText, notice string, unsaved bool) {
 }
 
 templ UploadLimitForm(u UploadLimitSettings) {
-	<form class="stack-form settings-group" id="upload-limit-form" hx-post="/settings/upload-limit" hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form settings-group" id="upload-limit-form" hx-post="/settings/upload-limit" hx-target="this" hx-swap="outerHTML" data-lock-while-saving>
 		<h3>Upload size limit</h3>
 		if u.Fixed {
 			<p>Each uploaded file can be up to <strong>{ u.Limit }</strong>.</p>
@@ -238,7 +238,7 @@ func trustValues(peer string) string {
 }
 
 templ ProxyForm(p ProxySettings) {
-	<form class="stack-form settings-group" id="proxy-form" hx-post="/settings/proxies" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop">
+	<form class="stack-form settings-group" id="proxy-form" hx-post="/settings/proxies" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" data-lock-while-saving>
 		<h3>Reverse proxy</h3>
 		if p.Fixed {
 			if p.Trusted == "" {
@@ -252,7 +252,7 @@ templ ProxyForm(p ProxySettings) {
 				<div class="alert alert--info proxy-hint" role="status">
 					<div>
 						<p>You’re reaching Ludock through a proxy at <strong>{ p.Forwarded }</strong> that it doesn’t trust, so every visitor shares that address.</p>
-						<button class="secondary-btn" type="button" hx-post="/settings/proxies" hx-vals={ trustValues(p.Forwarded) } hx-target="#proxy-form" hx-swap="outerHTML" hx-sync="#proxy-form:drop" data-busy-label="Trusting…">Trust { p.Forwarded }</button>
+						<button class="secondary-btn" type="button" hx-post="/settings/proxies" hx-vals={ trustValues(p.Forwarded) } hx-target="#proxy-form" hx-swap="outerHTML" hx-sync="#proxy-form:drop" data-lock-while-saving data-busy-label="Trusting…">Trust { p.Forwarded }</button>
 					</div>
 				</div>
 			}
@@ -269,7 +269,7 @@ templ ProxyForm(p ProxySettings) {
 }
 
 templ ConnectionForm(c ConnectionSettings) {
-	<form class="stack-form" id="connection-form" hx-post="/settings/connection" hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form" id="connection-form" hx-post="/settings/connection" hx-target="this" hx-swap="outerHTML" data-lock-while-saving>
 		<p class="section-lede">The name or IP address players use to reach this host. Ludock adds each server’s port.</p>
 		<label class="narrow-field">
 			Public address
@@ -395,7 +395,7 @@ templ BackupSummary(b BackupSettingsView) {
 }
 
 templ BackupSettingsForm(b BackupSettingsView) {
-	<form class="stack-form" id="backup-settings-form" hx-post="/settings/backups" hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form" id="backup-settings-form" hx-post="/settings/backups" hx-target="this" hx-swap="outerHTML" data-lock-while-saving>
 		if len(b.Roots) > 1 {
 			<div class="admin-root-options">
 				for _, root := range b.Roots {
@@ -588,7 +588,7 @@ templ NotificationDestination(n NotificationDestinationView) {
 		</summary>
 		<div class="notification-destination__body">
 			@destinationHealth(n)
-			<form class="stack-form" hx-post={ "/settings/notifications/" + string(n.Destination) } hx-target="closest .notification-destination" hx-swap="outerHTML">
+			<form class="stack-form" id={ destinationID(n.Destination, "form") } hx-post={ "/settings/notifications/" + string(n.Destination) } hx-target="closest .notification-destination" hx-swap="outerHTML" data-lock-while-saving>
 				@destinationFields(n)
 				<label class="check-label">
 					// A destination never saved is on once saved. A rejected save

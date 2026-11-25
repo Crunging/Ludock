@@ -95,7 +95,7 @@ templ UsersContent(u UsersView) {
 		if u.Link != nil {
 			@linkResult(*u.Link)
 		}
-		<form class="settings-card create-user" hx-post="/users" hx-target="#users" hx-swap="outerHTML">
+		<form class="settings-card create-user" id="create-user-form" hx-post="/users" hx-target="#users" hx-swap="outerHTML" data-lock-while-saving>
 			<h2>Add a person</h2>
 			<div class="form-grid">
 				<label>
@@ -242,7 +242,7 @@ templ userRow(u UsersView, user db.User) {
 			}
 			<details class="password-reset__manual">
 				<summary>Set password</summary>
-				<form hx-post={ "/users/" + user.ID + "/reset-password" } hx-target="#users" hx-swap="outerHTML">
+				<form id={ "reset-password-" + user.ID } hx-post={ "/users/" + user.ID + "/reset-password" } hx-target="#users" hx-swap="outerHTML" data-lock-while-saving>
 					<input type="password" name="password" placeholder="New password" aria-label={ "New password for " + user.Username } autocomplete="new-password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" required/>
 					<button class="secondary-btn" type="submit" data-busy-label="Working…">Save</button>
 				</form>

@@ -491,7 +491,7 @@ func scheduleTarget(f ScheduleForm) string {
 // and conflicts keep the draft.
 templ ScheduleEditor(f ScheduleForm) {
 	{{ input := f.Input }}
-	<form class="stack-form settings-section schedule-form" id="schedule-form" hx-post={ scheduleTarget(f) } hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form settings-section schedule-form" id="schedule-form" hx-post={ scheduleTarget(f) } hx-target="this" hx-swap="outerHTML" data-lock-while-saving>
 		<h3 tabindex="-1">
 			if f.EditID != "" {
 				Edit schedule

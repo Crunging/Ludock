@@ -122,9 +122,24 @@ test("changing the public address and backup limits", async ({ page }) => {
   await expect(save).toBeEnabled();
   await save.click();
   expect(await limit.evaluate((field) => field.validationMessage)).not.toBe("");
+  // While a section saves, it can't change, so nothing typed meanwhile is
+  // lost when the saved section comes back.
+  let answer;
+  const answered = new Promise((done) => { answer = done; });
+  await page.route("**/settings/backups", async (route) => { await answered; await route.continue(); });
+  const reserve = backups.getByLabel("Minimum free space (GiB)");
+  const reserved = await reserve.inputValue();
   await limit.fill("2.5");
-  await save.click();
+  await Promise.all([page.waitForRequest("**/settings/backups"), save.click()]);
+  await reserve.click();
+  await page.keyboard.type("9");
+  await expect(reserve).toHaveValue(reserved);
+  answer();
   await expect(backups.locator(".alert--success")).toContainText("Backup settings saved.");
+  await page.unroute("**/settings/backups");
+  await expect(reserve).toHaveValue(reserved);
+  await expect(reserve).toBeEditable();
+  await expect(reserve).toBeFocused();
   await expect(storage).toContainText("Total limit2.5 GiB");
   await expect(save).toBeDisabled();
   await page.reload();

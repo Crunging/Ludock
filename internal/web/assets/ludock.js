@@ -142,6 +142,67 @@
     button.disabled = true;
     ctx.busyButton = button;
   });
+  // A form marked data-lock-while-saving can't change while it saves, since
+  // the response replaces it: text fields turn read-only (still focusable and
+  // sent) and its other controls ignore input. Focus returns to the same
+  // field of the form that comes back. A control inside the form whose own
+  // request replaces it is marked too; other requests from inside it, such
+  // as a live preview, don't lock it.
+  function lockForm(form, locked) {
+    form.toggleAttribute("data-saving", locked);
+    form.querySelectorAll("input, textarea").forEach(function (field) {
+      if (locked && !field.readOnly) {
+        field.readOnly = true;
+        field.ludockLocked = true;
+      } else if (!locked && field.ludockLocked) {
+        field.readOnly = false;
+        delete field.ludockLocked;
+      }
+    });
+  }
+  document.addEventListener("htmx:before:request", function (event) {
+    var ctx = event.detail.ctx, source = ctx.sourceElement;
+    var form = source && source.matches && source.matches("[data-lock-while-saving]") && source.closest("form[data-lock-while-saving]");
+    if (!form || form.hasAttribute("data-saving")) return;
+    lockForm(form, true);
+    ctx.lockedForm = form;
+  });
+  document.addEventListener("htmx:before:swap", function (event) {
+    var ctx = event.detail.ctx, form = ctx.lockedForm, active = document.activeElement;
+    if (form && form.id && active && form.contains(active)) ctx.lockedFocus = { form: form.id, name: active.name,
+      value: /^(checkbox|radio)$/.test(active.type) ? active.value : null };
+  });
+  document.addEventListener("htmx:finally:request", function (event) {
+    var ctx = event.detail.ctx, form = ctx.lockedForm, focus = ctx.lockedFocus;
+    if (!form) return;
+    lockForm(form, false);
+    if (!focus || form.isConnected) return;
+    setTimeout(function () {
+      var current = document.activeElement, replacement = document.getElementById(focus.form);
+      if (!replacement || (current && current !== document.body)) return;
+      // The same field, else Save, else the first field that can take focus.
+      var fields = Array.prototype.filter.call(replacement.elements, function (field) { return !field.disabled && field.type !== "hidden"; });
+      fields.filter(function (field) { return focus.name && field.name === focus.name && (focus.value === null || field.value === focus.value); })
+        .concat(fields.filter(function (field) { return field.type === "submit"; }), fields)
+        .some(function (field) {
+          field.focus();
+          return document.activeElement === field;
+        });
+    });
+  });
+  ["click", "mousedown", "keydown"].forEach(function (type) {
+    document.addEventListener(type, function (event) {
+      var target = event.target, control = target.closest && target.closest("form[data-saving] :is(button, select, input, textarea)");
+      if (!control) return;
+      var text = control.tagName === "TEXTAREA" || (control.tagName === "INPUT" && !/^(checkbox|radio|file)$/.test(control.type));
+      if (type === "keydown" ? event.key === "Enter" && control.tagName !== "TEXTAREA" || control.tagName === "SELECT" && event.key !== "Tab"
+        : type === "mousedown" ? control.tagName === "SELECT" : !text) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, true);
+  });
+
   // Restore busy buttons, and close a dialog after its htmx form succeeds.
   document.addEventListener("htmx:finally:request", function (event) {
     var ctx = event.detail.ctx, button = ctx.busyButton;
