@@ -194,14 +194,12 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		return err
 	}
 	input.trailer = fileList(files)
-	// The helper asks to make each folder of the batch at most once.
 	var paths []string
 	for _, file := range files {
 		paths = append(paths, file.Name)
 	}
-	folders := BatchFolders(paths)
-	acks := &uploadAcks{limit: len(files), ready: make(chan struct{}, len(files)), folderLimit: folders,
-		folders: make(chan struct{}, folders), bodies: make(chan struct{}, len(files))}
+	acks := &uploadAcks{names: paths, approved: map[string]bool{}, ready: make(chan struct{}, len(files)),
+		folders: make(chan struct{}, BatchFolders(paths)), bodies: make(chan struct{}, len(files))}
 	input.ready, input.folders, input.bodies = acks.ready, acks.folders, acks.bodies
 	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized},
 		launch.ExecOptions{Input: input, Stdout: acks})
@@ -451,19 +449,25 @@ func (b *batchInput) Read(p []byte) (int, error) {
 // uploadAcks reads the helper's line for each file as it arrives, so files
 // committed before a failure are known.
 type uploadAcks struct {
-	limit   int
-	pending []byte
-	results []helper.UploadResult
-	// ready has a token for each file the helper asked the trailer of,
-	// folders for each folder it asked to make, and bodies for each body.
-	ready           chan struct{}
-	readies         int
-	folders, bodies chan struct{}
-	folderLimit     int
-	askedFolders    int
-	askedBodies     int
+	// names are the batch's files in order; each folder below the batch's
+	// folder that one goes in may be approved once, while the helper is on it.
+	names    []string
+	approved map[string]bool
+	pending  []byte
+	results  []helper.UploadResult
+	// file is the file the helper is on, and asked and readied whether it
+	// asked for that file's body and then its trailer.
+	file           int
+	asked, readied bool
+	ready, folders chan struct{}
+	bodies         chan struct{}
 }
 
+var errUnexpectedUpload = errors.New("unexpected upload output")
+
+// Write takes the helper's lines as they come, holding each to the file the
+// batch is on and the step that file is at: its folders, its body, its
+// trailer, then its result. Anything else ends the upload.
 func (a *uploadAcks) Write(p []byte) (int, error) {
 	a.pending = append(a.pending, p...)
 	for {
@@ -472,41 +476,39 @@ func (a *uploadAcks) Write(p []byte) (int, error) {
 			break
 		}
 		var result helper.UploadResult
-		if json.Unmarshal(line, &result) != nil {
-			return 0, errors.New("unexpected upload output")
+		if json.Unmarshal(line, &result) != nil || result.File != a.file || a.file >= len(a.names) {
+			return 0, errUnexpectedUpload
 		}
 		a.pending = rest
-		if result.Folder {
-			if a.askedFolders >= a.folderLimit {
-				return 0, errors.New("unexpected upload output")
+		switch {
+		case result.Folder != "":
+			if a.asked || a.approved[result.Folder] || !strings.HasPrefix(a.names[a.file], result.Folder+"/") {
+				return 0, errUnexpectedUpload
 			}
-			a.askedFolders++
+			a.approved[result.Folder] = true
 			a.folders <- struct{}{}
-			continue
-		}
-		if result.Body {
-			if a.askedBodies >= a.limit {
-				return 0, errors.New("unexpected upload output")
+		case result.Body:
+			if a.asked {
+				return 0, errUnexpectedUpload
 			}
-			a.askedBodies++
+			a.asked = true
 			a.bodies <- struct{}{}
-			continue
-		}
-		if result.Ready {
-			if a.readies >= a.limit {
-				return 0, errors.New("unexpected upload output")
+		case result.Ready:
+			if !a.asked || a.readied {
+				return 0, errUnexpectedUpload
 			}
-			a.readies++
+			a.readied = true
 			a.ready <- struct{}{}
-			continue
+		default:
+			if !a.asked || (result.OK && !a.readied) {
+				return 0, errUnexpectedUpload
+			}
+			a.results = append(a.results, result)
+			a.file, a.asked, a.readied = a.file+1, false, false
 		}
-		if len(a.results) >= a.limit {
-			return 0, errors.New("unexpected upload output")
-		}
-		a.results = append(a.results, result)
 	}
 	if len(a.pending) > 4096 {
-		return 0, errors.New("unexpected upload output")
+		return 0, errUnexpectedUpload
 	}
 	return len(p), nil
 }

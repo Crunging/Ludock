@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -141,6 +142,8 @@ type fileHelper struct {
 	// and replace lets a batch's file replace one there.
 	folder  string
 	replace bool
+	// file is the position in its batch of the file being uploaded.
+	file int
 	// leftover: the last upload's staging file could not be removed.
 	leftover bool
 	// excluded is what the request's excluded mounts hide, by identity.
@@ -1031,7 +1034,7 @@ func (h *fileHelper) removeStaging(folder fd, relative, id string) error {
 // file can be published rather than when the trailer was queued.
 func (h *fileHelper) readyForTrailer(part *uploadPart) error {
 	if h.request.Operation == "upload-files" {
-		if _, err := h.out.WriteString(`{"ready":true}` + "\n"); err != nil {
+		if _, err := h.out.WriteString(fmt.Sprintf(`{"file":%d,"ready":true}`, h.file) + "\n"); err != nil {
 			return err
 		}
 		if err := h.out.Flush(); err != nil {
@@ -1097,13 +1100,17 @@ type UploadResult struct {
 	Code int `json:"code,omitempty"`
 	// Space is the disk's when Code is FileNoSpace.
 	Space *FileSpace `json:"space,omitempty"`
+	// File is the position in the batch of the file a line is about, which
+	// the backend holds each request and result to.
+	File int `json:"file"`
 	// Ready asks for the file's trailer, ahead of its result.
 	Ready bool `json:"ready,omitempty"`
-	// Folder asks to make a missing folder; the backend answers with
-	// FolderGo once access is confirmed. Body asks for the next file's body,
-	// once its folders are made.
-	Folder bool `json:"folder,omitempty"`
-	Body   bool `json:"body,omitempty"`
+	// Folder asks to make the missing folder at this path below the batch's
+	// folder, one the file goes in; the backend answers with FolderGo once
+	// access is confirmed. Body asks for the file's body, once its folders
+	// are made.
+	Folder string `json:"folder,omitempty"`
+	Body   bool   `json:"body,omitempty"`
 	// Leftover: the file's staging file could not be removed.
 	Leftover bool `json:"leftover,omitempty"`
 }
@@ -1119,25 +1126,26 @@ func (h *fileHelper) uploadFiles(relative string) error {
 	if err := checkUploadList(relative, h.request.Files, true); err != nil {
 		return err
 	}
-	// The folders the backend approved, so no file asks for one again.
-	asked := map[string]error{}
+	// The folders the backend approved, so no file asks for one again, and
+	// those whose making failed by identity, so no spelling reaches one.
+	asked, unset := map[string]error{}, map[[2]uint64]error{}
 	h.buffer = make([]byte, 64*1024)
-	for _, file := range h.request.Files {
-		h.part, h.leftover = nil, false
+	for index, file := range h.request.Files {
+		h.part, h.leftover, h.file = nil, false, index
 		opened := len(h.t.open)
 		parts, _ := ownParts(file.Name)
 		// The root and folders are found again for each file, as for a single
 		// upload, in case any was moved or replaced meanwhile. The file is
 		// checked against exclusions once its folders are there, right before
 		// it is written, since making them waits on the backend.
-		folder, err := h.uploadPin(relative, parts[:len(parts)-1], file.Size, asked)
+		folder, err := h.uploadPin(relative, parts[:len(parts)-1], file.Size, asked, unset)
 		if err == nil {
 			err = h.check(path.Join(relative, file.Name), false)
 		}
 		if errors.Is(err, errUploadStream) {
 			return err
 		}
-		if lineErr := h.line(`{"body":true}`); lineErr != nil {
+		if lineErr := h.line(fmt.Sprintf(`{"file":%d,"body":true}`, index)); lineErr != nil {
 			return lineErr
 		}
 		if err == nil {
@@ -1148,7 +1156,7 @@ func (h *fileHelper) uploadFiles(relative string) error {
 		if errors.Is(err, errUploadStream) || h.uploadAborted() {
 			return errUploadStream
 		}
-		result := UploadResult{OK: err == nil, Leftover: h.leftover}
+		result := UploadResult{File: index, OK: err == nil, Leftover: h.leftover}
 		var full *noSpaceError
 		switch {
 		case err == nil:
@@ -1221,10 +1229,11 @@ func uploadDestinations(files []UploadFile) []string {
 // confirmed.
 const FolderGo = 'y'
 
-// confirmFolder asks the backend to confirm access before a missing folder
-// is made.
-func (h *fileHelper) confirmFolder() error {
-	if err := h.line(`{"folder":true}`); err != nil {
+// confirmFolder asks the backend to confirm access before the missing
+// folder at folder, below the batch's folder, is made for the current file.
+func (h *fileHelper) confirmFolder(folder string) error {
+	request, _ := json.Marshal(UploadResult{File: h.file, Folder: folder})
+	if err := h.line(string(request)); err != nil {
 		return err
 	}
 	var answer [1]byte
@@ -1264,13 +1273,23 @@ func (h *fileHelper) readFiles() error {
 // readList reads a list sent alone, to its end, so the command never acts
 // on part of one or exits before the backend has sent all of it, and checks
 // it before anything is done with it.
-func (h *fileHelper) readList(relative string) error {
+func (h *fileHelper) readList(relative string, ids bool) error {
 	if err := h.readFiles(); err != nil {
 		return err
 	}
 	var rest [1]byte
 	if n, err := h.stdin.Read(rest[:]); n > 0 || err != io.EOF {
 		return errUploadStream
+	}
+	// A batch has a file, and no more than it can; a cleanup removes only
+	// staging names it can make from every one of its upload IDs.
+	if len(h.request.Files) == 0 || len(h.request.Files) > UploadBatchFiles {
+		return errUploadStream
+	}
+	for _, file := range h.request.Files {
+		if _, err := uploadName(file.UploadID); ids && err != nil {
+			return err
+		}
 	}
 	return checkUploadList(relative, h.request.Files, false)
 }
@@ -1281,8 +1300,9 @@ func (h *fileHelper) readList(relative string) error {
 // folder makes it: after the backend confirms access again, in its parent
 // found again from the root, and checked against exclusions. asked holds
 // each folder the backend approved and how making it went; none is asked
-// for twice, so one made and then removed refuses the file.
-func (h *fileHelper) uploadPin(relative string, dirs []string, size int64, asked map[string]error) (fd, error) {
+// for twice, so one made and then removed refuses the file. unset holds,
+// by identity, the folders made whose setup failed, which are never used.
+func (h *fileHelper) uploadPin(relative string, dirs []string, size int64, asked map[string]error, unset map[[2]uint64]error) (fd, error) {
 	pin := func(depth int) (fd, error) {
 		folder, err := h.pinRoot()
 		if err == nil && relative != "" {
@@ -1303,6 +1323,13 @@ func (h *fileHelper) uploadPin(relative string, dirs []string, size int64, asked
 			return -1, failed
 		}
 		next, openErr := h.openFolders(folder, dirs[depth:depth+1])
+		if openErr == nil {
+			if info, statErr := fstat(next); statErr != nil {
+				openErr = statErr
+			} else if failed := unset[[2]uint64{info.Dev, info.Ino}]; failed != nil {
+				openErr = failed
+			}
+		}
 		if openErr == nil || !isNotExist(openErr) {
 			folder, err = next, openErr
 			continue
@@ -1316,7 +1343,7 @@ func (h *fileHelper) uploadPin(relative string, dirs []string, size int64, asked
 			break
 		}
 		h.t.closeFrom(opened)
-		if err = h.confirmFolder(); err != nil {
+		if err = h.confirmFolder(path.Join(dirs[:depth+1]...)); err != nil {
 			break
 		}
 		// The answer can take a while, and the parent and its disk can change
@@ -1336,6 +1363,10 @@ func (h *fileHelper) uploadPin(relative string, dirs []string, size int64, asked
 			if next, err = h.makeFolder(folder, folder, dirs[depth], owner); errors.Is(err, unix.EEXIST) {
 				next, err = h.openFolders(folder, dirs[depth:depth+1])
 			}
+		}
+		var made *unsetFolder
+		if errors.As(err, &made) {
+			unset[[2]uint64{made.dev, made.ino}] = err
 		}
 		switch full := (*noSpaceError)(nil); {
 		case errors.As(err, &full):
@@ -1525,15 +1556,30 @@ func (h *fileHelper) makeFolder(folder, like fd, name string, owner *unix.Stat_t
 		return -1, err
 	}
 	if inherited == nil && mode != final {
-		if err := unix.Fchown(int(directory), -1, int(owner.Gid)); err != nil {
-			return -1, err
-		}
-		if err := unix.Fchmod(int(directory), final); err != nil {
-			return -1, err
+		if err = fchown(int(directory), -1, int(owner.Gid)); err == nil {
+			err = fchmod(int(directory), final)
 		}
 	}
-	return directory, unix.Fchown(int(directory), int(owner.Uid), int(owner.Gid))
+	if err == nil {
+		err = fchown(int(directory), int(owner.Uid), int(owner.Gid))
+	}
+	if err != nil {
+		if info, statErr := fstat(directory); statErr == nil {
+			err = &unsetFolder{dev: uint64(info.Dev), ino: info.Ino, err: err}
+		}
+		return -1, err
+	}
+	return directory, nil
 }
+
+// unsetFolder is a folder makeFolder made but couldn't finish setting up.
+type unsetFolder struct {
+	dev, ino uint64
+	err      error
+}
+
+func (e *unsetFolder) Error() string { return e.err.Error() }
+func (e *unsetFolder) Unwrap() error { return e.err }
 
 func currentUmask() int {
 	old := syscall.Umask(0)
@@ -1663,7 +1709,7 @@ func (h *fileHelper) run() error {
 	case "upload-prepare":
 		if !h.request.List {
 			h.request.Files = nil
-		} else if err := h.readList(relative); err != nil {
+		} else if err := h.readList(relative, false); err != nil {
 			return err
 		}
 		folder, err := h.pinDirectory(root, relative)
@@ -1712,7 +1758,7 @@ func (h *fileHelper) run() error {
 		if !h.request.List {
 			return errUnsafe
 		}
-		if err := h.readList(relative); err != nil {
+		if err := h.readList(relative, true); err != nil {
 			return err
 		}
 		folder, err := h.pinDirectory(root, relative)

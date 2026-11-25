@@ -144,6 +144,21 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   expect(puts).toHaveLength(1);
   expect(readFileSync(join(ownServer.data, "mods", "pack", "config", "deep", "c.toml"), "utf8")).toBe("c\n");
 
+  // A file too deep is refused on the page, and its folders don't count
+  // toward a batch's, so the rest still goes in one request.
+  const tree = {};
+  for (let index = 0; index < 77; index++) tree[`g${String(index).padStart(2, "0")}`] = { a: { b: { "c.txt": "c" } } };
+  let deepest = { "deep.txt": "d" };
+  for (let level = 0; level < 33; level++) deepest = { d: deepest };
+  tree.d = deepest.d;
+  puts.length = 0;
+  page.on("request", countPuts);
+  await dropTree(page, { spread: tree });
+  await expect(page.locator("#file-feedback")).toContainText("Uploaded 77 of 78 files.");
+  await expect(page.locator("#file-feedback")).toContainText("This file is more than 32 folders below the folder you upload into, so it wasn’t uploaded.");
+  page.off("request", countPuts);
+  expect(puts).toHaveLength(1);
+
   // A folder here that is a link to somewhere else is never written through.
   const elsewhere = test.info().outputPath("elsewhere");
   mkdirSync(elsewhere);

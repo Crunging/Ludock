@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -792,5 +793,52 @@ func TestUploadFolderLimits(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.data, "late")); !os.IsNotExist(err) {
 		t.Fatal("an older helper made a folder", err)
+	}
+}
+
+// The backend holds the helper to the batch: a folder is approved only for
+// the file the helper is on, inside that file's path, and once; a body,
+// trailer, or result only in its file's turn, and a success only after its
+// trailer. Anything else ends the upload before the helper gets an answer.
+func TestUploadHoldsHelperToItsFiles(t *testing.T) {
+	f := setup(t)
+	entries := []UploadEntry{{Name: "a/b/x.txt", Size: 1}, {Name: "y.txt", Size: 1}}
+	for _, lines := range [][]string{
+		{`{"file":0,"folder":"c"}`},
+		{`{"file":0,"folder":"a/b/x.txt"}`},
+		{`{"file":0,"folder":"a"}`, `{"file":0,"folder":"a"}`},
+		{`{"file":1,"body":true}`},
+		{`{"file":0,"ready":true}`},
+		{`{"file":0,"body":true}`, `{"file":0,"body":true}`},
+		{`{"file":0,"body":true}`, `{"file":1,"ok":true}`},
+		{`{"file":0,"body":true}`, `{"file":0,"ok":true}`},
+		{`{"file":0,"body":true}`, `{"file":0,"ready":true}`, `{"file":0,"ok":true}`, `{"file":1,"folder":"a"}`},
+	} {
+		answered := 0
+		f.engine.RunHelpers(func(_ *fakedocker.Container, _, args []string, stdin *bufio.Reader, stdout, _ func([]byte)) (int, bool) {
+			if len(args) < 2 || !strings.Contains(args[1], `"operation":"upload-files"`) {
+				return 0, false
+			}
+			var length [8]byte
+			io.ReadFull(stdin, length[:])
+			io.ReadFull(stdin, make([]byte, binary.BigEndian.Uint64(length[:])))
+			for index, line := range lines {
+				stdout([]byte(line + "\n"))
+				if strings.Contains(line, `"folder"`) && index < len(lines)-1 {
+					if answer, err := stdin.ReadByte(); err == nil && answer == helper.FolderGo {
+						answered++
+					}
+				}
+			}
+			// The upload must end without answering the last line.
+			if _, err := stdin.ReadByte(); err == nil && strings.Contains(lines[len(lines)-1], `"folder"`) {
+				answered += 100
+			}
+			return 1, true
+		})
+		results, err := f.service.UploadFiles(ctx, f.target, f.root, "", entries, strings.NewReader("ab"), nil)
+		if err == nil || answered >= 100 {
+			t.Error(lines, results, err, answered)
+		}
 	}
 }
