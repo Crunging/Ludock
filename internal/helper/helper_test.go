@@ -216,25 +216,24 @@ func TestMutationsAndUploads(t *testing.T) {
 		t.Fatal("downloaded a hard link")
 	}
 
-	// The file gets its owner and group before its final mode, so a wider
-	// mode never applies to the helper's own group.
+	// The file gets its group before its final mode, and its owner last, so
+	// the mode's group bits never apply to the helper's own group.
 	var steps []string
+	parent, _ := os.Stat(root)
+	want := parent.Sys().(*syscall.Stat_t)
 	fchown = func(descriptor, uid, gid int) error {
-		steps = append(steps, "owner")
+		steps = append(steps, fmt.Sprintf("owner %d group %d", uid, gid))
 		return unix.Fchown(descriptor, uid, gid)
 	}
 	fchmod = func(descriptor int, mode uint32) error {
 		var stat unix.Stat_t
 		unix.Fstat(descriptor, &stat)
-		parent, _ := os.Stat(root)
-		if want := parent.Sys().(*syscall.Stat_t); stat.Uid != want.Uid || stat.Gid != want.Gid {
-			steps = append(steps, "mode before the owner")
-		}
-		steps = append(steps, "mode")
+		steps = append(steps, fmt.Sprintf("mode with group %d", stat.Gid))
 		return unix.Fchmod(descriptor, mode)
 	}
 	defer func() { fchown, fchmod = unix.Fchown, unix.Fchmod }()
-	if _, code := runFile(t, created, []byte("12345"+id)); code != 0 || !slices.Equal(steps, []string{"owner", "mode"}) {
+	if _, code := runFile(t, created, []byte("12345"+id)); code != 0 || !slices.Equal(steps, []string{fmt.Sprintf("owner -1 group %d", want.Gid),
+		fmt.Sprintf("mode with group %d", want.Gid), fmt.Sprintf("owner %d group -1", want.Uid)}) {
 		t.Fatal(code, steps)
 	}
 	// A publish that took effect and then failed, as on NFS, is a success.

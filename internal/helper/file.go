@@ -727,17 +727,23 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// game may also write to it, as it may a moment later once it has its
 	// name, so nothing is gained by changing it in between. The owner is set
 	// on the staged inode before the publish; whether that inode took the
-	// name is checked below. The owner and group come first, while the mode
-	// is still 0600, so the final mode never applies to the helper's group,
-	// as restores do; an upload's helper holds FOWNER for it.
+	// name is checked below. The group comes first, while the mode is still
+	// 0600, so the final mode's group bits only ever apply to the target's
+	// group. The owner stays the helper until last, so it may still set the
+	// mode without FOWNER, which would also let a publish override a sticky
+	// folder; the owner bits meanwhile grant root nothing DAC_OVERRIDE
+	// doesn't.
 	mode := uint32(0o666 &^ currentUmask())
 	if original != nil {
 		mode = original.Mode & 0o777
 	}
-	if err := fchown(int(file), int(owner.Uid), int(owner.Gid)); err != nil {
+	if err := fchown(int(file), -1, int(owner.Gid)); err != nil {
 		return err
 	}
 	if err := fchmod(int(file), mode); err != nil {
+		return err
+	}
+	if err := fchown(int(file), int(owner.Uid), -1); err != nil {
 		return err
 	}
 	if err := unix.Fsync(int(file)); err != nil {
@@ -872,6 +878,9 @@ func (h *fileHelper) sweepStaging(folder fd) (int, error) {
 			}
 			if err := h.sameFolder(folder); err != nil {
 				return stuck, err
+			}
+			if time.Since(started) >= sweepTime {
+				return stuck, nil
 			}
 			if err := unix.Unlinkat(int(folder), name, 0); err != nil && !isNotExist(err) {
 				stuck++

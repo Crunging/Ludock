@@ -96,7 +96,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	if !slices.Contains(results, nil) {
 		return results, nil
 	}
-	access, err := s.acquireUploader(ctx, target, root, assertAccess)
+	access, err := s.Acquire(ctx, target, root, false, assertAccess)
 	if err == nil {
 		// Uploads have no size limit by default, so a file that would fill the
 		// disk is refused before anything is written; the helper checks each
@@ -202,7 +202,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	access.Cleanup(true)
 	if len(staged) > 0 {
 		settled := context.WithoutCancel(ctx)
-		if cleanup, cleanupErr := s.acquireUploader(settled, target, root, nil); cleanupErr == nil {
+		if cleanup, cleanupErr := s.Acquire(settled, target, root, false, nil); cleanupErr == nil {
 			cleanup.Cleanup(removeStaged(cleanup) != nil)
 		} else {
 			log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
