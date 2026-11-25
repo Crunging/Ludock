@@ -201,9 +201,9 @@ func (u *unpacker) mkdir(parts []string) error {
 	return err
 }
 
-// file creates a regular file the way an upload creates a new one: the
-// helper's default mode and the parent folder's owner, whatever the archive
-// records.
+// file creates a regular file the way an upload creates a new one: the mode
+// or ACL a new file in its folder gets and the parent folder's owner,
+// whatever the archive records.
 func (u *unpacker) file(parts []string, body io.Reader) error {
 	if len(parts) == 0 {
 		return errArchiveUnsafe
@@ -256,7 +256,7 @@ func (u *unpacker) file(parts []string, body io.Reader) error {
 			return errNotArchive
 		}
 	}
-	if err := unix.Fchmod(int(file), uint32(0o666&^u.umask)); err != nil {
+	if err := createMode(file, directory, 0o666, u.umask); err != nil {
 		return err
 	}
 	if err := unix.Fchown(int(file), int(u.owner.Uid), int(u.owner.Gid)); err != nil {
@@ -264,6 +264,19 @@ func (u *unpacker) file(parts []string, body io.Reader) error {
 	}
 	u.result.Files++
 	return nil
+}
+
+// createMode gives entry, made in folder, the mode or ACL a create with mode
+// there would have given it.
+func createMode(entry, folder fd, mode uint32, umask int) error {
+	acl, err := createdACL(folder, mode)
+	if err != nil {
+		return err
+	}
+	if acl != nil {
+		return fsetxattr(int(entry), accessACL, acl, 0)
+	}
+	return unix.Fchmod(int(entry), mode&^uint32(umask))
 }
 
 // preader reads a tracked descriptor by offset. An *os.File would close
@@ -523,7 +536,7 @@ func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd
 		}
 	}
 	if source == parent {
-		if err := unix.Fchmod(int(stage), uint32(0o777&^umask)); err != nil {
+		if err := createMode(stage, parent, 0o777, umask); err != nil {
 			return result, err
 		}
 		if err := unix.Fchown(int(stage), int(owner.Uid), int(owner.Gid)); err != nil {

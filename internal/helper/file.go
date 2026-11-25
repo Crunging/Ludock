@@ -779,13 +779,17 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 		mode = original.Mode & 0o777
 	}
 	// A replaced file keeps its access ACL: its group bits are the ACL's
-	// mask, which would otherwise become the owning group's own rights. It is
-	// read once the input is in, so a refusal is the command's result.
+	// mask, which would otherwise become the owning group's own rights. A new
+	// one gets what creating it in its folder would have given it, since the
+	// staged file's ACL was cut down to 0600. It is read once the input is
+	// in, so a refusal is the command's result.
 	var acl []byte
 	if original != nil {
 		if acl, err = h.readAccessACL(parent, name, original); err != nil {
 			return err
 		}
+	} else if acl, err = createdACL(parent, 0o666); err != nil {
+		return errACLNotKept
 	}
 	if int(owner.Uid) != helperUID() {
 		owned := mode >> 6 & 7

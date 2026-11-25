@@ -308,6 +308,30 @@ func ParseACLText(text string) ([]byte, error) {
 	return encodeACL(entries), nil
 }
 
+// createdACL is the access ACL the kernel gives an entry created with mode
+// in folder, which has a default ACL, or nil for a folder without one. As in
+// acl(5), the owner, the mask (the owning group without one), and other
+// entries keep only what mode grants, named entries stay, and the umask
+// doesn't apply.
+func createdACL(folder fd, mode uint32) ([]byte, error) {
+	entries, err := readACL(folder, defaultACL)
+	if err != nil || entries == nil {
+		return nil, err
+	}
+	_, masked := aclPerm(entries, aclMask)
+	for index, entry := range entries {
+		switch {
+		case entry.tag == aclUserObj:
+			entries[index].perm &= uint16(mode >> 6 & 7)
+		case entry.tag == aclMask, entry.tag == aclGroupObj && !masked:
+			entries[index].perm &= uint16(mode >> 3 & 7)
+		case entry.tag == aclOther:
+			entries[index].perm &= uint16(mode & 7)
+		}
+	}
+	return encodeACL(entries), nil
+}
+
 // narrowACL caps an ACL's mask and its other entry at the owner's rights, as
 // the mode is when the owner changes: until then the future owner holds
 // those. It returns nil for a value it can't read.

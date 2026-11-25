@@ -1373,4 +1373,45 @@ func TestUploadKeepsAccessACL(t *testing.T) {
 	if _, err := unix.Getxattr(plain, accessACL, kept); !errors.Is(err, unix.ENODATA) {
 		t.Fatal("a replacement took its folder's default ACL", err)
 	}
+	// A new file gets what creating it with mode 0666 in its folder gives:
+	// the default ACL with its owner, mask, and other entries cut down by
+	// that mode, not by the staged 0600 or the umask. On ext4 and tmpfs that
+	// is mode 0440 with this ACL.
+	unix.Setxattr(root, defaultACL, mustACL(t, "user::r-x,user:4242:rwx,group::rwx,group:4343:rw-,mask::r-x,other::---"), 0)
+	created := FileRequest{Operation: "upload", Root: root, Path: "new.txt", Size: &size, UploadID: id}
+	if _, code := runFile(t, created, []byte("hello"+id)); code != 0 {
+		t.Fatal("create", code)
+	}
+	reference, _ := os.OpenFile(filepath.Join(root, "reference.txt"), os.O_CREATE|os.O_WRONLY, 0o666)
+	reference.Close()
+	sameAsCreated(t, filepath.Join(root, "new.txt"), filepath.Join(root, "reference.txt"),
+		"user::r--,user:4242:rwx,group::rwx,group:4343:rw-,mask::r--,other::---", 0o440)
+}
+
+// sameAsCreated fails unless got has the mode and ACLs of reference, which
+// the kernel created, and its access ACL is want.
+func sameAsCreated(t *testing.T, got, reference, want string, mode os.FileMode) {
+	t.Helper()
+	for _, attribute := range []string{accessACL, defaultACL} {
+		values := [2][]byte{}
+		for index, path := range []string{got, reference} {
+			value := make([]byte, 256)
+			n, err := unix.Getxattr(path, attribute, value)
+			if err != nil && !errors.Is(err, unix.ENODATA) {
+				t.Fatal(path, attribute, err)
+			}
+			values[index] = value[:max(n, 0)]
+		}
+		if !bytes.Equal(values[0], values[1]) {
+			t.Errorf("%s: %s %x, created %x", got, attribute, values[0], values[1])
+		}
+		if text, _ := ACLText(values[0]); attribute == accessACL && text != want {
+			t.Errorf("%s: %s", got, text)
+		}
+	}
+	for _, path := range []string{got, reference} {
+		if info, _ := os.Stat(path); info == nil || info.Mode()&^os.ModeType != mode {
+			t.Errorf("%s is %v", path, info)
+		}
+	}
 }
