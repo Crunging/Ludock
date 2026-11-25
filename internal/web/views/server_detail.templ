@@ -597,7 +597,7 @@ func describeAvailability(a *monitor.Availability, paused bool, now int64) avail
 	case suppressed:
 		result.Status = "Paused briefly after a restart or stop."
 	case result.OutageSince != 0:
-		waiting := now-result.OutageSince < int64(policy.GraceSeconds)*1000
+		waiting := !state.Notified && now-result.OutageSince < int64(policy.GraceSeconds)*1000
 		switch {
 		case state.LastState == monitor.NotAnswering:
 			result.Status = "The game isn’t answering."
