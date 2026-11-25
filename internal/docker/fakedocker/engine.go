@@ -107,6 +107,8 @@ type Engine struct {
 	faults       []*fault
 	// streams are the hijacked connections an outage cuts.
 	streams map[net.Conn]bool
+	// conns are the open connections' states, which Refuse reads.
+	conns map[net.Conn]http.ConnState
 
 	listener net.Listener
 	server   *http.Server
@@ -136,7 +138,18 @@ func (e *Engine) listen() error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: http.HandlerFunc(e.serve)}
+	server := &http.Server{Handler: http.HandlerFunc(e.serve), ConnState: func(conn net.Conn, state http.ConnState) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if state == http.StateClosed || state == http.StateHijacked {
+			delete(e.conns, conn)
+			return
+		}
+		if e.conns == nil {
+			e.conns = map[net.Conn]http.ConnState{}
+		}
+		e.conns[conn] = state
+	}}
 	e.mu.Lock()
 	e.listener, e.server = listener, server
 	e.mu.Unlock()
