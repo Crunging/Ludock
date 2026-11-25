@@ -12,6 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/mountinfo"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -261,10 +262,11 @@ func (f *fixture) refusedBeforeStop(t *testing.T, restoreID, message string) {
 }
 
 // Finishing a restore that stopped partway would move live data holding
-// another restore's stage folder: work that would finish it is refused
-// before the server stops, as in refusedBeforeStop. A step that fails after
-// the stop, before any live data moves, fails the backup, but the server it
-// stopped is running again and the undo is left for the next operation.
+// another restore's stage folder, or a mount the host added: work that would
+// finish it is refused before the server stops, as in refusedBeforeStop. A
+// step that fails after the stop, before any live data moves, fails the
+// backup, but the server it stopped is running again and the undo is left
+// for the next operation.
 func TestFailedUndoReturnsServerToRunning(t *testing.T) {
 	f := setup(t)
 	restore, _ := f.stoppedRestore(t)
@@ -275,6 +277,11 @@ func TestFailedUndoReturnsServerToRunning(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(other, "old")); err != nil {
 		t.Fatal("moved the other stage")
 	}
+	previous := mountinfo.Table
+	t.Cleanup(func() { mountinfo.Table = previous })
+	mountinfo.Table = func() ([]byte, error) { return []byte("40 22 0:45 / " + region + " rw - nfs4 server:/share rw\n"), nil }
+	f.refusedBeforeStop(t, restore.ID, backups.ErrHostMount.Message)
+	mountinfo.Table = previous
 	os.RemoveAll(region)
 	f.failStep, f.failTimes = helper.RestoreCleanup, 1
 	backup := f.run(t, "backup", nil)
