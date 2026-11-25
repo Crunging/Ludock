@@ -416,8 +416,8 @@ func TestWritesRecheckAccessInside(t *testing.T) {
 			}},
 		{name: "restart", revoke: "UPDATE users SET disabled=1 WHERE id=?1", status: http.StatusUnauthorized, written: queued,
 			setup: func(t *testing.T, p *pages) (*auth.Principal, string) {
-				if response := p.action("/servers/"+p.server+"/start", p.admin, nil); response.StatusCode != http.StatusOK {
-					t.Fatal(response.StatusCode)
+				if err := p.app.Docker.Start(ctx, p.docker); err != nil {
+					t.Fatal(err)
 				}
 				return member(p, authz.ServerView, authz.ServerRestart), "/servers/" + p.server + "/restart"
 			}},
@@ -464,7 +464,7 @@ func TestWritesRecheckAccessInside(t *testing.T) {
 			written: func(t *testing.T, p *pages) bool {
 				var paused int
 				p.app.DB.QueryRow("SELECT COUNT(*) FROM availability WHERE suppressed_until > 0").Scan(&paused)
-				return paused != 0 || p.running()
+				return paused != 0 || p.started()
 			}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

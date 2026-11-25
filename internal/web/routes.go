@@ -101,7 +101,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /fragments/settings/notifications/{destination}/tests/{id}", s.admin(s.testResult))
 	m.HandleFunc("POST /settings/notifications/deliveries/{id}/retry", s.admin(s.retryNotification))
 	m.HandleFunc("GET /settings/system", s.admin(s.systemPage))
-	m.HandleFunc("POST /servers/{id}/start", s.authed(s.startServer))
+	m.HandleFunc("POST /servers/{id}/start", s.authed(s.queueLifecycle(ops.KindStart)))
 	m.HandleFunc("POST /servers/{id}/stop", s.authed(s.queueLifecycle(ops.KindStop)))
 	m.HandleFunc("POST /servers/{id}/restart", s.authed(s.queueLifecycle(ops.KindRestart)))
 }

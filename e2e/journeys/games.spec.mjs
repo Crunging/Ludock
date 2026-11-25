@@ -25,6 +25,8 @@ test("taking Valheim down says who is on, though the game can't be warned", asyn
   await openServer(page, "valheim");
   try {
     await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
+    await expect(page.locator("#selected-operation")).toContainText("Succeeded");
+    await page.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
     await expect(page.locator(".overview-players")).toContainText(/2\s*of 10 online/, { timeout: 45_000 });
     // The header's dialog text follows its own refresh.
     const online = "2 players are online and will be disconnected.";
