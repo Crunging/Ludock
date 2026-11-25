@@ -820,9 +820,9 @@ func (r *stageRun) closeAll() {
 
 // wait collects every extraction once. A helper that stopped at the
 // reserve, or refused what it was sent, is why writing to it failed; one
-// that only saw its input end, or whose exit is unknown, isn't. A reserve
-// stop outranks the deadline too: exits are known only from before it, and
-// a full disk fails every retry until space is freed.
+// that only saw its input end, or whose exit is unknown, isn't. A known
+// reserve stop outranks the deadline too: a full disk fails every retry
+// until space is freed.
 func (r *stageRun) wait() error {
 	if !r.waited {
 		r.waited = true

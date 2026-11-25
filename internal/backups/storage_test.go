@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
@@ -118,8 +120,8 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	// A folder holding the archive's name fails the rename that publishes it.
 	taken := "5f9619ff-8b86-4011-b42d-00c04fc964ff"
 	os.MkdirAll(filepath.Join(destination, taken+".tar", "kept"), 0o755)
-	if _, _, err := helpers.WriteSnapshot(ctx, context, dataHelper, settings, taken, 1<<30, func() error { return nil }, nil); err == nil {
-		t.Fatal("published over a folder")
+	if _, _, err := helpers.WriteSnapshot(ctx, context, dataHelper, settings, taken, 1<<30, func() error { return nil }, nil); !errors.Is(err, unix.EISDIR) {
+		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(destination, taken+".tar.partial")); !os.IsNotExist(err) {
 		t.Fatal("partial left behind after the rename failed")
@@ -202,22 +204,24 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	var exited atomic.Bool
+	var code atomic.Int64
 	engine.RunHelpers(func(_ *fakedocker.Container, _, args []string, stdin *bufio.Reader, stdout, stderr func([]byte)) (int, bool) {
 		if len(args) == 0 || args[0] != "restore-extract" {
 			return 0, false
 		}
 		var out, errs bytes.Buffer
-		code := helper.Main(args, stdin, &out, &errs)
+		status := helper.Main(args, stdin, &out, &errs)
 		if errs.Len() > 0 {
 			stderr(errs.Bytes())
 		}
+		code.Store(int64(status))
 		time.Sleep(100 * time.Millisecond)
 		exited.Store(true)
-		return code, true
+		return status, true
 	})
 	err = helpers.ExtractToStage(ctx, destination, truncated, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, cut, roots, 1<<30, 1<<52, checksum, nil)
-	if !apperr.Is(err, "INVALID_BACKUP") || !exited.Load() {
-		t.Fatal(err, exited.Load())
+	if !apperr.Is(err, "INVALID_BACKUP") || !exited.Load() || code.Load() != helper.ExtractFullStatus {
+		t.Fatal(err, exited.Load(), code.Load())
 	}
 	engine.RunHelpers(nil)
 	// A check of the requester's access that fails is reported as itself.
