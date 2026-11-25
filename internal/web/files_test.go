@@ -225,14 +225,15 @@ func manifest(names ...string) string {
 // while they may still write: a grant removed while a batch is sent stops its
 // next file, and the helper is removed with it; without the grant, the list
 // of files isn't even read. An upload first removes staging files cut-off
-// uploads left in its folder, and the audit records the folder it used.
+// uploads left in its folder, the audit records the folder it used, and a
+// request from an outdated page is refused.
 func TestUploadFollowsGrant(t *testing.T) {
 	p, member, root, data := uploadPages(t)
 	server := httptest.NewServer(p.handler)
 	defer server.Close()
-	folder := ".//."
+	folder, extra := ".//.", ""
 	send := func(body io.Reader, length int64) (int, string) {
-		request, _ := http.NewRequest("PUT", server.URL+"/files/"+p.server+"/upload?root="+url.QueryEscape(root)+"&path="+url.QueryEscape(folder), body)
+		request, _ := http.NewRequest("PUT", server.URL+"/files/"+p.server+"/upload?root="+url.QueryEscape(root)+"&path="+url.QueryEscape(folder)+extra, body)
 		request.ContentLength = length
 		request.AddCookie(&http.Cookie{Name: auth.SessionCookie, Value: member.Token})
 		request.Header.Set("Content-Type", "application/octet-stream")
@@ -281,6 +282,14 @@ func TestUploadFollowsGrant(t *testing.T) {
 	if !strings.Contains(details, `"path":""`) {
 		t.Fatal("audited the folder as sent", details)
 	}
+
+	// A page from before files carried their own paths would put a folder's
+	// files here, so it is refused unread.
+	extra, body = "&into=mods", manifest("x.txt")+"hello"
+	if code, answer := send(strings.NewReader(body), int64(len(body))); code != http.StatusBadRequest || !strings.Contains(answer, "Reload Files") {
+		t.Fatal(code, answer)
+	}
+	extra = ""
 
 	head := manifest("d.txt", "e.txt")
 	reader, writer := io.Pipe()

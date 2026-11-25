@@ -1091,19 +1091,8 @@ type UploadResult struct {
 // reported; only a broken stream ends the batch, and each line is flushed
 // once its file is committed or refused.
 func (h *fileHelper) uploadFiles(relative string) error {
-	// The files are listed on stdin, ahead of their bodies, since a long list
-	// could pass an argument's size limit: its length, then its JSON.
-	var length [8]byte
-	if _, err := io.ReadFull(h.stdin, length[:]); err != nil {
-		return errUploadStream
-	}
-	size := binary.BigEndian.Uint64(length[:])
-	if size > 4<<20 {
-		return errUploadStream
-	}
-	list := make([]byte, size)
-	if _, err := io.ReadFull(h.stdin, list); err != nil || json.Unmarshal(list, &h.request.Files) != nil {
-		return errUploadStream
+	if err := h.readFiles(true); err != nil {
+		return err
 	}
 	var total int64
 	for _, file := range h.request.Files {
@@ -1114,6 +1103,28 @@ func (h *fileHelper) uploadFiles(relative string) error {
 	}
 	if len(h.request.Files) > UploadBatchFiles || (len(h.request.Files) > 1 && total > UploadBatchBytes) {
 		return errors.New("the batch is too large")
+	}
+	// Every folder the files need is made first, while the access the
+	// command started with still holds; a file whose folders couldn't be
+	// made reports why.
+	unmade := map[string]error{}
+	for _, inside := range uploadFolders(h.request.Files) {
+		opened := len(h.t.open)
+		parts, err := ownParts(inside)
+		var folder fd
+		if err == nil {
+			folder, err = h.pinRoot()
+		}
+		if err == nil && relative != "" {
+			folder, err = h.pinDirectory(folder, relative)
+		}
+		if err == nil {
+			_, err = h.uploadFolder(folder, relative, parts, true)
+		}
+		h.t.closeFrom(opened)
+		if err != nil {
+			unmade[inside] = err
+		}
 	}
 	h.buffer = make([]byte, 64*1024)
 	for _, file := range h.request.Files {
@@ -1135,8 +1146,11 @@ func (h *fileHelper) uploadFiles(relative string) error {
 		if err == nil && relative != "" {
 			folder, err = h.pinDirectory(folder, relative)
 		}
+		if failed := unmade[path.Dir(file.Name)]; err == nil && failed != nil {
+			err = failed
+		}
 		if err == nil {
-			folder, err = h.uploadFolder(folder, relative, parts[:len(parts)-1])
+			folder, err = h.uploadFolder(folder, relative, parts[:len(parts)-1], false)
 		}
 		if err == nil {
 			h.folder, h.replace = path.Join(append([]string{relative}, parts[:len(parts)-1]...)...), file.Replace
@@ -1195,14 +1209,35 @@ func (h *fileHelper) uploadFiles(relative string) error {
 	return nil
 }
 
+// readFiles reads the request's files from stdin, ahead of anything else
+// there, since a long list could pass an argument's size limit: its length,
+// then its JSON. Unless required, an empty stdin keeps the request's own.
+func (h *fileHelper) readFiles(required bool) error {
+	var length [8]byte
+	if n, err := io.ReadFull(h.stdin, length[:]); n == 0 && errors.Is(err, io.EOF) && !required {
+		return nil
+	} else if err != nil {
+		return errUploadStream
+	}
+	size := binary.BigEndian.Uint64(length[:])
+	if size > 4<<20 {
+		return errUploadStream
+	}
+	list := make([]byte, size)
+	if _, err := io.ReadFull(h.stdin, list); err != nil || json.Unmarshal(list, &h.request.Files) != nil {
+		return errUploadStream
+	}
+	return nil
+}
+
 // uploadFolder opens the folders parts below folder, at relative below the
-// root, without following links, making each that is missing as New folder
-// does: checked against exclusions, then made by makeFolder.
-func (h *fileHelper) uploadFolder(folder fd, relative string, parts []string) (fd, error) {
+// root, without following links, and with create, makes each that is missing
+// as New folder does: checked against exclusions, then made by makeFolder.
+func (h *fileHelper) uploadFolder(folder fd, relative string, parts []string, create bool) (fd, error) {
 	for _, part := range parts {
 		relative = path.Join(relative, part)
 		next, err := h.t.openAt(folder, part, directoryFlags, 0)
-		if isNotExist(err) {
+		if create && isNotExist(err) {
 			if err = h.check(relative, false); err != nil {
 				return -1, err
 			}
@@ -1493,12 +1528,17 @@ func (h *fileHelper) run() error {
 	case "upload-files":
 		return h.uploadFiles(relative)
 	case "upload-prepare":
+		if err := h.readFiles(false); err != nil {
+			return err
+		}
 		folder, err := h.pinDirectory(root, relative)
 		if err != nil {
 			return err
 		}
 		// The staging files cut-off uploads left go from each folder the
-		// batch writes into that exists, within one sweep's budget.
+		// batch writes into that exists, within one sweep's budget. Below the
+		// batch's own folder this is best effort: what can't be swept there
+		// is left, and each file's own write reports a folder that is wrong.
 		sweep := &sweepBudget{started: time.Now()}
 		h.folder = relative
 		stuck, err := h.sweepStaging(folder, sweep)
@@ -1506,21 +1546,16 @@ func (h *fileHelper) run() error {
 			return err
 		}
 		for _, inside := range uploadFolders(h.request.Files) {
+			if sweep.seen >= sweepEntries || time.Since(sweep.started) >= sweepTime {
+				break
+			}
 			opened := len(h.t.open)
 			h.folder = path.Join(relative, inside)
-			below, err := h.pinDirectory(folder, inside)
-			if err == nil {
-				var left int
-				left, err = h.sweepStaging(below, sweep)
+			if below, err := h.pinDirectory(folder, inside); err == nil {
+				left, _ := h.sweepStaging(below, sweep)
 				stuck += left
-			} else if isNotExist(err) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) || errors.Is(err, errExcluded) {
-				// Such a folder's files are refused or it is made later.
-				err = nil
 			}
 			h.t.closeFrom(opened)
-			if err != nil {
-				return err
-			}
 		}
 		// A space that can't be measured is reported as none, which the backend
 		// refuses, so the sweep's count still reaches it.
@@ -1530,6 +1565,9 @@ func (h *fileHelper) run() error {
 		}
 		return h.json(UploadPrepared{FileSpace: Space(&stat), Stuck: stuck})
 	case "upload-files-cleanup":
+		if err := h.readFiles(false); err != nil {
+			return err
+		}
 		folder, err := h.pinDirectory(root, relative)
 		if err != nil {
 			return err

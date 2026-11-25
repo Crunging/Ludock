@@ -116,8 +116,11 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 			// Its sweep may still be removing files.
 			access.Cleanup(true)
 		} else {
-			// The rest may fit once earlier files replace larger ones.
-			if index := slices.Index(results, nil); entries[index].Size > space.Available-helper.UploadSpare(space.Total) {
+			// The rest may fit once earlier files replace larger ones. A file
+			// below the folder may be on another disk, which the helper
+			// measures as it writes.
+			if index := slices.Index(results, nil); !strings.Contains(entries[index].Name, "/") &&
+				entries[index].Size > space.Available-helper.UploadSpare(space.Total) {
 				results[index] = uploadNoSpace(*space, entries[index].Size)
 			}
 		}
@@ -153,9 +156,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		}
 		return err
 	}
-	list, _ := json.Marshal(files)
-	input.trailer = binary.BigEndian.AppendUint64(nil, uint64(len(list)))
-	input.trailer = append(input.trailer, list...)
+	input.trailer = fileList(files)
 	acks := &uploadAcks{limit: len(files), ready: make(chan struct{}, len(files))}
 	input.ready = acks.ready
 	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized},
@@ -193,7 +194,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		// It runs even once the uploader's access is gone.
 		access = &Access{service: s, container: access.container, blocked: access.blocked}
 		_, err := access.request(context.WithoutCancel(ctx), helper.FileRequest{Operation: "upload-files-cleanup", Root: root.Path,
-			Path: normalized, Files: staged}, nil, nil)
+			Path: normalized}, bytes.NewReader(fileList(staged)), nil)
 		if err != nil {
 			log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
 		}
@@ -235,6 +236,13 @@ func validateUploadName(name string) error {
 		}
 	}
 	return nil
+}
+
+// fileList is a list of files as the helper reads it from stdin: its length,
+// then its JSON.
+func fileList(files []helper.UploadFile) []byte {
+	list, _ := json.Marshal(files)
+	return append(binary.BigEndian.AppendUint64(nil, uint64(len(list))), list...)
 }
 
 // isRefusal reports a public error that says nothing was written.
@@ -404,7 +412,7 @@ func (a *Access) prepareUpload(ctx context.Context, target Target, root Root, fo
 	for _, name := range names {
 		files = append(files, helper.UploadFile{Name: name})
 	}
-	out, err := a.request(ctx, helper.FileRequest{Operation: "upload-prepare", Root: root.Path, Path: folder, Files: files}, nil, nil)
+	out, err := a.request(ctx, helper.FileRequest{Operation: "upload-prepare", Root: root.Path, Path: folder}, bytes.NewReader(fileList(files)), nil)
 	if err != nil {
 		return nil, err
 	}

@@ -66,6 +66,11 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 	if err == nil && root == "" {
 		err = invalid
 	}
+	// A page from before files carried their own paths would put a folder's
+	// files in the folder shown.
+	if err == nil && (query.Has("into") || query.Has("replace")) {
+		err = apperr.New("UPLOAD_PAGE_OUTDATED", 400, "Ludock was updated since this page loaded. Reload Files, then upload again.")
+	}
 	// The list is read only for someone who may write here; startAction
 	// rechecks it, with the locks, once the list is in.
 	if err == nil {
