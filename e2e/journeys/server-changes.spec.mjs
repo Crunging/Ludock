@@ -151,6 +151,8 @@ test("a renamed server takes over its old backups, schedules, and sharing", asyn
     await expectOperationSucceeded(adminPage);
     await tabs.getByRole("link", { name: "Schedules" }).click();
     await adminPage.locator("#schedule-form").getByRole("button", { name: "Add schedule" }).click();
+    // Saving reloads the page; a goto sent while that reload commits is dropped.
+    await expect(adminPage).toHaveURL(/saved=created/);
     await expect(adminPage.locator("#schedule-list tbody tr")).toHaveCount(1);
 
     const renamed = `${ownServer.name} world`;
