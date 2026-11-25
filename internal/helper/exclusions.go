@@ -155,8 +155,13 @@ func (h *fileHelper) now(folder *unix.Stat_t) snapshot {
 // excludedIn reports an entry of parent that an excluded mount hides from
 // the game: what a destination's path names now or named at the start,
 // including one that has appeared where a path stopped short. Storage that
-// matches names loosely may reach it under another spelling, so it is found
-// by identity, looking a missing name up again in parent.
+// matches names loosely may reach it under another spelling, which names an
+// entry in the same folder, so the destination's name is looked up live in
+// parent and compared by identity. A folder that held a destination at the
+// start can't be told apart from that folder reached under another spelling,
+// so its names are looked up too, even if it has since been moved away: that
+// can hide a file the game sees, never show one it doesn't. A hard link
+// elsewhere is a name the game sees, so only the snapshots match it.
 func (h *fileHelper) excludedIn(parent fd, info *unix.Stat_t) bool {
 	if len(h.request.Blocked) == 0 || info == nil {
 		return false
