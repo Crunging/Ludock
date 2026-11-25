@@ -156,10 +156,7 @@ func (h *restoreHelper) moveContents(source, destination fd, toLive bool, omitte
 		if err != nil {
 			return err
 		}
-		if at, err := lstatAt(destination, name); err == nil {
-			if !toLive || !linkedPair(sourceInfo, at) {
-				return errUnsafe
-			}
+		if toLive && cutMoveIn(sourceInfo) {
 			if err := unix.Unlinkat(int(source), name, 0); err != nil {
 				return err
 			}
@@ -167,6 +164,9 @@ func (h *restoreHelper) moveContents(source, destination fd, toLive bool, omitte
 				return err
 			}
 			continue
+		}
+		if _, err := lstatAt(destination, name); err == nil {
+			return errUnsafe
 		} else if !isNotExist(err) {
 			return err
 		}
@@ -195,7 +195,7 @@ func (h *restoreHelper) moveContents(source, destination fd, toLive bool, omitte
 // RENAME_NOREPLACE, only Ludock makes names in its own folders, so a plain
 // rename goes there. Into live data, from the stage, a file is linked at the
 // target, which fails if anything is there, then its stage name unlinked;
-// cut between the two, it has both names, which linkedPair finds on a retry.
+// cut between the two, it has both names, which cutMoveIn finds on a retry.
 // Only the stage name is ever unlinked: a live one may be a save the game
 // just replaced. A folder is renamed, which can replace only an empty
 // folder. A filesystem with neither feature gets the plain rename whole
@@ -217,15 +217,42 @@ func renameChecked(from fd, name string, to fd, target string, info *unix.Stat_t
 	return renameat(int(from), name, int(to), target)
 }
 
-// linkedPair says at is the file info under a second name, as a move from
-// the stage by link and unlink cut between them leaves it; the move finishes
-// by unlinking info's stage name.
-func linkedPair(info, at *unix.Stat_t) bool {
-	return isRegular(info) && info.Nlink == 2 && sameInode(info, at)
+// cutMoveIn says a file in the stage has a second name, which only a move
+// into the live data cut between its link and unlink gives it: files enter
+// the stage with one. The live name, which the game may have renamed since,
+// holds the data, so the move finishes by unlinking the stage name.
+func cutMoveIn(info *unix.Stat_t) bool { return isRegular(info) && info.Nlink == 2 }
+
+// finishMovesIn finishes, before live data is set aside, the moves of the
+// backup's files in that were cut between link and unlink.
+func (h *restoreHelper) finishMovesIn(stage fd) error {
+	next, err := h.t.openAt(stage, "new", directoryFlags, 0)
+	if isNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	children, err := names(next)
+	if err != nil {
+		return err
+	}
+	for _, name := range children {
+		info, err := lstatAt(next, name)
+		if err != nil {
+			return err
+		}
+		if cutMoveIn(info) {
+			if err := unix.Unlinkat(int(next), name, 0); err != nil {
+				return err
+			}
+		}
+	}
+	return syncAll(next)
 }
 
 // asideEntry is movable for an entry that may be set aside, also passing a
-// file with a second name in the stage, which a cut move in left.
+// file with a second name so rollbackOld can tell the original itself after a
+// cut return; setAsideEntry refuses any other.
 func asideEntry(parent fd, name string, device uint64) (*unix.Stat_t, error) {
 	info, err := lstatAt(parent, name)
 	if isNotExist(err) {
@@ -640,30 +667,6 @@ func (h *restoreHelper) rollbackClean(root, stage fd) error {
 	return nil
 }
 
-// finishMoveIn unlinks the stage's new copy of a live file it is the same
-// file as, and returns the live file as it is then.
-func (h *restoreHelper) finishMoveIn(root, stage fd, name string, info *unix.Stat_t) (*unix.Stat_t, error) {
-	next, err := h.t.openAt(stage, "new", directoryFlags, 0)
-	if isNotExist(err) {
-		return info, nil
-	} else if err != nil {
-		return nil, err
-	}
-	staged, err := lstatAt(next, name)
-	if isNotExist(err) || (err == nil && !linkedPair(staged, info)) {
-		return info, nil
-	} else if err != nil {
-		return nil, err
-	}
-	if err := unix.Unlinkat(int(next), name, 0); err != nil {
-		return nil, err
-	}
-	if err := syncAll(next); err != nil {
-		return nil, err
-	}
-	return lstatAt(root, name)
-}
-
 func (h *restoreHelper) setAside(root, stage fd) error {
 	// Like rollbackClean, but what is live is kept: a server started
 	// elsewhere may have written there.
@@ -671,6 +674,9 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 		return err
 	}
 	if err := h.ownTree(root, false); err != nil {
+		return err
+	}
+	if err := h.finishMovesIn(stage); err != nil {
 		return err
 	}
 	aside, err := h.pinAside(root, stage)
@@ -695,13 +701,6 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 		info, err := asideEntry(root, name, rootInfo.Dev)
 		if err != nil {
 			return err
-		}
-		// A move in cut between link and unlink left the backup's copy under
-		// its stage name too, which that move would have removed.
-		if info != nil && info.Nlink == 2 {
-			if info, err = h.finishMoveIn(root, stage, name, info); err != nil {
-				return err
-			}
 		}
 		if err := setAsideEntry(root, name, aside, info); err != nil {
 			return err
@@ -746,7 +745,7 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 		if err != nil {
 			return err
 		}
-		if linkedPair(original, info) {
+		if cutMoveIn(original) && sameInode(original, info) {
 			continue
 		}
 		if aside, err = h.asideFor(root, stage, root, aside, name, name, info); err != nil {

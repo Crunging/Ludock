@@ -716,6 +716,9 @@ func TestRenameWithoutNoReplaceNeverClobbers(t *testing.T) {
 	// whose unlink could remove a save the game just replaced.
 	write(filepath.Join(old, "server.properties"), "original")
 	os.Link(filepath.Join(old, "server.properties"), filepath.Join(root, "server.properties"))
+	// The game may have renamed it since.
+	write(filepath.Join(old, "level.dat_mcr"), "original")
+	os.Link(filepath.Join(old, "level.dat_mcr"), filepath.Join(root, "level.dat_old"))
 	write(filepath.Join(old, "ops.json"), "original")
 	write(filepath.Join(root, "ops.json"), "game made")
 	var linked []string
@@ -737,7 +740,8 @@ func TestRenameWithoutNoReplaceNeverClobbers(t *testing.T) {
 	}
 	linkat = link
 	for name, want := range map[string]string{"level.dat": "original", asideName + "/level.dat": "game made", "server.properties": "original",
-		"ops.json": "original", asideName + "/ops.json": "game made", "whitelist.json": "original", asideName + "/whitelist.json": "game made"} {
+		"ops.json": "original", asideName + "/ops.json": "game made", "whitelist.json": "original", asideName + "/whitelist.json": "game made",
+		"level.dat_old": "original"} {
 		info, err := os.Stat(filepath.Join(root, name))
 		if got := read(filepath.Join(root, name)); got != want || err != nil || info.Sys().(*syscall.Stat_t).Nlink != 1 {
 			t.Errorf("%s holds %q, want %q", name, got, want)
@@ -753,12 +757,15 @@ func TestRenameWithoutNoReplaceNeverClobbers(t *testing.T) {
 	// setting the live data aside finishes that move first.
 	write(filepath.Join(root, stage, "new", "backup.dat"), "backup")
 	os.Link(filepath.Join(root, stage, "new", "backup.dat"), filepath.Join(root, "backup.dat"))
+	write(filepath.Join(root, stage, "new", "renamed.dat"), "backup")
+	os.Link(filepath.Join(root, stage, "new", "renamed.dat"), filepath.Join(root, "renamed.dat.bak"))
 	argument, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreSetAside, Aside: asideName, Base: root})
-	if RunRestore(string(argument), io.Discard, io.Discard) != 0 || read(filepath.Join(root, asideName, "backup.dat")) != "backup" {
+	if RunRestore(string(argument), io.Discard, io.Discard) != 0 || read(filepath.Join(root, asideName, "backup.dat")) != "backup" ||
+		read(filepath.Join(root, asideName, "renamed.dat.bak")) != "backup" {
 		t.Fatal("didn't set aside a file a cut move in left")
 	}
-	if _, err := os.Stat(filepath.Join(root, stage, "new", "backup.dat")); !os.IsNotExist(err) {
-		t.Fatal("left the move in's stage name")
+	if entries, _ := os.ReadDir(filepath.Join(root, stage, "new")); len(entries) != 0 {
+		t.Fatal("left the move in's stage names")
 	}
 	// Without hard links either, the plain rename is used.
 	write(filepath.Join(old, "usercache.json"), "original")
