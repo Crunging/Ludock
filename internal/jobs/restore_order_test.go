@@ -181,6 +181,42 @@ func startedAfter(operation, root string) func(*testing.T, *fixture) afterHook {
 // startedDuring starts the server elsewhere as a step begins, and the step
 // runs on, as a long move does, until its helper is stopped.
 func startedDuring(operation, root string) func(*testing.T, *fixture) {
+	return changedDuring(operation, root, (*fixture).startElsewhere)
+}
+
+// replaceElsewhere binds the server to a replacement, as discovery does
+// when another manager starts one and leaves the stopped original.
+func (f *fixture) replaceElsewhere() {
+	f.jobs.DB.Exec(`UPDATE logical_servers SET container_id='replacement', binding_revision=binding_revision+1 WHERE id=?`, f.serverID)
+}
+
+// stalledStart leaves the first move's exec start unanswered, as a stalled
+// Docker can, and starts the server elsewhere once it is sent.
+func stalledStart(t *testing.T, f *fixture) afterHook {
+	extracted := 0
+	return func(_ *fakedocker.Container, operation, _ string, code int) int {
+		if operation != "extract" {
+			return code
+		}
+		if extracted++; extracted == 2 {
+			arrived := f.engine.HangRequests(fakedocker.ExecStart)
+			go func() {
+				<-arrived
+				f.engine.HangRequests("^$")
+				f.startElsewhere()
+				started := time.Now()
+				t.Cleanup(func() {
+					if took := time.Since(started); took > 5*time.Second {
+						t.Errorf("waited %v on an unanswered start with the server running", took)
+					}
+				})
+			}()
+		}
+		return code
+	}
+}
+
+func changedDuring(operation, root string, change func(*fixture)) func(*testing.T, *fixture) {
 	return func(t *testing.T, f *fixture) {
 		run, hit := f.engine.Exec, false
 		f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
@@ -192,7 +228,7 @@ func startedDuring(operation, root string) func(*testing.T, *fixture) {
 				return run(c, cmd, stdin, stdout, stderr)
 			}
 			hit = true
-			f.startElsewhere()
+			change(f)
 			started := time.Now()
 			for time.Since(started) < 5*time.Second {
 				if helper := f.engine.Container(c.ID); helper == nil || !helper.State.Running {
@@ -320,6 +356,15 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 		{name: "started during a move out", during: startedDuring(helper.RestoreMoveOld, "world"), status: ops.Failed, journal: "replacing moving_old,staging unsafe",
 			left: true, elsewhere: true, guidance: "The restore was stopped partway.", trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe",
 				"kept world: replacing moving_old,staging unsafe", "kept config: replacing moving_old,staging unsafe"})},
+		// Likewise when the server is no longer the one the restore stopped,
+		// or the move's start is never answered.
+		{name: "replaced during a move out", during: changedDuring(helper.RestoreMoveOld, "world", (*fixture).replaceElsewhere), status: ops.Failed,
+			journal: "replacing moving_old,staging unsafe", left: true, down: true, guidance: "The restore was stopped partway.",
+			trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe",
+				"kept world: replacing moving_old,staging unsafe", "kept config: replacing moving_old,staging unsafe"})},
+		{name: "started at a stalled move out", after: stalledStart, status: ops.Failed, journal: "replacing moving_old,staging unsafe",
+			left: true, elsewhere: true, guidance: "The restore was stopped partway.", trace: slices.Concat(extracted,
+				[]string{"kept world: replacing moving_old,staging unsafe", "kept config: replacing moving_old,staging unsafe"})},
 		{name: "started during a move in", during: startedDuring(helper.RestoreMoveNew, "world"), status: ops.Failed, journal: "replacing old_moved,staging unsafe",
 			left: true, elsewhere: true, guidance: "The restore was stopped partway.", trace: slices.Concat(worldSwapped,
 				[]string{"kept world: replacing old_moved,staging unsafe", "kept config: replacing old_moved,staging unsafe"})},

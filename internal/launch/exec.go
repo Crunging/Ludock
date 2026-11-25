@@ -188,7 +188,27 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	var watched context.CancelCauseFunc
 	if options.Settle && options.Watch != nil {
 		deadline, watched = context.WithCancelCause(deadline)
-		defer watched(nil)
+		done := make(chan struct{})
+		// Watched from before the start, which can wait unanswered while the
+		// helper already runs.
+		go func() {
+			defer close(done)
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-deadline.Done():
+					return
+				case <-ticker.C:
+					if err := options.Watch(deadline); err != nil {
+						watched(err)
+						return
+					}
+				}
+			}
+		}()
+		// The watch reads the caller's state, so it ends before Exec does.
+		defer func() { watched(nil); <-done }()
 	}
 	var conn *docker.Conn
 	if options.Settle {
@@ -240,27 +260,6 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		}
 	})
 	defer stop()
-	if watched != nil {
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-deadline.Done():
-					return
-				case <-ticker.C:
-					if err := options.Watch(deadline); err != nil {
-						watched(err)
-						return
-					}
-				}
-			}
-		}()
-		// The watch reads the caller's state, so it ends before Exec does.
-		defer func() { stop(); watched(nil); <-done }()
-	}
 	if options.Input == nil && options.Limit > 0 && !options.Settle {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()

@@ -616,11 +616,13 @@ func (r *restoreRun) stillSafe() error {
 	return r.assertAccess()
 }
 
-// notStarted stops a move once something outside Ludock starts the server,
-// so the game doesn't run on data still moving. Other errors wait for the
-// check after the move.
+// notStarted stops a move once something outside Ludock starts the server
+// or it is no longer the server this restore stopped, so no game runs on
+// data still moving. A check that can't run waits for the one after the move.
 func (r *restoreRun) notStarted(ctx context.Context) error {
-	if err := r.j.assertStillStopped(ctx, r.server, r.job); errors.Is(err, errServerChanged) {
+	err := r.j.assertStillStopped(ctx, r.server, r.job)
+	if errors.Is(err, errServerChanged) || apperr.Is(err, "SERVER_BINDING_CHANGED") || apperr.Is(err, "SERVER_BINDING_UNAVAILABLE") ||
+		apperr.Is(err, "SERVER_NOT_FOUND") {
 		return err
 	}
 	return nil
