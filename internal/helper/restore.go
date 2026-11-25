@@ -257,10 +257,10 @@ func renameStrict(from fd, name string, to fd, target string) error {
 // RENAME_NOREPLACE, a fact the run holds to: the stage, the live data and
 // the set-aside folder share that filesystem. With it, every move uses it,
 // and an "unsupported" answer later fails the step like any other error.
-// Without it, the run moves as main does: the plain rename, except where
-// required says only RENAME_NOREPLACE will do, which is then refused with
-// nothing moved. A filesystem that changes its answer between runs is out
-// of scope.
+// Without it, the run uses the plain rename to a name it found free, except
+// where required says only RENAME_NOREPLACE will do, which is then refused
+// with nothing moved. A filesystem that changes its answer between runs is
+// out of scope.
 func (h *restoreHelper) renameRun(from fd, name string, to fd, target string, required bool) error {
 	if h.noReplace != noReplaceMissing {
 		err := renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE)
@@ -280,8 +280,8 @@ func (h *restoreHelper) renameRun(from fd, name string, to fd, target string, re
 
 // knowNoReplace finds out, before the first clash is set aside and its
 // folder made, whether the filesystem has RENAME_NOREPLACE, by a flagged
-// rename of an empty scratch folder in the stage. A probe that can't run, as on a
-// full disk, is no answer, so the clash is refused, as main refuses it.
+// rename of an empty scratch folder in the stage. A probe that can't run, as
+// on a full disk, is no answer, so the clash is refused with nothing moved.
 func (h *restoreHelper) knowNoReplace(root, stage fd) error {
 	if h.noReplace != noReplaceUnknown {
 		return nil
@@ -507,8 +507,7 @@ func (h *restoreHelper) checkReturn(root, stage fd) error {
 // back would fail after what is in its way moved. Only Ludock writes the
 // stage, so a link or special file there is told apart, to refuse before
 // the stop. A second name for a staged file can be the game's, which it may
-// drop as it stops, so that is refused only once the server is stopped, as
-// main does.
+// drop as it stops, so that is refused only once the server is stopped.
 func (h *restoreHelper) stagedEntry(old fd, name string) (*unix.Stat_t, error) {
 	if Reserved(name) {
 		return nil, nil
@@ -886,10 +885,6 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 	if err := h.ownTree(root, false); err != nil {
 		return err
 	}
-	aside, err := h.pinAside(root, stage)
-	if err != nil {
-		return err
-	}
 	rootInfo, err := fstat(root)
 	if err != nil {
 		return err
@@ -901,6 +896,8 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 	if len(children) > 1000000 {
 		return errUnsafe
 	}
+	// The folder is made only for something to keep.
+	var aside fd = -1
 	for _, name := range children {
 		if name == h.request.Stage || name == h.request.Aside || Reserved(name) {
 			continue
@@ -909,10 +906,18 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 		if err != nil {
 			return err
 		}
+		if aside < 0 {
+			if aside, err = h.pinAside(root, stage); err != nil {
+				return err
+			}
+		}
 		if err := setAsideEntry(root, name, aside, info, h.renameRun); err != nil {
 			return err
 		}
 		h.movedAside++
+	}
+	if aside < 0 {
+		return syncAll(stage, root)
 	}
 	return syncAll(aside, stage, root)
 }
@@ -942,7 +947,7 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 	// in an original's way means a game ran since the restore stopped, so no
 	// move may replace what it makes, which only a filesystem with
 	// RENAME_NOREPLACE can promise. On one without, a clash is refused with
-	// nothing of it moved or made, as main refuses it.
+	// nothing of it moved or made.
 	returnOld := func(from fd, name string, to fd, target string) error {
 		return h.renameRun(from, name, to, target, false)
 	}
@@ -1015,7 +1020,9 @@ func required(rename func(from fd, name string, to fd, target string, required b
 }
 
 // unsupported is a flagged rename's answer from a filesystem or kernel
-// without RENAME_NOREPLACE, or a seccomp profile that refuses renameat2.
+// without RENAME_NOREPLACE (ENOSYS, EINVAL, EOPNOTSUPP), or a seccomp profile
+// that refuses renameat2 (EPERM). Any other answer stops the step, to be
+// tried again.
 func unsupported(err error) bool {
 	for _, errno := range []unix.Errno{unix.ENOSYS, unix.EINVAL, unix.EOPNOTSUPP, unix.ENOTSUP, unix.EPERM} {
 		if errors.Is(err, errno) {
@@ -1456,8 +1463,8 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 				return err
 			}
 			if live != nil {
-				// One item moves only by RENAME_NOREPLACE, as on main, so without
-				// it the clash is refused before its folder is made.
+				// One item moves only by RENAME_NOREPLACE, so without it the clash
+				// is refused before its folder is made.
 				if err := h.knowNoReplace(root, stage); err != nil {
 					return err
 				}

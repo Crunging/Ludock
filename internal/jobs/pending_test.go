@@ -101,8 +101,7 @@ func TestNextBackupFinishesStoppedRestore(t *testing.T) {
 }
 
 // A nightly restart that backs up first, after a restore stopped partway,
-// finishes the undo, backs up, and leaves the server running, where before
-// the backup refused and the server stayed down.
+// finishes the undo, backs up, and leaves the server running.
 func TestRestartWithBackupFinishesStoppedRestore(t *testing.T) {
 	f := setup(t)
 	restore, _ := f.stoppedRestore(t)
@@ -337,5 +336,57 @@ func TestUndoRecoveryEndsAsWhatItDid(t *testing.T) {
 				t.Fatalf("%s %q %q, undo %q", job.Status, job.Error, job.Result.Guidance, job.Result.UndoNote)
 			}
 		})
+	}
+}
+
+// Another container that can write to the server's data starts while a
+// restore moves it, after the old data moved out or once the backup's is in
+// place, and writes a save there. The restore stops, and the owner stops
+// that container. Whichever finishes the undo, Undo, the next backup, or
+// startup with the server stopped, puts the previous data back and keeps the
+// save, never deleting it: nothing tells it apart from what the restore put
+// there.
+func TestUndoKeepsWhatAnotherWriterWrote(t *testing.T) {
+	for _, step := range []string{helper.RestoreMoveOld, helper.RestoreMoveNew} {
+		for _, finish := range []string{"undo", "backup", "startup"} {
+			t.Run(step+" "+finish, func(t *testing.T) {
+				f := setup(t)
+				input := map[string]any{"backupId": twoRootBackup(t, f), "confirmation": "mc"}
+				for _, root := range []string{"world", "config"} {
+					os.WriteFile(filepath.Join(f.data, root, "large.dat"), []byte("changed"), 0o644)
+				}
+				f.traceRestore(once(step, "world", func(_ *fakedocker.Container, code int) int {
+					f.writeElsewhere()
+					os.WriteFile(filepath.Join(f.data, "world", "sidecar-save"), []byte("new progress"), 0o600)
+					return code
+				}))
+				if restore := f.run(t, "restore", input); restore.Status != ops.Failed || f.running() {
+					t.Fatalf("%+v", restore)
+				}
+				if err := f.jobs.Docker.Stop(ctx, f.containerNamed("sidecar").ID, nil); err != nil {
+					t.Fatal(err)
+				}
+				var later *ops.Job
+				switch finish {
+				case "startup":
+					f.runner.Stop()
+					if err := f.runner.Start(ctx, nil); err != nil {
+						t.Fatal(err)
+					}
+				default:
+					if later = f.run(t, map[string]string{"undo": ops.KindUndoRestore, "backup": "backup"}[finish], nil); later.Status != ops.Succeeded {
+						t.Fatalf("%+v", later)
+					}
+				}
+				restore := lastRestore(f)
+				saved := filepath.Join(f.data, "world", helper.SetAsideName(restore), "sidecar-save")
+				if read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" || read(t, saved) != "new progress" {
+					t.Errorf("previous data not back, or the save not kept; journal %s", f.savedJournal(restore))
+				}
+				if later != nil && !strings.Contains(later.Result.UndoNote, helper.SetAsideName(restore)) {
+					t.Errorf("%+v", later.Result)
+				}
+			})
+		}
 	}
 }

@@ -122,8 +122,9 @@ func TestRestoreItemRefusesUnsafePaths(t *testing.T) {
 }
 
 // A selective restore interrupted after its swap, with the replaced copy
-// still staged, is rolled back on startup: the current copy returns, the
-// stage is removed, the server starts again, and Activity says it was undone.
+// still staged, is rolled back on startup: the backup's copy is set aside,
+// the current copy returns, the stage is removed, the server starts again,
+// and Activity says it was undone and where the backup's copy went.
 func TestRestoreItemInterrupted(t *testing.T) {
 	f := setup(t)
 	backupID, rootID := f.itemBackup(t)
@@ -162,11 +163,11 @@ func TestRestoreItemInterrupted(t *testing.T) {
 	}
 	recovered, _ := f.runner.Get(ctx, job.ID)
 	if recovered.Status != ops.Interrupted || !strings.Contains(recovered.Error, "restarted") ||
-		recovered.Result.Guidance != "The restore was undone: the server’s data is as it was. Ludock started the server again." {
+		recovered.Result.Guidance != "The restore was undone: the server’s data is as it was. "+keptNote(&ops.Context{Job: recovered})+" Ludock started the server again." {
 		t.Fatalf("%+v", recovered)
 	}
 	if read(t, filepath.Join(f.data, "world", "level.dat")) != "newer" || read(t, filepath.Join(f.data, "world", "today.dat")) != "today" ||
-		f.staged() || !f.running() {
+		read(t, filepath.Join(f.data, helper.SetAsideName(job.ID), "level.dat")) != "original" || f.staged() || !f.running() {
 		t.Fatal("recovery did not return the current copy", read(t, filepath.Join(f.data, "world", "level.dat")), f.staged(), f.running())
 	}
 }

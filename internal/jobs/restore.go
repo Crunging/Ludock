@@ -31,9 +31,8 @@ type journal struct {
 type restoreRecovery struct {
 	Status string    `json:"status"`
 	Roots  []journal `json:"roots,omitempty"`
-	// SetAside, saved before a later undo of a restore that ended partway
-	// moves anything, keeps what is live instead of removing it: a server
-	// started meanwhile may have written there.
+	// SetAside is what 1.0 saved before an undo that kept what was live.
+	// Every undo keeps it now, so it is only read.
 	SetAside bool `json:"setAside,omitempty"`
 	// StageMissing: the undo found a stage folder gone, so that root's live
 	// data was left as it was, which may not be the server's previous data.
@@ -339,14 +338,14 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 		return err
 	}
 	var entries []journal
-	setAside, missing, kept, unknown := false, false, false, false
+	missing, kept, unknown := false, false, false
 	if state != nil {
-		entries, setAside, missing, kept, unknown = state.Roots, state.SetAside, state.StageMissing, state.Kept, state.KeptUnknown
+		entries, missing, kept, unknown = state.Roots, state.StageMissing, state.Kept, state.KeptUnknown
 	}
 	// A root past staging had live data moved, even one a restart midway
 	// through this undo already put back.
 	touched := slices.ContainsFunc(entries, func(entry journal) bool { return entry.Phase != "staging" })
-	if err := saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries, SetAside: setAside, StageMissing: missing, Kept: kept,
+	if err := saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries, StageMissing: missing, Kept: kept,
 		KeptUnknown: unknown}, ""); err != nil {
 		return err
 	}
@@ -377,18 +376,14 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 		if err != nil {
 			return err
 		}
+		// What is live then is set aside, never removed: nothing tells the
+		// backup's copy apart from what another program wrote into it.
 		if entry.Phase == "old_moved" || entry.Phase == "replaced" {
-			clean := helper.RestoreRollbackClean
-			if setAside {
-				clean = helper.RestoreSetAside
-			}
-			cleaned, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, clean, live)
+			cleaned, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, helper.RestoreSetAside, live)
 			if err != nil {
 				return err
 			}
-			if clean == helper.RestoreSetAside {
-				kept = kept || cleaned["setAside"] == true
-			}
+			kept = kept || cleaned["setAside"] == true
 		}
 		if holdsLive(entry) {
 			// Persist after removing new data and before returning any old

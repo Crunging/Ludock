@@ -882,9 +882,9 @@ func TestRenamesNeverClobber(t *testing.T) {
 		return strings.Join(all, "\n")
 	}
 	// On a filesystem without RENAME_NOREPLACE, in any of the ways it says
-	// so, an undo moves as main does: something in the way is refused with
-	// the disk left exactly as it was, and once the owner clears it the
-	// return uses the plain rename.
+	// so, something in the way of an undo is refused with the disk left
+	// exactly as it was, and once the owner clears it the return uses the
+	// plain rename.
 	for _, errno := range []unix.Errno{unix.EINVAL, unix.ENOSYS, unix.EOPNOTSUPP, unix.EPERM} {
 		renameat2 = func(int, string, int, string, uint) error { return errno }
 		before := tree(root)
@@ -893,7 +893,7 @@ func TestRenamesNeverClobber(t *testing.T) {
 		}
 		os.Rename(filepath.Join(root, "ops.json"), filepath.Join(dir, "cleared"))
 		if RunRestore(string(argument), io.Discard, io.Discard) != 0 {
-			t.Fatalf("%v: refused a return main makes", errno)
+			t.Fatalf("%v: refused a return with nothing in the way", errno)
 		}
 		if data, _ := os.ReadFile(filepath.Join(root, "ops.json")); string(data) != "original" {
 			t.Fatal("didn't return the original:", string(data))
@@ -1070,8 +1070,8 @@ func TestRenamesNeverClobber(t *testing.T) {
 		os.Remove(filepath.Join(root, "file"+strconv.Itoa(index)))
 	}
 	// Finding out about RENAME_NOREPLACE needs a scratch folder only where
-	// something is in the way, which main refuses anyway: on a full disk, a
-	// clear return still finishes, and a clash is refused with nothing made.
+	// something is in the way: on a full disk, a clear return still
+	// finishes, and a clash is refused with nothing made.
 	// A stage it can't write in stands in for the full disk; root writes
 	// anyway.
 	if os.Geteuid() != 0 {
@@ -1086,7 +1086,7 @@ func TestRenamesNeverClobber(t *testing.T) {
 		}
 		os.Remove(filepath.Join(root, "ops.json"))
 		if RunRestore(string(argument), io.Discard, io.Discard) != 0 {
-			t.Fatal("a full disk refused a return main makes")
+			t.Fatal("a full disk refused a return with nothing in the way")
 		}
 		os.Chmod(filepath.Join(root, stage), 0o700)
 	}

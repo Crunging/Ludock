@@ -283,29 +283,32 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 		"moveNew config: replacing replaced,old_moved unsafe"})
 	committed := []string{"cleanup world: committed replaced,replaced", "cleanup config: committed replaced,replaced"}
 	unstaged := []string{"cleanup config: rolling_back staging,staging unsafe", "cleanup world: rolling_back staging,staging unsafe"}
+	// A rollback sets aside the backup's data it finds in place.
 	rolledBack := func(configPhase string) []string {
-		return []string{"rollbackClean config: rolling_back replaced," + configPhase + " unsafe",
-			"rollbackOld config: rolling_back replaced,rolling_back unsafe",
-			"cleanup config: rolling_back replaced,rolled_back unsafe",
-			"rollbackClean world: rolling_back replaced,rolled_back unsafe",
-			"rollbackOld world: rolling_back rolling_back,rolled_back unsafe",
-			"cleanup world: rolling_back rolled_back,rolled_back unsafe",
-			"kept world: rolling_back rolled_back,rolled_back unsafe", "kept config: rolling_back rolled_back,rolled_back unsafe"}
+		return []string{"setAside config: rolling_back replaced," + configPhase + " unsafe",
+			"rollbackOld config: rolling_back replaced,rolling_back kept unsafe",
+			"cleanup config: rolling_back replaced,rolled_back kept unsafe",
+			"setAside world: rolling_back replaced,rolled_back kept unsafe",
+			"rollbackOld world: rolling_back rolling_back,rolled_back kept unsafe",
+			"cleanup world: rolling_back rolled_back,rolled_back kept unsafe",
+			"kept world: rolling_back rolled_back,rolled_back kept unsafe", "kept config: rolling_back rolled_back,rolled_back kept unsafe"}
 	}
-	worldRolledBack := []string{"cleanup config: rolling_back old_moved,staging unsafe",
-		"rollbackClean world: rolling_back old_moved,staging unsafe",
-		"rollbackOld world: rolling_back rolling_back,staging unsafe",
-		"cleanup world: rolling_back rolled_back,staging unsafe",
-		"kept world: rolling_back rolled_back,staging unsafe", "kept config: rolling_back rolled_back,staging unsafe"}
+	worldRolledBack := func(kept string) []string {
+		return []string{"cleanup config: rolling_back old_moved,staging unsafe",
+			"setAside world: rolling_back old_moved,staging unsafe",
+			"rollbackOld world: rolling_back rolling_back,staging" + kept + " unsafe",
+			"cleanup world: rolling_back rolled_back,staging" + kept + " unsafe",
+			"kept world: rolling_back rolled_back,staging" + kept + " unsafe", "kept config: rolling_back rolled_back,staging" + kept + " unsafe"}
+	}
 	itemSwapped := []string{"space game: none", "check game: none", "space game: staging staging", "stage game: staging staging",
 		"extract game: staging staging", "moveOld game: replacing moving_old unsafe", "moveNew game: replacing old_moved unsafe"}
 	scenarios := []restoreScenario{
 		{name: "succeeds", status: ops.Succeeded, journal: "cleaned", restored: true, trace: slices.Concat(swapped, committed)},
 		{name: "item succeeds", item: true, status: ops.Succeeded, journal: "cleaned", restored: true,
 			trace: slices.Concat(itemSwapped, []string{"cleanup game: committed replaced"})},
-		{name: "item swap fails", item: true, after: failedAt(helper.RestoreMoveNew, "game"), status: ops.Failed, journal: "rolled_back put back",
-			trace: slices.Concat(itemSwapped, []string{"rollbackClean game: rolling_back old_moved unsafe",
-				"rollbackOld game: rolling_back rolling_back unsafe", "cleanup game: rolling_back rolled_back unsafe", "kept game: rolling_back rolled_back unsafe"})},
+		{name: "item swap fails", item: true, after: failedAt(helper.RestoreMoveNew, "game"), status: ops.Failed, journal: "rolled_back put back kept", kept: true,
+			trace: slices.Concat(itemSwapped, []string{"setAside game: rolling_back old_moved unsafe",
+				"rollbackOld game: rolling_back rolling_back kept unsafe", "cleanup game: rolling_back rolled_back kept unsafe", "kept game: rolling_back rolled_back kept unsafe"})},
 		// Without a helper nothing was staged, so there is nothing to roll back.
 		{name: "item helper not created", item: true, status: ops.Failed, journal: "rolled_back",
 			after: func(t *testing.T, f *fixture) afterHook {
@@ -323,17 +326,17 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 				"cleanup config: rolling_back moving_old,staging unsafe", "rollbackOld world: rolling_back rolling_back,staging unsafe",
 				"cleanup world: rolling_back rolled_back,staging unsafe", "kept world: rolling_back rolled_back,staging unsafe",
 				"kept config: rolling_back rolled_back,staging unsafe"})},
-		{name: "first move in fails", after: failedAt(helper.RestoreMoveNew, "world"), status: ops.Failed, journal: "rolled_back put back",
-			trace: slices.Concat(worldSwapped, worldRolledBack)},
+		{name: "first move in fails", after: failedAt(helper.RestoreMoveNew, "world"), status: ops.Failed, journal: "rolled_back put back kept", kept: true,
+			trace: slices.Concat(worldSwapped, worldRolledBack(" kept"))},
 		// Something makes a file in the emptied world folder during the
 		// rollback, which sets it aside, but the rollback's result is lost.
 		{name: "rollback's result lost", status: ops.Failed, journal: "rolling_back rolling_back,staging kept unsafe", left: true, kept: true, down: true,
 			guidance: "The restore was stopped partway while its previous data was being put back", trace: slices.Concat(worldSwapped, []string{"cleanup config: rolling_back old_moved,staging unsafe",
-				"rollbackClean world: rolling_back old_moved,staging unsafe", "rollbackOld world: rolling_back rolling_back,staging unsafe",
-				"kept world: rolling_back rolling_back,staging unsafe", "kept config: rolling_back rolling_back,staging unsafe"}),
+				"setAside world: rolling_back old_moved,staging unsafe", "rollbackOld world: rolling_back rolling_back,staging kept unsafe",
+				"kept world: rolling_back rolling_back,staging kept unsafe", "kept config: rolling_back rolling_back,staging kept unsafe"}),
 			after: func(t *testing.T, f *fixture) afterHook {
 				fail := once(helper.RestoreMoveNew, "world", func(*fakedocker.Container, int) int { return 1 })
-				write := once(helper.RestoreRollbackClean, "world", func(_ *fakedocker.Container, code int) int {
+				write := once(helper.RestoreSetAside, "world", func(_ *fakedocker.Container, code int) int {
 					os.WriteFile(filepath.Join(f.data, "world", "large.dat"), []byte("made meanwhile"), 0o644)
 					return code
 				})
@@ -342,11 +345,11 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 					return lose(c, op, root, write(c, op, root, fail(c, op, root, code)))
 				}
 			}},
-		{name: "last move in fails", after: failedAt(helper.RestoreMoveNew, "config"), status: ops.Failed, journal: "rolled_back put back",
+		{name: "last move in fails", after: failedAt(helper.RestoreMoveNew, "config"), status: ops.Failed, journal: "rolled_back put back kept", kept: true,
 			trace: slices.Concat(swapped, rolledBack("old_moved"))},
 		// A failed command that took its helper with it rolls back through a
 		// new one.
-		{name: "helper exits", status: ops.Failed, journal: "rolled_back put back", trace: slices.Concat(worldSwapped, worldRolledBack),
+		{name: "helper exits", status: ops.Failed, journal: "rolled_back put back kept", kept: true, trace: slices.Concat(worldSwapped, worldRolledBack(" kept")),
 			after: func(t *testing.T, f *fixture) afterHook {
 				return once(helper.RestoreMoveNew, "world", func(c *fakedocker.Container, _ int) int { f.engine.Exit(c.ID, 1); return 1 })
 			}},
@@ -392,10 +395,10 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 				[]string{"kept world: rolling_back replaced,replaced unsafe", "kept config: rolling_back replaced,replaced unsafe"})},
 		{name: "revoked after staging", after: revokedAfter(helper.RestoreStage, "config"), status: ops.Failed, journal: "rolled_back", trace: slices.Concat(checked, unstaged)},
 		{name: "revoked after a move out", after: revokedAfter(helper.RestoreMoveOld, "world"), status: ops.Failed, journal: "rolled_back put back",
-			trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe"}, worldRolledBack)},
-		{name: "revoked before commit", after: revokedAfter(helper.RestoreMoveNew, "config"), status: ops.Failed, journal: "rolled_back put back",
+			trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe"}, worldRolledBack(""))},
+		{name: "revoked before commit", after: revokedAfter(helper.RestoreMoveNew, "config"), status: ops.Failed, journal: "rolled_back put back kept", kept: true,
 			trace: slices.Concat(swapped, rolledBack("replaced"))},
-		{name: "revoked during rollback", status: ops.Failed, journal: "rolled_back put back", trace: slices.Concat(swapped, rolledBack("old_moved")),
+		{name: "revoked during rollback", status: ops.Failed, journal: "rolled_back put back kept", kept: true, trace: slices.Concat(swapped, rolledBack("old_moved")),
 			after: func(t *testing.T, f *fixture) afterHook {
 				fail := once(helper.RestoreMoveNew, "config", func(*fakedocker.Container, int) int { return 1 })
 				revoke := once(helper.RestoreRollbackClean, "config", func(_ *fakedocker.Container, code int) int { f.revoke(t); return code })
@@ -624,9 +627,10 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
 				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
 				relocate(t, filepath.Join(stage, "new", "world"), filepath.Join(f.data, "world"))
-			}, want: "newer", guidance: undone, journal: "rolled_back put back", running: true,
-			trace: []string{"rollbackClean game: rolling_back old_moved unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
-				"cleanup game: rolling_back rolled_back unsafe", "kept game: rolling_back rolled_back unsafe"}},
+			}, want: "newer", guidance: undone + " Anything Ludock moved out of the way of the server’s previous data went to the folder ludock-set-aside-%s in its data.",
+			journal: "rolled_back put back kept", running: true,
+			trace: []string{"setAside game: rolling_back old_moved unsafe", "rollbackOld game: rolling_back rolling_back kept unsafe",
+				"cleanup game: rolling_back rolled_back kept unsafe", "kept game: rolling_back rolled_back kept unsafe"}},
 		{name: "returning", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolling_back"}}},
 			arrange: func(t *testing.T, f *fixture, stage string) {
 				os.MkdirAll(filepath.Join(stage, "new"), 0o700)
@@ -659,7 +663,7 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
 				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
 			}, journal: "rolling_back rolling_back unsafe", guidance: pending,
-			trace: []string{"rollbackClean game: rolling_back old_moved unsafe", "rollbackOld game: rolling_back rolling_back unsafe", "kept game: rolling_back rolling_back unsafe",
+			trace: []string{"setAside game: rolling_back old_moved unsafe", "rollbackOld game: rolling_back rolling_back unsafe", "kept game: rolling_back rolling_back unsafe",
 				"stageExists game: rolling_back rolling_back unsafe", "checkReturn game: rolling_back rolling_back unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
 				"kept game: rolling_back rolling_back unsafe"}},
 	} {
@@ -728,8 +732,8 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 		// refusal, the error that refuses the undo before the stop.
 		mounted, refusal string
 		// afterStop: a live entry in the way, which the running game may
-		// still change, is refused once the server stops, as main does, and
-		// the server starts again.
+		// still change, is refused once the server stops, and the server
+		// starts again.
 		afterStop bool
 		// failStep fails the undo at that step, and guidance is part of what
 		// the restore's Activity then says.
