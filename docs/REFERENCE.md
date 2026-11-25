@@ -505,27 +505,41 @@ up; its log says so.
 From the moment Ludock saves its data until the update ends, it accepts no
 change: forms, sign-ins and sign-outs, and its own background work wait,
 and are refused with "Ludock is updating itself", since putting the old
-version back would undo them. Ludock doesn't begin an update while other
-work is queued, running, or still being recovered after a restart. If the
-helper is killed or the host restarts partway, Docker runs the helper again
-and it finishes or undoes the update. One stopped on purpose with `docker
-stop` is started again by a Ludock still running; with none running, it
-waits until Docker restarts or `docker start` starts it. A tag moved back to an older release
-is refused, since that release can't use the newer data.
+version back would undo them. That holds for every process that opens
+Ludock's data, so `ludock recover` waits too. Pages show the last known
+state and say Ludock is updating itself. A scheduled action that comes due
+meanwhile runs once Ludock is back, if that is within its grace period (15
+minutes for a repeating schedule, 5 for a one-time one), and an alert
+Ludock couldn't queue is kept in `notifications-pending.jsonl` beside its
+data and sent once it runs again.
+
+Ludock doesn't begin an update while other work is queued, running, or
+still being recovered after a restart; background work such as reading who
+is online is asked to stop first. If the helper is killed or the host
+restarts partway, Docker runs the helper again and it finishes or undoes the
+update. One stopped on purpose with `docker stop` is started again by a
+Ludock still running; with none running, it waits until Docker restarts or
+`docker start` starts it. One removed with `docker rm` is created again by
+the Ludock running, unless Docker already shows how the update ended. A tag
+moved back to an older release is refused, since that release can't use the
+newer data.
 
 The new container keeps everything the old one had: environment, mounts,
 ports, networks and addresses, restart policy, and labels, including
 Compose's, so `docker compose` still treats it as its own. The data copy is
 `ludock-update-<id>.tar` in Ludock's data folder. Ludock keeps the newest one
 and removes older ones; it restores with `ludock restore-data` like any
-[save](#ludocks-own-data).
+[save](#ludocks-own-data). Putting a version back restores only that file:
+the helper passes its SHA-256 to `restore-data`, which refuses any other.
 
 Settings shows commands instead of the button when Ludock can't update
 itself: outside a container it can prove is its own, started with `--rm`,
 with its health check turned off, reaching Docker other than through a
 mounted socket, with its data outside a volume or mounted folder a helper can
-mount the same way, with a host port Docker picks at each start, or sharing a
-network or processes with another container. In the folder with its
+mount the same way, with another mount inside its data folder (such as the
+database or its key mounted on their own), with a host port Docker picks at
+each start (a blank port, `0`, or a range), or sharing a network or
+processes with another container. In the folder with its
 `compose.yaml`:
 
 ```bash
@@ -620,7 +634,11 @@ docker compose run --rm --entrypoint sh ludock -c 'mkdir /data/replaced && mv /d
 ```
 
 `restore-data` checks that the file is complete and that its key matches the
-database before putting anything in place.
+database before putting anything in place. With `--sha256 <digest>` it also
+refuses any file whose SHA-256 differs. It exits 3 for a file it can't
+restore (damaged, or from a newer version or a beta), 4 for a data folder
+that already has data, and 1 for anything worth trying again, such as a file
+it couldn't read or a full disk.
 
 If the whole host was lost, set up Docker and Ludock's `compose.yaml` on the
 new host, mount the second folder (or a copy of its files) at `/backups`, and
@@ -817,7 +835,7 @@ Ludock runs short-lived helper containers from its own image:
   Ludock's data mount, mounted exactly as Ludock's, as its user and groups.
   The helper keeps its progress in never-started containers named after it
   (`ludock-self-update-<id>-state`, `-healthy`, `-undo`, `-ready-…`), which
-  the Ludock that comes up removes. The arguments, names, labels, data files,
+  the Ludock that comes up removes once Docker shows how the update ended. The arguments, names, labels, data files,
   and `restore-data` exit codes between Ludock versions are fixed; they are
   listed where they are defined, in `internal/selfupdate/interface.go`.
 - **Console, player, and status-check helpers** share the game container's

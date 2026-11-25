@@ -28,46 +28,56 @@ import (
 //
 // The arguments are:
 //   - container: the full ID of Ludock's own container, the one replaced.
-//   - image: the pulled image's ID (sha256:…), which the helper runs from
-//     and the replacement must run.
+//   - image: the pulled image's own ID (sha256:…), not a platform
+//     manifest's, which the helper runs from and the replacement must run.
 //   - operation: the update's UUID, which names everything below.
 //
 // Before starting the helper, the older Ludock saved its data beside its
-// database as SaveName, an archive `ludock restore-data` reads, and recorded
-// the update in the ludock.update setting (Record) as handed_over. It ends
-// a helper that hasn't created its state marker within two minutes.
+// database as SaveName, an archive `ludock restore-data` reads, labelled the
+// helper with the archive's SHA-256 in hex (ludock.update.save), and
+// recorded the update in the ludock.update setting (Record) as handed_over;
+// from then on every write to the database but the update's is refused. It
+// ends a helper that hasn't created its state marker within two minutes. A
+// helper it finds gone before Docker shows how the update ended, it creates
+// again the same way, without the save label, which the state marker holds.
 //
 // Every container the update creates carries ludock.enable=false, the
 // ludock.internal kind below, and ludock.update.operation; each is named
 // after HelperName and, but the helper, never started:
 //   - HelperName, kind self-update: the helper.
-//   - -state, kind self-update-state: the original's name (ludock.update.name)
-//     and restart policy (ludock.update.policy), written before anything
-//     changes.
+//   - -state, kind self-update-state: the original's name (ludock.update.name),
+//     restart policy as Docker reports it, {"Name":"no",…} if it reports none
+//     (ludock.update.policy), and the save's SHA-256 (ludock.update.save),
+//     written before anything changes.
 //   - -healthy, kind self-update-healthy: the replacement that passed its
 //     check (ludock.update.container), written before the original is
 //     removed.
 //   - -undo, kind self-update-undo: the decision to put the original back,
 //     with a Reason code (ReasonLabel) and whether its data is restored
-//     (ludock.update.restore).
+//     (ludock.update.restore, "true" or "false").
 //   - -ready-<container ID>, kind self-update-ready: written
 //     by a Ludock that opened its data and settles this update, naming its
 //     container (ludock.update.container) and that container's start time
-//     (ludock.update.started). The helper leaves only once the Ludock
-//     running under the original's name has written one for its run.
+//     as Docker reports it (ludock.update.started). The helper leaves only
+//     once the Ludock running under the original's name has written one for
+//     its run.
 //   - -data, kind self-update-data: a data step, run from the new image
 //     (self-update-data) or the original's (restore-data).
 //
 // Putting the original back with its data restores the save through the
-// original's own `ludock restore-data <save>`, whose exit code says how it
-// went: 0 restored, 3 the save can't be restored by that version (damaged,
-// from a newer version, or from a beta), 4 the data folder already holds
-// data, anything else an error worth trying again. The aside folder's
-// settled file then holds "restored" or "kept" (the save couldn't be
-// restored, so the newer data is back in place).
+// original's own `ludock restore-data --sha256 <digest> <save>`, whose exit
+// code says how it went: 0 restored, 3 the save can't be restored by that
+// version (damaged, another file than the digest names, from a newer
+// version, or from a beta), 4 the data folder already holds data, anything
+// else an error worth trying again, such as a failed read. The aside folder
+// (.ludock-update-<operation>) then holds a file named settled with
+// "restored" or "kept" and a newline (kept: the save couldn't be restored,
+// so the newer data is back in place).
 //
-// The Ludock that comes up removes these containers and the aside folder
-// once it has recorded the outcome.
+// The Ludock that comes up records the outcome only once Docker shows it:
+// the replacement recorded healthy runs under the original's name and
+// policy with the original gone, or the original runs again under them with
+// its data settled. It then removes these containers and the aside folder.
 const Version = "1"
 
 // ParseHelperArgs reads the helper's arguments after self-update.
