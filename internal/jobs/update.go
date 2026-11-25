@@ -160,7 +160,7 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (*ops
 	result := &ops.Result{Finished: completed && (!running || job.Job.Recovery.StateRestored)}
 	switch {
 	case completed && running && !job.Job.Recovery.StateRestored:
-		result.Guidance = restartedAfter + "the backup had finished. The server is stopped: it was started again and stopped before Ludock checked it."
+		result.Guidance = restartedAfter + "the backup had finished, but Ludock couldn’t confirm the server is running again. Check it."
 	case completed && running:
 		result.Guidance = restartedAfter + "the backup had finished."
 		withServerAfterRecovery(job, result)
