@@ -13,9 +13,9 @@ var (
 	cookiePattern    = regexp.MustCompile(`(?i)\b(ludock_session)=([^;\s]+)`)
 	sensitiveQuery   = regexp.MustCompile(`(?i)([?&](?:` + SensitiveKeySource + `)=)[^&#\s]+`)
 	// An absolute path not inside a URL or a word, such as a bind source,
-	// and the rest of its line: a path may hold spaces, quotes, and ": ",
-	// so nothing else safely ends it.
-	pathPattern         = regexp.MustCompile(`(?m)(^|[^\w.:/-])/.*$`)
+	// and everything after it: Docker prints a path verbatim, spaces,
+	// quotes, ": ", and newlines included, so nothing else safely ends it.
+	pathPattern         = regexp.MustCompile(`(?s)(^|[^\w.:/-])/.*`)
 	quotedSecretPattern = regexp.MustCompile(`(?i)(` + SensitiveKeySource + `)(["']?\s*[=:]\s*)("(?:\\[\s\S]|[^"\\])*(?:"|\\?$)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?$))`)
 )
 
