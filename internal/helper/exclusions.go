@@ -2,7 +2,6 @@ package helper
 
 import (
 	"errors"
-	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -167,37 +166,7 @@ func (h *fileHelper) checkFolder(relative string, recursive bool) error {
 }
 
 // writesInto reports a write into a folder an unresolved exclusion stopped
-// at.
+// at; a move checks its destination with it.
 func (h *fileHelper) writesInto(folder *unix.Stat_t) bool {
 	return !readOnlyOperations[h.request.Operation] && h.excluded.unresolved[identityOf(folder)]
-}
-
-// checkInto refuses putting entries into folder, below the root, as a move
-// does into its destination.
-func (h *fileHelper) checkInto(folder string) error {
-	if len(h.request.Blocked) == 0 {
-		return nil
-	}
-	parts, err := components(folder)
-	if err != nil {
-		return err
-	}
-	opened := len(h.t.open)
-	defer h.t.closeFrom(opened)
-	root, err := h.pinRoot()
-	if err != nil {
-		return err
-	}
-	directory, err := h.pinDirectory(root, strings.Join(parts, "/"))
-	if err != nil {
-		return err
-	}
-	info, err := fstat(directory)
-	if err != nil {
-		return err
-	}
-	if h.writesInto(info) {
-		return errExcluded
-	}
-	return nil
 }
