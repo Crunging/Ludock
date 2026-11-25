@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -162,7 +163,12 @@ func (h *restoreHelper) moveContents(source, destination fd, omitted ...string) 
 		} else if !isNotExist(err) {
 			return err
 		}
-		if err := unix.Renameat(int(source), name, int(destination), name); err != nil {
+		// A game started meanwhile may make the name after the check above.
+		err = renameat2(int(source), name, int(destination), name, unix.RENAME_NOREPLACE)
+		if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) {
+			err = renameat(int(source), name, int(destination), name)
+		}
+		if err != nil {
 			return err
 		}
 		moved, err := lstatAt(destination, name)
@@ -313,7 +319,15 @@ func setAsideEntry(parent fd, name string, aside fd, info *unix.Stat_t) error {
 		} else if count > 1000 {
 			return errUnsafe
 		}
-		target = name + " (" + strconv.Itoa(count) + ")"
+		// The numbered name still fits the filesystem's 255-byte limit.
+		suffix, base := " ("+strconv.Itoa(count)+")", name
+		for len(base)+len(suffix) > 255 {
+			base = base[:len(base)-1]
+		}
+		for utf8.ValidString(name) && !utf8.ValidString(base) {
+			base = base[:len(base)-1]
+		}
+		target = base + suffix
 	}
 	return move(parent, name, aside, target, info)
 }

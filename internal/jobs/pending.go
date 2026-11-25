@@ -116,6 +116,30 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		return "", err
 	}
 	live, missing := false, false
+	note := func(kept bool) string {
+		var note string
+		switch {
+		case state.Status == "committed":
+			note = "Ludock removed the folder " + stageName(restore) + " that a finished restore left, which held the data it replaced."
+		case missing && !live:
+			note = "Ludock found nothing to put back for a restore that had stopped partway: the folder " + stageName(restore) +
+				" that held the server’s previous data is no longer there, so its data was left as it is."
+		case state.SetAside && live:
+			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place, and what the game wrote meanwhile is kept in the folder " +
+				helper.SetAsideName(restore.Job.ID) + " beside it."
+		case kept:
+			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. The game had since made newer copies of some of it, which are kept in the folder " +
+				helper.SetAsideName(restore.Job.ID) + " beside it."
+		case !live:
+			note = "Ludock removed the backup’s unpacked copy that a stopped restore left in " + stageName(restore) + "."
+		default:
+			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place."
+		}
+		if missing && live {
+			note += " One of its data folders had nothing to put back: its folder " + stageName(restore) + " is no longer there."
+		}
+		return note
+	}
 	err = func() error {
 		if job != nil {
 			if err := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID = data.Container }, nil); err != nil {
@@ -156,7 +180,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 				return nil
 			}
 			return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.PendingUndo = true }, nil)
-		})
+		}, func(final restoreRecovery) string { return note(final.Kept) })
 	}()
 	data.Cleanup()
 	restore.Progress("", func(r *ops.Recovery) { r.DataHelperID = "" }, nil)
@@ -168,35 +192,14 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	if err != nil {
 		return "", err
 	}
-	kept := false
-	if final, _ := restoreState(restore); final != nil {
-		kept = final.Kept
+	final, _ := restoreState(restore)
+	done := note(final != nil && final.Kept)
+	if state.Status == "committed" {
+		result := restore.Job.Result
+		result.Guidance = done
+		restore.Progress("", nil, &result)
 	}
-	var note string
-	switch {
-	case state.Status == "committed":
-		note = "Ludock removed the folder " + stageName(restore) + " that a finished restore left, which held the data it replaced."
-	case missing && !live:
-		note = "Ludock found nothing to put back for a restore that had stopped partway: the folder " + stageName(restore) +
-			" that held the server’s previous data is no longer there, so its data was left as it is."
-	case state.SetAside && live:
-		note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place, and what the game wrote meanwhile is kept in the folder " +
-			helper.SetAsideName(restore.Job.ID) + " beside it."
-	case kept:
-		note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. The game had since made newer copies of some of it, which are kept in the folder " +
-			helper.SetAsideName(restore.Job.ID) + " beside it."
-	case !live:
-		note = "Ludock removed the backup’s unpacked copy that a stopped restore left in " + stageName(restore) + "."
-	default:
-		note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place."
-	}
-	if missing && live {
-		note += " One of its data folders had nothing to put back: its folder " + stageName(restore) + " is no longer there."
-	}
-	result := restore.Job.Result
-	result.Guidance = note
-	restore.Progress("", nil, &result)
-	return note, nil
+	return done, nil
 }
 
 // checkUndo marks the journal's roots whose stage folder is gone as having

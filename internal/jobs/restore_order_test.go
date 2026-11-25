@@ -651,8 +651,11 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 			if len(kept) != len(c.aside) {
 				t.Errorf("set aside %q, want %v", kept, c.aside)
 			}
-			if note := undo.Result.UndoNote; !strings.Contains(note, "newer copies") || !strings.Contains(note, aside) {
-				t.Errorf("undo says %q", note)
+			restore, _ := f.runner.Get(ctx, job.ID)
+			for _, note := range []string{undo.Result.UndoNote, restore.Result.Guidance} {
+				if !strings.Contains(note, "newer copies") || !strings.Contains(note, aside) {
+					t.Errorf("Activity says %q", note)
+				}
 			}
 			if got := trace.lines(); !slices.Equal(got, c.trace) {
 				t.Errorf("trace:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(c.trace, "\n"))

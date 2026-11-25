@@ -99,6 +99,11 @@ func journals(job *ops.Context) ([]journal, error) {
 // saveRestore persists the restore journal. Callers stop on an error: the
 // next data change must never run ahead of the journal a restart would read.
 func saveRestore(job *ops.Context, state restoreRecovery, phase string) error {
+	return saveRestoreWith(job, state, phase, nil)
+}
+
+// saveRestoreWith is saveRestore that also saves result in the same write.
+func saveRestoreWith(job *ops.Context, state restoreRecovery, phase string, result *ops.Result) error {
 	if phase == "" {
 		phase = "restore_" + state.Status
 	}
@@ -108,7 +113,7 @@ func saveRestore(job *ops.Context, state restoreRecovery, phase string) error {
 	}
 	return job.Progress(phase, func(r *ops.Recovery) {
 		r.Restore, r.DataUnsafe = encoded, state.Status == "replacing" || state.Status == "rolling_back"
-	}, nil)
+	}, result)
 }
 
 func persistJournal(job *ops.Context, index int, phase string) error {
@@ -250,8 +255,10 @@ func holdsLive(entry journal) bool { return entry.Phase != "staging" && entry.Ph
 // a stage folder, so a root that holds no live restore data is cleaned up
 // even if the server was started elsewhere; the others wait until it is
 // stopped, and the error says why. beforeLive, when set, runs before the
-// first step that changes live data is sent.
-func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper, beforeLive func() error) error {
+// first step that changes live data is sent; guidance, when set, is what
+// Activity says, saved with the final journal.
+func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper, beforeLive func() error,
+	guidance func(final restoreRecovery) string) error {
 	state, err := restoreState(job)
 	if err != nil {
 		return err
@@ -337,7 +344,13 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 	if blocked != nil {
 		return blocked
 	}
-	return saveRestore(job, restoreRecovery{Status: "rolled_back", StageMissing: missing, PutBack: touched && !missing, Kept: kept}, "")
+	final := restoreRecovery{Status: "rolled_back", StageMissing: missing, PutBack: touched && !missing, Kept: kept}
+	if guidance == nil {
+		return saveRestore(job, final, "")
+	}
+	result := job.Job.Result
+	result.Guidance = guidance(final)
+	return saveRestoreWith(job, final, "", &result)
 }
 
 func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper) error {
@@ -828,7 +841,7 @@ func (j *Jobs) rollbackAfterFailure(ctx context.Context, server *servers.Context
 			return err
 		}
 	}
-	return j.rollbackRestore(ctx, server, job, *data, nil)
+	return j.rollbackRestore(ctx, server, job, *data, nil, nil)
 }
 
 // cleanupAfterFailure removes a committed restore's staging folders through
@@ -911,7 +924,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 			if state != nil && state.Status == "committed" {
 				err = j.cleanupRestore(ctx, server, job, data)
 			} else {
-				err = j.rollbackRestore(ctx, server, job, data, nil)
+				err = j.rollbackRestore(ctx, server, job, data, nil, nil)
 			}
 			data.Cleanup()
 			if err != nil {
