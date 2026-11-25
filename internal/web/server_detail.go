@@ -59,11 +59,27 @@ func (s *Server) detail(r *http.Request, request *Request, id, tab string, withS
 	if admin {
 		d.Tabs = append(d.Tabs, views.DetailTab{ID: "update", Label: "Update"}, views.DetailTab{ID: "sharing", Label: "Sharing"})
 	}
+	if view.BindingStatus == identity.StatusActive && (admin || can(view, authz.BackupsCreate)) {
+		d.UndoBlocked = s.undoBlocked(ctx, view)
+		d.Row.CanBackup = d.Row.CanBackup && !d.UndoBlocked
+	}
 	d.Tab = "overview"
 	if slices.ContainsFunc(d.Tabs, func(item views.DetailTab) bool { return item.ID == tab }) {
 		d.Tab = tab
 	}
 	return d, nil
+}
+
+// undoBlocked reports a restore that stopped partway and that Ludock refuses
+// to undo, and so refuses data work, until the server's data folders are
+// back as it found them.
+func (s *Server) undoBlocked(ctx context.Context, view *servers.View) bool {
+	logical, err := s.App.Identity.Get(ctx, view.ID)
+	if err != nil || logical == nil {
+		return false
+	}
+	blocked, err := s.App.Jobs.UndoBlocked(ctx, &servers.Context{Logical: logical, Container: view.Container})
+	return err == nil && blocked
 }
 
 // overview adds the overview's monitoring and next schedule.

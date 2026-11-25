@@ -19,8 +19,8 @@ import (
 // Ludock is killed while a backup, or a restart that backs up first, is
 // copying the stopped server. Recovery starts the server, which was running,
 // without taking the backup again, says the backup didn't finish and that
-// the server was started again, alerts once, as a failed backup would, and
-// logs what it did without the server's paths.
+// the server was started again, without asking to check it, alerts once,
+// as a failed backup would, and logs what it did without the server's paths.
 func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 	for kind, input := range map[string]map[string]any{"restart": {"createBackup": true}, "backup": nil} {
 		t.Run(kind, func(t *testing.T) {
@@ -51,7 +51,7 @@ func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 			}
 			recovered, _ := f.runner.Get(ctx, job.ID)
 			guidance := recovered.Result.Guidance
-			if recovered.Status != ops.Interrupted || !strings.HasSuffix(guidance, map[string]string{"restart": "The server was started again.", "backup": "Ludock started the server again."}[kind]) ||
+			if recovered.Status != ops.Interrupted || recovered.Error != "Ludock restarted while this ran." || !strings.HasSuffix(guidance, map[string]string{"restart": "The server was started again.", "backup": "Ludock started the server again."}[kind]) ||
 				!strings.Contains(guidance, "no new backup") || !f.running() {
 				t.Fatalf("%+v", recovered)
 			}

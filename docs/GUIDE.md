@@ -482,7 +482,9 @@ as. Usually the restore was undone and the data is as it was. If something
 outside Ludock started the server partway, the restore stops and leaves it
 running; when the previous data was already moved out, **Needs attention**
 offers administrators **Undo the restore**, which keeps anything the game wrote
-meanwhile. [A restore that stopped partway](REFERENCE.md#a-restore-that-stopped-partway)
+meanwhile. Undo it before you change the server's data folders where it's
+defined: until they are back as they were, Ludock can't undo it and refuses
+backups, restores, and updates. [A restore that stopped partway](REFERENCE.md#a-restore-that-stopped-partway)
 has every case.
 
 ### Schedules

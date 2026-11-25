@@ -1,16 +1,17 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect, asAdmin, openServer, expectOperationSucceeded, fake } from "./fixtures.mjs";
 
 asAdmin();
 
 // Another manager starts the server between a restore moving its data out
-// and the backup's in, and the game, finding its folder emptied, keeps
-// exiting and being restarted by Docker. Its page says so and offers Stop.
-// The restore stops and says where the data is; Needs attention offers to
-// undo it, which stops the server without warning anyone, puts the data
-// back, keeps what the game wrote meanwhile, and starts the server again.
-// Stop works on a server that keeps restarting.
+// and the backup's in. The restore stops and says where the data is. While
+// the server's data folder points elsewhere, the undo is refused and says
+// how to get out. The game, finding its folder emptied, keeps exiting and
+// being restarted by Docker: its page says so and offers Stop. Needs
+// attention offers to undo the restore, which stops the server without
+// warning anyone, puts the data back, keeps what the game wrote meanwhile,
+// and starts the server again. Stop works on a server that keeps restarting.
 test("undoing a restore that was stopped partway", async ({ page, ownServer: server }) => {
   const marker = join(server.data, "stopped-restore.txt");
   writeFileSync(marker, "from the backup");
@@ -34,6 +35,30 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
   await expect(details).toContainText(`The restore was stopped partway. The server’s previous data is safe in the folder .ludock-restore-${restoreID}`);
   // The game, started on the emptied folder, writes a new world.
   writeFileSync(join(server.data, "generated.txt"), "written meanwhile");
+
+  // While the server points at another copy of its data, the undo is refused
+  // with what to do, and the server's page says so instead of offering
+  // backups.
+  const moved = server.data + "-moved";
+  cpSync(server.data, moved, { recursive: true });
+  await fake("/fake/recreate", { container: server.container, mount: `${server.data}=${moved}` });
+  await openServer(page, server.name);
+  await expect(page.locator(".alert--warning")).toContainText("the server’s data folders aren’t the ones that restore was working on any more");
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
+  await expect(page.getByRole("button", { name: "Create backup" })).toHaveCount(0);
+  await page.goto("/");
+  const item = page.locator(".needs-attention__list li", { hasText: "Restore stopped partway" });
+  await item.getByRole("button", { name: "Undo the restore" }).click();
+  await page.getByRole("dialog", { name: `Undo the restore of ${server.name}?` }).getByRole("button", { name: "Undo the restore" }).click();
+  await expect(page.locator("#action-error")).toContainText(`Undoing the restore of ${server.name}.`);
+  await openServer(page, server.name);
+  await page.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
+  await page.locator("#activity-list").getByRole("link", { name: /Undo restore/ }).first().click();
+  await expect(page.locator("main")).toContainText(
+    "Put the data folders back as they were where the server is defined, such as in Compose, then undo the restore.", { timeout: 30_000 });
+  await fake("/fake/recreate", { container: server.container, mount: `${server.data}=${server.data}` });
+
+  // Started on the emptied folder, the game keeps exiting.
   await fake("/fake/crashloop", { container: server.container });
   await openServer(page, server.name);
   await expect(page.locator(".detail-header__identity")).toContainText("Keeps restarting");
@@ -42,7 +67,6 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Restart" })).toHaveCount(0);
 
   await page.goto("/");
-  const item = page.locator(".needs-attention__list li", { hasText: "Restore stopped partway" });
   await expect(item).toContainText(`The restore of ${server.name} was stopped partway. Its previous data is safe but not in place: undo the restore to put it back.`);
   await item.getByRole("button", { name: "Undo the restore" }).click();
   const dialog = page.getByRole("dialog", { name: `Undo the restore of ${server.name}?` });

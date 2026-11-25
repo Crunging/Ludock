@@ -103,6 +103,17 @@ func StateGuidance(state string) string {
 	return "Docker reports it as " + state + ". Check it with the tool that runs it, such as Compose or Portainer, before using the controls."
 }
 
+// SafetyNote says what a safety backup was taken before, or is empty.
+func SafetyNote(reason string) string {
+	switch reason {
+	case "restore":
+		return "Taken before a restore"
+	case "update":
+		return "Taken before an update"
+	}
+	return ""
+}
+
 // Capitalize upper-cases the first letter and spaces underscores.
 func Capitalize(value string) string {
 	if value == "" {

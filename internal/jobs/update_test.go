@@ -144,7 +144,12 @@ func TestUpdateRecoveryUndoesUncheckedReplacement(t *testing.T) {
 			}
 			swap.Stage = c.stage
 		})
-		if job.Status != ops.Interrupted || job.Error != "Ludock restarted while this ran. Check the server before trying again." || job.Result.Guidance != c.guidance {
+		// Only a server Ludock didn't start again needs checking.
+		want := "Ludock restarted while this ran."
+		if ran {
+			want += " Check the server before trying again."
+		}
+		if job.Status != ops.Interrupted || job.Error != want || job.Result.Guidance != c.guidance {
 			t.Fatalf("%+v", job)
 		}
 		if c.stage == "" {

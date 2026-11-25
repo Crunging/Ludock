@@ -199,6 +199,9 @@ type ActiveOperation struct {
 type BackupSummary struct {
 	CreatedAt int64
 	Size      int64
+	// Reason is set on a safety backup, which is shown only when the server
+	// has no other.
+	Reason string
 }
 
 // View is a server as one actor may see it.
@@ -259,10 +262,12 @@ func (s *Service) readDetails(ctx context.Context, actor *db.SessionUser, server
 		return nil, err
 	}
 	rows.Close()
-	// Each server's newest backup is one seek in backups_server_idx, however
-	// much history is kept.
-	query = `SELECT b.server_id,b.created_at,b.size FROM logical_servers s JOIN backups b ON b.rowid=(
-    SELECT rowid FROM backups WHERE server_id=s.id AND state='complete' ORDER BY created_at DESC,id LIMIT 1)`
+	// Each server's newest backup other than a safety backup, or else its
+	// newest safety backup, walks backups_server_idx from the newest; retention
+	// keeps few safety backups.
+	query = `SELECT b.server_id,b.created_at,b.size,b.reason FROM logical_servers s JOIN backups b ON b.rowid=COALESCE(
+    (SELECT rowid FROM backups WHERE server_id=s.id AND state='complete' AND reason='' ORDER BY created_at DESC,id LIMIT 1),
+    (SELECT rowid FROM backups WHERE server_id=s.id AND state='complete' ORDER BY created_at DESC,id LIMIT 1))`
 	if serverID != "" {
 		query += " WHERE s.id=?"
 	}
@@ -274,7 +279,7 @@ func (s *Service) readDetails(ctx context.Context, actor *db.SessionUser, server
 	for rows.Next() {
 		var server string
 		var backup BackupSummary
-		if err := rows.Scan(&server, &backup.CreatedAt, &backup.Size); err != nil {
+		if err := rows.Scan(&server, &backup.CreatedAt, &backup.Size, &backup.Reason); err != nil {
 			return nil, err
 		}
 		d.backups[server] = &backup

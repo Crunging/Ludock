@@ -897,6 +897,13 @@ Then, if someone starts the server outside Ludock during an undo, a file the
 game makes in the instant between Ludock checking a name and moving data
 there can be replaced.
 
+If the server's data folders change where it is defined, such as in
+Compose, while such a restore waits to be undone, Ludock can't tell where the
+previous data belongs. The undo, backups, restores, updates, and restarts
+with a backup first are refused, and the server's page says why and doesn't
+offer them. Put the data folders back as they were, then choose **Undo the
+restore**.
+
 ### When Docker restarts
 
 If Docker itself restarts while work runs, such as for an upgrade, Ludock's

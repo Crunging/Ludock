@@ -138,7 +138,11 @@ templ backupsTabBody(b BackupsView) {
 			Last backup:
 			if b.LatestBackup != nil {
 				@Time(b.LatestBackup.CreatedAt, "plain", "")
-				({ FormatBytes(b.LatestBackup.Size) })
+				if note := SafetyNote(b.LatestBackup.Reason); note != "" {
+					({ FormatBytes(b.LatestBackup.Size) }, { strings.ToLower(note) })
+				} else {
+					({ FormatBytes(b.LatestBackup.Size) })
+				}
 			} else {
 				never
 			}
@@ -312,11 +316,8 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 		<td>
 			@Time(backup.CreatedAt, "", "")
 			<small class="table-detail">@Time(backup.CreatedAt, "sentence", "")</small>
-			switch backup.Reason {
-				case "restore":
-					<small class="table-detail">Taken before a restore</small>
-				case "update":
-					<small class="table-detail">Taken before an update</small>
+			if note := SafetyNote(backup.Reason); note != "" {
+				<small class="table-detail">{ note }</small>
 			}
 			if kept && backup.Note != "" {
 				<small class="table-detail backup-note">{ backup.Note }</small>

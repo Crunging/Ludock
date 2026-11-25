@@ -35,10 +35,10 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Gone: view.BindingStatus == identity.StatusMissing && !d.DiscoveryUnavailable,
 		Active: view.ActiveOperation != nil, LatestBackup: view.LatestBackup, NoData: view.NoDataFolders, BindingRevision: view.BindingRevision,
 		Warn: warnOffer(view.Container), Running: view.Container.State == "running", DeletedOnStop: view.AutoRemove}
-	if view.Refuses(ops.KindBackup) {
+	if view.Refuses(ops.KindBackup) || d.UndoBlocked {
 		b.CanCreate = false
 	}
-	if view.Refuses(ops.KindRestore) {
+	if view.Refuses(ops.KindRestore) || d.UndoBlocked {
 		b.CanRestore = false
 	}
 	// The tab follows any running work, so readiness and paused controls come

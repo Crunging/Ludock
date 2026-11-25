@@ -445,7 +445,8 @@ templ ServerCard(row ServerRow) {
 		<div class="server-row__identity">
 			<a class="server-row__name" id={ "server-" + server.ID } href={ templ.SafeURL("/servers/" + server.ID) }>{ server.DisplayName }</a>
 			<span class="server-row__game">{ server.GameName }</span>
-			if guidance := StateGuidance(server.State); guidance != "" {
+			// A server without exactly one container has no Docker state of its own.
+			if guidance := StateGuidance(server.State); guidance != "" && BindingNote(string(server.BindingStatus)) == "" {
 				<p class="server-row__note">{ guidance }</p>
 			}
 			if note := BindingNote(string(server.BindingStatus)); note != "" {
@@ -496,6 +497,9 @@ templ ServerCard(row ServerRow) {
 						<span class="muted">—</span>
 					} else if server.LatestBackup != nil {
 						@Time(server.LatestBackup.CreatedAt, "sentence", "")
+						if note := SafetyNote(server.LatestBackup.Reason); note != "" {
+							<small class="muted">{ note }</small>
+						}
 					} else if server.NoDataFolders || server.Refuses(ops.KindBackup) {
 						<span class="muted">—<span class="sr-only">Can’t be backed up</span></span>
 					} else {
