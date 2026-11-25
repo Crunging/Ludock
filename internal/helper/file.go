@@ -750,6 +750,13 @@ type noSpaceError struct{ space FileSpace }
 
 func (e *noSpaceError) Error() string { return "not enough free space" }
 
+// A batch upload holds at most UploadBatchFiles files, and several files
+// at most UploadBatchBytes in all; a larger file is uploaded alone.
+const (
+	UploadBatchFiles = 100
+	UploadBatchBytes = 16 << 20
+)
+
 // UploadResult is the file helper's line for each file of a batch upload.
 type UploadResult struct {
 	OK bool `json:"ok,omitempty"`
@@ -780,10 +787,15 @@ func (h *fileHelper) uploadFiles(relative string) error {
 	if _, err := io.ReadFull(h.stdin, list); err != nil || json.Unmarshal(list, &h.request.Files) != nil {
 		return errUploadStream
 	}
+	var total int64
 	for _, file := range h.request.Files {
 		if file.Size < 0 || file.Size > 1<<53-1 {
 			return errors.New("invalid upload size")
 		}
+		total += file.Size
+	}
+	if len(h.request.Files) > UploadBatchFiles || (len(h.request.Files) > 1 && total > UploadBatchBytes) {
+		return errors.New("the batch is too large")
 	}
 	h.buffer = make([]byte, 64*1024)
 	for _, file := range h.request.Files {
@@ -810,10 +822,29 @@ func (h *fileHelper) uploadFiles(relative string) error {
 			return errUploadStream
 		}
 		result := UploadResult{OK: err == nil}
+		var full *noSpaceError
+		switch {
+		case err == nil:
+		case errors.As(err, &full) || errors.Is(err, unix.ENOSPC) || errors.Is(err, unix.EDQUOT):
+			result.Code = FileNoSpace
+			if full != nil {
+				result.Space = &full.space
+			}
+		default:
+			result.Code = fileExit(err)
+		}
 		if err != nil {
 			part := h.part
 			if part == nil {
 				part = &uploadPart{in: h.stdin, body: file.Size, trailer: []byte(file.UploadID)}
+			}
+			// Reading past a refused file costs at most a batch; a larger one
+			// is reported and ends the command instead.
+			if part.body > UploadBatchBytes {
+				if err := h.result(result); err != nil {
+					return err
+				}
+				return errUploadStream
 			}
 			idle := time.AfterFunc(60*time.Second, func() { h.abortUpload(errors.New("upload interrupted")) })
 			for part.body > 0 {
@@ -828,23 +859,8 @@ func (h *fileHelper) uploadFiles(relative string) error {
 				return errUploadStream
 			}
 			idle.Stop()
-			var full *noSpaceError
-			if errors.As(err, &full) || errors.Is(err, unix.ENOSPC) || errors.Is(err, unix.EDQUOT) {
-				result.Code = FileNoSpace
-				if full != nil {
-					result.Space = &full.space
-				}
-			} else {
-				result.Code = fileExit(err)
-			}
 		}
-		if err := h.json(result); err != nil {
-			return err
-		}
-		if _, err := h.out.Write([]byte{'\n'}); err != nil {
-			return err
-		}
-		if err := h.out.Flush(); err != nil {
+		if err := h.result(result); err != nil {
 			return err
 		}
 	}
@@ -852,6 +868,18 @@ func (h *fileHelper) uploadFiles(relative string) error {
 		return errUploadStream
 	}
 	return nil
+}
+
+// result writes a batch file's line, flushed so the backend has it even if
+// the command then fails.
+func (h *fileHelper) result(result UploadResult) error {
+	if err := h.json(result); err != nil {
+		return err
+	}
+	if _, err := h.out.Write([]byte{'\n'}); err != nil {
+		return err
+	}
+	return h.out.Flush()
 }
 
 // expectVersion confirms the target still holds the expected content. The

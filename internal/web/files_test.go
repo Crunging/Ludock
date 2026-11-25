@@ -254,44 +254,72 @@ func TestUploadFollowsGrant(t *testing.T) {
 }
 
 // A client that stops sending partway is given up once nothing arrives for
-// uploadStall, long before the helper's own minute: the connection closes,
-// and neither the partial file nor its helper is left.
+// uploadStall, long before the helper's own minute, and a refused file is
+// never read past for long, however large it claims to be and however fast
+// it comes: a batch past what the page sends is refused unread, and a lone
+// file the helper refuses ends its command. Each time the connection
+// closes, and neither a partial file nor a helper is left.
 func TestUploadStallReleasesEverything(t *testing.T) {
 	previous := uploadStall
 	uploadStall = 300 * time.Millisecond
 	t.Cleanup(func() { uploadStall = previous })
 	p, member, root, data := uploadPages(t)
+	os.Mkdir(filepath.Join(data, "world"), 0o755)
 	server := httptest.NewServer(p.handler)
 	defer server.Close()
-	conn, err := net.Dial("tcp", server.Listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	head := `{"files":[{"name":"big.bin","size":100000}]}` + "\n"
-	fmt.Fprintf(conn, "PUT /files/%s/upload?root=%s HTTP/1.1\r\nHost: panel.example\r\nCookie: %s=%s\r\nX-CSRF-Token: %s\r\n"+
-		"Content-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%sstart",
-		p.server, url.QueryEscape(root), auth.SessionCookie, member.Token, CSRFToken(member.Token), len(head)+100000, head)
-	started := time.Now()
-	conn.SetDeadline(started.Add(20 * time.Second))
-	reader := bufio.NewReader(conn)
-	response, err := http.ReadResponse(reader, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	answer, _ := io.ReadAll(response.Body)
-	if !strings.Contains(string(answer), `"status":"failed"`) || time.Since(started) > 10*time.Second {
-		t.Fatal(string(answer), time.Since(started))
-	}
-	if _, err := reader.ReadByte(); err != io.EOF {
-		t.Fatal("the connection stayed open", err)
-	}
-	if entries, _ := os.ReadDir(data); len(entries) != 0 {
-		t.Fatal("left", entries[0].Name())
-	}
-	for _, id := range p.engine.SortedIDs() {
-		if c := p.engine.Container(id); c != nil && c.Config.Labels["ludock.internal"] != "" {
-			t.Fatal("helper left")
+	for _, test := range []struct {
+		files  string
+		size   int64
+		stream bool
+		want   string
+	}{
+		{`{"name":"big.bin","size":100000}`, 100000, false, `"status":"failed"`},
+		{`{"name":".ludock-mine","size":1099511627776},{"name":"a.txt","size":5}`, 1099511627781, true, "Upload at most 100 files"},
+		{`{"name":"world","size":67108864}`, 64 << 20, true, `"status":"failed"`},
+	} {
+		conn, err := net.Dial("tcp", server.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		head := `{"files":[` + test.files + "]}\n"
+		fmt.Fprintf(conn, "PUT /files/%s/upload?root=%s HTTP/1.1\r\nHost: panel.example\r\nCookie: %s=%s\r\nX-CSRF-Token: %s\r\n"+
+			"Content-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%sstart",
+			p.server, url.QueryEscape(root), auth.SessionCookie, member.Token, CSRFToken(member.Token), int64(len(head))+test.size, head)
+		started := time.Now()
+		conn.SetDeadline(started.Add(20 * time.Second))
+		sent := make(chan int64, 1)
+		go func() {
+			total := int64(0)
+			for chunk := make([]byte, 64*1024); test.stream && total < test.size; total += int64(len(chunk)) {
+				if _, err := conn.Write(chunk); err != nil {
+					break
+				}
+			}
+			sent <- total
+		}()
+		reader := bufio.NewReader(conn)
+		response, err := http.ReadResponse(reader, nil)
+		if err != nil {
+			t.Fatal(test.files, err)
+		}
+		answer, _ := io.ReadAll(response.Body)
+		if !strings.Contains(string(answer), test.want) || time.Since(started) > 10*time.Second {
+			t.Fatal(test.files, string(answer), time.Since(started))
+		}
+		if _, err := reader.ReadByte(); err != io.EOF {
+			t.Fatal(test.files, "the connection stayed open", err)
+		}
+		if read := <-sent; read > 32<<20 {
+			t.Fatal(test.files, "read", read, "bytes past a refused file")
+		}
+		conn.Close()
+		if entries, _ := os.ReadDir(data); len(entries) != 1 {
+			t.Fatal(test.files, "left", entries)
+		}
+		for _, id := range p.engine.SortedIDs() {
+			if c := p.engine.Container(id); c != nil && c.Config.Labels["ludock.internal"] != "" {
+				t.Fatal(test.files, "helper left")
+			}
 		}
 	}
 }

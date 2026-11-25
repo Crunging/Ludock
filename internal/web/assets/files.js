@@ -212,8 +212,8 @@
           window.location.assign("/login");
           return;
         }
-        // Ludock answers a refused file in its results, so a bare 413 is a
-        // proxy's body limit: its files go again one at a time.
+        // A bare 413 is a body limit, a proxy's or a batch's, not a refused
+        // file, which comes in the results: its files go again one at a time.
         if (response.status === 413) {
           if (batch.length > 1) {
             queue.splice(position + 1, 0, ...batch.map(function (file) { return [file]; }));

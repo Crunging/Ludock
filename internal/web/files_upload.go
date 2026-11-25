@@ -65,18 +65,28 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 	reader := bufio.NewReader(body)
 	line, err := readManifest(reader)
 	var manifest uploadManifest
-	if err != nil || root == "" || json.Unmarshal(line, &manifest) != nil || len(manifest.Files) == 0 || len(manifest.Files) > files.MaxBatch {
+	if err != nil || root == "" || json.Unmarshal(line, &manifest) != nil || len(manifest.Files) == 0 {
 		fail(invalid)
+		return
+	}
+	sizes := make([]int64, len(manifest.Files))
+	for index, file := range manifest.Files {
+		if file.Size < 0 || file.Size > 1<<53-1 {
+			fail(invalid)
+			return
+		}
+		sizes[index] = file.Size
+	}
+	// Refused files are read past, so a batch past what the page sends is
+	// refused before any of it is read.
+	if !files.BatchFits(sizes) {
+		fail(files.ErrBatchTooLarge)
 		return
 	}
 	limit, _ := s.App.Advanced.UploadLimit(r.Context())
 	entries := make([]files.UploadEntry, len(manifest.Files))
 	total := int64(len(line))
 	for index, file := range manifest.Files {
-		if file.Size < 0 || file.Size > 1<<53-1 {
-			fail(invalid)
-			return
-		}
 		entries[index] = files.UploadEntry{Name: file.Name, Size: file.Size}
 		if limit > 0 && file.Size > limit {
 			entries[index].Err = apperr.New("UPLOAD_TOO_LARGE", 413, "File exceeds the upload size limit of "+datasize.Format(limit))

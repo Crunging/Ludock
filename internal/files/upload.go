@@ -33,8 +33,22 @@ var ErrUploadUnconfirmed = apperr.New("UPLOAD_UNCONFIRMED", 500, "The upload may
 
 var errNotUploaded = apperr.New("UPLOAD_STOPPED", 409, "The upload stopped before this file")
 
-// MaxBatch is the most files one upload request may carry.
-const MaxBatch = 200
+// ErrBatchTooLarge refuses a batch past what the page sends, before any of
+// it is read: refused files are read past, so a batch bounds that reading.
+var ErrBatchTooLarge = apperr.New("UPLOAD_BATCH_TOO_LARGE", 413, fmt.Sprintf("Upload at most %d files and %s at once; a larger file goes on its own.",
+	helper.UploadBatchFiles, datasize.Format(helper.UploadBatchBytes)))
+
+// BatchFits reports whether files of these sizes may go in one batch.
+func BatchFits(sizes []int64) bool {
+	var total int64
+	for _, size := range sizes {
+		if size < 0 || size > 1<<53-1 {
+			return false
+		}
+		total += size
+	}
+	return len(sizes) <= helper.UploadBatchFiles && (len(sizes) == 1 || total <= helper.UploadBatchBytes)
+}
 
 // UploadFiles writes entries into one folder through one helper command.
 // Each file commits
@@ -63,8 +77,12 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		results[index] = entry.Err
 	}
 	root, normalized, err := resolve(target, rootID, folder)
-	if err == nil && len(entries) > MaxBatch {
-		err = Error("INVALID_UPLOAD", 400)
+	sizes := make([]int64, len(entries))
+	for index, entry := range entries {
+		sizes[index] = entry.Size
+	}
+	if err == nil && !BatchFits(sizes) {
+		err = ErrBatchTooLarge
 	}
 	if err != nil {
 		return fail(err)
