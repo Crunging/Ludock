@@ -1177,6 +1177,28 @@ func TestExclusionsHoldByIdentity(t *testing.T) {
 	if got := listTree(t, filepath.Join(root, "B", "missing")); !slices.Equal(got, []string{"hidden.txt"}) {
 		t.Fatal(got)
 	}
+	// So is one that appears in a folder that replaced the one it stopped at.
+	// A second spelling of a folder can't be made here, so a second name for
+	// the same file, a hard link, stands in for it.
+	os.MkdirAll(filepath.Join(root, "c"), 0o755)
+	exclusionsResolved = func() {
+		os.Rename(filepath.Join(root, "c"), filepath.Join(root, "c-old"))
+		os.Mkdir(filepath.Join(root, "c"), 0o755)
+		os.WriteFile(filepath.Join(root, "c", "missing"), []byte("hidden"), 0o644)
+		os.Link(filepath.Join(root, "c", "missing"), filepath.Join(root, "alias"))
+	}
+	listing, code = runFile(t, FileRequest{Operation: "list", Root: root, Blocked: []string{root + "/c/missing"}}, nil)
+	if code != 0 || strings.Contains(listing, `"alias"`) {
+		t.Fatal("listed an exclusion that appeared in a replaced folder", code, listing)
+	}
+	// A file where a folder on the way should be can't hold the exclusion,
+	// so it stays listed.
+	exclusionsResolved = func() {}
+	os.WriteFile(filepath.Join(root, "plain"), []byte("plain"), 0o644)
+	listing, code = runFile(t, FileRequest{Operation: "list", Root: root, Blocked: []string{root + "/plain/missing"}}, nil)
+	if code != 0 || !strings.Contains(listing, `"plain"`) {
+		t.Fatal("hid a file on the way to an exclusion", code, listing)
+	}
 }
 
 // A replaced file keeps its access ACL, whose mask the mode bits only show,

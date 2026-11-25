@@ -25,7 +25,17 @@ type exclusions struct {
 	// Nothing is written into it, since an entry made there could become
 	// the destination, and one that appears under such a name later in the
 	// command is refused like an excluded entry.
-	unresolved map[identity][]string
+	unresolved map[identity][]missingName
+	// missing are those destinations, walked again by their spelling at each
+	// check, in case the folder they stopped at was replaced meanwhile.
+	missing []string
+}
+
+// missingName is a name an unresolved destination lacks; only its last one
+// is the destination itself, and any other must be a folder to lead there.
+type missingName struct {
+	name string
+	last bool
 }
 
 type identity struct{ device, inode uint64 }
@@ -54,7 +64,7 @@ func (h *fileHelper) resolveExclusions() {
 	if len(h.request.Blocked) == 0 {
 		return
 	}
-	h.excluded = exclusions{entries: map[identity]bool{}, ancestors: map[identity]bool{}, unresolved: map[identity][]string{}}
+	h.excluded = exclusions{entries: map[identity]bool{}, ancestors: map[identity]bool{}, unresolved: map[identity][]missingName{}}
 	for _, destination := range h.request.Blocked {
 		h.resolveExclusion(destination)
 	}
@@ -93,16 +103,18 @@ func (h *fileHelper) resolveExclusion(destination string) {
 			current = next
 			continue
 		}
-		h.excluded.unresolved[identityOf(info)] = append(h.excluded.unresolved[identityOf(info)], part)
+		h.excluded.unresolved[identityOf(info)] = append(h.excluded.unresolved[identityOf(info)], missingName{part, index == len(parts)-1})
+		h.excluded.missing = append(h.excluded.missing, destination)
 		return
 	}
 }
 
 // excludedIn reports an entry of parent that an excluded mount hides from
 // the game: one resolved at the start, or one that has since appeared where
-// an unresolved destination was missing. Storage that matches names loosely
-// may reach that one under another spelling, so it is found by looking the
-// missing name up again and comparing identities.
+// an unresolved destination was missing, in the folder it stopped at or in
+// one that replaced it. Storage that matches names loosely may reach that
+// one under another spelling, so it is found by looking the missing name up
+// again and comparing identities.
 func (h *fileHelper) excludedIn(parent fd, info *unix.Stat_t) bool {
 	if info == nil {
 		return false
@@ -110,19 +122,78 @@ func (h *fileHelper) excludedIn(parent fd, info *unix.Stat_t) bool {
 	if h.excluded.entries[identityOf(info)] {
 		return true
 	}
-	if len(h.excluded.unresolved) == 0 {
+	if len(h.excluded.missing) == 0 {
 		return false
 	}
 	folder, err := fstat(parent)
 	if err != nil {
 		return true
 	}
-	for _, name := range h.excluded.unresolved[identityOf(folder)] {
-		if appeared, err := lstatAt(parent, name); err == nil && sameInode(appeared, info) {
+	appeared := func(missing missingName) bool {
+		entry, err := lstatAt(parent, missing.name)
+		return err == nil && sameInode(entry, info) && (missing.last || isDir(entry))
+	}
+	for _, missing := range h.excluded.unresolved[identityOf(folder)] {
+		if appeared(missing) {
+			return true
+		}
+	}
+	for _, destination := range h.excluded.missing {
+		stop, missing, entry := deepest(destination)
+		if (entry != nil && sameInode(entry, info)) || (stop != nil && sameInode(stop, folder) && appeared(missing)) {
 			return true
 		}
 	}
 	return false
+}
+
+// stoppedAt reports a folder an unresolved destination stops at, at the
+// start or now.
+func (h *fileHelper) stoppedAt(folder *unix.Stat_t) bool {
+	if h.excluded.unresolved[identityOf(folder)] != nil {
+		return true
+	}
+	for _, destination := range h.excluded.missing {
+		if stop, _, _ := deepest(destination); stop != nil && sameInode(stop, folder) {
+			return true
+		}
+	}
+	return false
+}
+
+// deepest walks destination from "/" by its spelling, without following
+// links or the tracker's refusal, and returns the deepest folder found with
+// the name missing from it, or the entry itself if it now exists.
+func deepest(destination string) (*unix.Stat_t, missingName, *unix.Stat_t) {
+	parts, err := components(destination)
+	if err != nil || len(parts) == 0 {
+		return nil, missingName{}, nil
+	}
+	current, err := unix.Open("/", directoryFlags, 0)
+	if err != nil {
+		return nil, missingName{}, nil
+	}
+	defer func() { unix.Close(current) }()
+	for index, part := range parts {
+		var folder unix.Stat_t
+		if unix.Fstat(current, &folder) != nil {
+			return nil, missingName{}, nil
+		}
+		if index == len(parts)-1 {
+			var entry unix.Stat_t
+			if unix.Fstatat(current, part, &entry, unix.AT_SYMLINK_NOFOLLOW) == nil {
+				return nil, missingName{}, &entry
+			}
+			return &folder, missingName{part, true}, nil
+		}
+		next, err := unix.Openat(current, part, directoryFlags, 0)
+		if err != nil {
+			return &folder, missingName{part, false}, nil
+		}
+		unix.Close(current)
+		current = next
+	}
+	return nil, missingName{}, nil
 }
 
 // checkIdentity refuses relative, below the root, when it is an excluded
@@ -175,7 +246,7 @@ func (h *fileHelper) checkIdentityOf(relative string, recursive, entry bool) (er
 			return nil
 		}
 	}
-	if h.excludedIn(folder, target) || (recursive && (h.excluded.ancestors[identityOf(target)] || h.excluded.unresolved[identityOf(target)] != nil)) {
+	if h.excludedIn(folder, target) || (recursive && (h.excluded.ancestors[identityOf(target)] || h.stoppedAt(target))) {
 		return errExcluded
 	}
 	return nil
@@ -192,5 +263,5 @@ func (h *fileHelper) checkFolder(relative string, recursive bool) error {
 // writesInto reports a write into a folder an unresolved exclusion stopped
 // at; a move checks its destination with it.
 func (h *fileHelper) writesInto(folder *unix.Stat_t) bool {
-	return !readOnlyOperations[h.request.Operation] && h.excluded.unresolved[identityOf(folder)] != nil
+	return !readOnlyOperations[h.request.Operation] && h.stoppedAt(folder)
 }
