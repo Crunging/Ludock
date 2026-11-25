@@ -492,7 +492,7 @@ func (s *Service) watch(ctx context.Context, record Record) {
 			if s.judge(ctx, record) == nil {
 				return
 			}
-		case err == nil && labels(spec)[operationLabel] == record.ID && spec.State.Status == "exited" && s.marked(ctx, record.ID):
+		case err == nil && labels(spec)[operationLabel] == record.ID && spec.State.Status == "exited" && s.confirmed(ctx, record.ID):
 			// Stopped by abandon as it recorded its marker, it goes on.
 			s.Docker.Start(ctx, spec.ID)
 		case err == nil && labels(spec)[operationLabel] == record.ID &&
@@ -509,25 +509,34 @@ func (s *Service) watch(ctx context.Context, record Record) {
 	}
 }
 
-// marked reports that the helper recorded its marker, or that Docker
-// couldn't say.
-func (s *Service) marked(ctx context.Context, operation string) bool {
+// marked reports whether the helper recorded its marker; known is false
+// when Docker couldn't say.
+func (s *Service) marked(ctx context.Context, operation string) (marked, known bool) {
 	_, err := s.Docker.InspectSpec(ctx, stateName(operation))
-	return !docker.IsNotFound(err)
+	if docker.IsNotFound(err) {
+		return false, true
+	}
+	return err == nil, err == nil
+}
+
+func (s *Service) confirmed(ctx context.Context, operation string) bool {
+	marked, known := s.marked(ctx, operation)
+	return marked && known
 }
 
 // abandon ends an update whose helper changed nothing: with no marker once
 // it is stopped, it never got that far. It reports whether it ended it.
 func (s *Service) abandon(ctx context.Context, record Record, helper string) bool {
-	marked := func() bool { return s.marked(ctx, record.ID) }
-	if marked() {
+	if marked, known := s.marked(ctx, record.ID); marked || !known {
 		return false
 	}
 	zero := 0
 	if err := s.Docker.Stop(ctx, helper, &zero); err != nil && docker.StatusCode(err) != 304 {
 		return false
 	}
-	if marked() {
+	if marked, known := s.marked(ctx, record.ID); !known {
+		return false
+	} else if marked {
 		// It recorded its marker as it was stopped, so it goes on; watch
 		// starts it again if this start fails.
 		s.Docker.Start(ctx, helper)
@@ -536,8 +545,12 @@ func (s *Service) abandon(ctx context.Context, record Record, helper string) boo
 	if err := s.Docker.Remove(ctx, helper, true, true); err != nil && !docker.IsNotFound(err) {
 		return false
 	}
+	if s.record(ctx, record, StateFailed, errHelper.Message) != nil {
+		return false
+	}
 	s.removeLeftovers(record.ID)
-	return s.finish(ctx, record, StateFailed, errHelper.Message) == nil
+	s.release(record.ID)
+	return true
 }
 
 // judge records an update whose helper is gone, by whether this Ludock runs
@@ -579,21 +592,38 @@ func (s *Service) judge(ctx context.Context, record Record) error {
 		s.Own.Forget()
 	}
 	if state == StatePutBack {
-		if settled, err := os.ReadFile(filepath.Join(s.DataDir, asideName(record.ID), "settled")); err == nil && strings.TrimSpace(string(settled)) == "kept" {
+		if readSettled(s.DataDir, record.ID) == "kept" {
 			reason += ", and Ludock couldn’t put its data back as it was saved, so it kept the newer data; the save " + SaveName(record.ID) +
 				" is beside it"
 		}
 	}
 	// The outcome is recorded before its evidence goes, so a restart between
 	// the two records it the same way; the next start removes what is left.
-	if err := s.finish(ctx, record, state, reason); err != nil {
+	// Work stays held until the cleanup, which prunes data saves, is done.
+	if err := s.record(ctx, record, state, reason); err != nil {
 		return err
 	}
 	if err := s.removeMarkers(ctx, record.ID); err != nil {
 		log.Warn("Could not remove a container Ludock's update left; remove it with docker rm")
 	}
 	s.removeLeftovers(record.ID)
+	s.release(record.ID)
 	return nil
+}
+
+// readSettled reads how the data step settled, never following a link.
+func readSettled(dataDir, operation string) string {
+	aside := filepath.Join(dataDir, asideName(operation))
+	if info, err := os.Lstat(aside); err != nil || !info.IsDir() {
+		return ""
+	}
+	file, err := os.OpenFile(filepath.Join(aside, "settled"), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	content, _ := io.ReadAll(io.LimitReader(file, 64))
+	return strings.TrimSpace(string(content))
 }
 
 // removeLeftovers removes the newer data a put-back moved aside, and every
@@ -618,6 +648,16 @@ func (s *Service) removeLeftovers(operation string) {
 // finish records how an update ended, with its audit entry, and lets work
 // start again.
 func (s *Service) finish(ctx context.Context, record Record, state, reason string) error {
+	if err := s.record(ctx, record, state, reason); err != nil {
+		return err
+	}
+	s.release(record.ID)
+	return nil
+}
+
+// record saves how an update ended, with its audit entry, unless it is no
+// longer the update in progress: whoever settled it first recorded it.
+func (s *Service) record(ctx context.Context, record Record, state, reason string) error {
 	ctx = context.WithoutCancel(ctx)
 	record.State, record.Reason, record.FinishedAt = state, reason, db.Now()
 	outcome := map[string]string{StateSucceeded: "succeeded", StateCurrent: "already_current"}[state]
@@ -625,7 +665,16 @@ func (s *Service) finish(ctx context.Context, record Record, state, reason strin
 		outcome = "failed"
 	}
 	details := map[string]string{"from": record.From, "to": record.To, "reason": reason, "outcome": state}
+	settled := false
 	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		var current Record
+		if _, err := db.ReadSetting(ctx, tx, recordSetting, &current); err != nil {
+			return err
+		}
+		if current.ID != record.ID || !current.InProgress() {
+			settled = true
+			return nil
+		}
 		if err := s.DB.SetSetting(ctx, tx, recordSetting, record); err != nil {
 			return err
 		}
@@ -648,18 +697,22 @@ func (s *Service) finish(ctx context.Context, record Record, state, reason strin
 		log.Warn("Could not record how Ludock's update ended; retrying")
 		return err
 	}
-	if (state == StatePutBack || state == StateFailed) && s.Notify != nil {
+	if !settled && (state == StatePutBack || state == StateFailed) && s.Notify != nil {
 		s.Notify(notify.FailedWork, "ludock-update:"+record.ID, "Ludock couldn’t update itself: "+strings.TrimSuffix(reason, ".")+
 			". It is still on version "+record.From+"; Needs attention says what to do.")
 	}
+	return nil
+}
+
+// release lets work start again after an update.
+func (s *Service) release(operation string) {
 	s.mu.Lock()
-	lift := s.lifts[record.ID]
-	delete(s.lifts, record.ID)
+	lift := s.lifts[operation]
+	delete(s.lifts, operation)
 	s.mu.Unlock()
 	if lift != nil {
 		lift()
 	}
-	return nil
 }
 
 func (s *Service) hold(operation string, lift func()) {
@@ -720,6 +773,7 @@ func (s *Service) Recover(ctx, base context.Context) error {
 	}
 	// What an update that ended left, if removing it failed then.
 	if !record.InProgress() {
+		s.removeLeftovers(record.ID)
 		return s.removeMarkers(ctx, record.ID)
 	}
 	// Startup retries recovery; a watcher already settles this update.
