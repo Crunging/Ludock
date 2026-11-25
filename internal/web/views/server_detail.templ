@@ -659,12 +659,12 @@ templ AvailabilityStatus(d ServerDetail) {
 					<dt>Outage since</dt>
 					<dd>@Time(described.OutageSince, "", "")</dd>
 				}
-				// Monitoring's last check can lag Docker, so a server Ludock now sees
-				// otherwise shows as it is.
+				// Monitoring's last check can lag Docker, so the server shows as
+				// discovery sees it now; monitoring adds only a game not answering.
 				{{ server := d.Row.Server }}
 				<dt>Last seen</dt>
 				<dd>
-					if a.State.LastState == monitor.DockerUnavailable || d.DiscoveryUnavailable {
+					if d.DiscoveryUnavailable {
 						Unknown: Ludock can’t reach Docker
 					} else if server.BindingStatus != identity.StatusActive {
 						{ BindingNote(string(server.BindingStatus)) }

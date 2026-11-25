@@ -900,9 +900,9 @@ there can be replaced.
 If the server's data folders change where it is defined, such as in
 Compose, while such a restore waits to be undone, Ludock can't tell where the
 previous data belongs. The undo, backups, restores, updates, and restarts
-with a backup first are refused, and the server's page says why and doesn't
-offer them. Put the data folders back as they were, then choose **Undo the
-restore**.
+with a backup first are refused with that reason. The server's page says so,
+and stops offering backups, restores, and a backup first on restart. Put the
+data folders back as they were, then choose **Undo the restore**.
 
 ### When Docker restarts
 

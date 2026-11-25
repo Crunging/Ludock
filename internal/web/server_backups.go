@@ -59,7 +59,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 	if b.Admin && b.CanRead {
 		if id := r.URL.Query().Get("browse"); id != "" {
 			b.Browse = s.backupBrowser(r, view.ID, id, s.archiveAccess(r.Context(), request, view.ID))
-			b.Browse.ServerName, b.Browse.CanRestore = view.DisplayName, restoreOffered(view, d.DiscoveryUnavailable)
+			b.Browse.ServerName, b.Browse.CanRestore = view.DisplayName, restoreOffered(view, d.DiscoveryUnavailable) && !d.UndoBlocked
 			b.Browse.Warn, b.Browse.Running = b.Warn, b.Running
 			s.fitBrowser(r.Context(), view, b.Browse)
 			return b
@@ -74,7 +74,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 			if backup.State != "complete" {
 				continue
 			}
-			if backup.ID == restore && restoreOffered(view, d.DiscoveryUnavailable) && b.Fits[backup.ID].Refusal == "" && !backup.Missing && !backup.CopyAway {
+			if backup.ID == restore && restoreOffered(view, d.DiscoveryUnavailable) && !d.UndoBlocked && b.Fits[backup.ID].Refusal == "" && !backup.Missing && !backup.CopyAway {
 				b.Restore = backup
 			}
 			if backup.ID == keep && backup.KeptAt == 0 && !b.Gone {

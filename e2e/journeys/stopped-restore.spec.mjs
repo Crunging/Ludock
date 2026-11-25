@@ -46,6 +46,7 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
   await expect(page.locator(".alert--warning")).toContainText("the server’s data folders aren’t the ones that restore was working on any more");
   await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   await expect(page.getByRole("button", { name: "Create backup" })).toHaveCount(0);
+  await expect(page.locator("#backup-list").getByRole("link", { name: "Restore…" })).toHaveCount(0);
   await page.goto("/");
   const item = page.locator(".needs-attention__list li", { hasText: "Restore stopped partway" });
   await item.getByRole("button", { name: "Undo the restore" }).click();

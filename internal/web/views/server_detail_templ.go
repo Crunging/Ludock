@@ -2153,7 +2153,7 @@ func AvailabilityStatus(d ServerDetail) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			if a.State.LastState == monitor.DockerUnavailable || d.DiscoveryUnavailable {
+			if d.DiscoveryUnavailable {
 				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 177, "Unknown: Ludock can’t reach Docker")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
