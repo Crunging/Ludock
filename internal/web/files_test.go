@@ -20,6 +20,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/files"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/launch"
 )
@@ -127,6 +128,18 @@ func TestUploadChecks(t *testing.T) {
 		map[string]string{"HX-Request": "true", "HX-Target": "file-action"})
 	if body := invalid.Body.String(); invalid.Code != http.StatusOK || !strings.Contains(body, "Invalid file path") || len(body) > 64<<10 {
 		t.Fatal("move dialog for an invalid destination", invalid.Code, len(body))
+	}
+	// A valid deep destination with a large selection stays small too: only
+	// its last folders are linked, each carrying the selection.
+	var selection []string
+	for index := range files.MaxSelection {
+		selection = append(selection, fmt.Sprintf("%030d", index))
+	}
+	values := url.Values{"root": {"0"}, "name": selection, "to": {strings.TrimSuffix(strings.Repeat("d/", 2000), "/")}}
+	crowded := p.do("GET", "/fragments/files/"+p.server+"/move?"+values.Encode(), p.admin, nil,
+		map[string]string{"HX-Request": "true", "HX-Target": "file-action"})
+	if crowded.Code != http.StatusOK || crowded.Body.Len() > 1<<20 {
+		t.Fatal("move dialog for a deep destination", crowded.Code, crowded.Body.Len())
 	}
 	// Dialogs refuse a path past the bound, composed as the change would.
 	folder := strings.Repeat("d", 4090)

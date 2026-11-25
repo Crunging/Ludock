@@ -505,9 +505,19 @@ func (m FileMove) browse(to string) string {
 	return "/fragments/files/" + m.ServerID + "/move?" + values.Encode()
 }
 
+// moveCrumbs is how many of the destination's last folders the move dialog
+// links to: each link carries the whole selection, so a deep destination
+// would otherwise repeat it hundreds of times.
+const moveCrumbs = 5
+
+// crumbs are the destination's last folders.
 func (m FileMove) crumbs() [][2]string {
-	return FilesView{Path: m.To}.breadcrumbs()
+	crumbs := FilesView{Path: m.To}.breadcrumbs()
+	return crumbs[max(0, len(crumbs)-moveCrumbs):]
 }
+
+// cropped reports whether crumbs leaves folders out.
+func (m FileMove) cropped() bool { return len(FilesView{Path: m.To}.breadcrumbs()) > moveCrumbs }
 
 templ FileMoveDialog(m FileMove) {
 	<dialog class="file-action-dialog" id="file-action" aria-labelledby="file-action-title" aria-describedby="file-action-description" data-open-on-load>
@@ -531,6 +541,9 @@ templ FileMoveContent(m FileMove) {
 		</div>
 		<nav class="file-breadcrumbs file-move__crumbs" aria-label="Folder to move to">
 			<button type="button" hx-get={ m.browse("") } hx-target="#file-action" hx-swap="innerHTML" aria-current?={ m.To == "" }>{ m.Root.Name }</button>
+			if m.cropped() {
+				<span><b aria-hidden="true">/</b> …</span>
+			}
 			for _, crumb := range m.crumbs() {
 				<span>
 					<b aria-hidden="true">/</b>
