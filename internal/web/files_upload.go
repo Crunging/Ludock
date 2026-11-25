@@ -104,17 +104,17 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 		return
 	}
 	body.unbound()
-	sizes := make([]int64, len(manifest))
+	sizes, names := make([]int64, len(manifest)), make([]string, len(manifest))
 	for index, file := range manifest {
 		if file.Size < 0 || file.Size > 1<<53-1 {
 			fail(invalid)
 			return
 		}
-		sizes[index] = file.Size
+		sizes[index], names[index] = file.Size, file.Name
 	}
 	// Refused files are read past, so a batch past what the page sends is
 	// refused before any of it is read.
-	if !files.BatchFits(sizes) {
+	if !files.BatchFits(sizes) || files.BatchFolders(names) > helper.UploadBatchFolders {
 		fail(files.ErrBatchTooLarge)
 		return
 	}

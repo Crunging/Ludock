@@ -93,7 +93,7 @@
   var feedback = document.getElementById("file-feedback");
   var csrf = document.querySelector('meta[name="csrf-token"]');
   var maxUpload = Number(page.getAttribute("data-max-upload")) || 0;
-  var batchFiles = 100, batchBytes = 16 * 1024 * 1024;
+  var batchFiles = 100, batchBytes = 16 * 1024 * 1024, batchFolders = 256;
   // busy holds the uploader from reading what was chosen to the end of the
   // upload; controller cancels the upload.
   var busy = false, controller = null;
@@ -255,16 +255,24 @@
     });
   }
 
+  // A batch holds files in at most batchFolders folders below the shown one,
+  // each folder on the way counted once.
   function batches(items) {
-    var all = [], batch = [], bytes = 0;
+    var all = [], batch = [], bytes = 0, folders = new Set();
     items.forEach(function (item) {
-      if (batch.length > 0 && (batch.length >= batchFiles || bytes + item.file.size > batchBytes)) {
+      var added = [];
+      for (var folder = item.folder; folder && !folders.has(folder); folder = folder.split("/").slice(0, -1).join("/")) added.push(folder);
+      if (batch.length > 0 && (batch.length >= batchFiles || bytes + item.file.size > batchBytes || folders.size + added.length > batchFolders)) {
         all.push(batch);
         batch = [];
         bytes = 0;
+        folders = new Set();
+        added = [];
+        for (var again = item.folder; again; again = again.split("/").slice(0, -1).join("/")) added.push(again);
       }
       batch.push(item);
       bytes += item.file.size;
+      added.forEach(function (folder) { folders.add(folder); });
     });
     if (batch.length > 0) all.push(batch);
     return all;

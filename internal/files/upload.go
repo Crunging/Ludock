@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -40,8 +41,28 @@ var errNotUploaded = apperr.New("UPLOAD_STOPPED", 409, "The upload stopped befor
 
 // ErrBatchTooLarge refuses a batch past what the page sends, before any of
 // it is read: refused files are read past, so a batch bounds that reading.
-var ErrBatchTooLarge = apperr.New("UPLOAD_BATCH_TOO_LARGE", 413, fmt.Sprintf("Upload at most %d files and %s at once; a larger file goes on its own.",
-	helper.UploadBatchFiles, datasize.Format(helper.UploadBatchBytes)))
+var ErrBatchTooLarge = apperr.New("UPLOAD_BATCH_TOO_LARGE", 413, fmt.Sprintf("Upload at most %d files in %d folders and %s at once; a larger file goes on its own.",
+	helper.UploadBatchFiles, helper.UploadBatchFolders, datasize.Format(helper.UploadBatchBytes)))
+
+var errTooDeep = apperr.New("UPLOAD_TOO_DEEP", 400, fmt.Sprintf("This file is more than %d folders below the folder you upload into, so it wasn’t uploaded.",
+	helper.UploadDepth))
+
+// ErrHelperOutdated is a helper image that predates this backend's uploads,
+// which only LUDOCK_HELPER_IMAGE can choose.
+var ErrHelperOutdated = apperr.New("HELPER_IMAGE_OUTDATED", 503,
+	"Ludock’s helper image is older than Ludock, so uploads can’t run. Remove LUDOCK_HELPER_IMAGE, or set it to the image Ludock runs.")
+
+// BatchFolders counts the folders below an upload's folder that files with
+// these paths are in, each folder on the way once.
+func BatchFolders(names []string) int {
+	folders := map[string]bool{}
+	for _, name := range names {
+		for folder := path.Dir(name); folder != "." && folder != "/" && !folders[folder]; folder = path.Dir(folder) {
+			folders[folder] = true
+		}
+	}
+	return len(folders)
+}
 
 // BatchFits reports whether files of these sizes may go in one batch.
 func BatchFits(sizes []int64) bool {
@@ -91,7 +112,13 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	for index, entry := range entries {
 		sizes[index] = entry.Size
 	}
-	if err == nil && !BatchFits(sizes) {
+	var listed []string
+	for index, entry := range entries {
+		if results[index] == nil {
+			listed = append(listed, entry.Name)
+		}
+	}
+	if err == nil && (!BatchFits(sizes) || BatchFolders(listed) > helper.UploadBatchFolders) {
 		err = ErrBatchTooLarge
 	}
 	if err != nil {
@@ -113,7 +140,10 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 			}
 		}
 		var space *helper.FileSpace
-		if space, err = access.prepareUpload(ctx, target, root, normalized, names); err != nil {
+		if err = s.speaksUploads(ctx, access, root); err == nil {
+			space, err = access.prepareUpload(ctx, target, root, normalized, names)
+		}
+		if err != nil {
 			// Its sweep may still be removing files.
 			access.Cleanup(true)
 		} else {
@@ -158,9 +188,15 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		return err
 	}
 	input.trailer = fileList(files)
-	acks := &uploadAcks{limit: len(files), ready: make(chan struct{}, len(files)), folders: make(chan struct{}, len(files)),
-		files: make(chan struct{}, 1)}
-	input.ready, input.folders, input.files = acks.ready, acks.folders, acks.files
+	// The helper asks to make each folder of the batch at most once.
+	var paths []string
+	for _, file := range files {
+		paths = append(paths, file.Name)
+	}
+	folders := BatchFolders(paths)
+	acks := &uploadAcks{limit: len(files), ready: make(chan struct{}, len(files)), folderLimit: folders,
+		folders: make(chan struct{}, folders), bodies: make(chan struct{}, len(files))}
+	input.ready, input.folders, input.bodies = acks.ready, acks.folders, acks.bodies
 	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized},
 		launch.ExecOptions{Input: input, Stdout: acks})
 	// Exec can return while its input is still being read; once stopped, no
@@ -232,11 +268,46 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 // validateUploadName checks a path below an upload's folder: each name in it
 // as a new name would be.
 func validateUploadName(name string) error {
-	for _, part := range strings.Split(name, "/") {
+	parts := strings.Split(name, "/")
+	for _, part := range parts {
 		if err := ValidateName(part); err != nil {
 			return err
 		}
 	}
+	if len(parts)-1 > helper.UploadDepth {
+		return errTooDeep
+	}
+	return nil
+}
+
+// speaksUploads confirms the helper speaks this backend's batch upload
+// protocol. Only LUDOCK_HELPER_IMAGE can choose another build than
+// Ludock's own, which is asked once per image; one too old to know the
+// question fails it as an unknown operation.
+func (s *Service) speaksUploads(ctx context.Context, access *Access, root Root) error {
+	if s.Images == nil || s.Images.Configured == "" {
+		return nil
+	}
+	s.mu.Lock()
+	known := s.uploadImages[s.Images.Configured]
+	s.mu.Unlock()
+	if known {
+		return nil
+	}
+	out, err := access.request(ctx, helper.FileRequest{Operation: "upload-version", Root: root.Path}, nil, nil)
+	var answer struct{ Version int }
+	if errors.Is(err, launch.ErrUnsafe) || (err == nil && (json.Unmarshal(out, &answer) != nil || answer.Version != helper.UploadVersion)) {
+		return ErrHelperOutdated
+	}
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.uploadImages == nil {
+		s.uploadImages = map[string]bool{}
+	}
+	s.uploadImages[s.Images.Configured] = true
+	s.mu.Unlock()
 	return nil
 }
 
@@ -260,17 +331,17 @@ type batchInput struct {
 	body  io.Reader
 	check func() error
 	ready <-chan struct{}
-	// folders has a token for each missing folder the helper asks to make
-	// before the files, and files one once their bodies may follow.
-	folders, files <-chan struct{}
-	begun          bool
-	done           chan struct{}
-	entries        []UploadEntry
-	ids            []string
-	index          int
-	left           int64
-	started        bool
-	trailer        []byte
+	// folders has a token for each missing folder the helper asks to make,
+	// and bodies one each time it asks for the next file's body.
+	folders, bodies <-chan struct{}
+	asked           bool
+	done            chan struct{}
+	entries         []UploadEntry
+	ids             []string
+	index           int
+	left            int64
+	started         bool
+	trailer         []byte
 
 	mu sync.Mutex
 	// sent marks entries whose trailer was handed on, which may be committed.
@@ -298,9 +369,23 @@ func (b *batchInput) Read(p []byte) (int, error) {
 			b.trailer = b.trailer[n:]
 			return n, nil
 		}
-		// A folder is made only once access and the game are confirmed again,
-		// as each file is before it is published.
-		if !b.begun {
+		if b.index >= len(b.entries) {
+			return 0, io.EOF
+		}
+		if !b.started {
+			b.left, b.started = b.entries[b.index].Size, true
+		}
+		if b.ids[b.index] == "" {
+			if _, err := io.CopyN(io.Discard, b.body, b.left); err != nil {
+				return 0, err
+			}
+			b.index, b.started = b.index+1, false
+			continue
+		}
+		// The helper asks for each body once the file's folders are made, and
+		// asks to make each missing one, which only goes ahead once access
+		// and the game are confirmed again, as before a file is published.
+		if !b.asked {
 			select {
 			case <-b.folders:
 				b.mu.Lock()
@@ -315,24 +400,11 @@ func (b *batchInput) Read(p []byte) (int, error) {
 					return 0, err
 				}
 				b.trailer = []byte{helper.FolderGo}
-			case <-b.files:
-				b.begun = true
+			case <-b.bodies:
+				b.asked = true
 			case <-b.done:
 				return 0, errInputStopped
 			}
-			continue
-		}
-		if b.index >= len(b.entries) {
-			return 0, io.EOF
-		}
-		if !b.started {
-			b.left, b.started = b.entries[b.index].Size, true
-		}
-		if b.ids[b.index] == "" {
-			if _, err := io.CopyN(io.Discard, b.body, b.left); err != nil {
-				return 0, err
-			}
-			b.index, b.started = b.index+1, false
 			continue
 		}
 		if b.left > 0 {
@@ -366,7 +438,7 @@ func (b *batchInput) Read(p []byte) (int, error) {
 			return 0, err
 		}
 		b.trailer = []byte(b.ids[b.index])
-		b.index, b.started = b.index+1, false
+		b.index, b.started, b.asked = b.index+1, false, false
 	}
 }
 
@@ -376,13 +448,14 @@ type uploadAcks struct {
 	limit   int
 	pending []byte
 	results []helper.UploadResult
-	// ready has a token for each file the helper asked the trailer of, and
-	// folders for each folder it asked to make; files, once it has made them.
-	ready          chan struct{}
-	readies        int
-	folders, files chan struct{}
-	asked          int
-	began          bool
+	// ready has a token for each file the helper asked the trailer of,
+	// folders for each folder it asked to make, and bodies for each body.
+	ready           chan struct{}
+	readies         int
+	folders, bodies chan struct{}
+	folderLimit     int
+	askedFolders    int
+	askedBodies     int
 }
 
 func (a *uploadAcks) Write(p []byte) (int, error) {
@@ -397,21 +470,20 @@ func (a *uploadAcks) Write(p []byte) (int, error) {
 			return 0, errors.New("unexpected upload output")
 		}
 		a.pending = rest
-		// Each of a batch's folders holds at least one of its files.
 		if result.Folder {
-			if a.began || a.asked >= a.limit {
+			if a.askedFolders >= a.folderLimit {
 				return 0, errors.New("unexpected upload output")
 			}
-			a.asked++
+			a.askedFolders++
 			a.folders <- struct{}{}
 			continue
 		}
-		if result.Files {
-			if a.began {
+		if result.Body {
+			if a.askedBodies >= a.limit {
 				return 0, errors.New("unexpected upload output")
 			}
-			a.began = true
-			a.files <- struct{}{}
+			a.askedBodies++
+			a.bodies <- struct{}{}
 			continue
 		}
 		if result.Ready {
@@ -455,9 +527,9 @@ func uploadNoSpace(space helper.FileSpace, size int64) error {
 		datasize.Format(size), datasize.Format(max(space.Available, 0)), datasize.Format(helper.UploadSpare(space.Total))))
 }
 
-// prepareUpload removes the staging files cut-off uploads left in folder and
-// the folders below it that entries go in, which may be what fills the disk,
-// then measures its free space.
+// prepareUpload removes the staging files cut-off uploads left in the
+// folders below folder that the files names go in, or folder itself for
+// none, which may be what fills the disk, then measures its free space.
 func (a *Access) prepareUpload(ctx context.Context, target Target, root Root, folder string, names []string) (*helper.FileSpace, error) {
 	var files []helper.UploadFile
 	for _, name := range names {

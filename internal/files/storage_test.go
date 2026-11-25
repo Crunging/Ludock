@@ -1,9 +1,11 @@
 package files
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -683,24 +685,88 @@ func TestUploadNestedBatch(t *testing.T) {
 }
 
 // Access is confirmed again before each folder an upload makes, as before
-// each file it publishes: once it is revoked, no further folder is made.
+// each file it publishes: once it is revoked, no further folder is made,
+// whether for another file or on the way to the same one.
 func TestUploadFoldersFollowAccess(t *testing.T) {
-	f := setup(t)
-	revoked := func() error {
-		if _, err := os.Stat(filepath.Join(f.data, "one")); err == nil {
-			return apperr.New("FORBIDDEN", 403, "You can’t do that")
+	for _, test := range []struct {
+		entries []UploadEntry
+		first   string
+		then    string
+	}{
+		{[]UploadEntry{{Name: "one/a.txt", Size: 1}, {Name: "two/b.txt", Size: 1}}, "one", "two"},
+		{[]UploadEntry{{Name: "deep/er/a.txt", Size: 1}}, "deep", "deep/er"},
+	} {
+		f := setup(t)
+		revoked := func() error {
+			if _, err := os.Stat(filepath.Join(f.data, test.first)); err == nil {
+				return apperr.New("FORBIDDEN", 403, "You can’t do that")
+			}
+			return nil
 		}
-		return nil
+		results, err := f.service.UploadFiles(ctx, f.target, f.root, "", test.entries, strings.NewReader("ab"[:len(test.entries)]), revoked)
+		if err == nil || slices.Contains(results, nil) {
+			t.Fatal(test.first, results, err)
+		}
+		if _, err := os.Stat(filepath.Join(f.data, test.first)); err != nil {
+			t.Fatal("the first folder wasn't made", err)
+		}
+		if _, err := os.Stat(filepath.Join(f.data, test.then)); !os.IsNotExist(err) {
+			t.Fatal("made", test.then, "after access was revoked", err)
+		}
 	}
-	entries := []UploadEntry{{Name: "one/a.txt", Size: 1}, {Name: "two/b.txt", Size: 1}}
-	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", entries, strings.NewReader("ab"), revoked)
-	if err == nil || results[0] == nil || results[1] == nil {
+}
+
+// A batch's folders have practical bounds: a file too deep is refused on
+// its own, and a batch in too many folders as a whole, before anything is
+// made. A folder is made only for a file that fits on its disk, and a helper
+// older than the backend's upload protocol is refused before any upload.
+func TestUploadFolderLimits(t *testing.T) {
+	f := setup(t)
+	deep := strings.Repeat("d/", helper.UploadDepth+1) + "deep.txt"
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: deep, Size: 1}, {Name: "ok.txt", Size: 1}},
+		strings.NewReader("ab"), nil)
+	if err != nil || !apperr.Is(results[0], "UPLOAD_TOO_DEEP") || results[1] != nil {
 		t.Fatal(results, err)
 	}
-	if _, err := os.Stat(filepath.Join(f.data, "one")); err != nil {
-		t.Fatal("the first folder wasn't made", err)
+	var spread []UploadEntry
+	for index := range 100 {
+		spread = append(spread, UploadEntry{Name: fmt.Sprintf("f%03d/a/b/c.txt", index)})
 	}
-	if _, err := os.Stat(filepath.Join(f.data, "two")); !os.IsNotExist(err) {
-		t.Fatal("made a folder after access was revoked", err)
+	if _, err := f.service.UploadFiles(ctx, f.target, f.root, "", spread, strings.NewReader(""), nil); !errors.Is(err, ErrBatchTooLarge) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "d")); !os.IsNotExist(err) {
+		t.Fatal("made folders for a file too deep", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "f000")); !os.IsNotExist(err) {
+		t.Fatal("made folders for a batch in too many", err)
+	}
+	var stat unix.Statfs_t
+	unix.Statfs(f.data, &stat)
+	huge := helper.Space(&stat).Available + 256<<20
+	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "room/for/huge.bin", Size: huge}}, zeroFree{}, nil)
+	if !apperr.Is(results[0], "NOT_ENOUGH_SPACE") {
+		t.Fatal(results, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "room")); !os.IsNotExist(err) {
+		t.Fatal("made folders for a file that doesn't fit", err)
+	}
+	// An older helper, chosen with LUDOCK_HELPER_IMAGE, doesn't know the
+	// question; asked once per image, it is never driven.
+	f.service.Images.Configured = "ghcr.io/crunging/ludock@sha256:" + strings.Repeat("c", 64)
+	f.engine.AddImage(f.service.Images.Configured)
+	f.engine.RunHelpers(func(_ *fakedocker.Container, _, args []string, _ *bufio.Reader, _, stderr func([]byte)) (int, bool) {
+		if len(args) > 1 && strings.Contains(args[1], `"operation":"upload-version"`) {
+			stderr([]byte(helper.FileFailure))
+			return 1, true
+		}
+		return 0, false
+	})
+	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "late/x.txt", Size: 1}}, strings.NewReader("x"), nil)
+	if !errors.Is(err, ErrHelperOutdated) || !errors.Is(results[0], ErrHelperOutdated) {
+		t.Fatal(results, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "late")); !os.IsNotExist(err) {
+		t.Fatal("an older helper made a folder", err)
 	}
 }

@@ -67,7 +67,7 @@ var folderOperations = map[string]bool{"upload-files": true, "upload-prepare": t
 	"move": true, "upload-cleanup": true, "unpack-cleanup": true}
 
 // readOnlyOperations are the file operations that write nothing.
-var readOnlyOperations = map[string]bool{"list": true, "stat": true, "download": true, "download-paths": true, "check": true,
+var readOnlyOperations = map[string]bool{"list": true, "stat": true, "download": true, "download-paths": true, "check": true, "upload-version": true,
 	"space": true, "mounts": true, "backup": true}
 
 // resolveExclusions takes the start's snapshot, then refuses any later open
