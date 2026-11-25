@@ -96,8 +96,8 @@ templ TakeOverNotice(o TakeOver) {
 	}
 }
 
-// TakeOverResult says what moved, and what stayed because the new server
-// had its own.
+// TakeOverResult says what moved, what stayed because the new server had
+// its own, and which moved schedules run alongside one of its own.
 templ TakeOverResult(d jobs.TakeOver) {
 	<div class="alert alert--success stack-form" role="status" id="take-over-result">
 		<p>
@@ -113,7 +113,17 @@ templ TakeOverResult(d jobs.TakeOver) {
 			<p>Not moved, because { d.ToName } already has the same schedule:</p>
 			<ul>
 				for _, input := range d.LeftSchedules {
-					<li>{ Capitalize(input.Action) }, { ScheduleWhen(input) }</li>
+					<li>{ ActionLabel(input.Action) }, { ScheduleWhen(input) }</li>
+				}
+			</ul>
+		}
+		if len(d.SameTime) > 0 {
+			<p>
+				{ counted(len(d.SameTime), "moved schedule runs", "moved schedules run") } at the same time as one of { d.ToName }’s own that does something else, so both were kept. Check them on <a class="text-link" href={ templ.SafeURL("/servers/" + d.ToID + "?tab=schedules") }>its Schedules tab</a>:
+			</p>
+			<ul>
+				for _, input := range d.SameTime {
+					<li>{ ActionLabel(input.Action) }, { ScheduleWhen(input) }</li>
 				}
 			</ul>
 		}

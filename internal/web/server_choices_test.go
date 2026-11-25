@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -102,7 +103,9 @@ func TestAddServerRefusesForgedRequests(t *testing.T) {
 // work. Its page and Needs attention suggest the new server when it has the
 // same game and data folders; the move gives it everything, the old server
 // leaves Ludock, and its work shows in the new server's Activity. A new
-// server with its own schedule or grant for the same person keeps its own.
+// server with its own schedule or grant for the same person keeps its own;
+// a moved schedule that also backs up first is kept beside the new server's
+// at the same time, and the result says so.
 // One with other data folders, or two with none, is offered only by name:
 // moved sharing waits for a confirmation that a page opened before the move
 // can't give, and the backups say the data lived elsewhere. Work on
@@ -171,6 +174,38 @@ func TestRenamedServerTakesOver(t *testing.T) {
 				p.app.DB.QueryRow("SELECT COUNT(*) FROM schedules").Scan(&count)
 				if can, _ := p.app.Authz.Has(ctx, &member.User, renamed, authz.ServerRestart); can || count != 1 {
 					t.Fatal(can, count)
+				}
+			}},
+		{name: "backs up first at the same time", status: http.StatusOK,
+			before: func(t *testing.T, p *pages, member *auth.Principal, renamed string) *auth.Principal {
+				p.app.DB.Exec("UPDATE schedules SET input_json=json_set(input_json,'$.createBackup',json('true'))")
+				if _, err := p.app.Schedules.CreateAsAdmin(ctx, &p.admin.User, p.admin.TokenHash, renamed, restart); err != nil {
+					t.Fatal(err)
+				}
+				return p.admin
+			},
+			check: func(t *testing.T, p *pages, member *auth.Principal, old, renamed, body string) {
+				var count, backingUp int
+				p.app.DB.QueryRow("SELECT COUNT(*), COUNT(*) FILTER (WHERE input_json->>'createBackup') FROM schedules WHERE server_id=?", renamed).
+					Scan(&count, &backingUp)
+				if !strings.Contains(body, "1 schedule,") || !strings.Contains(body, "1 moved schedule runs at the same time as one of valheim-world’s own") ||
+					strings.Contains(body, "already has the same schedule") || count != 2 || backingUp != 1 {
+					t.Fatal(count, backingUp, body)
+				}
+			}},
+		{name: "a one-time restart at the same time", status: http.StatusOK,
+			before: func(t *testing.T, p *pages, member *auth.Principal, renamed string) *auth.Principal {
+				// Another name for the same zone runs at the same instant.
+				once := schedules.Input{Kind: "once", Action: "restart", Enabled: true, Time: "04:00", Timezone: "Etc/UTC",
+					Date: time.Now().UTC().AddDate(0, 0, 2).Format("2006-01-02")}
+				if _, err := p.app.Schedules.CreateAsAdmin(ctx, &p.admin.User, p.admin.TokenHash, renamed, once); err != nil {
+					t.Fatal(err)
+				}
+				return p.admin
+			},
+			check: func(t *testing.T, p *pages, member *auth.Principal, old, renamed, body string) {
+				if !strings.Contains(body, "1 moved schedule runs at the same time as one of valheim-world’s own") {
+					t.Fatal(body)
 				}
 			}},
 		{name: "other data folders", data: true, status: http.StatusOK, check: func(t *testing.T, p *pages, member *auth.Principal, old, renamed, body string) {
