@@ -699,7 +699,9 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// inside a larger mount, the game can move a folder out of the root within
 	// that mount, but only to where the game itself can already write. So
 	// this catches a move during a long transfer and reports it; it is not a
-	// boundary against any of them.
+	// boundary against any of them. A member's file that lands in a folder
+	// moved in that moment lands where whoever moved the folder put it, which
+	// the member neither chose nor could arrange.
 	unchanged := func() error {
 		current, err := uploadTarget(parent, name)
 		if err != nil {
@@ -725,17 +727,17 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// game may also write to it, as it may a moment later once it has its
 	// name, so nothing is gained by changing it in between. The owner is set
 	// on the staged inode before the publish; whether that inode took the
-	// name is checked below. Set permissions while the
-	// helper still owns the new inode; CHOWN is enough to restore game
-	// ownership without granting FOWNER.
+	// name is checked below. The owner and group come first, while the mode
+	// is still 0600, so the final mode never applies to the helper's group,
+	// as restores do; that needs FOWNER.
 	mode := uint32(0o666 &^ currentUmask())
 	if original != nil {
 		mode = original.Mode & 0o777
 	}
-	if err := unix.Fchmod(int(file), mode); err != nil {
+	if err := fchown(int(file), int(owner.Uid), int(owner.Gid)); err != nil {
 		return err
 	}
-	if err := unix.Fchown(int(file), int(owner.Uid), int(owner.Gid)); err != nil {
+	if err := fchmod(int(file), mode); err != nil {
 		return err
 	}
 	if err := unix.Fsync(int(file)); err != nil {
@@ -812,18 +814,23 @@ func (h *fileHelper) sameFolder(parent fd) error {
 // with room for the clocks of hosts that share it.
 const stagingAge = time.Hour
 
-// sweepChunk is how many names a sweep reads at a time; tests shrink it and
-// watch readNames.
+// sweepChunk is how many names a sweep reads at a time, and sweepEntries
+// and sweepTime its budget; tests shrink them and watch readNames.
 var (
-	sweepChunk = 1024
-	readNames  = (*os.File).Readdirnames
+	sweepChunk   = 1024
+	sweepEntries = 10000
+	sweepTime    = 2 * time.Second
+	readNames    = (*os.File).Readdirnames
 )
 
 // sweepStaging removes the staging files that uploads cut off earlier left
 // in folder, reading it a chunk at a time. It returns how many it could not
-// remove, such as in a folder only its owner may delete from; those are
-// left, and free space still decides each upload.
+// remove; those are left, and free space still decides each upload. It is
+// housekeeping and never holds up the write: it stops once it has looked at
+// sweepEntries names or run for sweepTime, so a folder too large to sweep
+// within that keeps its stale staging files until it shrinks.
 func (h *fileHelper) sweepStaging(folder fd) (int, error) {
+	started, seen := time.Now(), 0
 	duplicate, err := unix.Dup(int(folder))
 	if err != nil {
 		return 0, err
@@ -835,7 +842,11 @@ func (h *fileHelper) sweepStaging(folder fd) (int, error) {
 	}
 	stuck := 0
 	for {
-		children, readErr := readNames(directory, sweepChunk)
+		if seen >= sweepEntries || time.Since(started) >= sweepTime {
+			return stuck, nil
+		}
+		children, readErr := readNames(directory, min(sweepChunk, sweepEntries-seen))
+		seen += len(children)
 		for _, name := range children {
 			id, found := strings.CutPrefix(name, ".ludock-upload-")
 			id, staged := strings.CutSuffix(id, ".tmp")
@@ -1221,9 +1232,11 @@ func (h *fileHelper) run() error {
 		if err != nil {
 			return err
 		}
+		// A space that can't be measured is reported as none, which the backend
+		// refuses, so the sweep's count still reaches it.
 		var stat unix.Statfs_t
 		if err := unix.Fstatfs(int(folder), &stat); err != nil {
-			return err
+			return h.json(UploadPrepared{Stuck: stuck})
 		}
 		return h.json(UploadPrepared{FileSpace: Space(&stat), Stuck: stuck})
 	case "upload-files-cleanup":
@@ -1483,6 +1496,9 @@ var (
 	renameat2 = unix.Renameat2
 	renameat  = unix.Renameat
 	linkat    = unix.Linkat
+	// fchown and fchmod let tests see the order an upload hands over in.
+	fchown = unix.Fchown
+	fchmod = unix.Fchmod
 )
 
 // renameNoReplace moves an entry without ever replacing what is at the

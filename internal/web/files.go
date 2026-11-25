@@ -212,6 +212,12 @@ func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Req
 	}
 	d := views.FileDialog{ServerID: view.ID, ServerName: view.DisplayName, Action: query.Get("action"), Path: path,
 		Type: query.Get("type")}
+	if d.Action == "delete-selection" {
+		if err := files.CheckSelection(d.Path, query["name"]); err != nil {
+			s.fail(w, r, request, err)
+			return
+		}
+	}
 	index := slices.IndexFunc(view.FileRoots, func(root files.Root) bool { return root.ID == query.Get("root") })
 	if index < 0 || !slices.Contains([]string{"create", "rename", "delete", "unpack", "delete-selection"}, d.Action) {
 		s.fail(w, r, request, files.Error("ROOT_NOT_FOUND", 404))
@@ -219,10 +225,7 @@ func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Req
 	}
 	d.Root = view.FileRoots[index]
 	if d.Action == "delete-selection" {
-		if d.Names = query["name"]; len(d.Names) == 0 || len(d.Names) > files.MaxSelection {
-			s.fail(w, r, request, files.Error("INVALID_SELECTION", 400))
-			return
-		}
+		d.Names = query["name"]
 	} else if d.Action != "create" {
 		d.Name = d.Path[strings.LastIndex(d.Path, "/")+1:]
 	}

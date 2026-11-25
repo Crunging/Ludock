@@ -383,10 +383,13 @@ func (a *Access) prepareUpload(ctx context.Context, target Target, root Root, fo
 		return nil, err
 	}
 	var prepared helper.UploadPrepared
-	if err := json.Unmarshal(out, &prepared); err != nil || prepared.Total <= 0 {
+	if err := json.Unmarshal(out, &prepared); err != nil {
 		return nil, Error("FILE_OPERATION_FAILED", 409)
 	}
 	logStuck(target, prepared.Stuck)
+	if prepared.Total <= 0 {
+		return nil, Error("FILE_OPERATION_FAILED", 409)
+	}
 	return &prepared.FileSpace, nil
 }
 

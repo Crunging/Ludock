@@ -33,25 +33,43 @@ func selection(target Target, rootID, folder string, names []string) (Root, stri
 	if err != nil {
 		return Root{}, "", nil, err
 	}
+	paths, err := selectionPaths(normalized, names)
+	if err != nil {
+		return Root{}, "", nil, err
+	}
+	return root, normalized, paths, nil
+}
+
+// CheckSelection refuses a selection of names in folder that a delete or a
+// move of it would refuse, for a dialog to check before it opens.
+func CheckSelection(folder string, names []string) error {
+	normalized, err := NormalizeRelativePath(folder)
+	if err == nil {
+		_, err = selectionPaths(normalized, names)
+	}
+	return err
+}
+
+func selectionPaths(normalized string, names []string) ([]string, error) {
 	if len(names) == 0 || len(names) > MaxSelection {
-		return Root{}, "", nil, Error("INVALID_SELECTION", 400)
+		return nil, Error("INVALID_SELECTION", 400)
 	}
 	size := 0
 	paths := make([]string, 0, len(names))
 	for index, name := range names {
 		if err := ValidateName(name); err != nil {
-			return Root{}, "", nil, err
+			return nil, err
 		}
 		if size += len(name); size > selectionBytes || slices.Contains(names[:index], name) {
-			return Root{}, "", nil, Error("INVALID_SELECTION", 400)
+			return nil, Error("INVALID_SELECTION", 400)
 		}
 		joined, err := joinChecked(normalized, name)
 		if err != nil {
-			return Root{}, "", nil, err
+			return nil, err
 		}
 		paths = append(paths, joined)
 	}
-	return root, normalized, paths, nil
+	return paths, nil
 }
 
 // DeleteSelection removes entries of one folder, after checking them all.

@@ -9,8 +9,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -214,6 +216,27 @@ func TestMutationsAndUploads(t *testing.T) {
 		t.Fatal("downloaded a hard link")
 	}
 
+	// The file gets its owner and group before its final mode, so a wider
+	// mode never applies to the helper's own group.
+	var steps []string
+	fchown = func(descriptor, uid, gid int) error {
+		steps = append(steps, "owner")
+		return unix.Fchown(descriptor, uid, gid)
+	}
+	fchmod = func(descriptor int, mode uint32) error {
+		var stat unix.Stat_t
+		unix.Fstat(descriptor, &stat)
+		parent, _ := os.Stat(root)
+		if want := parent.Sys().(*syscall.Stat_t); stat.Uid != want.Uid || stat.Gid != want.Gid {
+			steps = append(steps, "mode before the owner")
+		}
+		steps = append(steps, "mode")
+		return unix.Fchmod(descriptor, mode)
+	}
+	defer func() { fchown, fchmod = unix.Fchown, unix.Fchmod }()
+	if _, code := runFile(t, created, []byte("12345"+id)); code != 0 || !slices.Equal(steps, []string{"owner", "mode"}) {
+		t.Fatal(code, steps)
+	}
 	// A publish that took effect and then failed, as on NFS, is a success.
 	renameat = func(fromDirectory int, from string, toDirectory int, to string) error {
 		unix.Renameat(fromDirectory, from, toDirectory, to)
@@ -269,6 +292,19 @@ func TestUploadSweepsStaleStaging(t *testing.T) {
 			t.Fatal(stage(index), "kept", err == nil)
 		}
 	}
+	// A folder past the sweep's budget is swept only so far, and the upload
+	// goes ahead.
+	seen := 0
+	sweepEntries = 5
+	readNames = func(directory *os.File, count int) ([]string, error) {
+		names, err := directory.Readdirnames(count)
+		seen += len(names)
+		return names, err
+	}
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root, Blocked: []string{hidden}}, nil); code != 0 || seen > 5 {
+		t.Fatal("prepare past the budget", code, seen)
+	}
+	sweepEntries = 10000
 	for _, request := range []FileRequest{
 		{Operation: "upload-files-cleanup", Root: root, Files: []UploadFile{{UploadID: stage(3)[15:51]}}, Blocked: []string{hidden}},
 		{Operation: "upload-cleanup", Root: root, Path: "server.properties", UploadID: stage(3)[15:51], Blocked: []string{hidden}},

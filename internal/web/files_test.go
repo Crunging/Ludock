@@ -114,9 +114,13 @@ func TestUploadChecks(t *testing.T) {
 	if longest > 36 {
 		t.Fatal("audited a forged server ID of", longest, "bytes")
 	}
-	long := "/fragments/files/" + p.server + "/dialog?action=delete&root=0&path=" + strings.Repeat("d", 4097)
-	if code := p.do("GET", long, p.admin, nil, map[string]string{"HX-Request": "true"}).Code; code != http.StatusBadRequest {
-		t.Fatal("opened a dialog for a path past the bound", code)
+	// Dialogs refuse a path past the bound, composed as the change would.
+	folder := strings.Repeat("d", 4090)
+	for _, dialog := range []string{"/dialog?action=delete&root=0&path=" + strings.Repeat("d", 4097),
+		"/dialog?action=delete-selection&root=0&path=" + folder + "&name=selected", "/move?root=0&path=" + folder + "&name=selected"} {
+		if code := p.do("GET", "/fragments/files/"+p.server+dialog, p.admin, nil, map[string]string{"HX-Request": "true"}).Code; code != http.StatusBadRequest {
+			t.Fatal("opened a dialog for a path past the bound", dialog[:30], code)
+		}
 	}
 }
 

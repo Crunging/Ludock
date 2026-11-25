@@ -331,7 +331,9 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 	if err != nil {
 		return nil, err
 	}
-	capabilities := []string{"DAC_OVERRIDE", "CHOWN"}
+	// FOWNER lets an upload set a file's mode after giving it the game's
+	// owner, so no wider mode exists before the right owner does.
+	capabilities := []string{"DAC_OVERRIDE", "CHOWN", "FOWNER"}
 	if readOnly {
 		capabilities = []string{"DAC_OVERRIDE"}
 	}

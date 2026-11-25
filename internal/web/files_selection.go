@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"slices"
 
@@ -42,8 +43,10 @@ func (s *Server) fileMoveDialog(w http.ResponseWriter, r *http.Request, request 
 	if !query.Has("to") {
 		m.To = m.Path
 	}
-	if len(m.Names) == 0 || len(m.Names) > files.MaxSelection {
-		s.fail(w, r, request, files.Error("INVALID_SELECTION", 400))
+	// The folder and the one shown as the destination each hold the names
+	// within the path bound.
+	if err := errors.Join(files.CheckSelection(m.Path, m.Names), files.CheckSelection(m.To, m.Names)); err != nil {
+		s.fail(w, r, request, err)
 		return
 	}
 	action, err := s.startAction(r, request, m.ServerID, authz.FilesWrite)
