@@ -244,8 +244,9 @@ func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *bac
 // assertPendingUndoable refuses, before players are warned or the server
 // stops, work whose stop would finish a restore that ended partway that
 // finishPending would refuse: its journal no longer matches the server, or
-// its undo would move another restore's stage. finishPending checks again
-// once the server is stopped; a check that can't run here is left to it.
+// its undo would move another restore's stage or a mount the host added.
+// finishPending checks again once the server is stopped; a check that can't
+// run here is left to it.
 func (j *Jobs) assertPendingUndoable(ctx context.Context, server *servers.Context, job *ops.Context, assertAccess func() error) error {
 	pending, err := j.pendingRestores(ctx, server.Logical.ID)
 	if err != nil {
@@ -271,7 +272,7 @@ func (j *Jobs) assertPendingUndoable(ctx context.Context, server *servers.Contex
 			}
 		}
 		if _, _, err := j.checkUndo(ctx, server, data, restore, state, assertAccess); err != nil {
-			if apperr.Is(err, backups.StageInside("").Code) {
+			if apperr.Is(err, backups.StageInside("").Code) || apperr.Is(err, backups.ErrHostMount.Code) {
 				return err
 			}
 			return nil
