@@ -131,7 +131,7 @@ templ shareRow(v SharingView, share authz.Share) {
 				<span class="user-row__disabled">Disabled</span>
 			}
 		</div>
-		<form class="share-row__form" hx-post={ "/servers/" + v.ServerID + "/sharing/" + share.UserID } hx-target="#sharing" hx-swap="outerHTML">
+		<form class="share-row__form" id={ "share-form-" + share.UserID } hx-post={ "/servers/" + v.ServerID + "/sharing/" + share.UserID } hx-target="#sharing" hx-swap="outerHTML" data-lock-while-saving>
 			@levelChoice("share-"+share.UserID, "Access for "+share.Username, share.Level, share.Capabilities, false)
 			<div class="inline-actions">
 				<button class="secondary-btn" type="submit" data-busy-label="Saving…">Save</button>
@@ -153,7 +153,7 @@ templ shareRow(v SharingView, share authz.Share) {
 }
 
 templ shareForm(v SharingView) {
-	<form class="settings-card share-form" hx-post={ "/servers/" + v.ServerID + "/sharing" } hx-target="#sharing" hx-swap="outerHTML">
+	<form class="settings-card share-form" id="share-form" hx-post={ "/servers/" + v.ServerID + "/sharing" } hx-target="#sharing" hx-swap="outerHTML" data-lock-while-saving>
 		<h3>Share with someone</h3>
 		<div class="form-grid">
 			if len(v.People) > 0 {

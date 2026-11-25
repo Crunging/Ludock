@@ -1,6 +1,7 @@
 package views
 
 import (
+	"encoding/json"
 	"slices"
 	"strconv"
 	"strings"
@@ -179,8 +180,18 @@ templ settingFeedback(errorText, notice string) {
 	}
 }
 
+// saveRow is the Save of an Advanced section, enabled while the section has
+// an unsaved change, or while its last save failed, with the outcome beside
+// it. label names the section for screen readers.
+templ saveRow(label, errorText, notice string, unsaved bool) {
+	<div class="settings-save">
+		<button class="primary-btn" type="submit" aria-label={ label } disabled?={ !unsaved } data-unsaved?={ unsaved } data-save-changes data-busy-label="Saving…">Save</button>
+		@settingFeedback(errorText, notice)
+	</div>
+}
+
 templ UploadLimitForm(u UploadLimitSettings) {
-	<form class="stack-form settings-group" id="upload-limit-form" hx-post="/settings/upload-limit" hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form settings-group" id="upload-limit-form" hx-post="/settings/upload-limit" hx-target="this" hx-swap="outerHTML" data-lock-while-saving>
 		<h3>Upload size limit</h3>
 		if u.Fixed {
 			<p>Each uploaded file can be up to <strong>{ u.Limit }</strong>.</p>
@@ -193,8 +204,7 @@ templ UploadLimitForm(u UploadLimitSettings) {
 				</label>
 				<p class="muted" id="upload-limit-help">For example 500 MB or 4 GiB. Empty allows any file that leaves the server’s disk room to spare.</p>
 			</div>
-			@settingFeedback(u.Error, u.Notice)
-			<button class="primary-btn" type="submit" data-busy-label="Saving…">Save upload limit</button>
+			@saveRow("Save upload limit", u.Error, u.Notice, u.Error != "")
 		}
 	</form>
 }
@@ -219,8 +229,16 @@ templ LoggingForm(l LoggingSettings) {
 	</form>
 }
 
+// trustValues trusts peer. Trust is a button of its own, not a submit, so
+// Enter in the field saves what is typed and never trusts the proxy; the two
+// share one request at a time.
+func trustValues(peer string) string {
+	values, _ := json.Marshal(map[string]string{"trust": peer})
+	return string(values)
+}
+
 templ ProxyForm(p ProxySettings) {
-	<form class="stack-form settings-group" id="proxy-form" hx-post="/settings/proxies" hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form settings-group" id="proxy-form" hx-post="/settings/proxies" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" data-lock-while-saving>
 		<h3>Reverse proxy</h3>
 		if p.Fixed {
 			if p.Trusted == "" {
@@ -234,7 +252,7 @@ templ ProxyForm(p ProxySettings) {
 				<div class="alert alert--info proxy-hint" role="status">
 					<div>
 						<p>You’re reaching Ludock through a proxy at <strong>{ p.Forwarded }</strong> that it doesn’t trust, so every visitor shares that address.</p>
-						<button class="secondary-btn" type="submit" name="trust" value={ p.Forwarded } data-busy-label="Trusting…">Trust { p.Forwarded }</button>
+						<button class="secondary-btn" type="button" hx-post="/settings/proxies" hx-vals={ trustValues(p.Forwarded) } hx-target="#proxy-form" hx-swap="outerHTML" hx-sync="#proxy-form:drop" data-lock-while-saving data-busy-label="Trusting…">Trust { p.Forwarded }</button>
 					</div>
 				</div>
 			}
@@ -245,14 +263,13 @@ templ ProxyForm(p ProxySettings) {
 				</label>
 				<p class="muted" id="proxy-help">Only your own proxy, such as 172.18.0.2 or 172.18.0.0/16, so sign-in limits see each visitor’s address.</p>
 			</div>
-			@settingFeedback(p.Error, p.Notice)
-			<button class="primary-btn" type="submit" data-busy-label="Saving…">Save proxies</button>
+			@saveRow("Save proxies", p.Error, p.Notice, p.Error != "")
 		}
 	</form>
 }
 
 templ ConnectionForm(c ConnectionSettings) {
-	<form class="stack-form" id="connection-form" hx-post="/settings/connection" hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form" id="connection-form" hx-post="/settings/connection" hx-target="this" hx-swap="outerHTML" data-lock-while-saving>
 		<p class="section-lede">The name or IP address players use to reach this host. Ludock adds each server’s port.</p>
 		<label class="narrow-field">
 			Public address
@@ -378,7 +395,7 @@ templ BackupSummary(b BackupSettingsView) {
 }
 
 templ BackupSettingsForm(b BackupSettingsView) {
-	<form class="stack-form" id="backup-settings-form" hx-post="/settings/backups" hx-target="this" hx-swap="outerHTML">
+	<form class="stack-form" id="backup-settings-form" hx-post="/settings/backups" hx-target="this" hx-swap="outerHTML" data-lock-while-saving>
 		if len(b.Roots) > 1 {
 			<div class="admin-root-options">
 				for _, root := range b.Roots {
@@ -425,13 +442,7 @@ templ BackupSettingsForm(b BackupSettingsView) {
 		} else {
 			<p class="muted" id="backup-copy-help">For a second copy of every backup, mount a folder from another disk at <code>/backups-copy</code> in Ludock’s Compose file. Ludock starts copying to it by itself.</p>
 		}
-		if b.Error != "" {
-			@Alert("error", b.Error)
-		}
-		if b.Saved {
-			@Alert("success", "Backup settings saved.")
-		}
-		<button class="primary-btn" type="submit" data-busy-label="Saving backup settings…">Save backup settings</button>
+		@saveRow("Save backup settings", b.Error, map[bool]string{true: "Backup settings saved."}[b.Saved], b.Error != "" || !b.Configured)
 	</form>
 }
 
@@ -577,7 +588,7 @@ templ NotificationDestination(n NotificationDestinationView) {
 		</summary>
 		<div class="notification-destination__body">
 			@destinationHealth(n)
-			<form class="stack-form" hx-post={ "/settings/notifications/" + string(n.Destination) } hx-target="closest .notification-destination" hx-swap="outerHTML">
+			<form class="stack-form" id={ destinationID(n.Destination, "form") } hx-post={ "/settings/notifications/" + string(n.Destination) } hx-target="closest .notification-destination" hx-swap="outerHTML" data-lock-while-saving>
 				@destinationFields(n)
 				<label class="check-label">
 					// A destination never saved is on once saved. A rejected save
