@@ -1053,9 +1053,10 @@ func (s *Service) hostMounts(ctx context.Context, folder string) ([]identity.Mou
 	return mounts, nil
 }
 
-// AssertDataOperationState refuses servers in transitional states.
+// AssertDataOperationState refuses servers in transitional states. A
+// restarting server is one whose game keeps exiting, which a stop ends.
 func AssertDataOperationState(state string) error {
-	if slices.Contains([]string{"paused", "restarting", "removing", "dead"}, state) {
+	if slices.Contains([]string{"paused", "removing", "dead"}, state) {
 		return fail("SERVER_STATE", "Unpause or repair this server first.")
 	}
 	return nil

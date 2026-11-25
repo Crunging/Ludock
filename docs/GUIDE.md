@@ -282,6 +282,15 @@ after an error exit, **Out of memory** when the kernel killed it, and
 recent progress may be lost. A server that stopped without anyone stopping it
 shows **Down** once its alert is due, as the alert says.
 
+A server shows **Keeps restarting** when its game exits soon after starting,
+such as after a bad mod or setting, and Docker's restart policy starts it
+again and again. **Stop** ends that; then read its **Logs**, fix the file in
+**Files**, or restore a backup, and start it. A backup or restore works on it
+too: it stops the server, does the work, and starts it again, which brings it
+up if the work fixed the cause and leaves it restarting if not. An update must
+start cleanly, so one that doesn't fix the cause is undone and the server left
+stopped.
+
 A server's **Overview** starts with whether it's up, whether the game answers,
 the address to give friends, its last backup, and what's scheduled next. Then
 come **Players**, **Resources** with their history, and **Monitoring**.
@@ -321,7 +330,8 @@ online when the work starts (for an update, once the new image is downloaded;
 for a restore, once the backup is checked). If someone is on, or Ludock can't
 tell, it tells players in the game, waits the minute (shown in **Activity**),
 then goes ahead. If nobody is on, it goes ahead at once, and **Activity** says
-nobody was online.
+nobody was online. A server that keeps restarting has no game to warn or ask
+to save, so its work goes ahead at once and **Activity** says so.
 
 If the game's console or Docker doesn't answer when it's time to warn, Ludock
 keeps trying for a minute (**Warning players** in **Activity**) and gives
@@ -537,6 +547,9 @@ found it stays quiet until it runs. A game still starting, or whose status
 check is off or wrong, never counts as not answering. Ludock remembers that a
 game answered, so one that hangs while Ludock itself restarts is still caught;
 the wait starts again when Ludock is back, unless the alert was already sent.
+A server that keeps restarting is one outage: a run between restarts ends it
+only once the game answers, or after it has stayed up for **Wait before
+alerting**.
 Disks are measured about every 10 minutes while someone has Ludock open and
 every 30 otherwise.
 

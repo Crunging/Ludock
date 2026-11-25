@@ -45,8 +45,9 @@ func ServerStatus(state, health string, exit *servers.Exit) Status {
 		return Status{"Stopped", "idle"}
 	case "created":
 		return Status{"Not started", "idle"}
+	// Docker restarts a game that keeps exiting under its restart policy.
 	case "restarting":
-		return Status{"Restarting", "active"}
+		return Status{"Keeps restarting", "failed"}
 	case "paused":
 		return Status{"Paused", "active"}
 	case "removing":
@@ -72,9 +73,11 @@ func ExitDetail(exit *servers.Exit) string {
 }
 
 // LifecycleAction is the main control for a state: start, stop, or none.
+// Docker treats a restarting container as started, and a stop ends its
+// restarts.
 func LifecycleAction(state string) string {
 	switch state {
-	case "running":
+	case "running", "restarting":
 		return "stop"
 	case "created", "exited":
 		return "start"
@@ -82,16 +85,18 @@ func LifecycleAction(state string) string {
 	return ""
 }
 
-// StateGuidance explains states without a lifecycle control.
+// StateGuidance explains a broken server, or a state without a lifecycle
+// control.
 func StateGuidance(state string) string {
+	if state == "restarting" {
+		return "The game keeps stopping and Docker keeps starting it again. Stop it, check its logs, then fix the cause or restore a backup."
+	}
 	if LifecycleAction(state) != "" {
 		return ""
 	}
 	switch state {
 	case "paused":
 		return "Paused in Docker. Resume it with the tool that runs it, such as Compose or Portainer."
-	case "restarting":
-		return "Restart in progress. Controls will be available when it finishes."
 	case "removing":
 		return "Removal in progress."
 	}
@@ -203,6 +208,8 @@ func SaveDetail(result ops.Result) string {
 			return "Save skipped: console unavailable. Shutdown continued."
 		case "not_running":
 			return "Save skipped: server was already stopped."
+		case "restarting":
+			return "Save skipped: the game kept stopping and starting again, so it couldn’t be asked to save."
 		case "saves_on_stop":
 			return "The game saves its world when it stops."
 		case "unsupported":

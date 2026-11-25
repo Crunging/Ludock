@@ -24,7 +24,7 @@ import (
 // AssertRunningForBackupRestart: restarting with a backup returns a running
 // server to running. A stopped server is backed up from Backups, or started.
 func AssertRunningForBackupRestart(state string) error {
-	if state != "running" {
+	if state != "running" && state != "restarting" {
 		return apperr.New("SERVER_NOT_RUNNING", 409, "Restart with a backup needs a running server. Start it, or back it up from Backups.")
 	}
 	return nil

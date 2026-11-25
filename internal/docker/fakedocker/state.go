@@ -95,9 +95,21 @@ func (e *Engine) Exit(id string, code int) {
 	}
 }
 
+// CrashLoop shows a container as Docker does between the restarts of a
+// game that keeps exiting under its restart policy, until it is stopped:
+// still running to the Engine API, with the last run's start time.
+func (e *Engine) CrashLoop(id string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if c := e.containers[id]; c != nil {
+		c.State.Status, c.State.Running, c.State.Restarting, c.State.ExitCode = "restarting", true, true, 1
+		e.emitLocked("die", c.ID)
+	}
+}
+
 // exitLocked returns OnStop, to run once the lock is released.
 func (e *Engine) exitLocked(c *Container, code int) func(*Container) {
-	c.State.Status, c.State.Running, c.State.ExitCode = "exited", false, code
+	c.State.Status, c.State.Running, c.State.Restarting, c.State.ExitCode = "exited", false, false, code
 	c.State.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	// Docker releases a stopped container's addresses.
 	for name, endpoint := range c.Networks {

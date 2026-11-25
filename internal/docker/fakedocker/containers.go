@@ -269,8 +269,14 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 			w.WriteHeader(304)
 			return
 		}
-		if !c.IgnoresStop {
-			hook := e.exitLocked(c, 0)
+		// Docker stops a restarting container at once; its exit stays the
+		// game's own.
+		if !c.IgnoresStop || c.State.Restarting {
+			code := 0
+			if c.State.Restarting {
+				code = c.State.ExitCode
+			}
+			hook := e.exitLocked(c, code)
 			e.mu.Unlock()
 			if hook != nil {
 				hook(c)
@@ -302,7 +308,7 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 		}
 		w.WriteHeader(204)
 	case action == "/restart" && r.Method == "POST":
-		c.State.Status, c.State.Running, c.State.StartedAt = "running", true, now
+		c.State.Status, c.State.Running, c.State.Restarting, c.State.StartedAt = "running", true, false, now
 		e.emitLocked("restart", id)
 		e.mu.Unlock()
 		w.WriteHeader(204)

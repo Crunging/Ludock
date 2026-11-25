@@ -39,8 +39,9 @@ func (p ServerPlayers) Online(ctx context.Context, user *db.SessionUser, serverI
 	if err != nil {
 		return Occupancy{}, err
 	}
+	// A restarting server's game keeps exiting before anyone can join.
 	switch server.Container.State {
-	case "running", "paused", "restarting":
+	case "running", "paused":
 	default:
 		return Occupancy{Known: true, Stopped: true}, nil
 	}
