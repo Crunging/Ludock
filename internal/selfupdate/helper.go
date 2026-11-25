@@ -502,9 +502,10 @@ func DataMount(mounts []docker.MountPoint, dataDir string) *docker.MountPoint {
 	return found
 }
 
-// runData runs a data step in a one-off container from image, as the
-// original's user with only its data mount, and returns its exit code. A
-// step left running by an earlier pass is waited out first.
+// runData runs a data step in a one-off container from image, by ID, as the
+// original's user with exactly its data mount, no network, and no socket,
+// and returns its exit code. A step left running by an earlier pass is
+// waited out first.
 func (h *Helper) runData(ctx context.Context, old *docker.ContainerSpec, image string, cmd ...string) (int, error) {
 	name := dataName(h.Operation)
 	if leftover, err := h.inspect(ctx, name); err != nil {
@@ -539,19 +540,21 @@ func (h *Helper) runData(ctx context.Context, old *docker.ContainerSpec, image s
 		"Env": append(config.Env, "LUDOCK_DATA_DIR="+dataDir), "Labels": labels, "Healthcheck": map[string]any{"Test": []string{"NONE"}},
 		"HostConfig": map[string]any{"NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": []string{"ALL"}, "CapAdd": host.CapAdd,
 			"SecurityOpt": []string{"no-new-privileges:true"},
-			"Mounts":      []map[string]any{{"Type": mount.Type, "Source": source, "Target": mount.Destination}}}}
+			"Mounts":      []map[string]any{{"Type": mount.Type, "Source": source, "Target": mount.Destination, "ReadOnly": !mount.RW}}}}
 	id, err := h.Docker.Create(ctx, name, "", body)
 	if err != nil {
 		return 0, err
 	}
-	if err := h.Docker.Start(ctx, id); err != nil {
-		return 0, err
+	code := 0
+	if err = h.Docker.Start(ctx, id); err == nil {
+		code, err = h.Docker.Wait(ctx, id)
 	}
-	code, err := h.Docker.Wait(ctx, id)
-	if err != nil {
-		return 0, err
+	// Removed whatever happened; a step cut short is repeated whole, and a
+	// removal that fails is retried by the next pass, which waits it out.
+	if removeErr := h.removeUntilGone(context.WithoutCancel(ctx), id); err == nil {
+		err = removeErr
 	}
-	return code, h.removeUntilGone(ctx, id)
+	return code, err
 }
 
 func encode(fields map[string]json.RawMessage) []byte {

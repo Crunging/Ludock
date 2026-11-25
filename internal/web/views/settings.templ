@@ -326,8 +326,9 @@ templ LudockCheckSaved(check *update.CheckStatus, offer selfupdate.Offer) {
 }
 
 // LudockNotice tops Settings while a newer Ludock is available, while it
-// updates, and for a day after an update ended. While it updates the page
-// polls it, and reloads once Ludock answers again after a restart.
+// updates, and with how the last update ended: a success until the next
+// check, a failure until it is dismissed. While it updates the page polls
+// it, and reloads once Ludock answers again after a restart.
 templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 	<div id="ludock-notice">
 		if offer.Updating {
@@ -337,14 +338,22 @@ templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 				</div>
 			</div>
 		} else {
-			if last := offer.Last; recentUpdate(last) {
-				switch last.State {
-					case selfupdate.StateSucceeded:
-						@Alert("success", ludockUpdated(*last))
-					case selfupdate.StateCurrent:
-						@Alert("success", "Ludock already runs the newest image its tag points to.")
-					default:
-						@Alert("error", "Ludock couldn’t update itself: "+strings.TrimSuffix(last.Reason, ".")+". It is still on version "+last.From+".")
+			if failed := offer.Failed; failed != nil {
+				<div class="alert alert--error" role="alert">
+					<div>
+						<p><strong>{ ludockFailed(*failed) }</strong></p>
+						<p>Try again later. To see what goes wrong, update it from a terminal instead, in the folder with its compose.yaml, then read <code>docker compose logs ludock</code>:</p>
+						<pre><code>docker compose pull ludock{ "\n" }docker compose up -d ludock</code></pre>
+						<div class="inline-actions">
+							<button class="secondary-btn" type="button" hx-post="/settings/ludock-update/dismiss" hx-vals={ dismissValues(failed.ID) } hx-target="#ludock-notice" hx-swap="outerHTML" data-busy-label="Dismissing…">Dismiss</button>
+						</div>
+					</div>
+				</div>
+			} else if last := offer.Last; updatedSince(last, check) {
+				if last.State == selfupdate.StateCurrent {
+					@Alert("success", "Ludock already runs the newest image its tag points to.")
+				} else {
+					@Alert("success", ludockUpdated(*last))
 				}
 			}
 			if check != nil && check.State == update.CheckAvailable {

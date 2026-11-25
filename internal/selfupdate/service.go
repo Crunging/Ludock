@@ -56,8 +56,12 @@ type Record struct {
 	Target     string `json:"target,omitempty"`
 	StartedAt  int64  `json:"startedAt"`
 	FinishedAt int64  `json:"finishedAt,omitempty"`
-	// Reason says, for people, why it failed or was put back.
+	// Reason says, for people, why it failed or was put back; Code is the
+	// helper's reason code.
 	Reason string `json:"reason,omitempty"`
+	Code   string `json:"code,omitempty"`
+	// Dismissed: an administrator has seen that it failed.
+	Dismissed bool `json:"dismissed,omitempty"`
 }
 
 func (r *Record) InProgress() bool {
@@ -137,14 +141,32 @@ func (s *Service) Last(ctx context.Context) *Record {
 	return &record
 }
 
-// Failed is the latest update when it failed or was put back, until Ludock
-// runs another version.
+// Failed is the latest update when it failed or was put back, until it is
+// dismissed or Ludock runs another version.
 func (s *Service) Failed(ctx context.Context) *Record {
 	last := s.Last(ctx)
-	if last == nil || (last.State != StatePutBack && last.State != StateFailed) || last.From != s.Version {
+	if !last.Failed() || last.Dismissed || last.From != s.Version {
 		return nil
 	}
 	return last
+}
+
+func (r *Record) Failed() bool {
+	return r != nil && (r.State == StatePutBack || r.State == StateFailed)
+}
+
+var errNothingToDismiss = apperr.New("NOT_FOUND", 404, "There is no failed update of Ludock to dismiss.")
+
+// Dismiss records that an administrator has seen the failed update id.
+func (s *Service) Dismiss(ctx context.Context, adminID, tokenHash, id string) error {
+	return authz.AdminMutationError(s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		var record Record
+		if found, err := db.ReadSetting(ctx, tx, recordSetting, &record); err != nil || !found || record.ID != id || !record.Failed() {
+			return cmpErr(err, errNothingToDismiss)
+		}
+		record.Dismissed = true
+		return s.DB.SetSetting(ctx, tx, recordSetting, record)
+	}))
 }
 
 // Offer is whether an administrator can update Ludock from Settings.
@@ -156,11 +178,13 @@ type Offer struct {
 	Pinned   bool
 	Updating bool
 	Last     *Record
+	// Failed is a failed update an administrator hasn't dismissed.
+	Failed *Record
 }
 
 // Offer reports whether Update Ludock can be offered now.
 func (s *Service) Offer(ctx context.Context) Offer {
-	offer := Offer{Last: s.Last(ctx)}
+	offer := Offer{Last: s.Last(ctx), Failed: s.Failed(ctx)}
 	if offer.Last.InProgress() {
 		offer.Updating = true
 		return offer
@@ -321,6 +345,13 @@ func (s *Service) run(ctx context.Context, record Record, plan *update.Plan) {
 		s.settle(ctx, record, StateCurrent, "")
 		return
 	}
+	// Release images name their version in a label; a build without one is
+	// named once it runs.
+	if image, err := s.Docker.InspectImageConfig(ctx, target); err == nil {
+		var config struct{ Labels map[string]string }
+		json.Unmarshal(encode(image.Config), &config)
+		record.To = config.Labels["org.opencontainers.image.version"]
+	}
 	// Saved before the data save, so the save restored after a failed update
 	// shows the update handed over.
 	record.State, record.Target = StateHandedOver, target
@@ -409,7 +440,7 @@ func (s *Service) startHelper(ctx context.Context, record Record) error {
 		"Env":  []string{"LUDOCK_DOCKER_SOCKET=" + socket.Destination},
 		"User": config.User, "Labels": labels, "Healthcheck": map[string]any{"Test": []string{"NONE"}},
 		"HostConfig": map[string]any{"NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": []string{"ALL"},
-			"SecurityOpt": []string{"no-new-privileges:true"}, "GroupAdd": host.GroupAdd,
+			"CapAdd": host.CapAdd, "SecurityOpt": []string{"no-new-privileges:true"}, "GroupAdd": host.GroupAdd,
 			"RestartPolicy": map[string]any{"Name": "unless-stopped"},
 			"Mounts":        []map[string]any{{"Type": "bind", "Source": socket.Source, "Target": socket.Destination, "ReadOnly": !socket.RW}}}}
 	id, err := s.Docker.Create(ctx, HelperName(record.ID), "", body)
@@ -460,7 +491,8 @@ func (s *Service) judge(ctx context.Context, record Record) error {
 		if err == nil {
 			var config struct{ Labels map[string]string }
 			json.Unmarshal(encode(spec.Config), &config)
-			if reason = reasons[config.Labels[ReasonLabel]]; reason == "" {
+			record.Code = config.Labels[ReasonLabel]
+			if reason = reasons[record.Code]; reason == "" {
 				reason = "the new version didn’t come up"
 			}
 		}
@@ -506,7 +538,7 @@ func (s *Service) finish(ctx context.Context, record Record, state, reason strin
 	if outcome == "" {
 		outcome = "failed"
 	}
-	details := map[string]string{"from": record.From, "to": record.To, "reason": reason}
+	details := map[string]string{"from": record.From, "to": record.To, "reason": reason, "outcome": state}
 	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		if err := s.DB.SetSetting(ctx, tx, recordSetting, record); err != nil {
 			return err
@@ -544,6 +576,27 @@ func (s *Service) finish(ctx context.Context, record Record, state, reason strin
 	return nil
 }
 
+// removeOld removes the markers and data steps of updates other than one in
+// progress, and helpers of theirs that ended, such as after the update's
+// record was restored from an older save.
+func (s *Service) removeOld(ctx context.Context, record *Record) error {
+	containers, err := s.Docker.ListContainers(ctx, true, docker.Filters{"label": {operationLabel}})
+	if err != nil {
+		return err
+	}
+	for _, container := range containers {
+		kind, operation := container.Labels[launch.InternalLabel], container.Labels[operationLabel]
+		ended := container.State == nil || *container.State != "running"
+		if (record.InProgress() && operation == record.ID) || (kind != markerKind && kind != dataKind && !(kind == helperKind && ended)) {
+			continue
+		}
+		if err := s.Docker.Remove(ctx, container.ID, true, false); err != nil && !docker.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 // Recover settles an update a restart interrupted, before work can start:
 // one whose helper still runs holds work back until it is gone. base is
 // the context later updates run in.
@@ -552,6 +605,9 @@ func (s *Service) Recover(ctx, base context.Context) error {
 	s.base = base
 	s.mu.Unlock()
 	record := s.Last(ctx)
+	if err := s.removeOld(ctx, record); err != nil {
+		return err
+	}
 	if !record.InProgress() {
 		return nil
 	}

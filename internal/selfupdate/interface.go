@@ -65,7 +65,7 @@ const (
 // HelperName is the helper's container name for an update.
 func HelperName(operation string) string {
 	sum := sha256.Sum256([]byte(operation))
-	return "ludock-self-update-" + hex.EncodeToString(sum[:4])
+	return "ludock-self-update-" + hex.EncodeToString(sum[:8])
 }
 
 func stateName(operation string) string { return HelperName(operation) + "-state" }

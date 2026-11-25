@@ -813,6 +813,31 @@ func AuditLabel(action string) string {
 	return Capitalize(strings.ReplaceAll(action, ".", " "))
 }
 
+// ludockUpdateLabel says which versions an update of Ludock went between and
+// how it ended.
+func ludockUpdateLabel(action string, details map[string]any) string {
+	from, _ := details["from"].(string)
+	to, _ := details["to"].(string)
+	reason, _ := details["reason"].(string)
+	outcome, _ := details["outcome"].(string)
+	versions := " from version " + from
+	if to != "" {
+		versions += " to version " + to
+	}
+	reason = strings.TrimSuffix(reason, ".")
+	switch {
+	case action == "ludock.update.succeeded":
+		return "Updated Ludock" + versions
+	case action == "ludock.update.already_current":
+		return "Updated Ludock: it already ran the newest image"
+	case action == "ludock.update.started":
+		return "Updating Ludock" + versions
+	case outcome == "put_back":
+		return "Updated Ludock" + versions + ", put back: " + reason
+	}
+	return "Updated Ludock" + versions + ", didn’t start: " + reason
+}
+
 var playerActionLabels = map[string]string{"kick": "Kicked", "ban": "Banned", "unban": "Unbanned",
 	"allow": "Added to the allowlist:", "disallow": "Removed from the allowlist:"}
 
@@ -830,19 +855,7 @@ func entryLabel(entry history.AuditEntry) string {
 		return "Moved " + from + "’s backups, schedules, and sharing here"
 	}
 	if strings.HasPrefix(entry.Action, "ludock.update.") && details != nil {
-		from, _ := details["from"].(string)
-		to, _ := details["to"].(string)
-		reason, _ := details["reason"].(string)
-		switch {
-		case entry.Action == "ludock.update.failed" && reason != "":
-			return "Ludock didn’t update: " + strings.TrimSuffix(reason, ".")
-		case entry.Action == "ludock.update.already_current":
-			return "Ludock was already up to date"
-		case from != "" && to != "" && from != to:
-			return "Updated Ludock from " + from + " to " + to
-		case from != "" && entry.Action == "ludock.update.started":
-			return "Updating Ludock from " + from
-		}
+		return ludockUpdateLabel(entry.Action, details)
 	}
 	return AuditLabel(entry.Action)
 }
@@ -887,7 +900,7 @@ func auditList(h HistoryView) templ.Component {
 			var templ_7745c5c3_Var25 string
 			templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(entryLabel(entry))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 445, Col: 32}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 458, Col: 32}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 			if templ_7745c5c3_Err != nil {
@@ -900,7 +913,7 @@ func auditList(h HistoryView) templ.Component {
 			var templ_7745c5c3_Var26 string
 			templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(auditActor(entry))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 446, Col: 30}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 459, Col: 30}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 			if templ_7745c5c3_Err != nil {
@@ -918,7 +931,7 @@ func auditList(h HistoryView) templ.Component {
 				var templ_7745c5c3_Var27 string
 				templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(by)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 448, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 461, Col: 29}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 				if templ_7745c5c3_Err != nil {
@@ -945,7 +958,7 @@ func auditList(h HistoryView) templ.Component {
 				var templ_7745c5c3_Var28 string
 				templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(OperationStatusLabels[entry.Status])
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 453, Col: 44}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 466, Col: 44}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 				if templ_7745c5c3_Err != nil {
@@ -981,7 +994,7 @@ func auditList(h HistoryView) templ.Component {
 				var templ_7745c5c3_Var29 string
 				templ_7745c5c3_Var29, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL("/activity?serverId=" + url.QueryEscape(entry.TargetID))).ResolveURL(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 466, Col: 104}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 479, Col: 104}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var29)
 				if templ_7745c5c3_Err != nil {
@@ -995,7 +1008,7 @@ func auditList(h HistoryView) templ.Component {
 					var templ_7745c5c3_Var30 string
 					templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 468, Col: 14}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 481, Col: 14}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 					if templ_7745c5c3_Err != nil {
@@ -1020,7 +1033,7 @@ func auditList(h HistoryView) templ.Component {
 					var templ_7745c5c3_Var31 string
 					templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 475, Col: 19}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 488, Col: 19}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 					if templ_7745c5c3_Err != nil {
@@ -1044,7 +1057,7 @@ func auditList(h HistoryView) templ.Component {
 				var templ_7745c5c3_Var32 string
 				templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 480, Col: 18}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 493, Col: 18}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 				if templ_7745c5c3_Err != nil {
@@ -1072,7 +1085,7 @@ func auditList(h HistoryView) templ.Component {
 				var templ_7745c5c3_Var33 string
 				templ_7745c5c3_Var33, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL("/activity/" + entry.OperationID)).ResolveURL(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 487, Col: 82}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 500, Col: 82}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var33)
 				if templ_7745c5c3_Err != nil {
@@ -1170,7 +1183,7 @@ func OperationDetailPage(page Page, o OperationDetailView) templ.Component {
 				var templ_7745c5c3_Var36 string
 				templ_7745c5c3_Var36, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL("/activity/" + o.Operation.ID)).ResolveURL(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 528, Col: 81}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 541, Col: 81}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var36)
 				if templ_7745c5c3_Err != nil {
@@ -1249,7 +1262,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var38 string
 			templ_7745c5c3_Var38, templ_7745c5c3_Err = templruntime.NewAttributeExpression("/fragments/activity/" + operation.ID).Resolve(ctx)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 548, Col: 49}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 561, Col: 49}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var38)
 			if templ_7745c5c3_Err != nil {
@@ -1267,7 +1280,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 		var templ_7745c5c3_Var39 string
 		templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(Capitalize(operation.Kind))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 555, Col: 35}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 568, Col: 35}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 		if templ_7745c5c3_Err != nil {
@@ -1285,7 +1298,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var40 string
 			templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(item)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 558, Col: 14}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 571, Col: 14}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 			if templ_7745c5c3_Err != nil {
@@ -1321,7 +1334,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 		var templ_7745c5c3_Var41 string
 		templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(OperationStatusLabels[operation.Status])
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 567, Col: 45}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 580, Col: 45}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 		if templ_7745c5c3_Err != nil {
@@ -1334,7 +1347,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 		var templ_7745c5c3_Var42 string
 		templ_7745c5c3_Var42, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL("/servers/" + operation.ServerID)).ResolveURL(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 571, Col: 79}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 584, Col: 79}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var42)
 		if templ_7745c5c3_Err != nil {
@@ -1348,7 +1361,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var43 string
 			templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.JoinStringErrs(o.ServerName)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 573, Col: 20}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 586, Col: 20}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var43))
 			if templ_7745c5c3_Err != nil {
@@ -1358,7 +1371,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var44 string
 			templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(operation.ServerID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 575, Col: 26}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 588, Col: 26}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 			if templ_7745c5c3_Err != nil {
@@ -1372,7 +1385,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 		var templ_7745c5c3_Var45 string
 		templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.JoinStringErrs(ActorLabel(o.Actor))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 580, Col: 28}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 593, Col: 28}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var45))
 		if templ_7745c5c3_Err != nil {
@@ -1406,7 +1419,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var46 string
 			templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs(OperationLabel(operation.Status, operation.Phase))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 587, Col: 59}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 600, Col: 59}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var46))
 			if templ_7745c5c3_Err != nil {
@@ -1443,7 +1456,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var47 string
 			templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.JoinStringErrs(CancelledNote(o.CancelledBy))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 596, Col: 57}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 609, Col: 57}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var47))
 			if templ_7745c5c3_Err != nil {
@@ -1462,7 +1475,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var48 string
 			templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.JoinStringErrs(operation.Error)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 599, Col: 47}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 612, Col: 47}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var48))
 			if templ_7745c5c3_Err != nil {
@@ -1481,7 +1494,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var49 string
 			templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(detail)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 602, Col: 35}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 615, Col: 35}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 			if templ_7745c5c3_Err != nil {
@@ -1500,7 +1513,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var50 string
 			templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(detail)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 605, Col: 35}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 618, Col: 35}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 			if templ_7745c5c3_Err != nil {
@@ -1519,7 +1532,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var51 string
 			templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinStringErrs(detail)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 608, Col: 35}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 621, Col: 35}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var51))
 			if templ_7745c5c3_Err != nil {
@@ -1538,7 +1551,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var52 string
 			templ_7745c5c3_Var52, templ_7745c5c3_Err = templ.JoinStringErrs(detail)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 611, Col: 35}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 624, Col: 35}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var52))
 			if templ_7745c5c3_Err != nil {
@@ -1557,7 +1570,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var53 string
 			templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.JoinStringErrs(detail)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 614, Col: 35}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 627, Col: 35}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var53))
 			if templ_7745c5c3_Err != nil {
@@ -1576,7 +1589,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var54 string
 			templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinStringErrs(detail)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 617, Col: 35}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 630, Col: 35}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 			if templ_7745c5c3_Err != nil {
@@ -1595,7 +1608,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var55 string
 			templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(text)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 620, Col: 33}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 633, Col: 33}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 			if templ_7745c5c3_Err != nil {
@@ -1619,7 +1632,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 		var templ_7745c5c3_Var56 string
 		templ_7745c5c3_Var56, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL("/activity?serverId=" + url.QueryEscape(operation.ServerID))).ResolveURL(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 626, Col: 105}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 639, Col: 105}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var56)
 		if templ_7745c5c3_Err != nil {
@@ -1637,7 +1650,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 			var templ_7745c5c3_Var57 string
 			templ_7745c5c3_Var57, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL("/activity?show=" + ShowEverything + "&operationId=" + url.QueryEscape(operation.ID))).ResolveURL(ctx)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 628, Col: 131}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `history.templ`, Line: 641, Col: 131}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var57)
 			if templ_7745c5c3_Err != nil {

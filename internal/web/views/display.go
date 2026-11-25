@@ -1,6 +1,7 @@
 package views
 
 import (
+	"encoding/json"
 	"net"
 	"slices"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/servers"
+	"github.com/Crunging/Ludock/internal/update"
 )
 
 type Status struct{ Label, Tone string }
@@ -347,14 +349,27 @@ func BrowserName(userAgent string) string {
 	return "Unknown browser"
 }
 
-// recentUpdate reports an update of Ludock that ended in the last day.
-func recentUpdate(last *selfupdate.Record) bool {
-	return last != nil && !last.InProgress() && time.Since(time.UnixMilli(last.FinishedAt)) < 24*time.Hour
+// updatedSince reports an update of Ludock that succeeded since the last
+// check of its image.
+func updatedSince(last *selfupdate.Record, check *update.CheckStatus) bool {
+	return last != nil && (last.State == selfupdate.StateSucceeded || last.State == selfupdate.StateCurrent) &&
+		(check == nil || check.CheckedAt < last.FinishedAt)
 }
 
 func ludockUpdated(record selfupdate.Record) string {
-	if record.To != "" && record.To != record.From {
-		return "Ludock was updated from version " + record.From + " to " + record.To + "."
+	return "Ludock was updated to version " + record.To + "."
+}
+
+// ludockFailed says how a failed update ended, in plain words.
+func ludockFailed(record selfupdate.Record) string {
+	reason := strings.TrimSuffix(record.Reason, ".")
+	if record.State == selfupdate.StatePutBack {
+		return "Ludock’s update didn’t finish: " + reason + ". Ludock put version " + record.From + " back, with its data as it was."
 	}
-	return "Ludock was updated to the newest image its tag points to."
+	return "Ludock couldn’t update itself: " + reason + ". It is still on version " + record.From + "."
+}
+
+func dismissValues(id string) string {
+	encoded, _ := json.Marshal(map[string]string{"id": id})
+	return string(encoded)
 }

@@ -11,6 +11,8 @@ const image = process.env.LUDOCK_TEST_IMAGE || "ludock:test";
 export const ludockImage = image;
 // The same build reporting another version, for Ludock updating itself.
 export const nextImage = process.env.LUDOCK_TEST_NEXT_IMAGE;
+// That build with a health check that never passes.
+export const unhealthyImage = process.env.LUDOCK_TEST_UNHEALTHY_IMAGE;
 // A game stand-in: it stays up, keeps its data under /data, prints a line
 // every few seconds, and exits cleanly on SIGTERM like a well-behaved server
 // (Ludock refuses backups of servers that need forced termination). Updates

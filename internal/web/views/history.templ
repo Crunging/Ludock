@@ -392,6 +392,31 @@ func AuditLabel(action string) string {
 	return Capitalize(strings.ReplaceAll(action, ".", " "))
 }
 
+// ludockUpdateLabel says which versions an update of Ludock went between and
+// how it ended.
+func ludockUpdateLabel(action string, details map[string]any) string {
+	from, _ := details["from"].(string)
+	to, _ := details["to"].(string)
+	reason, _ := details["reason"].(string)
+	outcome, _ := details["outcome"].(string)
+	versions := " from version " + from
+	if to != "" {
+		versions += " to version " + to
+	}
+	reason = strings.TrimSuffix(reason, ".")
+	switch {
+	case action == "ludock.update.succeeded":
+		return "Updated Ludock" + versions
+	case action == "ludock.update.already_current":
+		return "Updated Ludock: it already ran the newest image"
+	case action == "ludock.update.started":
+		return "Updating Ludock" + versions
+	case outcome == "put_back":
+		return "Updated Ludock" + versions + ", put back: " + reason
+	}
+	return "Updated Ludock" + versions + ", didn’t start: " + reason
+}
+
 var playerActionLabels = map[string]string{"kick": "Kicked", "ban": "Banned", "unban": "Unbanned",
 	"allow": "Added to the allowlist:", "disallow": "Removed from the allowlist:"}
 
@@ -409,19 +434,7 @@ func entryLabel(entry history.AuditEntry) string {
 		return "Moved " + from + "’s backups, schedules, and sharing here"
 	}
 	if strings.HasPrefix(entry.Action, "ludock.update.") && details != nil {
-		from, _ := details["from"].(string)
-		to, _ := details["to"].(string)
-		reason, _ := details["reason"].(string)
-		switch {
-		case entry.Action == "ludock.update.failed" && reason != "":
-			return "Ludock didn’t update: " + strings.TrimSuffix(reason, ".")
-		case entry.Action == "ludock.update.already_current":
-			return "Ludock was already up to date"
-		case from != "" && to != "" && from != to:
-			return "Updated Ludock from " + from + " to " + to
-		case from != "" && entry.Action == "ludock.update.started":
-			return "Updating Ludock from " + from
-		}
+		return ludockUpdateLabel(entry.Action, details)
 	}
 	return AuditLabel(entry.Action)
 }

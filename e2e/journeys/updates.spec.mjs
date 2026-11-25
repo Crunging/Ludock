@@ -221,9 +221,10 @@ test("turning image update checks off", async ({ page, ownServer }) => {
 // says so. Once it runs from a tag that moves, Settings offers to update it
 // and a destination that chose newer images is told once. Updating replaces
 // its container through a helper, which the fake daemon runs in place of the
-// container, and Activity records it.
+// container, and Activity records it. A version that fails is put back and
+// stays in Needs attention until dismissed.
 test("finding a newer Ludock and updating it", async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   const pinned = "ghcr.io/crunging/ludock@sha256:" + "ab".repeat(32);
   const tagged = "ghcr.io/crunging/ludock:latest";
   const check = page.locator("#ludock-check");
@@ -274,14 +275,39 @@ test("finding a newer Ludock and updating it", async ({ page }) => {
     await confirm.getByRole("button", { name: "Update Ludock" }).click();
     await expect(notice).toContainText("Ludock is updating.");
     await expect(notice.locator("[data-await-restart]")).toBeAttached();
-    await expect(notice).toContainText("Ludock was updated to the newest image its tag points to.", { timeout: 30_000 });
+    await expect(notice).toContainText("Ludock was updated to version dev.", { timeout: 30_000 });
     await expect(notice.getByRole("button", { name: "Update Ludock" })).toHaveCount(0);
     await page.goto("/activity?show=everything&action=Updated Ludock");
     const entry = page.locator(".audit-entry").first();
-    await expect(entry).toContainText("Updated Ludock");
+    await expect(entry).toContainText("Updated Ludock from version dev to version dev");
     await expect(entry).toContainText("Succeeded");
     await expect(entry).toContainText(admin.username);
+    // The outcome shows until the next check.
     await checkLudock("Ludock runs the newest image its tag points to.");
+    await expect(notice).toBeEmpty();
+
+    // A version whose health check fails is put back, said where the update
+    // was offered and in Needs attention until dismissed.
+    await fake("/fake/registry", { image: tagged, id: "sha256:" + "b".repeat(64) });
+    await checkLudock("A newer Ludock is available.");
+    await notice.getByRole("button", { name: "Update Ludock" }).click();
+    await page.getByRole("dialog", { name: "Update Ludock?" }).getByRole("button", { name: "Update Ludock" }).click();
+    const failure = "Ludock’s update didn’t finish: the new version reported itself unhealthy. Ludock put version dev back, with its data as it was.";
+    await expect(notice.locator(".alert--error")).toContainText(failure, { timeout: 30_000 });
+    await expect(notice.locator("pre")).toHaveText("docker compose pull ludock\ndocker compose up -d ludock");
+    await expect.poll(() => hook.all().filter((body) => body.message.startsWith("Ludock couldn’t update itself:")).length, { timeout: 30_000 }).toBe(1);
+    await page.goto("/activity?show=everything&action=Updated Ludock");
+    await expect(entry).toContainText("Updated Ludock from version dev, put back: the new version reported itself unhealthy");
+    await expect(entry).toContainText("Failed");
+    await expect(entry).toContainText(admin.username);
+    await page.goto("/");
+    const item = page.locator(".needs-attention__list li", { hasText: "Ludock’s update didn’t finish" });
+    await expect(item).toContainText("The new version reported itself unhealthy, so Ludock is still on version dev.");
+    await item.getByRole("link", { name: /^Open Settings/ }).click();
+    await notice.getByRole("button", { name: "Dismiss" }).click();
+    await expect(notice.locator(".alert--error")).toHaveCount(0);
+    await page.goto("/");
+    await expect(item).toHaveCount(0);
   } finally {
     await fake("/fake/recreate", { container: "ludock-dev", image: pinned });
     await hook.close();

@@ -174,6 +174,19 @@ func (s *Server) updateLudock(w http.ResponseWriter, r *http.Request, request *R
 	render(w, r, http.StatusOK, views.LudockNotice(s.App.Checks.SelfStatus(r.Context()), offer))
 }
 
+// dismissLudockUpdate records that an administrator has seen a failed update.
+func (s *Server) dismissLudockUpdate(w http.ResponseWriter, r *http.Request, request *Request) {
+	err := s.App.SelfUpdate.Dismiss(r.Context(), request.User().ID, request.Principal.TokenHash, r.PostFormValue("id"))
+	if s.adminRefused(w, r, request, err) {
+		return
+	}
+	offer := s.App.SelfUpdate.Offer(r.Context())
+	if err != nil {
+		offer.Reason, _ = apperr.Public(err)
+	}
+	render(w, r, http.StatusOK, views.LudockNotice(s.App.Checks.SelfStatus(r.Context()), offer))
+}
+
 // ludockUpdate is the notice again, which a waiting page polls.
 func (s *Server) ludockUpdate(w http.ResponseWriter, r *http.Request, request *Request) {
 	s.renderAdmin(w, r, request, http.StatusOK, views.LudockNotice(s.App.Checks.SelfStatus(r.Context()), s.App.SelfUpdate.Offer(r.Context())))

@@ -101,6 +101,8 @@ func newRig(t *testing.T) *rig {
 			"RestartPolicy": map[string]any{"Name": "unless-stopped", "MaximumRetryCount": 0}}
 	})
 	g.game = engine.AddContainer(fakedocker.GameOptions{Name: "valheim", Image: "lloesche/valheim-server", Running: true})
+	engine.SetImageConfig(newImage, map[string]any{"Healthcheck": health, "Env": []string{"LUDOCK_DATA_DIR=/data"},
+		"Labels": map[string]any{"org.opencontainers.image.version": "1.1.0"}})
 	engine.PublishImage(tag, newImage)
 
 	engine.Intercept = g.intercept
@@ -432,8 +434,25 @@ func TestSelfUpdateOrder(t *testing.T) {
 				t.Error("the game was touched")
 			}
 			record := after.svc.Last(context.Background())
-			if record.State != c.state || record.Reason != c.reason || record.From != "1.0.0" {
+			if record.State != c.state || record.Reason != c.reason || record.From != "1.0.0" || record.To != "1.1.0" {
 				t.Errorf("recorded %+v", record)
+			}
+			// Activity says who updated Ludock, between which versions, and
+			// how it ended; Needs attention keeps a failure.
+			var user, action, details string
+			if err := after.d.QueryRow("SELECT user_id, action, details_json FROM audit_log WHERE target_type='ludock'").Scan(&user, &action, &details); err != nil {
+				t.Fatal(err)
+			}
+			outcome := map[string]string{selfupdate.StateSucceeded: "succeeded"}[c.state]
+			if outcome == "" {
+				outcome = "failed"
+			}
+			wantDetails := fmt.Sprintf(`{"from":"1.0.0","outcome":%q,"reason":%q,"to":"1.1.0"}`, c.state, c.reason)
+			if user != "admin" || action != "ludock.update."+outcome || details != wantDetails {
+				t.Errorf("audit %s %s %s", user, action, details)
+			}
+			if failed := after.svc.Failed(context.Background()); (failed != nil) != (c.state == selfupdate.StatePutBack) {
+				t.Errorf("needs attention: %+v", failed)
 			}
 			if release, err := after.svc.Locks.Acquire([]string{"server:x"}, nil); err != nil {
 				t.Errorf("work is still held back: %v", err)

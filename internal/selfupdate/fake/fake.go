@@ -26,6 +26,16 @@ type Options struct {
 	// Started sees each helper run start, with what ends it and what closes
 	// once it ended.
 	Started func(cancel context.CancelFunc, done <-chan struct{})
+	// Unhealthy is an image ID whose containers report unhealthy once
+	// started, as a broken release would.
+	Unhealthy string
+}
+
+// Dev are the options for a development daemon, whose Ludock isn't in the
+// container it stands for: that Ludock keeps its data open while its
+// container is "stopped", so putting a version back leaves the data alone.
+func Dev() Options {
+	return Options{Unhealthy: "sha256:" + strings.Repeat("b", 64), Step: func([]string) (int, bool) { return 0, true }}
 }
 
 // Run installs the helpers on engine.
@@ -50,6 +60,13 @@ func Run(engine *fakedocker.Engine, options Options) {
 			defer cancel()
 			run.Run(ctx)
 		}()
+	}
+	if options.Unhealthy != "" {
+		engine.Starts[""] = func(c *fakedocker.Container) {
+			if c.Image == options.Unhealthy {
+				engine.Update(c.ID, func(c *fakedocker.Container) { c.State.Health = &docker.HealthState{Status: "unhealthy"} })
+			}
+		}
 	}
 	engine.Starts["self-update-data"] = func(c *fakedocker.Container) {
 		code, handled := 0, false

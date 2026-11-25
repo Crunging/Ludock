@@ -49,7 +49,7 @@ func seed(engine *fakedocker.Engine, dir, self, backups, data string, demo bool)
 	engine.Update(self, func(c *fakedocker.Container) {
 		c.ExtraConfig = map[string]any{"Healthcheck": map[string]any{"Test": []any{"CMD", "/usr/local/bin/ludock", "healthcheck"}}}
 	})
-	fake.Run(engine, fake.Options{})
+	fake.Run(engine, fake.Dev())
 	// Console helpers run for real, so commands reach the fake game consoles
 	// on 127.0.0.1. A game with a stdin console reads its commands.
 	var stdinGames sync.Map

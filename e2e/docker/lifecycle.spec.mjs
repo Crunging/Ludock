@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect, asAdmin, admin, openServer, expectOperationSucceeded, expectOffline } from "../journeys/fixtures.mjs";
-import { docker, gameImage, ludock, game, stack, gameContainer, healthy, ludockImage, nextImage } from "../docker-setup.mjs";
+import { docker, gameImage, ludock, game, stack, gameContainer, healthy, ludockImage, nextImage, unhealthyImage } from "../docker-setup.mjs";
 
 asAdmin();
 
@@ -106,8 +106,9 @@ async function updateLudock(page) {
 // helper and the page comes back on the new version, with the game left
 // running. A version whose health check never passes is then put back.
 test("Ludock updates itself, and puts itself back when the new version fails", async ({ page }) => {
-  test.skip(!nextImage, "LUDOCK_TEST_NEXT_IMAGE names a second build of the image");
+  test.skip(!nextImage || !unhealthyImage, "LUDOCK_TEST_NEXT_IMAGE and LUDOCK_TEST_UNHEALTHY_IMAGE name second builds of the image");
   test.setTimeout(600_000);
+  const began = Math.floor(Date.now() / 1000);
   docker("run", "--detach", "--name", "ludocktest-registry", "--publish", "127.0.0.1:5000:5000", "registry:2");
   try {
     await expect.poll(async () => (await fetch("http://127.0.0.1:5000/v2/").catch(() => ({ ok: false }))).ok, { timeout: 30_000 }).toBe(true);
@@ -154,9 +155,7 @@ test("Ludock updates itself, and puts itself back when the new version fails", a
     await expect(entry).toContainText(admin.username);
 
     // A version whose health check never passes.
-    const draft = docker("create", nextImage);
-    docker("commit", "--change", 'HEALTHCHECK --interval=1s --timeout=2s --retries=1 CMD ["/bin/false"]', draft, `${registry}:unhealthy`);
-    docker("rm", draft);
+    docker("tag", unhealthyImage, `${registry}:unhealthy`);
     docker("push", `${registry}:unhealthy`);
     await publish("unhealthy");
     const failing = await updateLudock(page);
@@ -172,10 +171,34 @@ test("Ludock updates itself, and puts itself back when the new version fails", a
     await page.goto("/");
     await expect(page.locator(".needs-attention__list li", { hasText: "Ludock’s update didn’t finish" }))
       .toContainText("The new version reported itself unhealthy, so Ludock is still on version e2e-next");
+  } catch (error) {
+    diagnose(began);
+    throw error;
   } finally {
     docker("rm", "--force", "ludocktest-registry");
   }
 });
+
+/** Prints what Docker did since began, each Ludock container's state and health, and the logs of Ludock and its helpers. */
+function diagnose(began) {
+  const run = (...args) => {
+    try {
+      return docker(...args);
+    } catch (error) {
+      return String(error.stderr || error);
+    }
+  };
+  const out = [run("events", "--since", String(began), "--until", String(Math.floor(Date.now() / 1000)), "--filter", "type=container",
+    "--format", "{{.Time}} {{.Action}} {{.Actor.Attributes.name}} {{.Actor.Attributes.image}}"),
+  run("ps", "--all", "--no-trunc", "--format", "{{.ID}} {{.Names}} {{.Image}} {{.Status}}")];
+  const ids = run("ps", "--all", "--quiet", "--filter", "label=ludock.internal").split("\n")
+    .concat(run("ps", "--all", "--quiet", "--filter", "label=com.docker.compose.service=ludock").split("\n")).filter(Boolean);
+  for (const id of new Set(ids)) {
+    out.push(`--- ${id}`, run("inspect", "--format", "{{.Name}} {{.Image}} {{json .State}} {{json .Config.Labels}}", id),
+      run("logs", "--tail", "100", id));
+  }
+  console.log(out.join("\n"));
+}
 
 // A file command interrupted by a restart may still be writing through its
 // helper, so Ludock removes every file helper before work resumes.

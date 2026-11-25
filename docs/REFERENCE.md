@@ -496,7 +496,8 @@ version to which, and how it ended.
 If the new version doesn't start, stops, or doesn't report healthy within 3
 minutes, the helper removes it, puts Ludock's data back as it was saved (the
 new version may already have changed it), and starts the previous container
-again. **Needs attention** then says why. While an update runs no other work
+again. **Settings** and **Needs attention** then say why, until an
+administrator dismisses it in **Settings**. While an update runs no other work
 can start, and Ludock doesn't begin one while other work is queued or
 running. If the helper is stopped or the host restarts partway, Docker runs
 the helper again and it finishes or undoes the update.
