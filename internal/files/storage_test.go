@@ -1,9 +1,11 @@
 package files
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -429,7 +431,7 @@ func TestFailedChangeRemovesHelper(t *testing.T) {
 			return f.service.Rename(ctx, f.target, f.root, "missing.txt", "other.txt", nil)
 		},
 		"upload": func() error {
-			_, err := f.service.UploadFiles(ctx, f.target, f.root, "", "", false, []UploadEntry{{Name: "short.txt", Size: 10}}, strings.NewReader("short"), nil)
+			_, err := f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "short.txt", Size: 10}}, strings.NewReader("short"), nil)
 			return err
 		},
 	} {
@@ -481,7 +483,7 @@ func TestUploadNeedsFreeSpace(t *testing.T) {
 	// Within the free space, but not with the spare kept; the margin covers
 	// other writers freeing space meanwhile.
 	size := space.Available - helper.UploadSpare(space.Total) + 256<<20
-	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", "", false, []UploadEntry{{Name: "huge.bin", Size: size}}, zeroFree{}, nil)
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "huge.bin", Size: size}}, zeroFree{}, nil)
 	if public, ok := apperr.As(results[0]); err != nil || !ok || public.Code != "NOT_ENOUGH_SPACE" || public.Status != 507 {
 		t.Fatal(results, err)
 	}
@@ -587,12 +589,12 @@ func TestDownloadBlamesDockerForItsFailures(t *testing.T) {
 	f.helpersLeft(t)
 }
 
-// raceReader creates path with "game" once the first n bytes are read, as a
-// game saving a file while its upload streams.
+// raceReader runs at once the first n bytes are read, as a game changing
+// the folder while an upload streams.
 type raceReader struct {
 	body string
 	n    int
-	path string
+	at   func()
 }
 
 func (r *raceReader) Read(p []byte) (int, error) {
@@ -601,9 +603,9 @@ func (r *raceReader) Read(p []byte) (int, error) {
 	}
 	count := copy(p, r.body[:min(len(r.body), max(r.n, 1))])
 	r.body, r.n = r.body[count:], r.n-count
-	if r.n <= 0 && r.path != "" {
-		os.WriteFile(r.path, []byte("game"), 0o644)
-		r.path = ""
+	if r.n <= 0 && r.at != nil {
+		r.at()
+		r.at = nil
 	}
 	return count, nil
 }
@@ -615,8 +617,8 @@ func TestUploadReplacesOnlyWhenConfirmed(t *testing.T) {
 	f := setup(t)
 	os.WriteFile(filepath.Join(f.data, "taken.txt"), []byte("old"), 0o644)
 	entries := []UploadEntry{{Name: "taken.txt", Size: 3}, {Name: "new.txt", Size: 3}, {Name: "raced.txt", Size: 3}}
-	body := &raceReader{body: "abcdefghi", n: 7, path: filepath.Join(f.data, "raced.txt")}
-	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", "", false, entries, body, nil)
+	body := &raceReader{body: "abcdefghi", n: 7, at: func() { os.WriteFile(filepath.Join(f.data, "raced.txt"), []byte("game"), 0o644) }}
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", entries, body, nil)
 	if err != nil || !errors.Is(results[0], launch.ErrNameTaken) || results[1] != nil || !errors.Is(results[2], launch.ErrNameTaken) {
 		t.Fatal(results, err)
 	}
@@ -625,8 +627,170 @@ func TestUploadReplacesOnlyWhenConfirmed(t *testing.T) {
 			t.Errorf("%s: %q", name, data)
 		}
 	}
-	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", "", true, entries[:1], strings.NewReader("abc"), nil)
+	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "taken.txt", Size: 3, Replace: true}}, strings.NewReader("abc"), nil)
 	if data, _ := os.ReadFile(filepath.Join(f.data, "taken.txt")); err != nil || results[0] != nil || string(data) != "abc" {
 		t.Fatal(results, err, string(data))
+	}
+}
+
+// One batch writes files in several folders below its own through one
+// helper, making the missing ones. Each file finds its folders again without
+// following links: a folder swapped for a link to elsewhere while the batch
+// streams refuses its files there and writes nothing through the link, and a
+// file where a folder is needed, or a folder where a file is, refuses only
+// that file.
+func TestUploadNestedBatch(t *testing.T) {
+	f := setup(t)
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(f.data, "blocker"), []byte("file"), 0o644)
+	os.MkdirAll(filepath.Join(f.data, "mods", "taken"), 0o755)
+	os.MkdirAll(filepath.Join(f.data, "mods", "swapped"), 0o755)
+	entries := []UploadEntry{{Name: "mods/a.jar", Size: 3}, {Name: "mods/swapped/b.jar", Size: 3}, {Name: "mods/swapped/c.jar", Size: 3},
+		{Name: "config/x/y/z.toml", Size: 3}, {Name: "blocker/d.txt", Size: 3}, {Name: "mods/taken", Size: 3}, {Name: "config/x/w.toml", Size: 3}}
+	creates := func() (count int) {
+		for _, call := range f.engine.Requests {
+			if strings.HasSuffix(call, "/containers/create") {
+				count++
+			}
+		}
+		return count
+	}
+	before := creates()
+	// Once mods/swapped/b.jar's body is in, the folder becomes a link out.
+	swapped := filepath.Join(f.data, "mods", "swapped")
+	body := &raceReader{body: "aaabbbcccddddddeeefff", n: 4, at: func() {
+		os.Rename(swapped, filepath.Join(outside, "moved"))
+		os.Symlink(outside, swapped)
+	}}
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", entries, body, nil)
+	if err != nil || results[0] != nil || results[1] == nil || results[2] == nil || results[3] != nil ||
+		!apperr.Is(results[4], "NOT_A_FOLDER") || !apperr.Is(results[5], "IS_A_FOLDER") || results[6] != nil {
+		t.Fatal(results, err)
+	}
+	for name, want := range map[string]string{"mods/a.jar": "aaa", "config/x/y/z.toml": "ddd", "config/x/w.toml": "fff", "blocker": "file"} {
+		if data, _ := os.ReadFile(filepath.Join(f.data, name)); string(data) != want {
+			t.Errorf("%s: %q", name, data)
+		}
+	}
+	if listed, _ := os.ReadDir(outside); len(listed) != 1 {
+		t.Fatal("wrote through the link:", listed)
+	}
+	if moved, _ := os.ReadDir(filepath.Join(outside, "moved")); len(moved) != 0 {
+		t.Fatal("published in the moved folder:", moved)
+	}
+	// The helper and the validator that proved its mount.
+	if started := creates() - before; started != 2 {
+		t.Fatal(started, "containers started for one batch")
+	}
+}
+
+// Access is confirmed again before each folder an upload makes, as before
+// each file it publishes: once it is revoked, no further folder is made,
+// whether for another file or on the way to the same one.
+func TestUploadFoldersFollowAccess(t *testing.T) {
+	for _, test := range []struct {
+		entries []UploadEntry
+		first   string
+		then    string
+	}{
+		{[]UploadEntry{{Name: "one/a.txt", Size: 1}, {Name: "two/b.txt", Size: 1}}, "one", "two"},
+		{[]UploadEntry{{Name: "deep/er/a.txt", Size: 1}}, "deep", "deep/er"},
+	} {
+		f := setup(t)
+		revoked := func() error {
+			if _, err := os.Stat(filepath.Join(f.data, test.first)); err == nil {
+				return apperr.New("FORBIDDEN", 403, "You can’t do that")
+			}
+			return nil
+		}
+		results, err := f.service.UploadFiles(ctx, f.target, f.root, "", test.entries, strings.NewReader("ab"[:len(test.entries)]), revoked)
+		if err == nil || slices.Contains(results, nil) {
+			t.Fatal(test.first, results, err)
+		}
+		if _, err := os.Stat(filepath.Join(f.data, test.first)); err != nil {
+			t.Fatal("the first folder wasn't made", err)
+		}
+		if _, err := os.Stat(filepath.Join(f.data, test.then)); !os.IsNotExist(err) {
+			t.Fatal("made", test.then, "after access was revoked", err)
+		}
+	}
+}
+
+// A batch's folders have practical bounds: a file too deep is refused on
+// its own, and a batch in too many folders as a whole, before anything is
+// made. A folder is made only for a file that fits on its disk, and a helper
+// older than the backend's upload protocol is refused before any upload.
+func TestUploadFolderLimits(t *testing.T) {
+	f := setup(t)
+	deep := strings.Repeat("d/", helper.UploadDepth+1) + "deep.txt"
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: deep, Size: 1}, {Name: "ok.txt", Size: 1}},
+		strings.NewReader("ab"), nil)
+	if err != nil || !apperr.Is(results[0], "UPLOAD_TOO_DEEP") || results[1] != nil {
+		t.Fatal(results, err)
+	}
+	// A file too deep counts no folders toward the batch's.
+	var near []UploadEntry
+	for index := range 77 {
+		near = append(near, UploadEntry{Name: fmt.Sprintf("g%02d/a/b/c.txt", index), Size: 1})
+	}
+	near = append(near, UploadEntry{Name: deep, Size: 1})
+	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", near, strings.NewReader(strings.Repeat("x", len(near))), nil)
+	if err != nil || results[0] != nil || !apperr.Is(results[len(near)-1], "UPLOAD_TOO_DEEP") {
+		t.Fatal(results[0], results[len(near)-1], err)
+	}
+	var spread []UploadEntry
+	for index := range 100 {
+		spread = append(spread, UploadEntry{Name: fmt.Sprintf("f%03d/a/b/c.txt", index)})
+	}
+	if _, err := f.service.UploadFiles(ctx, f.target, f.root, "", spread, strings.NewReader(""), nil); !errors.Is(err, ErrBatchTooLarge) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "d")); !os.IsNotExist(err) {
+		t.Fatal("made folders for a file too deep", err)
+	}
+	// A folder the upload made and the game then removed isn't asked for
+	// again: only its files are refused, and the rest of the batch goes on.
+	removed := false
+	gone := func() error {
+		if _, err := os.Stat(filepath.Join(f.data, "gone")); err == nil && !removed {
+			removed = os.RemoveAll(filepath.Join(f.data, "gone")) == nil
+		}
+		return nil
+	}
+	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "gone/a.txt", Size: 1}, {Name: "gone/b.txt", Size: 1},
+		{Name: "kept.txt", Size: 1}}, strings.NewReader("abc"), gone)
+	if err != nil || !removed || results[0] == nil || results[1] == nil || results[2] != nil {
+		t.Fatal(results, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "f000")); !os.IsNotExist(err) {
+		t.Fatal("made folders for a batch in too many", err)
+	}
+	var stat unix.Statfs_t
+	unix.Statfs(f.data, &stat)
+	huge := helper.Space(&stat).Available + 256<<20
+	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "room/for/huge.bin", Size: huge}}, zeroFree{}, nil)
+	if !apperr.Is(results[0], "NOT_ENOUGH_SPACE") {
+		t.Fatal(results, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "room")); !os.IsNotExist(err) {
+		t.Fatal("made folders for a file that doesn't fit", err)
+	}
+	// An older helper, chosen with LUDOCK_HELPER_IMAGE, doesn't know the
+	// question; asked once per image, it is never driven.
+	f.service.Images.Configured = "ghcr.io/crunging/ludock@sha256:" + strings.Repeat("c", 64)
+	f.engine.AddImage(f.service.Images.Configured)
+	f.engine.RunHelpers(func(_ *fakedocker.Container, _, args []string, _ *bufio.Reader, _, stderr func([]byte)) (int, bool) {
+		if len(args) > 1 && strings.Contains(args[1], `"operation":"upload-version"`) {
+			stderr([]byte(helper.FileFailure))
+			return 1, true
+		}
+		return 0, false
+	})
+	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "late/x.txt", Size: 1}}, strings.NewReader("x"), nil)
+	if !errors.Is(err, ErrHelperOutdated) || !errors.Is(results[0], ErrHelperOutdated) {
+		t.Fatal(results, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "late")); !os.IsNotExist(err) {
+		t.Fatal("an older helper made a folder", err)
 	}
 }

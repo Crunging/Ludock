@@ -104,6 +104,26 @@ func TestUploadChecks(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"failed","message":"File exceeds the upload size limit of 3 B"`) {
 		t.Fatal("size", response.Code, response.Body.String())
 	}
+	// A batch in more folders than the page sends is refused unread; a file
+	// too deep is refused on its own, counting none of its folders.
+	spread := func(count int, extra string) string {
+		var list []string
+		for index := range count {
+			list = append(list, fmt.Sprintf(`{"name":"f%03d/a/b/c.txt","size":0}`, index))
+		}
+		if extra != "" {
+			list = append(list, `{"name":"`+extra+`","size":0}`)
+		}
+		return `{"files":[` + strings.Join(list, ",") + "]}\n"
+	}
+	headers := map[string]string{"Content-Type": "application/octet-stream", "X-CSRF-Token": csrf}
+	if code := upload(headers, spread(86, "")).Code; code != http.StatusRequestEntityTooLarge {
+		t.Fatal("folders", code)
+	}
+	response = upload(headers, spread(77, strings.Repeat("d/", 40)+"deep.txt"))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "more than 32 folders") {
+		t.Fatal("deep", response.Code, response.Body.String())
+	}
 	// A route ID that is no server's is refused like a hidden server, and its
 	// denial is audited without it.
 	server = strings.Repeat("x", 5000)
@@ -225,14 +245,15 @@ func manifest(names ...string) string {
 // while they may still write: a grant removed while a batch is sent stops its
 // next file, and the helper is removed with it; without the grant, the list
 // of files isn't even read. An upload first removes staging files cut-off
-// uploads left in its folder, and the audit records the folder it used.
+// uploads left in its folder, the audit records the folder it used, and a
+// request from an outdated page is refused.
 func TestUploadFollowsGrant(t *testing.T) {
 	p, member, root, data := uploadPages(t)
 	server := httptest.NewServer(p.handler)
 	defer server.Close()
-	folder := ".//."
+	folder, extra := ".//.", ""
 	send := func(body io.Reader, length int64) (int, string) {
-		request, _ := http.NewRequest("PUT", server.URL+"/files/"+p.server+"/upload?root="+url.QueryEscape(root)+"&path="+url.QueryEscape(folder), body)
+		request, _ := http.NewRequest("PUT", server.URL+"/files/"+p.server+"/upload?root="+url.QueryEscape(root)+"&path="+url.QueryEscape(folder)+extra, body)
 		request.ContentLength = length
 		request.AddCookie(&http.Cookie{Name: auth.SessionCookie, Value: member.Token})
 		request.Header.Set("Content-Type", "application/octet-stream")
@@ -312,6 +333,13 @@ func TestUploadFollowsGrant(t *testing.T) {
 	if code, _ := send(never, 1000); code != http.StatusForbidden || time.Since(started) > 5*time.Second {
 		t.Fatal("waited for the list of someone who can't write", code, time.Since(started))
 	}
+	// A page from before files carried their own paths would put a folder's
+	// files here, so it is refused unread.
+	p.grant(member, authz.ServerView, authz.FilesRead, authz.FilesWrite)
+	extra, body = "&into=mods", manifest("x.txt")+"hello"
+	if code, answer := send(strings.NewReader(body), int64(len(body))); code != http.StatusBadRequest || !strings.Contains(answer, "Reload Files") {
+		t.Fatal(code, answer)
+	}
 	if entries, _ := os.ReadDir(data); len(entries) != 21 {
 		t.Fatal(len(entries), "files")
 	}
@@ -339,7 +367,7 @@ func TestUploadStallReleasesEverything(t *testing.T) {
 	}{
 		{`{"name":"big.bin","size":100000}`, 100000, false, `"status":"failed"`},
 		{`{"name":".ludock-mine","size":1099511627776},{"name":"a.txt","size":5}`, 1099511627781, true, "Upload at most 100 files"},
-		{`{"name":"world","size":67108864}`, 64 << 20, true, `"status":"failed","message":"The path changed, is unsafe, or cannot be accessed"}],"stop":false`},
+		{`{"name":"world","size":67108864}`, 64 << 20, true, `"status":"failed","message":"A folder has this name, so the file wasn’t uploaded."}],"stop":false`},
 	} {
 		conn, err := net.Dial("tcp", server.Listener.Addr().String())
 		if err != nil {

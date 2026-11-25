@@ -229,7 +229,8 @@ needs `ludock.address`.
 
 | What | Limit |
 | --- | --- |
-| Upload | No size limit by default, but a file is refused if it would leave less than 1 GiB free on the server's disk (a twentieth of a disk under 20 GiB), a margin for the game that the disk's own rounding can dip into slightly; set a limit in **Settings → Advanced** |
+| Upload | No size limit by default, but a file is refused if it would leave less than 1 GiB free on the server's disk (a twentieth of a disk under 20 GiB), a margin for the game that the disk's own rounding can dip into slightly, and no folder is made for it; set a limit in **Settings → Advanced** |
+| Folder upload | 32 folders deep below the folder you upload into |
 | Text preview and editing | 512 KiB; larger or binary files download instead |
 | Unpacking an archive | 20 GiB, 100,000 entries, 64 nested folders, and 100 times the archive's size plus 1 MiB; 30 minutes |
 | Selection | 500 entries of one folder |

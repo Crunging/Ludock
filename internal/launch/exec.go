@@ -46,6 +46,8 @@ var fileErrors = &ExecErrors{Timeout: ErrTimeout, Failed: ErrFailed, Unsafe: Err
 	helper.FileArchiveFull: apperr.New("ARCHIVE_NO_SPACE", 409, "The archive wasn’t unpacked: the disk would run short of free space."),
 	helper.FileNotArchive:  apperr.New("NOT_AN_ARCHIVE", 415, "This file isn’t a zip, tar, or tar.gz archive, or it is damaged."),
 	helper.FileACLNotKept:  apperr.New("ACL_NOT_KEPT", 409, "The file wasn’t replaced: Ludock couldn’t keep its access control list, so the new file would have had wider permissions."),
+	helper.FileNotFolder:   apperr.New("NOT_A_FOLDER", 409, "A file has the name of a folder this goes in, so it wasn’t uploaded."),
+	helper.FileIsFolder:    apperr.New("IS_A_FOLDER", 409, "A folder has this name, so the file wasn’t uploaded."),
 	helper.FileArchiveDeep: apperr.New("ARCHIVE_TOO_DEEP", 409, "The archive wasn’t unpacked: its files would sit deeper than Files can open. Move it to a folder nearer the top and unpack it there."),
 	// A 5xx status reports the result as unconfirmed.
 	helper.FilePartial:      apperr.New("FILE_PARTIAL", 500, "Only part of the selection was changed"),
@@ -80,10 +82,10 @@ type ExecOptions struct {
 	// limited.
 	Stdout io.Writer
 	// AssertAccess runs before the exec, after it is created, and between
-	// input chunks; with Limit, also every second while the command runs.
-	// A settling command checks it only after the create.
+	// input chunks; with Limit and no input, also every second while the
+	// command runs. A settling command checks it only after the create.
 	AssertAccess func() error
-	// Limit replaces the one-minute bound of a command without input.
+	// Limit replaces a command's bound: one minute, or 30 with input.
 	Limit time.Duration
 	// Errors replaces the file errors.
 	Errors *ExecErrors
@@ -173,10 +175,10 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	}
 	var err error
 	limit := time.Minute
-	if options.Input != nil {
-		limit = 30 * time.Minute
-	} else if options.Limit > 0 || options.Settle {
+	if options.Limit > 0 || options.Settle {
 		limit = options.Limit
+	} else if options.Input != nil {
+		limit = 30 * time.Minute
 	}
 	parent := ctx
 	if options.Settle {

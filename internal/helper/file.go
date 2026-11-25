@@ -35,9 +35,9 @@ type FileRequest struct {
 	UploadID    string   `json:"uploadId,omitempty"`
 	// Expected makes an upload replace only this exact existing file.
 	Expected *FileVersion `json:"expected,omitempty"`
-	// Replace lets a batch upload replace existing files; without it, a file
-	// whose name is taken is refused with FileNameTaken.
-	Replace bool `json:"replace,omitempty"`
+	// List says an upload's prepare or cleanup reads its files from stdin;
+	// without it, prepare is for one file in Path and reads nothing.
+	List bool `json:"list,omitempty"`
 	// Paths are the entries of one folder that a selection acts on.
 	Paths []string `json:"paths,omitempty"`
 	// Mounts are the nested mounts the helper has, which a move can't cross.
@@ -52,10 +52,14 @@ type FileRequest struct {
 	Base string `json:"base,omitempty"`
 }
 
+// UploadFile is a file of a batch upload. Name is its path below the
+// batch's folder, whose missing folders the upload makes. Without Replace, a
+// file whose name is taken is refused with FileNameTaken.
 type UploadFile struct {
 	Name     string `json:"name"`
 	Size     int64  `json:"size"`
 	UploadID string `json:"uploadId"`
+	Replace  bool   `json:"replace,omitempty"`
 }
 
 // FileVersion identifies a file's content by size and SHA-256.
@@ -117,6 +121,10 @@ const (
 	FileArchiveDeep = 14
 	// FileACLNotKept refuses replacing a file whose access ACL can't be kept.
 	FileACLNotKept = 15
+	// FileNotFolder refuses a file of a batch upload where a file has the
+	// name of a folder it needs, and FileIsFolder one whose name is a folder's.
+	FileNotFolder = 16
+	FileIsFolder  = 17
 )
 
 type fileHelper struct {
@@ -129,8 +137,10 @@ type fileHelper struct {
 	// part is the upload part being read, which a refused file of a batch
 	// is skipped to the end of.
 	part *uploadPart
-	// folder is the path, below the root, of the folder an upload writes in.
-	folder string
+	// folder is the path, below the root, of the folder an upload writes in,
+	// and replace lets a batch's file replace one there.
+	folder  string
+	replace bool
 	// leftover: the last upload's staging file could not be removed.
 	leftover bool
 	// excluded is what the request's excluded mounts hide, by identity.
@@ -247,6 +257,9 @@ func uploadTarget(parent fd, name string) (*unix.Stat_t, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if isDir(info) {
+		return nil, errIsFolder
 	}
 	if !isRegular(info) || info.Nlink != 1 {
 		return nil, errors.New("only regular files without hard links are supported")
@@ -653,7 +666,7 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	}
 	// A batch upload not confirmed to replace refuses a name taken now, or
 	// by the time the file would be published, having written nothing to it.
-	keep := h.request.Operation == "upload-files" && !h.request.Replace
+	keep := h.request.Operation == "upload-files" && !h.replace
 	if keep && original != nil {
 		return errNameTaken
 	}
@@ -926,14 +939,22 @@ var (
 	readNames    = (*os.File).Readdirnames
 )
 
+// sweepBudget is what the sweeps of one upload's folders have spent: the
+// names they looked at and the time since they started.
+type sweepBudget struct {
+	started time.Time
+	seen    int
+}
+
 // sweepStaging removes the staging files that uploads cut off earlier left
-// in folder, reading it a chunk at a time. It returns how many it could not
-// remove; those are left, and free space still decides each upload. It is
-// housekeeping and never holds up the write: it stops once it has looked at
-// sweepEntries names or run for sweepTime, so a folder too large to sweep
-// within that keeps its stale staging files until it shrinks.
-func (h *fileHelper) sweepStaging(folder fd) (int, error) {
-	started, seen := time.Now(), 0
+// in folder, h.folder below the root, reading it a chunk at a time. It
+// returns how many it could not remove; those are left, and free space still
+// decides each upload. It is housekeeping and never holds up the write: the
+// sweeps of one upload stop once they have looked at sweepEntries names or
+// run for sweepTime, so a folder too large to sweep within that keeps its
+// stale staging files until it shrinks.
+func (h *fileHelper) sweepStaging(folder fd, budget *sweepBudget) (int, error) {
+	started := budget.started
 	// A folder that can't be read is left unswept; only a moved one is an
 	// error.
 	duplicate, err := unix.Dup(int(folder))
@@ -945,14 +966,14 @@ func (h *fileHelper) sweepStaging(folder fd) (int, error) {
 	if _, err := directory.Seek(0, 0); err != nil {
 		return 0, nil
 	}
-	spent := func() bool { return seen >= sweepEntries || time.Since(started) >= sweepTime }
+	spent := func() bool { return budget.seen >= sweepEntries || time.Since(started) >= sweepTime }
 	stuck := 0
 	for {
 		if spent() {
 			return stuck, nil
 		}
-		children, readErr := readNames(directory, min(sweepChunk, sweepEntries-seen))
-		seen += len(children)
+		children, readErr := readNames(directory, min(sweepChunk, sweepEntries-budget.seen))
+		budget.seen += len(children)
 		for _, name := range children {
 			// Checked before each candidate's calls, which can each be slow on
 			// network storage.
@@ -1048,6 +1069,20 @@ const (
 	UploadBatchBytes = 16 << 20
 )
 
+// A file of a batch upload sits at most UploadDepth folders below the
+// batch's folder, and a batch's files are in at most UploadBatchFolders
+// folders below it, counting each folder on the way once. Mod packs and
+// resource packs go about 10 deep, and a batch of 100 files rarely spans
+// more than 150 folders; the page splits a batch before it passes them.
+const (
+	UploadDepth        = 32
+	UploadBatchFolders = 256
+)
+
+// UploadVersion is the batch upload protocol this helper speaks, which
+// upload-version reports, so a backend never drives an older helper.
+const UploadVersion = 2
+
 // UploadPrepared is the free space a batch upload starts with, after its
 // folder's sweep, and how many staging files the sweep could not remove.
 type UploadPrepared struct {
@@ -1064,6 +1099,11 @@ type UploadResult struct {
 	Space *FileSpace `json:"space,omitempty"`
 	// Ready asks for the file's trailer, ahead of its result.
 	Ready bool `json:"ready,omitempty"`
+	// Folder asks to make a missing folder; the backend answers with
+	// FolderGo once access is confirmed. Body asks for the next file's body,
+	// once its folders are made.
+	Folder bool `json:"folder,omitempty"`
+	Body   bool `json:"body,omitempty"`
 	// Leftover: the file's staging file could not be removed.
 	Leftover bool `json:"leftover,omitempty"`
 }
@@ -1073,49 +1113,36 @@ type UploadResult struct {
 // reported; only a broken stream ends the batch, and each line is flushed
 // once its file is committed or refused.
 func (h *fileHelper) uploadFiles(relative string) error {
-	// The files are listed on stdin, ahead of their bodies, since a long list
-	// could pass an argument's size limit: its length, then its JSON.
-	var length [8]byte
-	if _, err := io.ReadFull(h.stdin, length[:]); err != nil {
-		return errUploadStream
+	if err := h.readFiles(); err != nil {
+		return err
 	}
-	size := binary.BigEndian.Uint64(length[:])
-	if size > 4<<20 {
-		return errUploadStream
+	if err := checkUploadList(relative, h.request.Files, true); err != nil {
+		return err
 	}
-	list := make([]byte, size)
-	if _, err := io.ReadFull(h.stdin, list); err != nil || json.Unmarshal(list, &h.request.Files) != nil {
-		return errUploadStream
-	}
-	var total int64
-	for _, file := range h.request.Files {
-		if file.Size < 0 || file.Size > 1<<53-1 {
-			return errors.New("invalid upload size")
-		}
-		total += file.Size
-	}
-	if len(h.request.Files) > UploadBatchFiles || (len(h.request.Files) > 1 && total > UploadBatchBytes) {
-		return errors.New("the batch is too large")
-	}
+	// The folders the backend approved, so no file asks for one again.
+	asked := map[string]error{}
 	h.buffer = make([]byte, 64*1024)
 	for _, file := range h.request.Files {
 		h.part, h.leftover = nil, false
 		opened := len(h.t.open)
-		err := h.check(path.Join(relative, file.Name), false)
-		if parts, partsErr := ownParts(file.Name); err == nil && (partsErr != nil || len(parts) != 1 || parts[0] != file.Name) {
-			err = errUnsafe
-		}
-		// The root and folder are found again for each file, as for a single
-		// upload, in case either was moved meanwhile.
-		var folder fd
+		parts, _ := ownParts(file.Name)
+		// The root and folders are found again for each file, as for a single
+		// upload, in case any was moved or replaced meanwhile. The file is
+		// checked against exclusions once its folders are there, right before
+		// it is written, since making them waits on the backend.
+		folder, err := h.uploadPin(relative, parts[:len(parts)-1], file.Size, asked)
 		if err == nil {
-			folder, err = h.pinRoot()
+			err = h.check(path.Join(relative, file.Name), false)
 		}
-		if err == nil && relative != "" {
-			folder, err = h.pinDirectory(folder, relative)
+		if errors.Is(err, errUploadStream) {
+			return err
+		}
+		if lineErr := h.line(`{"body":true}`); lineErr != nil {
+			return lineErr
 		}
 		if err == nil {
-			err = h.upload(folder, file.Name, file.Size, file.UploadID, nil)
+			h.folder, h.replace = path.Join(append([]string{relative}, parts[:len(parts)-1]...)...), file.Replace
+			err = h.upload(folder, parts[len(parts)-1], file.Size, file.UploadID, nil)
 		}
 		h.t.closeFrom(opened)
 		if errors.Is(err, errUploadStream) || h.uploadAborted() {
@@ -1166,6 +1193,216 @@ func (h *fileHelper) uploadFiles(relative string) error {
 	}
 	if n, err := h.stdin.Read(h.buffer[:1]); n > 0 || err != io.EOF {
 		return errUploadStream
+	}
+	return nil
+}
+
+// uploadDestinations lists the folders below a batch's folder that its files
+// go in, each once, "" for the folder itself, which is all of them for no
+// files.
+func uploadDestinations(files []UploadFile) []string {
+	var folders []string
+	for _, file := range files {
+		folder := path.Dir(file.Name)
+		if folder == "." {
+			folder = ""
+		}
+		if !slices.Contains(folders, folder) {
+			folders = append(folders, folder)
+		}
+	}
+	if len(folders) == 0 {
+		folders = []string{""}
+	}
+	return folders
+}
+
+// FolderGo is the backend’s answer to a Folder request once access is
+// confirmed.
+const FolderGo = 'y'
+
+// confirmFolder asks the backend to confirm access before a missing folder
+// is made.
+func (h *fileHelper) confirmFolder() error {
+	if err := h.line(`{"folder":true}`); err != nil {
+		return err
+	}
+	var answer [1]byte
+	if _, err := io.ReadFull(h.stdin, answer[:]); err != nil || answer[0] != FolderGo {
+		return errUploadStream
+	}
+	return nil
+}
+
+// line writes a line of a batch's output, flushed so the backend can answer.
+func (h *fileHelper) line(text string) error {
+	if _, err := h.out.WriteString(text + "\n"); err != nil {
+		return err
+	}
+	return h.out.Flush()
+}
+
+// readFiles reads the request's files from stdin, ahead of anything else
+// there, since a long list could pass an argument's size limit: its length,
+// then its JSON.
+func (h *fileHelper) readFiles() error {
+	var length [8]byte
+	if _, err := io.ReadFull(h.stdin, length[:]); err != nil {
+		return errUploadStream
+	}
+	size := binary.BigEndian.Uint64(length[:])
+	if size > 4<<20 {
+		return errUploadStream
+	}
+	list := make([]byte, size)
+	if _, err := io.ReadFull(h.stdin, list); err != nil || json.Unmarshal(list, &h.request.Files) != nil {
+		return errUploadStream
+	}
+	return nil
+}
+
+// readList reads a list sent alone, to its end, so the command never acts
+// on part of one or exits before the backend has sent all of it, and checks
+// it before anything is done with it.
+func (h *fileHelper) readList(relative string) error {
+	if err := h.readFiles(); err != nil {
+		return err
+	}
+	var rest [1]byte
+	if n, err := h.stdin.Read(rest[:]); n > 0 || err != io.EOF {
+		return errUploadStream
+	}
+	return checkUploadList(relative, h.request.Files, false)
+}
+
+// uploadPin opens the folder a file of size bytes goes in, dirs below the
+// batch's folder at relative, without following links. Missing folders are
+// made only if the file fits on the disk they would be made on, each as New
+// folder makes it: after the backend confirms access again, in its parent
+// found again from the root, and checked against exclusions. asked holds
+// each folder the backend approved and how making it went; none is asked
+// for twice, so one made and then removed refuses the file.
+func (h *fileHelper) uploadPin(relative string, dirs []string, size int64, asked map[string]error) (fd, error) {
+	pin := func(depth int) (fd, error) {
+		folder, err := h.pinRoot()
+		if err == nil && relative != "" {
+			folder, err = h.pinDirectory(folder, relative)
+		}
+		if err == nil {
+			folder, err = h.openFolders(folder, dirs[:depth])
+		}
+		return folder, err
+	}
+	opened := len(h.t.open)
+	folder, err := pin(0)
+	for depth := 0; err == nil && depth < len(dirs); depth++ {
+		at := path.Join(append([]string{relative}, dirs[:depth+1]...)...)
+		// One that failed after approval, even once made, isn't used.
+		failed, approved := asked[at]
+		if failed != nil {
+			return -1, failed
+		}
+		next, openErr := h.openFolders(folder, dirs[depth:depth+1])
+		if openErr == nil || !isNotExist(openErr) {
+			folder, err = next, openErr
+			continue
+		}
+		if approved {
+			return -1, errUnsafe
+		}
+		// Every missing folder is on the disk of the deepest that exists; one
+		// that doesn't fit the file isn't asked for.
+		if err = fits(folder, size); err != nil {
+			break
+		}
+		h.t.closeFrom(opened)
+		if err = h.confirmFolder(); err != nil {
+			break
+		}
+		// The answer can take a while, and the parent and its disk can change
+		// meanwhile.
+		if folder, err = pin(depth); err == nil {
+			err = h.check(at, false)
+		}
+		if err == nil {
+			err = fits(folder, size)
+		}
+		var owner *unix.Stat_t
+		if err == nil {
+			owner, err = fstat(folder)
+		}
+		if err == nil {
+			// Another file or the game may have made it meanwhile.
+			if next, err = h.makeFolder(folder, folder, dirs[depth], owner); errors.Is(err, unix.EEXIST) {
+				next, err = h.openFolders(folder, dirs[depth:depth+1])
+			}
+		}
+		switch full := (*noSpaceError)(nil); {
+		case errors.As(err, &full):
+			// Its measure was this file's; a later one is told only the disk is short.
+			asked[at] = unix.ENOSPC
+		case !errors.Is(err, errUploadStream):
+			asked[at] = err
+		}
+		folder = next
+	}
+	return folder, err
+}
+
+// openFolders opens the folders parts below folder without following links.
+func (h *fileHelper) openFolders(folder fd, parts []string) (fd, error) {
+	for _, part := range parts {
+		next, err := h.t.openAt(folder, part, directoryFlags, 0)
+		// O_NOFOLLOW with O_DIRECTORY refuses a link as not a folder too.
+		if errors.Is(err, unix.ENOTDIR) {
+			if info, statErr := lstatAt(folder, part); statErr == nil && !isSymlink(info) {
+				return -1, errNotFolder
+			}
+		}
+		if err != nil {
+			return -1, err
+		}
+		folder = next
+	}
+	return folder, nil
+}
+
+// fits refuses a file of size bytes that would leave the disk under folder
+// less than UploadSpare.
+func fits(folder fd, size int64) error {
+	var stat unix.Statfs_t
+	if err := unix.Fstatfs(int(folder), &stat); err != nil {
+		return err
+	}
+	if space := Space(&stat); size > space.Available-UploadSpare(space.Total) {
+		return &noSpaceError{space}
+	}
+	return nil
+}
+
+// checkUploadList refuses a whole list unless every file's path below the
+// batch's folder at relative is its own, within MaxPath and UploadDepth,
+// and the files are in at most UploadBatchFolders folders; with sizes, a
+// batch also within UploadBatchFiles and UploadBatchBytes.
+func checkUploadList(relative string, files []UploadFile, sizes bool) error {
+	var total int64
+	folders := map[string]bool{}
+	for _, file := range files {
+		parts, err := ownParts(file.Name)
+		if err != nil || len(parts) == 0 || len(parts)-1 > UploadDepth || strings.Join(parts, "/") != file.Name ||
+			len(path.Join(relative, file.Name)) > MaxPath {
+			return errUnsafe
+		}
+		for depth := 1; depth < len(parts); depth++ {
+			folders[strings.Join(parts[:depth], "/")] = true
+		}
+		if sizes && (file.Size < 0 || file.Size > 1<<53-1) {
+			return errors.New("invalid upload size")
+		}
+		total += file.Size
+	}
+	if len(folders) > UploadBatchFolders || (sizes && (len(files) > UploadBatchFiles || (len(files) > 1 && total > UploadBatchBytes))) {
+		return errors.New("the batch is too large")
 	}
 	return nil
 }
@@ -1326,6 +1563,8 @@ func (h *fileHelper) run() error {
 	switch operation {
 	case "check":
 		return h.json(map[string]bool{"safe": true})
+	case "upload-version":
+		return h.json(map[string]int{"version": UploadVersion})
 	case "space":
 		// A folder below the root can be on another disk, such as a nested
 		// mount.
@@ -1420,17 +1659,47 @@ func (h *fileHelper) run() error {
 	case "delete-paths", "move", "download-paths":
 		return h.selection(root, operation)
 	case "upload-files":
-		h.folder = relative
 		return h.uploadFiles(relative)
 	case "upload-prepare":
-		h.folder = relative
+		if !h.request.List {
+			h.request.Files = nil
+		} else if err := h.readList(relative); err != nil {
+			return err
+		}
 		folder, err := h.pinDirectory(root, relative)
 		if err != nil {
 			return err
 		}
-		stuck, err := h.sweepStaging(folder)
-		if err != nil {
-			return err
+		// The staging files cut-off uploads left go from each folder the
+		// batch writes into that exists, starting at a different one each
+		// time, within one sweep's budget; with no files listed, from the
+		// batch's folder. Only that folder's own sweep can fail the batch:
+		// what can't be swept below it is left, and each file's own write
+		// reports a folder that is wrong.
+		destinations := uploadDestinations(h.request.Files)
+		sweep := &sweepBudget{started: time.Now()}
+		first := int(time.Now().UnixNano() % int64(len(destinations)))
+		stuck := 0
+		for offset := range destinations {
+			if sweep.seen >= sweepEntries || time.Since(sweep.started) >= sweepTime {
+				break
+			}
+			inside := destinations[(first+offset)%len(destinations)]
+			opened := len(h.t.open)
+			h.folder = path.Join(relative, inside)
+			below, err := folder, error(nil)
+			if inside != "" {
+				below, err = h.pinDirectory(folder, inside)
+			}
+			var left int
+			if err == nil {
+				left, err = h.sweepStaging(below, sweep)
+				stuck += left
+			}
+			h.t.closeFrom(opened)
+			if err != nil && inside == "" {
+				return err
+			}
 		}
 		// A space that can't be measured is reported as none, which the backend
 		// refuses, so the sweep's count still reaches it.
@@ -1440,13 +1709,33 @@ func (h *fileHelper) run() error {
 		}
 		return h.json(UploadPrepared{FileSpace: Space(&stat), Stuck: stuck})
 	case "upload-files-cleanup":
+		if !h.request.List {
+			return errUnsafe
+		}
+		if err := h.readList(relative); err != nil {
+			return err
+		}
 		folder, err := h.pinDirectory(root, relative)
 		if err != nil {
 			return err
 		}
 		var refused error
 		for _, file := range h.request.Files {
-			if err := h.removeStaging(folder, relative, file.UploadID); err != nil {
+			opened := len(h.t.open)
+			inside, below, err := path.Dir(file.Name), folder, error(nil)
+			if inside == "." {
+				inside = ""
+			} else {
+				below, err = h.pinDirectory(folder, inside)
+			}
+			// A folder that is gone took its staging files with it.
+			if err == nil {
+				err = h.removeStaging(below, path.Join(relative, inside), file.UploadID)
+			} else if isNotExist(err) {
+				err = nil
+			}
+			h.t.closeFrom(opened)
+			if err != nil {
 				refused = err
 			}
 		}
@@ -1665,6 +1954,10 @@ func fileExit(err error) int {
 		return FileArchiveDeep
 	case errors.Is(err, errACLNotKept):
 		return FileACLNotKept
+	case errors.Is(err, errNotFolder):
+		return FileNotFolder
+	case errors.Is(err, errIsFolder):
+		return FileIsFolder
 	}
 	return 1
 }
@@ -1676,6 +1969,8 @@ var (
 	errMounted      = errors.New("the folder is or holds a separate mount")
 	errHoldsRestore = errors.New("the folder holds a restore's stage folder")
 	errPublished    = errors.New("the upload failed after it took its name")
+	errNotFolder    = errors.New("a file has the name of a folder the upload needs")
+	errIsFolder     = errors.New("a folder has the upload's name")
 )
 
 func nameTaken(err error) error {

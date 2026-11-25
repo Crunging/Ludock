@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { crc32, gzipSync } from "node:zlib";
 import { test, expect, asAdmin, serverRow, signIn, createUser, fake, shareServer } from "./fixtures.mjs";
@@ -128,14 +128,33 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   for (const mod of mods) expect(readFileSync(join(ownServer.data, "mods", mod.name))).toEqual(mod.buffer);
   expect(readdirSync(join(ownServer.data, "mods"))).toHaveLength(40);
 
-  // A chosen folder goes up with its folders.
+  // A chosen folder goes up with its folders, in one request however many
+  // folders its files are in.
   const picked = test.info().outputPath("pack");
-  mkdirSync(join(picked, "config"), { recursive: true });
+  mkdirSync(join(picked, "config", "deep"), { recursive: true });
   writeFileSync(join(picked, "a.toml"), "a\n");
   writeFileSync(join(picked, "config", "b.toml"), "b\n");
+  writeFileSync(join(picked, "config", "deep", "c.toml"), "c\n");
+  const puts = [];
+  const countPuts = (request) => { if (request.method() === "PUT" && request.url().includes("/upload?")) puts.push(request.url()); };
+  page.on("request", countPuts);
   await page.locator("[data-upload-folder-input]").setInputFiles(picked);
-  await expect(page.locator("#file-feedback")).toHaveText("2 files uploaded.");
-  expect(readFileSync(join(ownServer.data, "mods", "pack", "config", "b.toml"), "utf8")).toBe("b\n");
+  await expect(page.locator("#file-feedback")).toHaveText("3 files uploaded.");
+  page.off("request", countPuts);
+  expect(puts).toHaveLength(1);
+  expect(readFileSync(join(ownServer.data, "mods", "pack", "config", "deep", "c.toml"), "utf8")).toBe("c\n");
+
+  // A folder here that is a link to somewhere else is never written through.
+  const elsewhere = test.info().outputPath("elsewhere");
+  mkdirSync(elsewhere);
+  symlinkSync(elsewhere, join(ownServer.data, "mods", "linked"));
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.locator(".file-row__name", { hasText: "linked" })).toHaveCount(1);
+  await dropTree(page, { linked: { "x.txt": "x" } });
+  await page.locator("#confirm-dialog").getByRole("button", { name: "Upload and replace" }).click();
+  await expect(page.locator("#file-feedback")).toHaveText("Uploaded 0 of 1 file. Could not upload “linked/x.txt”: " +
+    "The path changed, is unsafe, or cannot be accessed");
+  expect(readdirSync(elsewhere)).toHaveLength(0);
 
   // So do dropped folders and files together. Names already in the folder
   // are asked about once, and cancelling uploads nothing.
@@ -147,6 +166,7 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   await expect(question.locator("#confirm-dialog-detail")).toHaveText("2 names you chose are already in this folder: “mod-1.jar” and “pack”. " +
     "Files with the same names are replaced, including inside folders, and that can’t be undone.");
   await question.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.locator("[data-choose-files]")).toBeEnabled();
   expect(readFileSync(join(ownServer.data, "mods", "mod-1.jar"))).toEqual(mods[0].buffer);
   expect(existsSync(join(ownServer.data, "mods", "shaders"))).toBe(false);
   await dropTree(page, drop);
@@ -366,7 +386,7 @@ test("a save or upload whose result is lost is reported as unconfirmed, not fail
   await expect(page.locator(".file-row__name", { hasText: "never.txt" })).toHaveCount(0);
 
   // A cancelled upload counts the files confirmed and names the batch being
-  // sent, any of which may have been written.
+  // sent, any of which may have been written. Batches span folders.
   let held;
   const uploads = (url) => url.pathname.endsWith("/upload");
   await page.route(uploads, (route) => {
@@ -376,12 +396,19 @@ test("a save or upload whose result is lost is reported as unconfirmed, not fail
     }
     held = route;
   });
-  await page.locator("[data-upload-input]").setInputFiles(Array.from({ length: 150 }, (_, index) =>
-    ({ name: `c-${String(index + 1).padStart(3, "0")}.txt`, mimeType: "text/plain", buffer: Buffer.from("c\n") })));
+  const spread = {};
+  for (let folder = 1; folder <= 15; folder++) {
+    const files = {};
+    for (let file = 1; file <= 10; file++) files[`c-${String(file).padStart(2, "0")}.txt`] = "c\n";
+    spread[`d-${String(folder).padStart(2, "0")}`] = files;
+  }
+  await dropTree(page, spread);
   await expect.poll(() => Boolean(held)).toBe(true);
   await page.getByRole("button", { name: "Cancel upload" }).click();
   await expect(page.locator("#file-feedback")).toHaveText("Upload cancelled. 100 of 150 files are confirmed uploaded, and any of the 50 being sent, " +
-    "“c-101.txt” to “c-150.txt”, may have been written too. Cancelling doesn’t undo them; check the folder before trying again.");
+    "“d-11/c-01.txt” to “d-15/c-10.txt”, may have been written too. Cancelling doesn’t undo them; check the folder before trying again.");
+  expect(readdirSync(join(ownServer.data, "d-10"))).toHaveLength(10);
+  expect(existsSync(join(ownServer.data, "d-11"))).toBe(false);
   await held.abort().catch(() => {});
   await page.unroute(uploads);
 
