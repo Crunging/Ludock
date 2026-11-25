@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -190,6 +191,11 @@ func TestRestoreSnapshot(t *testing.T) {
 	archive := saveSnapshot(t, d)
 
 	target := filepath.Join(t.TempDir(), "data", "ludock.db")
+	// A console command finds no data there, and leaves none for the
+	// restore to refuse.
+	if _, err := OpenExisting(target); !errors.Is(err, ErrNoDatabase) {
+		t.Fatal("opened a database that wasn't there", err)
+	}
 	if _, err := RestoreSnapshot(archive, target, ""); err != nil {
 		t.Fatal(err)
 	}

@@ -53,7 +53,7 @@ func main() {
 	case "self-update":
 		code = selfUpdate(args)
 	case "self-update-data":
-		code = selfupdate.DataMain(args, cmp.Or(os.Getenv("LUDOCK_DATA_DIR"), "data"), os.Stderr)
+		code = selfupdate.DataMain(args, config.DataDir(os.Getenv("LUDOCK_DATA_DIR")), os.Stderr)
 	case "version", "--version":
 		fmt.Println(version)
 	default:
@@ -252,13 +252,11 @@ func recoverAccount(args []string) int {
 	if !ok {
 		return 2
 	}
-	// Opening a database that isn't there creates one, which would take
-	// the place of data an update's rollback has moved aside for a moment.
-	if _, err := os.Lstat(cfg.DBPath()); errors.Is(err, os.ErrNotExist) {
+	database, err := db.OpenExisting(cfg.DBPath())
+	if errors.Is(err, db.ErrNoDatabase) {
 		fmt.Fprintln(os.Stderr, "Ludock has no data here yet, or is putting its data back after an update. Start Ludock, wait until it answers, then try again.")
 		return 1
 	}
-	database, err := db.Open(cfg.DBPath())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, startupError(err, "Could not open the database. Check that LUDOCK_DATA_DIR exists and is writable."))
 		return 1

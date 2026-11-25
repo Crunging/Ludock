@@ -5,6 +5,7 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
@@ -83,6 +84,10 @@ func (c Config) HealthURL() string {
 	return "http://" + net.JoinHostPort(host, port) + "/api/v1/health"
 }
 
+// DataDir is the data folder a LUDOCK_DATA_DIR value names, as Ludock reads
+// it at startup.
+func DataDir(raw string) string { return cmp.Or(strings.TrimSpace(raw), "data") }
+
 func value(name, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 		return value
@@ -133,7 +138,7 @@ var levels = []string{"error", "warn", "info", "debug"}
 func Load() (Config, error) {
 	c := Config{
 		Listen:         value("LUDOCK_LISTEN", DefaultListen),
-		DataDir:        value("LUDOCK_DATA_DIR", "data"),
+		DataDir:        DataDir(os.Getenv("LUDOCK_DATA_DIR")),
 		LogLevel:       strings.ToLower(value("LUDOCK_LOG_LEVEL", "")),
 		TrustedProxies: value("LUDOCK_TRUSTED_PROXIES", ""),
 		SetupCode:      value("LUDOCK_SETUP_CODE", ""),

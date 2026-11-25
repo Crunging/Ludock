@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/config"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
@@ -692,22 +693,22 @@ func (h *Helper) restoreData(ctx context.Context, old *docker.ContainerSpec, sav
 
 // dataDirOf is Ludock's data folder inside the original, as config reads it.
 func dataDirOf(old *docker.ContainerSpec) string {
-	var config struct {
+	var defined struct {
 		Env        []string
 		WorkingDir string
 	}
-	json.Unmarshal(encode(old.Config), &config)
+	json.Unmarshal(encode(old.Config), &defined)
 	// The first entry, as Ludock's os.Getenv reads it.
 	dir := ""
-	for _, entry := range config.Env {
+	for _, entry := range defined.Env {
 		if value, ok := strings.CutPrefix(entry, "LUDOCK_DATA_DIR="); ok {
 			dir = value
 			break
 		}
 	}
-	dir = cmp.Or(dir, "data")
+	dir = config.DataDir(dir)
 	if !path.IsAbs(dir) {
-		dir = path.Join("/", config.WorkingDir, dir)
+		dir = path.Join("/", defined.WorkingDir, dir)
 	}
 	return path.Clean(dir)
 }

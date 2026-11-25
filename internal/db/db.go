@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net/url"
 	"os"
@@ -86,7 +87,23 @@ func readHeader(path string) (header [100]byte, err error) {
 }
 
 // Open opens or initializes the database at path (":memory:" for tests).
-func Open(path string) (result *DB, err error) {
+func Open(path string) (*DB, error) { return open(path, false) }
+
+// ErrNoDatabase: OpenExisting found no database at the path.
+var ErrNoDatabase = errors.New("no database exists at the path")
+
+// OpenExisting opens the database at path only if it is there, for a
+// console command: one that initialized it could take the place of data an
+// update's rollback has moved aside for a moment.
+func OpenExisting(path string) (*DB, error) {
+	result, err := open(path, true)
+	if _, statErr := os.Lstat(path); err != nil && errors.Is(statErr, os.ErrNotExist) {
+		return nil, ErrNoDatabase
+	}
+	return result, err
+}
+
+func open(path string, existing bool) (result *DB, err error) {
 	memory := path == ":memory:"
 	if !memory {
 		if info, ok := exists(path); ok && info.Size() > 0 {
@@ -99,6 +116,10 @@ func Open(path string) (result *DB, err error) {
 		}
 	}
 	query := url.Values{"_txlock": {"immediate"}}
+	if existing {
+		// SQLite fails instead of creating the file.
+		query["mode"] = []string{"rw"}
+	}
 	// Operations are persisted before they act on Docker, so a commit must
 	// survive power loss, not only a restart. WAL defaults differ by platform.
 	query["_pragma"] = []string{"foreign_keys(1)", "busy_timeout(5000)", "synchronous(FULL)"}

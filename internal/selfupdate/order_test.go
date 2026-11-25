@@ -456,6 +456,8 @@ func TestSelfUpdateOrder(t *testing.T) {
 			g.fail["start new"] = 500
 			g.engine.Update(g.old, func(c *fakedocker.Container) {
 				c.HostConfig["Mounts"] = []map[string]any{{"Type": "bind", "Source": g.dataDir, "Target": g.dataDir, "BindOptions": map[string]any{"NonRecursive": true}}}
+				// Ludock trims its data folder's name.
+				c.Config.Env = []string{"LUDOCK_DATA_DIR= " + g.dataDir + " "}
 			})
 		}, trace: join(begin, swap, []string{"start new"}, putBack, backDone), image: oldImage, state: selfupdate.StatePutBack,
 			reason: "Docker couldn’t start the new container, for example because its port was still in use",
