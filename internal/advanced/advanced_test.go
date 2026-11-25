@@ -56,7 +56,9 @@ func TestApplyIgnoresInvalidSavedProxies(t *testing.T) {
 func TestVerboseLoggingEnds(t *testing.T) {
 	d := dbtest.Open(t)
 	t.Cleanup(func() { logging.SetLevel(logging.LevelInfo) })
-	until := time.Now().Add(200 * time.Millisecond).UnixMilli()
+	// On is checked against a time far off, so a slow machine can't reach it
+	// before the check; only then is it brought close.
+	until := time.Now().Add(time.Hour).UnixMilli()
 	if err := d.SetSetting(ctx, nil, loggingKey, loggingSetting{VerboseUntil: until}); err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +67,10 @@ func TestVerboseLoggingEnds(t *testing.T) {
 	if logging.CurrentLevel() != logging.LevelDebug || s.Logging(ctx).VerboseUntil != until {
 		t.Fatal(logging.CurrentLevel())
 	}
+	if err := d.SetSetting(ctx, nil, loggingKey, loggingSetting{VerboseUntil: time.Now().Add(50 * time.Millisecond).UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	s.Apply(ctx)
 	deadline := time.Now().Add(5 * time.Second)
 	for logging.CurrentLevel() != logging.LevelInfo {
 		if time.Now().After(deadline) {
