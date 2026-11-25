@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
@@ -89,8 +91,11 @@ type Service struct {
 	Version string
 	Poll    time.Duration
 
-	mu   sync.Mutex
-	base context.Context
+	// admit serializes starting an update with settling one, whose cleanup
+	// prunes data saves.
+	admit sync.Mutex
+	mu    sync.Mutex
+	base  context.Context
 	// lifts release each update's hold on work, by update.
 	lifts map[string]func()
 }
@@ -289,6 +294,11 @@ func (s *Service) check(ctx context.Context, dependents bool) (*docker.Container
 // Start begins updating Ludock for an administrator. Nothing may run or be
 // queued; from here until the update settles no work can start.
 func (s *Service) Start(ctx context.Context, adminID, tokenHash, ip string) error {
+	s.admit.Lock()
+	defer s.admit.Unlock()
+	if s.Updating() {
+		return errUpdating
+	}
 	own, plan, err := s.check(ctx, true)
 	if err != nil {
 		return err
@@ -545,6 +555,8 @@ func (s *Service) abandon(ctx context.Context, record Record, helper string) boo
 	if err := s.Docker.Remove(ctx, helper, true, true); err != nil && !docker.IsNotFound(err) {
 		return false
 	}
+	s.admit.Lock()
+	defer s.admit.Unlock()
 	if s.record(ctx, record, StateFailed, errHelper.Message) != nil {
 		return false
 	}
@@ -600,6 +612,8 @@ func (s *Service) judge(ctx context.Context, record Record) error {
 	// The outcome is recorded before its evidence goes, so a restart between
 	// the two records it the same way; the next start removes what is left.
 	// Work stays held until the cleanup, which prunes data saves, is done.
+	s.admit.Lock()
+	defer s.admit.Unlock()
 	if err := s.record(ctx, record, state, reason); err != nil {
 		return err
 	}
@@ -611,26 +625,36 @@ func (s *Service) judge(ctx context.Context, record Record) error {
 	return nil
 }
 
-// readSettled reads how the data step settled, never following a link.
+// readSettled reads how the data step settled, never following a link or
+// waiting on anything but a regular file.
 func readSettled(dataDir, operation string) string {
-	aside := filepath.Join(dataDir, asideName(operation))
-	if info, err := os.Lstat(aside); err != nil || !info.IsDir() {
-		return ""
-	}
-	file, err := os.OpenFile(filepath.Join(aside, "settled"), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	dir, err := unix.Open(filepath.Join(dataDir, asideName(operation)), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return ""
 	}
+	defer unix.Close(dir)
+	fd, err := unix.Openat(dir, "settled", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return ""
+	}
+	file := os.NewFile(uintptr(fd), "settled")
 	defer file.Close()
+	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
 	content, _ := io.ReadAll(io.LimitReader(file, 64))
 	return strings.TrimSpace(string(content))
 }
 
-// removeLeftovers removes the newer data a put-back moved aside, and every
-// data save but this update's.
+// removeLeftovers removes the newer data a put-back moved aside, and, once
+// this update wrote its save, every other.
 func (s *Service) removeLeftovers(operation string) {
 	if err := os.RemoveAll(filepath.Join(s.DataDir, asideName(operation))); err != nil {
 		log.Warn("Could not remove the newer data an update moved aside")
+	}
+	// Older saves make way only for this update's, if it wrote one.
+	if info, err := os.Lstat(filepath.Join(s.DataDir, SaveName(operation))); err != nil || !info.Mode().IsRegular() {
+		return
 	}
 	entries, err := os.ReadDir(s.DataDir)
 	if err != nil {
@@ -773,6 +797,8 @@ func (s *Service) Recover(ctx, base context.Context) error {
 	}
 	// What an update that ended left, if removing it failed then.
 	if !record.InProgress() {
+		s.admit.Lock()
+		defer s.admit.Unlock()
 		s.removeLeftovers(record.ID)
 		return s.removeMarkers(ctx, record.ID)
 	}
