@@ -29,6 +29,8 @@ type RestoreRequest struct {
 	// Aside names the folder below Root that setAside moves live data into,
 	// and rollbackOld any live entry in an original's way.
 	Aside string `json:"aside,omitempty"`
+	// Sync, for kept, makes a set-aside folder that holds copies durable.
+	Sync bool `json:"sync,omitempty"`
 	// Base is the helper's mount that holds Root. Moving live data out
 	// refuses any other mount on its way or inside it.
 	Base string `json:"base,omitempty"`
@@ -72,6 +74,12 @@ const RestoreHoldsStage = FileHoldsRestore
 // name. It is apart from the file helper's codes, which share one table.
 const RestoreUnsafeEntry = 20
 
+// RestoreClashUnsafe is checkReturn's exit code for anything else returning
+// the originals would refuse: what the check found, not a failure to look.
+const RestoreClashUnsafe = 21
+
+var errClashUnsafe = errors.New("an undo would refuse to move an entry")
+
 var errUnsafeEntry = errors.New("an entry an undo would move can't be moved")
 
 // StagePrefix starts the name of a restore's stage folder, which sits in the
@@ -103,6 +111,8 @@ type restoreHelper struct {
 	request RestoreRequest
 	t       tracker
 	removed int
+	// movedAside counts what this run moved into the set-aside folder.
+	movedAside int
 }
 
 func (h *restoreHelper) pinRoot() (fd, error) {
@@ -475,6 +485,14 @@ func setAsideEntry(parent fd, name string, aside fd, info *unix.Stat_t, strict b
 }
 
 func (h *restoreHelper) run() (any, error) {
+	result, err := h.step()
+	if h.request.Operation == RestoreCheckReturn && errors.Is(err, errUnsafe) && !errors.Is(err, errUnsafeEntry) {
+		err = errClashUnsafe
+	}
+	return result, err
+}
+
+func (h *restoreHelper) step() (any, error) {
 	if !validStage(h.request.Stage) {
 		return nil, errUnsafe
 	}
@@ -507,7 +525,13 @@ func (h *restoreHelper) run() (any, error) {
 		stage, err := h.pinStage(root, true)
 		return map[string]bool{"exists": stage >= 0}, err
 	case RestoreKept:
-		if kept, known, _ := h.keptAside(root); known {
+		kept, known, aside := h.keptAside(root)
+		// A copy an attempt moved aside whose sync then failed is durable
+		// before it is reported kept; one that can't be made so is unknown.
+		if known && kept && h.request.Sync && syncAll(aside) != nil {
+			known = false
+		}
+		if known {
 			return map[string]bool{"kept": kept}, nil
 		}
 		return map[string]bool{}, nil
@@ -562,22 +586,12 @@ func (h *restoreHelper) run() (any, error) {
 // whether the root holds the set-aside folder, which a retry after an
 // interruption still finds.
 func (h *restoreHelper) done(root fd) (any, error) {
-	if (h.request.Operation != RestoreRollbackOld && h.request.Operation != RestoreSetAside) || h.request.Aside == "" {
+	if h.request.Operation != RestoreRollbackOld && h.request.Operation != RestoreSetAside {
 		return map[string]bool{"ok": true}, nil
 	}
-	kept, known, aside := h.keptAside(root)
-	if !known {
-		// The step is done; only what Activity says is unknown.
-		return map[string]bool{"ok": true}, nil
-	}
-	// What an earlier attempt moved in is durable before it is reported
-	// kept, even if that attempt's sync failed.
-	if kept {
-		if err := syncAll(aside); err != nil {
-			return nil, err
-		}
-	}
-	return map[string]bool{"ok": true, "kept": kept}, nil
+	// Each move aside was synced as it ran; what earlier attempts kept is
+	// read apart from this step, so reading it never fails the step.
+	return map[string]bool{"ok": true, "setAside": h.movedAside > 0}, nil
 }
 
 // keptAside says whether copies were kept: the set-aside folder exists and
@@ -592,6 +606,10 @@ func (h *restoreHelper) keptAside(root fd) (kept, known bool, aside fd) {
 	if isNotExist(err) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) {
 		return false, true, -1
 	} else if err != nil {
+		return false, false, -1
+	}
+	// A folder mounted there holds what its owner put there, not copies.
+	if same, err := sameMount(root, aside); err != nil || !same {
 		return false, false, -1
 	}
 	children, err := names(aside)
@@ -782,6 +800,7 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 		if err := setAsideEntry(root, name, aside, info, false); err != nil {
 			return err
 		}
+		h.movedAside++
 	}
 	return syncAll(aside, stage, root)
 }
@@ -841,12 +860,19 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 			}
 			return err
 		}
+		h.movedAside++
 	}
 	// The mark, made before the first clash moved, keeps every later
-	// attempt at this root as strict.
+	// attempt at this root as strict while a copy that clash moved aside is
+	// there to show one did. A mark whose move never happened, as when an
+	// attempt was cut first, leaves main's return once the way is clear.
 	strict, err := clashMarked(stage)
 	if err != nil {
 		return err
+	}
+	if strict && h.movedAside == 0 {
+		kept, known, _ := h.keptAside(root)
+		strict = kept || !known
 	}
 	if err := h.moveContents(old, root, strict); err != nil {
 		return err
@@ -1311,7 +1337,11 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		if err != nil {
 			return err
 		}
-		return setAsideEntry(parent, name, aside, info, true)
+		if err := setAsideEntry(parent, name, aside, info, true); err != nil {
+			return err
+		}
+		h.movedAside++
+		return nil
 	case RestoreRollbackOld:
 		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 		if err != nil {
@@ -1338,6 +1368,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 				if err := setAsideEntry(parent, name, aside, live, true); err != nil {
 					return err
 				}
+				h.movedAside++
 			}
 		}
 		return move(old, "item", parent, name, info)
@@ -1383,6 +1414,8 @@ func RunRestore(argument string, stdout, stderr io.Writer) int {
 			return RestoreHoldsStage
 		case errors.Is(err, errUnsafeEntry):
 			return RestoreUnsafeEntry
+		case errors.Is(err, errClashUnsafe):
+			return RestoreClashUnsafe
 		}
 		return 1
 	}

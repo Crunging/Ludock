@@ -752,9 +752,16 @@ func TestRenamesNeverClobber(t *testing.T) {
 	os.WriteFile(filepath.Join(other, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")), nil, 0o644)
 	plain, _ := json.Marshal(RestoreRequest{Root: other, Stage: stage, Operation: RestoreRollbackOld,
 		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: other})
-	var said bytes.Buffer
-	if RunRestore(string(plain), &said, io.Discard) != 0 || !strings.Contains(said.String(), `"kept":false`) {
-		t.Fatal("returned nothing past a file at the set-aside name:", said.String())
+	// What the folder holds is read apart from any step.
+	kept := func(root string, sync bool) string {
+		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreKept,
+			Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Sync: sync, Base: root})
+		var out bytes.Buffer
+		RunRestore(string(request), &out, io.Discard)
+		return out.String()
+	}
+	if RunRestore(string(plain), io.Discard, io.Discard) != 0 || kept(other, false) != `{"kept":false}` {
+		t.Fatal("returned nothing past a file at the set-aside name:", kept(other, false))
 	}
 	// An empty set-aside folder kept nothing, and a filesystem that answers
 	// the flagged rename with EOPNOTSUPP still gets the plain one.
@@ -762,9 +769,8 @@ func TestRenamesNeverClobber(t *testing.T) {
 	os.Mkdir(filepath.Join(other, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")), 0o700)
 	os.WriteFile(filepath.Join(other, stage, "old", "whitelist.json"), []byte("original"), 0o644)
 	renameat2 = func(int, string, int, string, uint) error { return unix.EOPNOTSUPP }
-	said.Reset()
-	if RunRestore(string(plain), &said, io.Discard) != 0 || !strings.Contains(said.String(), `"kept":false`) {
-		t.Fatal("returned nothing past EOPNOTSUPP, or claimed an empty folder:", said.String())
+	if RunRestore(string(plain), io.Discard, io.Discard) != 0 || kept(other, false) != `{"kept":false}` {
+		t.Fatal("returned nothing past EOPNOTSUPP, or claimed an empty folder:", kept(other, false))
 	}
 	renameat2 = original
 	// Once this undo set a copy aside, every retry returns only by
@@ -836,6 +842,34 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(marked, "ops.json")); string(data) != "original" {
 		t.Fatal("didn't return the original:", string(data))
 	}
+	// A record left by an attempt cut before its first move, with no copy
+	// aside to show a clash moved, leaves main's return once the way is
+	// clear.
+	os.Rename(filepath.Join(marked, "ops.json"), filepath.Join(marked, stage, "old", "ops.json"))
+	os.Remove(filepath.Join(marked, stage, "clash"))
+	os.WriteFile(filepath.Join(marked, stage, "clash"), nil, 0o600)
+	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
+	if RunRestore(string(markedReturn), io.Discard, io.Discard) != 0 {
+		t.Fatal("a record with nothing moved refused main's return")
+	}
+	renameat2 = original
+	// A folder mounted at the set-aside name holds no copies Ludock knows.
+	os.MkdirAll(filepath.Join(marked, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), "theirs"), 0o700)
+	asidePath := filepath.Join(marked, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"))
+	mountOf = func(descriptor fd) (uint64, error) {
+		if path, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(int(descriptor))); path == asidePath {
+			return 999, nil
+		}
+		return mountID(descriptor)
+	}
+	markedKept, _ := json.Marshal(RestoreRequest{Root: marked, Stage: stage, Operation: RestoreKept,
+		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: marked})
+	var mountedSaid bytes.Buffer
+	RunRestore(string(markedKept), &mountedSaid, io.Discard)
+	mountOf = mountID
+	if mountedSaid.String() != `{}` {
+		t.Fatal("reported a mounted folder's contents as kept copies:", mountedSaid.String())
+	}
 	// A record an attempt made, whose folder that attempt couldn't sync, is
 	// synced before a retry relies on it.
 	os.Remove(filepath.Join(marked, stage, "clash"))
@@ -870,8 +904,8 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "game made" {
 		t.Fatal("moved the live copy:", string(data))
 	}
-	// A retry makes the set-aside folder durable before saying it holds a
-	// copy, though nothing is left in the way.
+	// The read that follows a retry makes the set-aside folder durable
+	// before saying it holds a copy, though nothing is left in the way.
 	if RunRestore(string(item), io.Discard, io.Discard) != 0 {
 		t.Fatal("returned nothing")
 	}
@@ -882,10 +916,13 @@ func TestRenamesNeverClobber(t *testing.T) {
 		return unix.Fsync(descriptor)
 	}
 	t.Cleanup(func() { fsync = unix.Fsync })
-	var out bytes.Buffer
-	if RunRestore(string(item), &out, io.Discard) != 0 || !strings.Contains(out.String(), `"kept":true`) ||
-		!slices.Contains(synced, filepath.Join(root, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"))) {
-		t.Fatalf("retry said %s, synced %q", out.String(), synced)
+	if said := kept(root, true); said != `{"kept":true}` || !slices.Contains(synced, filepath.Join(root, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"))) {
+		t.Fatalf("read said %s, synced %q", said, synced)
+	}
+	// One whose sync fails is not reported kept, and fails no step.
+	fsync = func(int) error { return unix.EIO }
+	if said := kept(root, true); said != `{}` {
+		t.Fatalf("read said %s of a folder it couldn't sync", said)
 	}
 }
 

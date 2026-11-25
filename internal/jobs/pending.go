@@ -148,7 +148,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		}
 		return note
 	}
-	finish := &restoreFinish{note: note, by: job}
+	finish := &restoreFinish{note: note, by: job, pending: true}
 	err = func() error {
 		if job != nil {
 			if err := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID = data.Container }, nil); err != nil {
@@ -243,10 +243,12 @@ func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *bac
 			// Returning originals sets aside what is in their way, which is
 			// refused before anything moves. Before the stop, only what the
 			// game can't change is: a mount or a second name in its data may
-			// go as it shuts down.
+			// go as it shuts down. A check that couldn't run refuses nothing:
+			// returning the originals checks again before it moves anything.
 			if entry.Phase == "moving_old" || entry.Phase == "rolling_back" {
-				if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, restore, helper.RestoreCheckReturn, assertAccess); err != nil &&
-					(stopped || apperr.Is(err, backups.ErrUndoEntryUnsafe.Code)) {
+				_, err := j.restoreStep(ctx, data, rootPath, entry.Item, restore, helper.RestoreCheckReturn, assertAccess)
+				if apperr.Is(err, backups.ErrUndoEntryUnsafe.Code) || (stopped && (apperr.Is(err, backups.ErrUndoClashUnsafe.Code) ||
+					apperr.Is(err, backups.ErrHostMount.Code) || apperr.Is(err, backups.StageInside("").Code))) {
 					return false, false, err
 				}
 			}
