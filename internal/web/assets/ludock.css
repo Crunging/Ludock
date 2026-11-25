@@ -1156,6 +1156,7 @@ td > .cancel-form { display: block; margin-top: 6px; }
 .backup-storage__values dt { color: var(--ink-3); font-size: 13px; }
 .backup-storage__values dd { font-family: var(--display); font-size: 21px; font-weight: 600; }
 .backup-storage__issues { color: var(--halt-text); font-size: 14px; }
+.backup-storage__removed { font-size: 14px; }
 .admin-root-options { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .admin-root-options .secondary-btn { max-width: 100%; white-space: normal; text-align: left; }
 .backup-storage__folder { grid-column: 1 / -1; }

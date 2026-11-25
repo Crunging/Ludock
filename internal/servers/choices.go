@@ -450,6 +450,10 @@ func (s *Service) byExternal(ctx context.Context, external string) (*identity.Se
 	return nil, apperr.New("SERVER_NOT_FOUND", 404, "The container changed before it could be added. Refresh the list and try again.")
 }
 
+// RemoveKeepsBackups is why a missing server that still has backups can't
+// be removed.
+const RemoveKeepsBackups = "Delete this server’s backups on its Backups tab, or move them to its new server, before removing it from Ludock."
+
 // Remove stops Ludock managing a server, as a ludock.enable: "false" label
 // would: its sharing, schedules, and backups are kept for when it is added
 // again, and it leaves the server list once its container is out of
@@ -485,6 +489,17 @@ func (s *Service) Remove(ctx context.Context, adminID, tokenHash, id string, aud
 		}
 		if active > 0 {
 			return apperr.New("OPERATION_ACTIVE", 409, "Wait for the work in progress to finish, then remove it.")
+		}
+		// A missing server can't be added back from the list, so its
+		// backups would be out of reach while they still count toward the
+		// total limit.
+		var stranded bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM logical_servers s JOIN backups b ON b.server_id = s.id
+      WHERE s.id = ? AND s.status = 'missing' AND b.state = 'complete')`, id).Scan(&stranded); err != nil {
+			return err
+		}
+		if stranded {
+			return apperr.New("SERVER_HAS_BACKUPS", 409, RemoveKeepsBackups)
 		}
 		return nil
 	})

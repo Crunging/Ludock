@@ -671,6 +671,14 @@ type StorageStatus struct {
 	// DataProblem why that or its second copy is failing.
 	DataSavedAt int64
 	DataProblem string
+	// Removed are the servers removed from Ludock that still have backups,
+	// which no server list shows.
+	Removed []RemovedServer
+}
+
+type RemovedServer struct {
+	ID, Name string
+	Backups  int
 }
 
 // inspect checks storage; for a server, room its backups' retention may free
@@ -769,7 +777,27 @@ func (s *Service) inspect(ctx context.Context, serverID string, measure bool) (S
 
 func (s *Service) Status(ctx context.Context) StorageStatus {
 	status, _ := s.inspect(ctx, "", true)
+	status.Removed = s.removedServers(ctx)
 	return status
+}
+
+func (s *Service) removedServers(ctx context.Context) []RemovedServer {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, display_name, (SELECT COUNT(*) FROM backups WHERE server_id = logical_servers.id
+    AND state = 'complete') AS complete FROM logical_servers WHERE `+identity.RemovedServer+` AND complete > 0
+    ORDER BY display_name COLLATE NOCASE, id`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var removed []RemovedServer
+	for rows.Next() {
+		var server RemovedServer
+		if rows.Scan(&server.ID, &server.Name, &server.Backups) != nil {
+			return nil
+		}
+		removed = append(removed, server)
+	}
+	return removed
 }
 
 // Preflight is advisory only: no helpers, locks, stops, archive writes, or

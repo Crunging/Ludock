@@ -203,6 +203,7 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 			from, _ := s.App.Identity.Get(r.Context(), d.Row.Server.ID)
 			d.TakeOver = s.takeOverOffer(r.Context(), from, all)
 		}
+		d.Removed, _ = s.App.Identity.Removed(r.Context(), d.Row.Server.ID)
 	}
 	page := s.page(r, request, d.Row.Server.DisplayName)
 	page.Path = "/"
