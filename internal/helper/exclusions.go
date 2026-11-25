@@ -10,29 +10,37 @@ import (
 // parent mount's own entry, which the game never sees. Paths are compared
 // by spelling, but storage that matches names case-insensitively or with
 // normalization opens that entry under other spellings too, so the
-// exclusion also holds by identity: each destination is resolved once, at
-// the start of a command, to the entry it names and the folders on the way
-// to it.
+// exclusion also holds by identity: an entry is refused when it is what a
+// destination's path names now, or named when the command began.
 type exclusions struct {
-	// entries are the excluded destinations themselves, which nothing may
-	// open or change.
-	entries map[identity]bool
-	// ancestors are the folders that hold one, which a change to a whole
-	// folder (delete, rename, move, download) may not take.
-	ancestors map[identity]bool
-	// unresolved are, for destinations whose entry couldn't be found, the
-	// deepest folder found on the way, with the names missing from it.
-	// Nothing is written into it, since an entry made there could become
-	// the destination, and one that appears under such a name later in the
-	// command is refused like an excluded entry.
-	unresolved map[identity][]missingName
-	// missing are those destinations, walked again by their spelling at each
-	// check, in case the folder they stopped at was replaced meanwhile.
-	missing []string
+	// start is where the paths led when the command began; its folders and
+	// entries stay open until it ends, since some filesystems, such as exFAT,
+	// number an entry anew once it leaves their cache.
+	start snapshot
+	// current is where they lead now, walked again for each folder looked
+	// into: once for a whole listing, once per folder of a recursive walk.
+	current snapshot
+	at      identity
+	fresh   bool
 }
 
-// missingName is a name an unresolved destination lacks; only its last one
-// is the destination itself, and any other must be a folder to lead there.
+// snapshot is where the excluded destinations' paths lead at one moment.
+type snapshot struct {
+	// entries are the destinations themselves, which nothing may open or
+	// change.
+	entries map[identity]bool
+	// folders are those on the way to one, which a change to a whole folder
+	// (delete, rename, move, download) may not take.
+	folders map[identity]bool
+	// stops are, for a path that stops short, the deepest folder found, with
+	// the name missing from it. Nothing is written into it, since an entry
+	// made there could become the destination, and one that has appeared
+	// under that name is refused like an excluded entry.
+	stops map[identity][]missingName
+}
+
+// missingName is a name a path lacks; only its last one is the destination
+// itself, and any other must be a folder to lead there.
 type missingName struct {
 	name string
 	last bool
@@ -58,118 +66,103 @@ var folderOperations = map[string]bool{"upload-files": true, "upload-prepare": t
 var readOnlyOperations = map[string]bool{"list": true, "stat": true, "download": true, "download-paths": true, "check": true,
 	"space": true, "mounts": true, "backup": true}
 
-// resolveExclusions walks each excluded destination from "/" without
-// following links, then refuses any later open of one of its entries.
+// resolveExclusions takes the start's snapshot, then refuses any later open
+// of an excluded entry.
 func (h *fileHelper) resolveExclusions() {
 	if len(h.request.Blocked) == 0 {
 		return
 	}
-	h.excluded = exclusions{entries: map[identity]bool{}, ancestors: map[identity]bool{}, unresolved: map[identity][]missingName{}}
-	for _, destination := range h.request.Blocked {
-		h.resolveExclusion(destination)
-	}
+	h.excluded.start = h.snapshot(func(descriptor int) { h.t.add(fd(descriptor)) })
 	h.t.refuse = h.excludedIn
 	exclusionsResolved()
 }
 
-// resolveExclusion records a destination's entry and the folders on its
-// way, holding each open until the command ends: some filesystems, such as
-// exFAT, number an entry anew once it leaves their cache. Where the entry
-// can't be found, the deepest folder reached is recorded instead.
-func (h *fileHelper) resolveExclusion(destination string) {
+// snapshot walks every destination from "/" by its spelling, without
+// following links or the tracker's refusal. keep, when set, keeps each
+// descriptor it opens.
+func (h *fileHelper) snapshot(keep func(int)) snapshot {
+	taken := snapshot{entries: map[identity]bool{}, folders: map[identity]bool{}, stops: map[identity][]missingName{}}
+	for _, destination := range h.request.Blocked {
+		taken.walk(destination, keep)
+	}
+	return taken
+}
+
+func (s snapshot) walk(destination string, keep func(int)) {
+	release := func(descriptor int) {
+		if keep != nil {
+			keep(descriptor)
+		} else {
+			unix.Close(descriptor)
+		}
+	}
 	parts, err := components(destination)
 	if err != nil || len(parts) == 0 {
 		return
 	}
-	current, err := h.t.openPath("/", directoryFlags)
+	current, err := unix.Open("/", directoryFlags, 0)
 	if err != nil {
 		return
 	}
+	defer func() { release(current) }()
 	for index, part := range parts {
-		info, err := fstat(current)
-		if err != nil {
+		var folder unix.Stat_t
+		if unix.Fstat(current, &folder) != nil {
 			return
 		}
+		s.folders[identityOf(&folder)] = true
 		if index == len(parts)-1 {
-			if entry, err := h.t.openAt(current, part, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0); err == nil {
-				if entryInfo, err := fstat(entry); err == nil {
-					h.excluded.ancestors[identityOf(info)] = true
-					h.excluded.entries[identityOf(entryInfo)] = true
-					return
+			if entry, err := unix.Openat(current, part, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0); err == nil {
+				var info unix.Stat_t
+				if unix.Fstat(entry, &info) == nil {
+					s.entries[identityOf(&info)] = true
 				}
+				release(entry)
+				return
 			}
-		} else if next, err := h.t.openAt(current, part, directoryFlags, 0); err == nil {
-			h.excluded.ancestors[identityOf(info)] = true
-			current = next
-			continue
+			s.stops[identityOf(&folder)] = append(s.stops[identityOf(&folder)], missingName{part, true})
+			return
 		}
-		h.excluded.unresolved[identityOf(info)] = append(h.excluded.unresolved[identityOf(info)], missingName{part, index == len(parts)-1})
-		h.excluded.missing = append(h.excluded.missing, destination)
-		return
+		next, err := unix.Openat(current, part, directoryFlags, 0)
+		if err != nil {
+			s.stops[identityOf(&folder)] = append(s.stops[identityOf(&folder)], missingName{part, false})
+			return
+		}
+		release(current)
+		current = next
 	}
 }
 
+// now is where the paths lead as of looking into folder.
+func (h *fileHelper) now(folder *unix.Stat_t) snapshot {
+	if !h.excluded.fresh || h.excluded.at != identityOf(folder) {
+		h.excluded.current, h.excluded.at, h.excluded.fresh = h.snapshot(nil), identityOf(folder), true
+	}
+	return h.excluded.current
+}
+
 // excludedIn reports an entry of parent that an excluded mount hides from
-// the game: one resolved at the start, or one that has since appeared where
-// an unresolved destination was missing, in the folder it stopped at or in
-// one that replaced it. Storage that matches names loosely may reach that
-// one under another spelling, so it is found by looking the missing name up
-// again and comparing identities.
+// the game: what a destination's path names now or named at the start,
+// including one that has appeared where a path stopped short. Storage that
+// matches names loosely may reach it under another spelling, so it is found
+// by identity, looking a missing name up again in parent.
 func (h *fileHelper) excludedIn(parent fd, info *unix.Stat_t) bool {
-	if info == nil {
+	if len(h.request.Blocked) == 0 || info == nil {
 		return false
 	}
-	if h.excluded.entries[identityOf(info)] {
+	if h.excluded.start.entries[identityOf(info)] {
 		return true
-	}
-	if len(h.excluded.missing) == 0 {
-		return false
 	}
 	folder, err := fstat(parent)
 	if err != nil {
 		return true
 	}
-	appeared := func(missing missingName) bool {
-		entry, err := lstatAt(parent, missing.name)
-		return err == nil && sameInode(entry, info) && (missing.last || isDir(entry))
-	}
-	for _, missing := range h.excluded.unresolved[identityOf(folder)] {
-		if appeared(missing) {
+	for _, taken := range []snapshot{h.excluded.start, h.now(folder)} {
+		if taken.entries[identityOf(info)] {
 			return true
 		}
-	}
-	for _, destination := range h.excluded.missing {
-		path := walkDestination(destination)
-		if (path.entry != nil && sameInode(path.entry, info)) || (path.stop != nil && sameInode(path.stop, folder) && appeared(path.missing)) {
-			return true
-		}
-	}
-	return false
-}
-
-// stoppedAt reports a folder an unresolved destination stops at, at the
-// start or now.
-func (h *fileHelper) stoppedAt(folder *unix.Stat_t) bool {
-	if h.excluded.unresolved[identityOf(folder)] != nil {
-		return true
-	}
-	for _, destination := range h.excluded.missing {
-		if path := walkDestination(destination); path.stop != nil && sameInode(path.stop, folder) {
-			return true
-		}
-	}
-	return false
-}
-
-// onMissingPath reports a folder that is, at the start or now, on the way to
-// an unresolved destination, which a change to a whole folder may not take.
-func (h *fileHelper) onMissingPath(folder *unix.Stat_t) bool {
-	if h.stoppedAt(folder) {
-		return true
-	}
-	for _, destination := range h.excluded.missing {
-		for _, ancestor := range walkDestination(destination).folders {
-			if sameInode(&ancestor, folder) {
+		for _, missing := range taken.stops[identityOf(folder)] {
+			if entry, err := lstatAt(parent, missing.name); err == nil && sameInode(entry, info) && (missing.last || isDir(entry)) {
 				return true
 			}
 		}
@@ -177,53 +170,14 @@ func (h *fileHelper) onMissingPath(folder *unix.Stat_t) bool {
 	return false
 }
 
-// destinationPath is where a destination's spelling leads now: the folders
-// on the way, the deepest with the name missing from it, or the entry itself
-// if it exists.
-type destinationPath struct {
-	folders []unix.Stat_t
-	stop    *unix.Stat_t
-	missing missingName
-	entry   *unix.Stat_t
+// stoppedAt reports a folder a path stops short at, at the start or now.
+func (h *fileHelper) stoppedAt(folder *unix.Stat_t) bool {
+	return h.excluded.start.stops[identityOf(folder)] != nil || h.now(folder).stops[identityOf(folder)] != nil
 }
 
-// walkDestination walks destination from "/" by its spelling, without
-// following links or the tracker's refusal.
-func walkDestination(destination string) destinationPath {
-	var path destinationPath
-	parts, err := components(destination)
-	if err != nil || len(parts) == 0 {
-		return path
-	}
-	current, err := unix.Open("/", directoryFlags, 0)
-	if err != nil {
-		return path
-	}
-	defer func() { unix.Close(current) }()
-	for index, part := range parts {
-		var folder unix.Stat_t
-		if unix.Fstat(current, &folder) != nil {
-			return destinationPath{}
-		}
-		path.folders = append(path.folders, folder)
-		if index == len(parts)-1 {
-			var entry unix.Stat_t
-			if unix.Fstatat(current, part, &entry, unix.AT_SYMLINK_NOFOLLOW) == nil {
-				path.entry = &entry
-			} else {
-				path.stop, path.missing = &folder, missingName{part, true}
-			}
-			return path
-		}
-		next, err := unix.Openat(current, part, directoryFlags, 0)
-		if err != nil {
-			path.stop, path.missing = &folder, missingName{part, false}
-			return path
-		}
-		unix.Close(current)
-		current = next
-	}
-	return path
+// onPath reports a folder on the way to a destination, at the start or now.
+func (h *fileHelper) onPath(folder *unix.Stat_t) bool {
+	return h.excluded.start.folders[identityOf(folder)] || h.now(folder).folders[identityOf(folder)]
 }
 
 // checkIdentity refuses relative, below the root, when it is an excluded
@@ -276,7 +230,7 @@ func (h *fileHelper) checkIdentityOf(relative string, recursive, entry bool) (er
 			return nil
 		}
 	}
-	if h.excludedIn(folder, target) || (recursive && (h.excluded.ancestors[identityOf(target)] || h.onMissingPath(target))) {
+	if h.excludedIn(folder, target) || (recursive && h.onPath(target)) {
 		return errExcluded
 	}
 	return nil
@@ -293,5 +247,5 @@ func (h *fileHelper) checkFolder(relative string, recursive bool) error {
 // writesInto reports a write into a folder an unresolved exclusion stopped
 // at; a move checks its destination with it.
 func (h *fileHelper) writesInto(folder *unix.Stat_t) bool {
-	return !readOnlyOperations[h.request.Operation] && h.stoppedAt(folder)
+	return !readOnlyOperations[h.request.Operation] && len(h.request.Blocked) > 0 && h.stoppedAt(folder)
 }

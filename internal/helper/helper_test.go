@@ -1119,7 +1119,8 @@ func TestExclusionsHoldByIdentity(t *testing.T) {
 	if got := listTree(t, filepath.Join(root, "A")); !slices.Equal(got, []string{"deep", "deep/hidden.txt"}) {
 		t.Fatal(got)
 	}
-	// Everything else still works.
+	// Everything else still works, with the exclusions where they were.
+	exclusionsResolved = func() {}
 	swap("MODS A", "mods a")
 	if _, code := runFile(t, FileRequest{Operation: "upload", Root: root, Path: "fine.txt", Size: &size, UploadID: id, Blocked: blocked},
 		[]byte("12345"+id)); code != 0 {
@@ -1209,6 +1210,33 @@ func TestExclusionsHoldByIdentity(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "e", "f")); err != nil {
 		t.Fatal(err)
+	}
+	// One present at the start and replaced after it by another folder is
+	// refused both as the folder its path names now and as the one it named.
+	for _, folder := range []string{"g", "spare"} {
+		os.MkdirAll(filepath.Join(root, folder), 0o755)
+		os.WriteFile(filepath.Join(root, folder, "hidden.txt"), []byte("hidden"), 0o644)
+	}
+	exclusionsResolved = func() {
+		os.Rename(filepath.Join(root, "g"), filepath.Join(root, "g-old"))
+		os.Rename(filepath.Join(root, "spare"), filepath.Join(root, "g"))
+	}
+	for _, request := range []FileRequest{
+		{Operation: "list", Path: "g"},
+		{Operation: "download", Path: "g/hidden.txt"},
+		{Operation: "upload", Path: "g/new.txt", Size: &size, UploadID: id},
+		{Operation: "download", Path: "g-old/hidden.txt"},
+		{Operation: "list"},
+	} {
+		os.Rename(filepath.Join(root, "g"), filepath.Join(root, "spare"))
+		os.Rename(filepath.Join(root, "g-old"), filepath.Join(root, "g"))
+		request.Root, request.Blocked = root, []string{root + "//g"}
+		out, code := runFile(t, request, []byte("12345"+id))
+		if request.Path == "" && (code != 0 || strings.Contains(out, `"g"`) || strings.Contains(out, `"g-old"`)) {
+			t.Error("listed a replaced exclusion", code, out)
+		} else if request.Path != "" && code == 0 {
+			t.Error(request.Operation, request.Path, "reached a replaced exclusion")
+		}
 	}
 	// A file where a folder on the way should be can't hold the exclusion,
 	// so it stays listed.
