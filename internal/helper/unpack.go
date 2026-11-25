@@ -183,14 +183,17 @@ func (u *unpacker) entry(name string) ([]string, error) {
 	if err := u.stopped(); err != nil {
 		return nil, err
 	}
-	parts, err := archiveParts(name, u.limits.Depth)
-	if err == nil {
-		u.longest = max(u.longest, len(strings.Join(parts, "/")))
-	}
-	return parts, err
+	return archiveParts(name, u.limits.Depth)
+}
+
+// extracted counts the path of an entry that is unpacked, not skipped,
+// toward longest.
+func (u *unpacker) extracted(parts []string) {
+	u.longest = max(u.longest, len(strings.Join(parts, "/")))
 }
 
 func (u *unpacker) mkdir(parts []string) error {
+	u.extracted(parts)
 	directory, err := u.directory(parts)
 	if err == nil {
 		u.h.t.close(directory)
@@ -205,6 +208,7 @@ func (u *unpacker) file(parts []string, body io.Reader) error {
 	if len(parts) == 0 {
 		return errArchiveUnsafe
 	}
+	u.extracted(parts)
 	directory, err := u.directory(parts[:len(parts)-1])
 	if err != nil {
 		return err

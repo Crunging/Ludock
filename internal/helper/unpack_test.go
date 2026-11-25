@@ -175,12 +175,18 @@ func TestUnpackFormatsAndNames(t *testing.T) {
 	if result, code := unpackFile(t, root, deep+"/w.tar", tarArchive(t, []archived{{name: long + "/", flag: tar.TypeDir}, {name: long + "/a", body: "a"}})); code != 0 || result.Name != "w" {
 		t.Fatal(result, code)
 	}
+	// A skipped link's long name doesn't count.
+	link := strings.Repeat("l", 200)
+	if result, code := unpackFile(t, root, deep+"/v.tar", tarArchive(t, []archived{{name: "pack/", flag: tar.TypeDir}, {name: "pack/a", body: "a"},
+		{name: "pack/" + link, flag: tar.TypeSymlink, link: "a"}})); code != 0 || result.Name != "pack" {
+		t.Fatal(result, code)
+	}
 	// One whose files would pass it even so is refused, and leaves nothing.
 	deeper := long + "/" + strings.Repeat("f", 100)
 	if _, code := unpackFile(t, root, deep+"/x.tar", tarArchive(t, []archived{{name: long + "/", flag: tar.TypeDir}, {name: deeper, body: "f"}})); code != FileArchiveDeep {
 		t.Fatal("unpacked files Files can't open", code)
 	}
-	if got := listTree(t, filepath.Join(root, deep)); !reflect.DeepEqual(got, []string{"w", "w/a", "w.tar", "x.tar"}) {
+	if got := listTree(t, filepath.Join(root, deep)); !reflect.DeepEqual(got, []string{"pack", "pack/a", "v.tar", "w", "w/a", "w.tar", "x.tar"}) {
 		t.Fatal(got)
 	}
 }

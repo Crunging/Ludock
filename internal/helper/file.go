@@ -693,12 +693,13 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// between the last check and the publish goes unseen. When the root is
 	// its own mount, the game can't move a folder out of it through that
 	// mount (a rename across it gets EXDEV); only another mount of the same
-	// storage can, on the host or in another container, and whoever holds
-	// that can already write there. When the root is a folder inside a
-	// larger mount, the game can move a folder out of the root within that
-	// mount, but only to where the game itself can already write. So this
-	// catches a move during a long transfer and reports it; it is not a
-	// boundary against either.
+	// storage can, on the host, in another container, or in the game's own
+	// container when one of its mounts exposes a parent of the root, and
+	// whoever holds that can already write there. When the root is a folder
+	// inside a larger mount, the game can move a folder out of the root within
+	// that mount, but only to where the game itself can already write. So
+	// this catches a move during a long transfer and reports it; it is not a
+	// boundary against any of them.
 	unchanged := func() error {
 		current, err := uploadTarget(parent, name)
 		if err != nil {
