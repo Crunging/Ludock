@@ -264,8 +264,10 @@ templ DetailLive(d ServerDetail) {
 		} else {
 			<div class="alert alert--error" role="alert">{ BindingNote(string(server.BindingStatus)) } Controls come back once Docker has exactly one container for it.</div>
 		}
-		if d.UndoBlocked {
+		if d.UndoBlocked && d.Admin {
 			@Alert("warning", UndoBlockedNote)
+		} else if d.UndoBlocked {
+			@Alert("warning", "Backups of this server are paused: an earlier restore stopped partway, and an administrator needs to finish undoing it.")
 		}
 		// The notice points to progress the page doesn't already show.
 		if operation := server.ActiveOperation; operation != nil && d.Tab != "activity" && operation.ID != d.Operation {
