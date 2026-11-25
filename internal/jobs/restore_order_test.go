@@ -634,8 +634,9 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 		// where to look; checkFails: the checks of what is in the way can't
 		// run, which refuses nothing.
 		unreadable, checkFails bool
-		// finalFails: the final journal's write fails.
-		finalFails bool
+		// finalFails: the final journal's write fails; helperFails: no
+		// helper can start once the server stops.
+		finalFails, helperFails bool
 		// plain: nothing was set aside, so Activity says only that the
 		// previous data is back.
 		plain bool
@@ -788,6 +789,12 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
 			}, lostStep: helper.RestoreRollbackOld, lostHelper: true, guidance: "can’t confirm", aside: map[string]string{"world/level.dat": "new run"}},
+		// No helper starts: the undo fails, and both Activity entries say
+		// where to look.
+		{name: "helper can't start", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, helperFails: true},
 		// The final journal's write fails: neither Activity note is saved.
 		{name: "final write fails", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
@@ -890,7 +897,7 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				}
 			}
 			if c.recovered {
-				journal, says := "rolled_back put back kept", "Ludock moved what"
+				journal, says := "rolled_back put back kept", "Anything Ludock moved"
 				if c.unreadable {
 					journal, says = "rolled_back put back", "couldn’t check the folder"
 				}
@@ -942,6 +949,16 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				if undo.Status != ops.Failed || undo.Error != c.refusal || stopped != c.afterStop || !f.running() ||
 					f.savedJournal(job.ID) != journal || !maps.Equal(liveFiles(t, f.data), live) {
 					t.Errorf("%s %q, stopped %v, running %v, journal %s", undo.Status, undo.Error, stopped, f.running(), f.savedJournal(job.ID))
+				}
+				return
+			}
+			if c.helperFails {
+				f.engine.AddFault(`^POST .*/containers/create`, 500, false, 0)
+				undo := f.run(t, ops.KindUndoRestore, nil)
+				restore, _ := f.runner.Get(ctx, job.ID)
+				if undo.Status != ops.Failed || !strings.Contains(restore.Result.Guidance, "couldn’t check the folder "+aside) ||
+					!strings.Contains(undo.Result.UndoNote, restore.Result.Guidance) {
+					t.Errorf("%s %q, Activity says %q, the undo %q", undo.Status, undo.Error, restore.Result.Guidance, undo.Result.UndoNote)
 				}
 				return
 			}
@@ -1017,7 +1034,7 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 					t.Errorf("Activity claims what the folder holds now: %q", note)
 				}
 				// A folder is named exactly when copies were kept in it.
-				if strings.Contains(note, aside) == c.plain || strings.Contains(note, "Ludock moved what") == c.plain || !strings.Contains(note, "back in place") {
+				if strings.Contains(note, aside) == c.plain || strings.Contains(note, "Anything Ludock moved") == c.plain || !strings.Contains(note, "back in place") {
 					t.Errorf("Activity says %q", note)
 				}
 			}
@@ -1057,7 +1074,7 @@ func TestUndoKeepsCopiesAcrossRoots(t *testing.T) {
 	})
 	undo := f.run(t, ops.KindUndoRestore, nil)
 	restore, _ := f.runner.Get(ctx, job.ID)
-	if guidance := restore.Result.Guidance; undo.Status != ops.Failed || !strings.Contains(guidance, "Ludock moved what was in the way of the server’s previous data to the folder "+aside) ||
+	if guidance := restore.Result.Guidance; undo.Status != ops.Failed || !strings.Contains(guidance, "Anything Ludock moved out of the way of the server’s previous data went to the folder "+aside) ||
 		read(t, filepath.Join(f.data, "config", aside, "large.dat")) != "new run" {
 		t.Errorf("%s %q, journal %s, Activity says %q", undo.Status, undo.Error, f.savedJournal(job.ID), guidance)
 	}

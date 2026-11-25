@@ -290,7 +290,7 @@ var helperErrors = &launch.ExecErrors{Timeout: errTimeout, Failed: errFailed, Un
 // file, or a file with a second name.
 // ErrUndoClashUnsafe is what undoing the restore would refuse to move found
 // once the server stopped, as opposed to a check that couldn't run.
-var ErrUndoClashUnsafe = fail("RESTORE_UNDO_IN_THE_WAY", "Undoing the restore would have to move something in the server’s data that is a link, a special file, a file with a second name elsewhere, or on another disk, so Ludock went no further and started the server again if it was running. That restore’s Activity says where the server’s previous data is.")
+var ErrUndoClashUnsafe = fail("RESTORE_UNDO_IN_THE_WAY", "Undoing the restore would have to move something in the server’s data that is a link, a special file, a file with a second name elsewhere, or on another disk, so Ludock went no further. That restore’s Activity says where the server’s previous data is.")
 
 var ErrUndoEntryUnsafe = fail("RESTORE_UNDO_UNSAFE", "Undoing the restore would have to move something in the server’s data that is a link, a special file, or a file with a second name elsewhere, so Ludock went no further. That restore’s Activity says where the server’s previous data is.")
 

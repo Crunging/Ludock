@@ -682,7 +682,7 @@ func TestRenamesNeverClobber(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "aside", to), []byte("made meanwhile"), 0o644)
 		return original(fromFD, from, toFD, to, flags)
 	}
-	if err := setAsideEntry(parent, "b.txt", fd(aside), stat("b.txt"), true); err == nil {
+	if err := setAsideEntry(parent, "b.txt", fd(aside), stat("b.txt"), strictRename); err == nil {
 		t.Fatal("replaced a file made meanwhile")
 	}
 	if data, _ := os.ReadFile(filepath.Join(dir, "aside", "b.txt")); string(data) != "made meanwhile" {
@@ -743,8 +743,10 @@ func TestRenamesNeverClobber(t *testing.T) {
 		os.Rename(filepath.Join(root, "ops.json"), filepath.Join(root, stage, "old", "ops.json"))
 		os.Rename(filepath.Join(dir, "cleared"), filepath.Join(root, "ops.json"))
 	}
-	// On one that has it, every move of the run uses it, so a later
-	// "unsupported" answer fails the step and never becomes a plain rename.
+	// On one that has it, as the run's first flagged rename finds, every
+	// later move uses it, so an "unsupported" answer then fails the step and
+	// never becomes a plain rename.
+	os.WriteFile(filepath.Join(root, stage, "old", "whitelist.json"), []byte("original"), 0o644)
 	calls := 0
 	renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
 		if calls++; calls > 1 {
@@ -792,7 +794,30 @@ func TestRenamesNeverClobber(t *testing.T) {
 	}
 	mountOf = mountID
 	os.Remove(filepath.Join(root, asideName, "theirs"))
-	// One item's return needs RENAME_NOREPLACE, so without it nothing moves.
+	os.Remove(filepath.Join(root, asideName))
+	// Finding out about RENAME_NOREPLACE needs a scratch file only where
+	// something is in the way, which main refuses anyway: on a full disk, a
+	// clear return still finishes, and a clash is refused with nothing made.
+	// A stage it can't write in stands in for the full disk; root writes
+	// anyway.
+	if os.Geteuid() != 0 {
+		os.WriteFile(filepath.Join(root, stage, "old", "ops.json"), []byte("original"), 0o644)
+		os.WriteFile(filepath.Join(root, "ops.json"), []byte("game made"), 0o644)
+		os.Chmod(filepath.Join(root, stage), 0o500)
+		if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
+			t.Fatal("set aside without finding out about RENAME_NOREPLACE")
+		}
+		if _, err := os.Lstat(filepath.Join(root, asideName)); !os.IsNotExist(err) {
+			t.Fatal("made the set-aside folder for a refused clash")
+		}
+		os.Remove(filepath.Join(root, "ops.json"))
+		if RunRestore(string(argument), io.Discard, io.Discard) != 0 {
+			t.Fatal("a full disk refused a return main makes")
+		}
+		os.Chmod(filepath.Join(root, stage), 0o700)
+	}
+	// One item's return needs RENAME_NOREPLACE, so without it nothing moves,
+	// and nothing is made.
 	os.MkdirAll(filepath.Join(root, "world"), 0o755)
 	os.WriteFile(filepath.Join(root, "world", "level.dat"), []byte("game made"), 0o644)
 	os.WriteFile(filepath.Join(root, stage, "old", "item"), []byte("original"), 0o644)
@@ -805,6 +830,9 @@ func TestRenamesNeverClobber(t *testing.T) {
 	renameat2 = original
 	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "game made" {
 		t.Fatal("moved the live copy:", string(data))
+	}
+	if _, err := os.Lstat(filepath.Join(root, asideName)); !os.IsNotExist(err) {
+		t.Fatal("made the set-aside folder for a refused clash")
 	}
 	// The read that follows a retry makes the set-aside folder durable
 	// before saying it holds a copy, though nothing is left in the way.

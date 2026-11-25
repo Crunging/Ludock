@@ -1057,11 +1057,11 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 		if len(entries) > 0 && !journalMatches(entries, server) {
 			return fail("INVALID_RESTORE_JOURNAL", "Restore recovery roots do not match this server. Keep it stopped and review its recovery state.")
 		}
-		if err := j.removeUnpublished(ctx, job); err != nil {
-			return err
-		}
 		if len(entries) > 0 {
 			err := func() error {
+				if err := j.removeUnpublished(ctx, job); err != nil {
+					return err
+				}
 				if err := j.assertStopped(ctx, server, job); err != nil {
 					return err
 				}
@@ -1087,6 +1087,8 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 			if err != nil {
 				return err
 			}
+		} else if err := j.removeUnpublished(ctx, job); err != nil {
+			return err
 		}
 		return j.restoreInitialState(ctx, server, job)
 	})
