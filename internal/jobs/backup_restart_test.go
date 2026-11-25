@@ -2,7 +2,9 @@ package jobs
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -10,13 +12,15 @@ import (
 
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
 // Ludock is killed while a backup, or a restart that backs up first, is
 // copying the stopped server. Recovery starts the server, which was running,
-// without taking the backup again, says the backup didn't finish, and alerts
-// once, as a failed backup would.
+// without taking the backup again, says the backup didn't finish and that
+// the server was started again, alerts once, as a failed backup would, and
+// logs what it did without the server's paths.
 func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 	for kind, input := range map[string]map[string]any{"restart": {"createBackup": true}, "backup": nil} {
 		t.Run(kind, func(t *testing.T) {
@@ -39,13 +43,21 @@ func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 			if _, err := f.jobs.DB.Exec("UPDATE operations SET status='running',phase='backing_up',recovery_json=? WHERE id=?", string(recovery), job.ID); err != nil {
 				t.Fatal(err)
 			}
+			var logged bytes.Buffer
+			logging.SetOutput(&logged, &logged)
+			defer logging.SetOutput(os.Stdout, os.Stderr)
 			if err := f.runner.Start(ctx, nil); err != nil {
 				t.Fatal(err)
 			}
 			recovered, _ := f.runner.Get(ctx, job.ID)
 			guidance, _ := recovered.Result["guidance"].(string)
-			if recovered.Status != ops.Interrupted || (kind == "restart" && !strings.Contains(guidance, "no new backup")) || !f.running() {
+			if recovered.Status != ops.Interrupted || !strings.HasSuffix(guidance, map[string]string{"restart": "The server was started again.", "backup": "Ludock started the server again."}[kind]) ||
+				!strings.Contains(guidance, "no new backup") || !f.running() {
 				t.Fatalf("%+v", recovered)
+			}
+			if line := logged.String(); !strings.Contains(line, job.ID) || !strings.Contains(line, `"kind":"`+kind+`"`) ||
+				!strings.Contains(line, "server started again") || strings.Contains(line, f.backupTo) || strings.Contains(line, f.data) {
+				t.Fatal(line)
 			}
 			if backups, _ := f.jobs.Backups.List(ctx, f.serverID); len(backups) != 0 {
 				t.Fatal("backup taken again:", backups)

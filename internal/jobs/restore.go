@@ -927,5 +927,5 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string
 		return nil, err
 	}
 	result["guidance"] = outcome
-	return result, nil
+	return withServerAfterRecovery(job, result), nil
 }
