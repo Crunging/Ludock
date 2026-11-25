@@ -30,8 +30,8 @@ const (
 func commandFailed(message string) error { return apperr.New("COMMAND_FAILED", 409, message) }
 
 // skipped ends a run without sending its command, as the scheduler would.
-func skipped(reason schedules.Skip) (map[string]any, error) {
-	return map[string]any{"action": "command", "skipped": true, "guidance": string(reason)}, nil
+func skipped(reason schedules.Skip) (*ops.Result, error) {
+	return &ops.Result{Action: ops.KindCommand, Skipped: true, Guidance: string(reason)}, nil
 }
 
 // scheduledCommand reads the command from the schedule that queued job, at
@@ -81,7 +81,7 @@ func (r *reply) String() string {
 
 // runCommand sends a scheduled console command once, through the game
 // console adapter. A run that can't start at once is not sent later.
-func (j *Jobs) runCommand(ctx context.Context, job *ops.Context) (map[string]any, error) {
+func (j *Jobs) runCommand(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 	if _, scheduled := job.Job.Input["scheduleId"].(string); !scheduled {
 		return nil, errScheduleRevoked
 	}
@@ -120,7 +120,7 @@ func (j *Jobs) runCommand(ctx context.Context, job *ops.Context) (map[string]any
 		return err
 	}
 	// Persisted first: an interrupted send is reported, never repeated.
-	if err := job.Progress("sending_command", nil, map[string]any{"action": "command"}); err != nil {
+	if err := job.Progress("sending_command", nil, &ops.Result{Action: ops.KindCommand}); err != nil {
 		return nil, err
 	}
 	if db.Now()-job.Job.CreatedAt > commandLate.Milliseconds() {
@@ -145,9 +145,5 @@ func (j *Jobs) runCommand(ctx context.Context, job *ops.Context) (map[string]any
 		}
 		return nil, commandFailed(message)
 	}
-	result := map[string]any{"action": "command", "sent": true}
-	if text := output.String(); text != "" {
-		result["reply"] = text
-	}
-	return result, nil
+	return &ops.Result{Action: ops.KindCommand, Sent: true, Reply: output.String()}, nil
 }

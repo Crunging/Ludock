@@ -241,7 +241,7 @@ func TestRevokedOwnerCannotRun(t *testing.T) {
 		job = f.run(t, kind, input)
 		var paused int
 		f.jobs.DB.QueryRow("SELECT COUNT(*) FROM availability WHERE suppressed_until > 0").Scan(&paused)
-		if kept, _ := f.jobs.Backups.Exists(ctx, backup.Result["backupId"].(string), true); job.Status != ops.Failed || paused != 0 ||
+		if kept, _ := f.jobs.Backups.Exists(ctx, backup.Result.BackupID, true); job.Status != ops.Failed || paused != 0 ||
 			!f.running() || !kept {
 			t.Fatalf("%s: %+v paused=%d kept=%v", kind, job, paused, kept)
 		}
@@ -251,7 +251,7 @@ func TestRevokedOwnerCannotRun(t *testing.T) {
 func TestFailedRestoreRollsBack(t *testing.T) {
 	f := setup(t)
 	backup := f.run(t, "backup", nil)
-	backupID := backup.Result["backupId"].(string)
+	backupID := backup.Result.BackupID
 	os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("newer"), 0o644)
 	f.mu.Lock()
 	f.failStep = helper.RestoreMoveNew
@@ -283,7 +283,7 @@ func TestFailedRestoreRollsBack(t *testing.T) {
 func TestRestoreCleanupAfterCommit(t *testing.T) {
 	f := setup(t)
 	backup := f.run(t, "backup", nil)
-	backupID := backup.Result["backupId"].(string)
+	backupID := backup.Result.BackupID
 	os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("newer"), 0o644)
 	staged := func() bool {
 		entries, _ := os.ReadDir(f.data)
@@ -331,7 +331,7 @@ func TestRecoveryWithUnreadableRow(t *testing.T) {
 	if _, err := f.jobs.DB.Exec("ALTER TABLE backups RENAME TO backups_unreadable"); err != nil {
 		t.Fatal(err)
 	}
-	job := &ops.Context{Job: &ops.Job{ID: backup.ID, Recovery: ops.Recovery{BackupID: backup.Result["backupId"].(string), BackupDestination: f.backupTo}}}
+	job := &ops.Context{Job: &ops.Job{ID: backup.ID, Recovery: ops.Recovery{BackupID: backup.Result.BackupID, BackupDestination: f.backupTo}}}
 	if err := f.jobs.removeUnpublished(ctx, job); err == nil {
 		t.Fatal("treated an unreadable backup row as absent")
 	}
@@ -344,7 +344,7 @@ func TestRecoveryWithUnreadableRow(t *testing.T) {
 func TestInterruptedPruning(t *testing.T) {
 	f := setup(t)
 	// The fourth backup of a day is the first retention removes.
-	old := f.run(t, "backup", nil).Result["backupId"].(string)
+	old := f.run(t, "backup", nil).Result.BackupID
 	f.run(t, "backup", nil)
 	f.run(t, "backup", nil)
 	if _, err := f.jobs.DB.Exec(`CREATE TRIGGER no_prune BEFORE DELETE ON backups
@@ -443,7 +443,7 @@ func twoRootBackup(t *testing.T, f *fixture) any {
 	if backup.Status != ops.Succeeded {
 		t.Fatal(backup)
 	}
-	return backup.Result["backupId"]
+	return backup.Result.BackupID
 }
 
 // spaceReports answers restore space probes with free(check), counting
@@ -761,7 +761,7 @@ func TestDeletedOnStopServerIsNeverStopped(t *testing.T) {
 // the Backups tab then reports it until someone checks again.
 func TestImpossibleBackupNeverStopsServer(t *testing.T) {
 	f := setup(t)
-	backupID := f.run(t, "backup", nil).Result["backupId"]
+	backupID := f.run(t, "backup", nil).Result.BackupID
 	mods := filepath.Join(f.data, "world", "mods")
 	os.MkdirAll(mods, 0o755)
 	warned := map[string]any{WarnInput: true}
@@ -887,7 +887,7 @@ func TestBackupMakesRoomBeforeTheStop(t *testing.T) {
 			f := setup(t)
 			var ids []string
 			for index := range 6 {
-				ids = append(ids, f.run(t, "backup", nil).Result["backupId"].(string))
+				ids = append(ids, f.run(t, "backup", nil).Result.BackupID)
 				if index < 3 {
 					f.jobs.DB.Exec("UPDATE backups SET reason='restore' WHERE id=?", ids[index])
 				}

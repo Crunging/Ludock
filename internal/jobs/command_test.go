@@ -77,13 +77,13 @@ func TestScheduledCommandKeepsRedactedReply(t *testing.T) {
 	f := setup(t)
 	serverID, _, received := f.commandServer(t, "Saved the game\nusing db-secret-value "+strings.Repeat("é", 400))
 	job := f.scheduleCommand(t, serverID, "admin", "save-all")
-	if job.Status != ops.Succeeded || job.Result["sent"] != true {
+	if job.Status != ops.Succeeded || !job.Result.Sent {
 		t.Fatalf("%+v", job)
 	}
 	if got := received(); len(got) != 1 || got[0] != "save-all" {
 		t.Fatal(got)
 	}
-	reply, _ := job.Result["reply"].(string)
+	reply := job.Result.Reply
 	if !strings.HasPrefix(reply, "Saved the game using [redacted] é") || !strings.HasSuffix(reply, "é…") ||
 		len(reply) > MaxCommandReply || strings.Contains(reply, "db-secret") {
 		t.Fatal(reply)
@@ -101,7 +101,7 @@ func TestScheduledCommandSkipsStoppedServer(t *testing.T) {
 	serverID, containerID, received := f.commandServer(t, "")
 	f.engine.Update(containerID, func(c *fakedocker.Container) { c.State.Running, c.State.Status = false, "exited" })
 	job := f.scheduleCommand(t, serverID, "admin", "save-all")
-	if job.Status != ops.Skipped || job.Result["guidance"] != "Skipped: the server wasn't running" || len(received()) != 0 {
+	if job.Status != ops.Skipped || job.Result.Guidance != "Skipped: the server wasn't running" || len(received()) != 0 {
 		t.Fatalf("%+v", job)
 	}
 }
@@ -133,7 +133,7 @@ func TestScheduledCommandSkipsBusyServer(t *testing.T) {
 	defer release()
 	started := time.Now()
 	job := f.scheduleCommand(t, serverID, "admin", "save-all")
-	if job.Status != ops.Skipped || job.Result["guidance"] != "Skipped: the server was busy with other work" ||
+	if job.Status != ops.Skipped || job.Result.Guidance != "Skipped: the server was busy with other work" ||
 		time.Since(started) > commandTimeout/2 || len(received()) != 0 {
 		t.Fatalf("%+v", job)
 	}

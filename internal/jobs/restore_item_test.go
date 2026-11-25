@@ -18,7 +18,7 @@ func (f *fixture) itemBackup(t *testing.T) (backupID, rootID string) {
 	if backup.Status != ops.Succeeded {
 		t.Fatalf("%+v", backup)
 	}
-	row, err := f.jobs.Backups.Get(ctx, f.serverID, backup.Result["backupId"].(string))
+	row, err := f.jobs.Backups.Get(ctx, f.serverID, backup.Result.BackupID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestRestoreItem(t *testing.T) {
 	f.failStep = ""
 	f.mu.Unlock()
 	restored := f.run(t, "restore", input)
-	if restored.Status != ops.Succeeded || restored.Result["safetyBackupId"] != nil || f.staged() || !f.running() {
+	if restored.Status != ops.Succeeded || restored.Result.SafetyBackupID != "" || f.staged() || !f.running() {
 		t.Fatalf("%+v", restored)
 	}
 	if read(t, filepath.Join(f.data, "world", "level.dat")) != "original" || read(t, filepath.Join(f.data, "world", "today.dat")) != "today" {
@@ -76,11 +76,11 @@ func TestRestoreItem(t *testing.T) {
 	os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("newest"), 0o644)
 	input["createBackup"] = true
 	backedUp := f.run(t, "restore", input)
-	if backedUp.Status != ops.Succeeded || backedUp.Result["safetyBackupId"] == nil || backedUp.Result["restoredItem"] != "world/level.dat" ||
+	if backedUp.Status != ops.Succeeded || backedUp.Result.SafetyBackupID == "" || backedUp.Result.RestoredItem != "world/level.dat" ||
 		f.staged() || !f.running() || read(t, filepath.Join(f.data, "world", "level.dat")) != "original" {
 		t.Fatalf("%+v", backedUp)
 	}
-	safety, err := f.jobs.Backups.Get(ctx, f.serverID, backedUp.Result["safetyBackupId"].(string))
+	safety, err := f.jobs.Backups.Get(ctx, f.serverID, backedUp.Result.SafetyBackupID)
 	if err != nil || safety.Reason != "restore" || safety.State != "complete" {
 		t.Fatal(safety, err)
 	}
@@ -162,7 +162,7 @@ func TestRestoreItemInterrupted(t *testing.T) {
 	}
 	recovered, _ := f.runner.Get(ctx, job.ID)
 	if recovered.Status != ops.Interrupted || !strings.Contains(recovered.Error, "restarted") ||
-		recovered.Result["guidance"] != "The restore was undone: the server’s data is as it was. Ludock started the server again." {
+		recovered.Result.Guidance != "The restore was undone: the server’s data is as it was. Ludock started the server again." {
 		t.Fatalf("%+v", recovered)
 	}
 	if read(t, filepath.Join(f.data, "world", "level.dat")) != "newer" || read(t, filepath.Join(f.data, "world", "today.dat")) != "today" ||
@@ -197,7 +197,7 @@ func TestRestoreInterruptedAfterCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	recovered, _ := f.runner.Get(ctx, job.ID)
-	if recovered.Status != ops.Interrupted || recovered.Result["guidance"] != "The restore had finished: what it restored is in place. Ludock started the server again." || !f.running() {
+	if recovered.Status != ops.Interrupted || recovered.Result.Guidance != "The restore had finished: what it restored is in place. Ludock started the server again." || !f.running() {
 		t.Fatalf("%+v", recovered)
 	}
 }

@@ -220,7 +220,7 @@ func backsUpFirst(job *ops.Context) bool {
 	return job.Job.Kind == ops.KindBackup || (job.Job.Kind == ops.KindRestart && job.Job.Input["createBackup"] == true)
 }
 
-func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any, error) {
+func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 	server, err := j.resolve(ctx, job, authz.BackupsCreate, true)
 	if err != nil {
 		return nil, err
@@ -228,7 +228,7 @@ func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any,
 	// The second copy is made once the server is back as it was and its
 	// locks are released.
 	defer j.Backups.WakeCopies()
-	return job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), func() (result map[string]any, err error) {
+	return job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), func() (result *ops.Result, err error) {
 		if err := j.assertCapability(ctx, job, authz.BackupsCreate); err != nil {
 			return nil, err
 		}
@@ -253,7 +253,7 @@ func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any,
 			}
 			return nil, err
 		}
-		return withSave(job, map[string]any{"backupId": backup.ID, "size": backup.Size, "checksum": backup.Checksum}), nil
+		return withSave(job, &ops.Result{BackupID: backup.ID, Size: backup.Size, Checksum: backup.Checksum}), nil
 	})
 }
 

@@ -367,7 +367,7 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 					}
 				}
 			}
-			if guidance, _ := job.Result["guidance"].(string); !strings.HasPrefix(guidance, scenario.guidance) {
+			if guidance := job.Result.Guidance; !strings.HasPrefix(guidance, scenario.guidance) {
 				t.Errorf("guidance %q", guidance)
 			}
 			if got := sortedExtracts(trace.lines()); !slices.Equal(got, scenario.trace) {
@@ -383,7 +383,7 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 func (f *fixture) interruptedRestore(t *testing.T, state *restoreRecovery, arrange func(stage string)) (*ops.Job, *restoreTrace) {
 	t.Helper()
 	backup := f.run(t, "backup", nil)
-	row, err := f.jobs.Backups.Get(ctx, f.serverID, backup.Result["backupId"].(string))
+	row, err := f.jobs.Backups.Get(ctx, f.serverID, backup.Result.BackupID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +528,7 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 			if c.journal == "" {
 				c.journal = "rolled_back"
 			}
-			guidance, _ := job.Result["guidance"].(string)
+			guidance := job.Result.Guidance
 			c.guidance = strings.ReplaceAll(c.guidance, "%s", job.ID)
 			if c.running {
 				c.guidance += " Ludock started the server again."
@@ -620,7 +620,7 @@ func TestRestoreKeepsOtherStages(t *testing.T) {
 		}
 		kept(name)
 	}
-	if job := f.run(t, "backup", nil); job.Status != ops.Succeeded || job.Result["leftOut"] != f.data+"/world" {
+	if job := f.run(t, "backup", nil); job.Status != ops.Succeeded || job.Result.LeftOut != f.data+"/world" {
 		t.Errorf("backup: %s %v", job.Status, job.Result)
 	}
 	// A warned backup checks again after the warning; a stage gone by then
@@ -636,7 +636,7 @@ func TestRestoreKeepsOtherStages(t *testing.T) {
 		}
 		return code
 	}
-	if job := f.run(t, "backup", map[string]any{WarnInput: true}); job.Status != ops.Succeeded || checks != 2 || job.Result["leftOut"] != nil {
+	if job := f.run(t, "backup", map[string]any{WarnInput: true}); job.Status != ops.Succeeded || checks != 2 || job.Result.LeftOut != "" {
 		t.Errorf("warned backup: %s %v, %d checks", job.Status, job.Result, checks)
 	}
 	f.engine.Exec = plain

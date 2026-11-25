@@ -92,19 +92,11 @@ func (j *Jobs) finishPendingRestores(ctx context.Context, server *servers.Contex
 		return nil
 	}
 	undone := strings.Join(slices.DeleteFunc(append([]string{job.Job.Recovery.Undone}, notes...), func(note string) bool { return note == "" }), " ")
-	result := withUndone(job.Job.Result, undone)
-	return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.PendingUndo, r.Undone = false, undone }, result)
-}
-
-func withUndone(result map[string]any, undone string) map[string]any {
-	merged := map[string]any{}
-	for key, value := range result {
-		merged[key] = value
-	}
+	result := job.Job.Result
 	if undone != "" {
-		merged["undone"] = undone
+		result.Undone = undone
 	}
-	return merged
+	return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.PendingUndo, r.Undone = false, undone }, &result)
 }
 
 // finishPending finishes one restore that ended partway and returns what
@@ -194,9 +186,9 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	if missing && live {
 		note += " One of its data folders had nothing to put back: its folder " + stageName(restore) + " is no longer there."
 	}
-	result := withUndone(restore.Job.Result, "")
-	result["guidance"] = note
-	restore.Progress("", nil, result)
+	result := restore.Job.Result
+	result.Guidance = note
+	restore.Progress("", nil, &result)
 	return note, nil
 }
 
@@ -334,12 +326,12 @@ func (j *Jobs) finishStoppedRestores(ctx context.Context) {
 	}
 }
 
-func (j *Jobs) runUndoRestore(ctx context.Context, job *ops.Context) (map[string]any, error) {
+func (j *Jobs) runUndoRestore(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 	server, err := j.resolve(ctx, job, authz.BackupsRestore, true)
 	if err != nil {
 		return nil, err
 	}
-	return job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), func() (result map[string]any, err error) {
+	return job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), func() (result *ops.Result, err error) {
 		if err := j.assertCapability(ctx, job, authz.BackupsRestore); err != nil {
 			return nil, err
 		}
@@ -348,7 +340,7 @@ func (j *Jobs) runUndoRestore(ctx context.Context, job *ops.Context) (map[string
 			return nil, err
 		}
 		if len(pending) == 0 {
-			return map[string]any{"skipped": true, "guidance": "There was nothing left to undo."}, nil
+			return &ops.Result{Skipped: true, Guidance: "There was nothing left to undo."}, nil
 		}
 		defer func() {
 			if restoreErr := j.restoreInitialState(context.WithoutCancel(ctx), server, job); restoreErr != nil && err == nil {
@@ -360,6 +352,6 @@ func (j *Jobs) runUndoRestore(ctx context.Context, job *ops.Context) (map[string
 		if err := j.stopForData(ctx, server, job); err != nil && !apperr.Is(err, "UNCLEAN_SHUTDOWN") {
 			return nil, err
 		}
-		return withSave(job, map[string]any{}), nil
+		return withSave(job, &ops.Result{}), nil
 	})
 }

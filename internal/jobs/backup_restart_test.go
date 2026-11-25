@@ -50,7 +50,7 @@ func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 				t.Fatal(err)
 			}
 			recovered, _ := f.runner.Get(ctx, job.ID)
-			guidance, _ := recovered.Result["guidance"].(string)
+			guidance := recovered.Result.Guidance
 			if recovered.Status != ops.Interrupted || !strings.HasSuffix(guidance, map[string]string{"restart": "The server was started again.", "backup": "Ludock started the server again."}[kind]) ||
 				!strings.Contains(guidance, "no new backup") || !f.running() {
 				t.Fatalf("%+v", recovered)
@@ -117,7 +117,7 @@ func TestBackupRestartKeepsServerStoppedElsewhere(t *testing.T) {
 	}
 	job := f.run(t, "restart", map[string]any{"createBackup": true})
 	if backups, _ := f.jobs.Backups.List(ctx, f.serverID); job.Status != ops.Succeeded || f.running() || len(backups) != 1 ||
-		job.Result["backupId"] != backups[0].ID || job.Result["guidance"] != stoppedElsewhere {
+		job.Result.BackupID != backups[0].ID || job.Result.Guidance != stoppedElsewhere {
 		t.Fatalf("%+v, running %v, backups %v", job, f.running(), backups)
 	}
 }

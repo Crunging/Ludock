@@ -29,7 +29,7 @@ func (f *fixture) stoppedRestore(t *testing.T) (*ops.Job, *restoreTrace) {
 	if restore.Status != ops.Failed || f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" || !f.running() {
 		t.Fatalf("%+v, journal %s", restore, f.savedJournal(restore.ID))
 	}
-	if guidance, _ := restore.Result["guidance"].(string); !strings.Contains(guidance, "stopped partway") || !strings.Contains(guidance, helper.StageName(restore.ID)) {
+	if guidance := restore.Result.Guidance; !strings.Contains(guidance, "stopped partway") || !strings.Contains(guidance, helper.StageName(restore.ID)) {
 		t.Fatal(restore.Result)
 	}
 	os.WriteFile(filepath.Join(f.data, "world", "generated.dat"), []byte("generated"), 0o644)
@@ -62,12 +62,12 @@ func (f *fixture) checkUndone(t *testing.T, failed *ops.Job, later *ops.Job) {
 		}
 	}
 	restore, _ := f.runner.Get(ctx, restoreID)
-	if guidance, _ := restore.Result["guidance"].(string); restore.Status != ops.Failed || restore.UpdatedAt != failed.UpdatedAt ||
+	if guidance := restore.Result.Guidance; restore.Status != ops.Failed || restore.UpdatedAt != failed.UpdatedAt ||
 		f.savedJournal(restoreID) != "rolled_back put back" ||
 		!strings.Contains(guidance, "back in place") || !strings.Contains(guidance, aside) {
 		t.Errorf("%+v, journal %s", restore, f.savedJournal(restoreID))
 	}
-	if undone, _ := later.Result["undone"].(string); !strings.Contains(undone, "back in place") || !strings.Contains(undone, aside) {
+	if undone := later.Result.Undone; !strings.Contains(undone, "back in place") || !strings.Contains(undone, aside) {
 		t.Errorf("%+v", later)
 	}
 }
@@ -164,7 +164,7 @@ func TestNextBackupAfterStaleRestoreJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	backup := f.run(t, "backup", nil)
-	if undone, _ := backup.Result["undone"].(string); backup.Status != ops.Succeeded || !f.running() || !strings.Contains(undone, "nothing to put back") ||
+	if undone := backup.Result.Undone; backup.Status != ops.Succeeded || !f.running() || !strings.Contains(undone, "nothing to put back") ||
 		f.savedJournal(restoreID) != "rolled_back stage missing" {
 		t.Fatalf("%+v, running %v, journal %s", backup, f.running(), f.savedJournal(restoreID))
 	}

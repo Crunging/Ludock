@@ -115,6 +115,10 @@ func (d *DB) Snapshot(ctx context.Context) (*Snapshot, error) {
 	return &Snapshot{File: archive, Size: counter.n, Checksum: hex.EncodeToString(digest.Sum(nil))}, nil
 }
 
+// GuidancePath is the JSON path of ops.Result's guidance, which this package
+// sits below.
+const GuidancePath = "$.guidance"
+
 // settleOperations ends the copy's queued and running operations: restored
 // later, they would stop servers long after they were asked for, or recover
 // work whose result the copy never saw, such as an archive recorded since.
@@ -140,7 +144,7 @@ func settleOperations(ctx context.Context, path string) error {
 	}
 	// The guidance names the restore's stage folder (helper.StageName).
 	_, err = conn.ExecContext(ctx, `UPDATE operations SET recovery_json=json_set(json_remove(recovery_json,'$.dataUnsafe'),'$.restore',json('{"status":"unknown"}')),
-    result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.guidance',?||id||?)
+    result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'`+GuidancePath+`',?||id||?)
     WHERE kind='restore' AND json_valid(recovery_json) AND json_extract(recovery_json,'$.restore.status') IN ('staging','replacing','rolling_back','committed')`,
 		"Ludock’s data was saved before this restore finished, so this copy doesn’t know how it ended, and Ludock won’t change the server’s data for it. "+
 			"If one of the server’s data folders still has a folder named .ludock-restore-",

@@ -57,15 +57,15 @@ func dataCapabilities(job *ops.Context) []authz.Capability {
 }
 
 // withSave adds the outcome of the save before the stop to a result.
-func withSave(job *ops.Context, result map[string]any) map[string]any {
+func withSave(job *ops.Context, result *ops.Result) *ops.Result {
 	if recovery := job.Job.Recovery; recovery.SaveStatus != "" {
-		result["saveStatus"], result["saveReason"] = recovery.SaveStatus, recovery.SaveReason
+		result.SaveStatus, result.SaveReason = recovery.SaveStatus, recovery.SaveReason
 	}
 	if undone := job.Job.Recovery.Undone; undone != "" {
-		result["undone"] = undone
+		result.Undone = undone
 	}
 	if leftOut := job.Job.Recovery.LeftOut; leftOut != "" {
-		result["leftOut"] = leftOut
+		result.LeftOut = leftOut
 	}
 	return result
 }
@@ -315,7 +315,7 @@ func settleStop(r *ops.Recovery) { r.StopSettled = true }
 
 // withServerAfterRecovery adds to result's guidance what recovery did with
 // the server the operation stopped.
-func withServerAfterRecovery(job *ops.Context, result map[string]any) map[string]any {
+func withServerAfterRecovery(job *ops.Context, result *ops.Result) *ops.Result {
 	recovery := job.Job.Recovery
 	var said string
 	switch {
@@ -329,10 +329,9 @@ func withServerAfterRecovery(job *ops.Context, result map[string]any) map[string
 		said = "The server was running again, so Ludock left it as it was."
 	}
 	if result == nil {
-		result = map[string]any{}
+		result = &ops.Result{}
 	}
-	text, _ := result["guidance"].(string)
-	result["guidance"] = strings.TrimSpace(text + " " + said)
+	result.Guidance = strings.TrimSpace(result.Guidance + " " + said)
 	return result
 }
 

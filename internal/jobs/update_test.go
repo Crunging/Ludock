@@ -144,7 +144,7 @@ func TestUpdateRecoveryUndoesUncheckedReplacement(t *testing.T) {
 			}
 			swap.Stage = c.stage
 		})
-		if job.Status != ops.Interrupted || job.Error != "Ludock restarted while this ran. Check the server before trying again." || job.Result["guidance"] != c.guidance {
+		if job.Status != ops.Interrupted || job.Error != "Ludock restarted while this ran. Check the server before trying again." || job.Result.Guidance != c.guidance {
 			t.Fatalf("%+v", job)
 		}
 		if c.stage == "" {
@@ -256,7 +256,7 @@ func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
 				f.engine.RemoveContainer(replacement)
 			}
 		})
-		if job.Status != ops.Interrupted || job.Result["guidance"] != c.guidance {
+		if job.Status != ops.Interrupted || job.Result.Guidance != c.guidance {
 			t.Fatalf("%s: %+v", c.name, job)
 		}
 		down := c.fails || c.exits || (c.restored && c.stopped) || c.removed
@@ -549,13 +549,13 @@ func TestUpdateNotesItNamedAnUnnamedVolume(t *testing.T) {
 	}
 	request := map[string]any{"request": map[string]any{"skipBackupConfirmation": "state", "forceRecreate": true}}
 	job := f.run(t, "update", request)
-	if job.Status != ops.Succeeded || job.Result["guidance"] != unnamedVolumeGuidance {
+	if job.Status != ops.Succeeded || job.Result.Guidance != unnamedVolumeGuidance {
 		t.Fatalf("%+v", job)
 	}
 	if current := f.containerNamed("state"); current == nil || current.ID == original {
 		t.Fatalf("not replaced: %+v", current)
 	}
-	if job := f.run(t, "update", request); job.Status != ops.Succeeded || job.Result["guidance"] != nil {
+	if job := f.run(t, "update", request); job.Status != ops.Succeeded || job.Result.Guidance != "" {
 		t.Fatalf("%+v", job)
 	}
 }
@@ -631,7 +631,7 @@ func TestUpdateKeepsStateChangedDuringPull(t *testing.T) {
 		var stopped bool
 		f.jobs.DB.QueryRow("SELECT intentionally_stopped FROM availability WHERE server_id=?", f.serverID).Scan(&stopped)
 		if job.Status != ops.Succeeded || current == nil || current.ID == f.game || current.State.Running != startedElsewhere ||
-			job.Result["running"] != startedElsewhere || stopped == startedElsewhere || (job.Result["saveStatus"] != nil) != startedElsewhere {
+			job.Result.Running != startedElsewhere || stopped == startedElsewhere || (job.Result.SaveStatus != "") != startedElsewhere {
 			t.Fatalf("started elsewhere %v: %+v, running %v, intentionally stopped %v", startedElsewhere, job, current.State.Running, stopped)
 		}
 	}

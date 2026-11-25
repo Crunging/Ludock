@@ -43,11 +43,11 @@ func (j *Jobs) warningLead() time.Duration {
 var verbs = map[string]string{ops.KindRestart: "restart", ops.KindStop: "shut down", ops.KindUpdate: "restart for an update",
 	ops.KindBackup: "restart for a backup", ops.KindRestore: "restart to restore a backup", ops.KindUndoRestore: "restart to undo a restore"}
 
-type runFunc = func(ctx context.Context, job *ops.Context) (map[string]any, error)
+type runFunc = func(ctx context.Context, job *ops.Context) (*ops.Result, error)
 
 // warnedFirst runs an operation after warnFirst.
 func (j *Jobs) warnedFirst(capability authz.Capability, run runFunc) runFunc {
-	return func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	return func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		if err := j.warnFirst(ctx, job, capability, false); err != nil {
 			return nil, calledOff(job, err)
 		}
@@ -95,7 +95,7 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 	// before the stop. Work that holds its locks while it warns checks its
 	// backup before calling this.
 	if until == 0 && (backsUpFirst(job) || slices.Contains([]string{ops.KindRestore, ops.KindUndoRestore, ops.KindUpdate}, job.Job.Kind)) {
-		check := func() (map[string]any, error) {
+		check := func() (*ops.Result, error) {
 			if err := assertAccess(); err != nil {
 				return nil, err
 			}
@@ -156,9 +156,9 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 			if err := assertAccess(); err != nil {
 				return err
 			}
-			result := withUndone(job.Job.Result, "")
-			result["warnFailed"] = warnFailedNote(job.Job.Kind)
-			return job.Progress(phaseWarned, func(r *ops.Recovery) { r.WarnFailed = true }, result)
+			result := job.Job.Result
+			result.WarnFailed = warnFailedNote(job.Job.Kind)
+			return job.Progress(phaseWarned, func(r *ops.Recovery) { r.WarnFailed = true }, &result)
 		default:
 			// A game that can't message its players waits out the minute.
 			if err := job.Progress(ops.PhaseWarning, nil, nil); err != nil {
@@ -274,18 +274,18 @@ func (j *Jobs) nobodyOnline(ctx context.Context, server *servers.Context, locked
 
 // warnedResult ends an operation that may have warned first: a success notes
 // that nobody was online to warn, and a failure is calledOff.
-func warnedResult(job *ops.Context, result map[string]any, err error) (map[string]any, error) {
+func warnedResult(job *ops.Context, result *ops.Result, err error) (*ops.Result, error) {
 	if err != nil {
 		return result, calledOff(job, err)
 	}
 	if job.Job.Recovery.WarnSkipped || job.Job.Recovery.WarnFailed {
 		if result == nil {
-			result = map[string]any{}
+			result = &ops.Result{}
 		}
 		if job.Job.Recovery.WarnFailed {
-			result["warnFailed"] = warnFailedNote(job.Job.Kind)
+			result.WarnFailed = warnFailedNote(job.Job.Kind)
 		} else {
-			result["warnSkipped"] = true
+			result.WarnSkipped = true
 		}
 	}
 	return result, nil

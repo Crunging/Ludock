@@ -189,7 +189,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		// undo found a stage folder gone may have left the wrong data, which
 		// only a later restore settles. SQLite may evaluate both sides of AND,
 		// so JSON is read only under CASE.
-		forced := `COALESCE(CASE WHEN json_valid(result_json) THEN json_extract(result_json,'$.forceStopped') = 1 END, 0)`
+		forced := `COALESCE(CASE WHEN json_valid(result_json) THEN json_extract(result_json,'` + ops.PathForceStopped + `') = 1 END, 0)`
 		rows, err := s.DB.QueryContext(ctx, `SELECT id,kind,status,updated_at,actor_id=?,`+forced+`,
       kind='restore' AND COALESCE(CASE WHEN json_valid(recovery_json) THEN json_extract(recovery_json,'$.restore.status') = 'rolled_back' AND
         json_extract(recovery_json,'$.restore.putBack') = 1 END, 0)

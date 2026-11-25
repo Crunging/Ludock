@@ -53,7 +53,7 @@ func TestCancelNeedsTheStartCapability(t *testing.T) {
 	if code := cancel(runner); code != http.StatusOK {
 		t.Fatal("runner", code)
 	}
-	if current, _ := p.app.Runner.Get(ctx, job.ID); current.Status != ops.Cancelled || current.Result["cancelledBy"] != "u-runner" {
+	if current, _ := p.app.Runner.Get(ctx, job.ID); current.Status != ops.Cancelled || current.Result.CancelledBy != "u-runner" {
 		t.Fatalf("%+v", current)
 	}
 	if code := cancel(runner); code != http.StatusConflict {

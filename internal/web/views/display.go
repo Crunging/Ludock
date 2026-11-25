@@ -188,18 +188,15 @@ func CanCancelActive(server servers.View) bool {
 
 // CommandReply is the redacted, bounded reply a scheduled command kept. It is
 // console output, for viewers with console access only.
-func CommandReply(result map[string]any) string {
-	text, _ := result["reply"].(string)
-	return text
-}
+func CommandReply(result ops.Result) string { return result.Reply }
 
 // SaveDetail explains the save step of a stop or restart.
-func SaveDetail(result map[string]any) string {
-	switch result["saveStatus"] {
+func SaveDetail(result ops.Result) string {
+	switch result.SaveStatus {
 	case "sent":
 		return "Save command sent before stopping."
 	case "skipped":
-		switch result["saveReason"] {
+		switch result.SaveReason {
 		case "timed_out":
 			return "Save command timed out; shutdown continued."
 		case "console_unavailable":
@@ -217,20 +214,20 @@ func SaveDetail(result map[string]any) string {
 }
 
 // WarnDetail notes work asked to warn players that found nobody online.
-func WarnDetail(result map[string]any) string {
-	if result["warnSkipped"] == true {
+func WarnDetail(result ops.Result) string {
+	if result.WarnSkipped {
 		return "Nobody was online, so players weren’t warned."
 	}
-	if note, _ := result["warnFailed"].(string); note != "" {
-		return note
+	if result.WarnFailed != "" {
+		return result.WarnFailed
 	}
 	return ""
 }
 
 // MovedDetail notes a restore of a backup taken before the server's data
 // moved to other host storage.
-func MovedDetail(result map[string]any) string {
-	if result["dataMoved"] == true {
+func MovedDetail(result ops.Result) string {
+	if result.DataMoved {
 		return "The backup was taken before the server’s data moved."
 	}
 	return ""
@@ -238,16 +235,16 @@ func MovedDetail(result map[string]any) string {
 
 // LeftOutDetail notes a backup that left out a folder holding a restore's
 // stage, and with it the previous data that restore kept.
-func LeftOutDetail(result map[string]any) string {
-	if folder, _ := result["leftOut"].(string); folder != "" {
-		return "The backup leaves out the hidden .ludock-restore-… folder in " + folder + ", so the previous data an unfinished restore keeps there isn’t in it."
+func LeftOutDetail(result ops.Result) string {
+	if result.LeftOut != "" {
+		return "The backup leaves out the hidden .ludock-restore-… folder in " + result.LeftOut + ", so the previous data an unfinished restore keeps there isn’t in it."
 	}
 	return ""
 }
 
 // DockerWaitDetail notes work that waited for Docker to come back.
-func DockerWaitDetail(result map[string]any) string {
-	if result["waitedForDocker"] == true {
+func DockerWaitDetail(result ops.Result) string {
+	if result.WaitedForDocker {
 		return "Waited for Docker to answer again."
 	}
 	return ""

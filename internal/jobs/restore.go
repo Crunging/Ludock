@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"maps"
 	"slices"
 	"time"
 
@@ -378,16 +377,16 @@ type restoreRun struct {
 	stageMade bool
 	safety    *backups.Backup
 	// restored is the result, set once the restore commits.
-	restored map[string]any
+	restored *ops.Result
 }
 
-func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any, error) {
+func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 	r, err := j.planRestore(ctx, job)
 	if err != nil {
 		return nil, err
 	}
 	// The archive is validated once its locks are held.
-	return job.WithLocks(append(slices.Clone(r.server.LockKeys), locks.StorageKey), func() (result map[string]any, err error) {
+	return job.WithLocks(append(slices.Clone(r.server.LockKeys), locks.StorageKey), func() (result *ops.Result, err error) {
 		r.resumed = job.Job.Recovery.WarnUntil != 0
 		defer func() {
 			if r.data != nil {
@@ -450,7 +449,7 @@ func (j *Jobs) planRestore(ctx context.Context, job *ops.Context) (*restoreRun, 
 
 // run is the restore's phases in order. Every data change is journaled
 // before it runs, since recovery acts on the journal alone.
-func (r *restoreRun) run() (map[string]any, error) {
+func (r *restoreRun) run() (*ops.Result, error) {
 	// Players are warned once the archive is validated, which can take
 	// minutes; staging reads it again and verifies its checksum before any
 	// data is replaced. A warning resumed after a restart of Ludock is waited
@@ -713,23 +712,20 @@ func (r *restoreRun) replace(index int, root backups.Root) error {
 	return persistJournal(r.job, index, "replaced")
 }
 
-func (r *restoreRun) result() map[string]any {
-	restored := withSave(r.job, map[string]any{"restoredBackupId": r.row.ID})
-	if r.moved {
-		restored[MovedInput] = true
-	}
+func (r *restoreRun) result() *ops.Result {
+	restored := withSave(r.job, &ops.Result{RestoredBackupID: r.row.ID, DataMoved: r.moved})
 	if r.safety != nil {
-		restored["safetyBackupId"] = r.safety.ID
+		restored.SafetyBackupID = r.safety.ID
 	}
 	if !r.whole {
-		restored["restoredRoot"], restored["restoredItem"] = r.roots[0].ID, r.item
+		restored.RestoredRoot, restored.RestoredItem = r.roots[0].ID, r.item
 	}
 	return restored
 }
 
 // failed finishes a committed restore whose cleanup failed, or rolls back
 // one that had not committed. Activity says what state the data was left in.
-func (r *restoreRun) failed(err error) (map[string]any, error) {
+func (r *restoreRun) failed(err error) (*ops.Result, error) {
 	ctx, job := context.WithoutCancel(r.ctx), r.job
 	state, _ := restoreState(job)
 	// The restored data is in place; only its staging copy of the old data
@@ -756,12 +752,9 @@ func (r *restoreRun) failed(err error) (map[string]any, error) {
 		saveRestore(job, restoreRecovery{Status: "rolled_back"}, "")
 	}
 	if guidance := endedRestoreGuidance(job, touched); guidance != "" {
-		result := maps.Clone(job.Job.Result)
-		if result == nil {
-			result = map[string]any{}
-		}
-		result["guidance"] = guidance
-		job.Progress(job.Job.Phase, nil, result)
+		result := job.Job.Result
+		result.Guidance = guidance
+		job.Progress(job.Job.Phase, nil, &result)
 	}
 	if r.ctx.Err() == nil {
 		r.j.notify(notify.Results, "restore-result:"+job.Job.ID, r.server.Container.DisplayName+": "+r.what+" failed. Its Activity says why.")
@@ -858,7 +851,7 @@ func publicFirst(err error) error {
 	return err
 }
 
-func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string]any, error) {
+func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 	// What recovery leaves the data as, for Activity: a committed restore is
 	// finished, one that began replacing is undone.
 	outcome := restoreNothing
@@ -913,19 +906,16 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string
 		}
 		return j.restoreInitialState(ctx, server, job)
 	})
-	result := maps.Clone(job.Job.Result)
-	if result == nil {
-		result = map[string]any{}
-	}
+	result := job.Job.Result
 	if err != nil {
 		// The outcome keeps this guidance: a recovery that can't finish, such
 		// as one blocked by a server started elsewhere, is finished later.
 		if guidance := endedRestoreGuidance(job, touched); guidance != "" {
-			result["guidance"] = guidance
-			job.Progress(job.Job.Phase, nil, result)
+			result.Guidance = guidance
+			job.Progress(job.Job.Phase, nil, &result)
 		}
 		return nil, err
 	}
-	result["guidance"] = outcome
-	return withServerAfterRecovery(job, result), nil
+	result.Guidance = outcome
+	return withServerAfterRecovery(job, &result), nil
 }

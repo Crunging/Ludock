@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -458,10 +457,9 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, serverID stri
 				view.Command, view.CommandHidden = "", true
 			}
 			// A command's reply is console output.
-			if operation := view.LastOperation; operation != nil && operation.Result["reply"] != nil {
+			if operation := view.LastOperation; operation != nil && operation.Result.Reply != "" {
 				stripped := *operation
-				stripped.Result = maps.Clone(operation.Result)
-				delete(stripped.Result, "reply")
+				stripped.Result.Reply = ""
 				view.LastOperation = &stripped
 			}
 		}
