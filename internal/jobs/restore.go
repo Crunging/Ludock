@@ -167,6 +167,20 @@ func (j *Jobs) saveFinal(ctx context.Context, job *ops.Context, final restoreRec
 	return nil
 }
 
+// persistRoot saves a root's phase, and whether copies were kept, together.
+func persistRoot(job *ops.Context, rootID, phase string, kept bool) error {
+	state, err := restoreState(job)
+	if err != nil || state == nil || len(state.Roots) == 0 {
+		return errJournal
+	}
+	index := indexOf(state.Roots, rootID)
+	if index < 0 {
+		return errJournal
+	}
+	state.Roots[index].Phase, state.Kept = phase, state.Kept || kept
+	return saveRestore(job, *state, "restore_"+phase)
+}
+
 func persistJournal(job *ops.Context, index int, phase string) error {
 	state, err := restoreState(job)
 	if err != nil || state == nil || len(state.Roots) == 0 {
@@ -356,15 +370,17 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 			if setAside {
 				clean = helper.RestoreSetAside
 			}
-			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, clean, live); err != nil {
+			cleaned, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, clean, live)
+			if err != nil {
 				return err
 			}
+			kept = kept || cleaned["kept"] == true
 		}
 		if holdsLive(entry) {
-			current, _ := journals(job)
 			// Persist after removing new data and before returning any old
 			// entry: a restart midway must never delete returned originals.
-			if err := persistJournal(job, indexOf(current, entry.Root.ID), "rolling_back"); err != nil {
+			// Copies just set aside are journaled with it.
+			if err := persistRoot(job, entry.Root.ID, "rolling_back", kept); err != nil {
 				return err
 			}
 			// A server started while new data was removed must not have old
@@ -376,14 +392,8 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 			if err != nil {
 				return err
 			}
-			saved, err := restoreState(job)
-			if err != nil || saved == nil {
-				return errJournal
-			}
-			saved.Roots[indexOf(saved.Roots, entry.Root.ID)].Phase = "rolled_back"
 			kept = kept || returned["kept"] == true
-			saved.Kept = kept
-			if err := saveRestore(job, *saved, "restore_rolled_back"); err != nil {
+			if err := persistRoot(job, entry.Root.ID, "rolled_back", kept); err != nil {
 				return err
 			}
 		}
@@ -863,7 +873,7 @@ func endedRestoreGuidance(job *ops.Context, touched bool) string {
 		guidance = "The restore was stopped partway. The server’s previous data is safe in the folder " + stageName(job) +
 			" in its data, but not in place. An administrator can undo the restore from Needs attention; otherwise Ludock undoes it " + pendingLater + "."
 	case returned:
-		guidance = restoreUndone + " Its folder " + stageName(job) + " is still in the data; Ludock removes it " + pendingLater + "."
+		guidance = restoreUndone + " Ludock finishes removing its folder " + stageName(job) + " " + pendingLater + "."
 	default:
 		guidance = "Nothing was restored, but the backup’s unpacked copy is still in the folder " + stageName(job) + ". Ludock removes it " + pendingLater + "."
 	}

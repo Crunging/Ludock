@@ -669,15 +669,24 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if err := renameNoReplace(parent, "folder", parent, "moved", stat("folder")); err == nil {
 		t.Fatal("renamed a folder without an atomic no-replace rename")
 	}
-	// Undoing a restore moves live data as whole restores always have there,
-	// setting aside under a free name.
+	// A whole folder's undo sets aside as whole restores always moved there,
+	// but a numbered name, new with this, needs RENAME_NOREPLACE.
 	os.Mkdir(filepath.Join(dir, "aside"), 0o700)
-	os.Mkdir(filepath.Join(dir, "aside", "folder"), 0o700)
 	aside, err := unix.Open(filepath.Join(dir, "aside"), unix.O_DIRECTORY|unix.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer unix.Close(aside)
+	os.Mkdir(filepath.Join(dir, "aside", "folder"), 0o700)
+	if err := setAsideEntry(parent, "folder", fd(aside), stat("folder"), false); err == nil {
+		t.Fatal("set aside under a numbered name without RENAME_NOREPLACE")
+	}
+	os.Remove(filepath.Join(dir, "aside", "folder"))
+	if err := setAsideEntry(parent, "folder", fd(aside), stat("folder"), false); err != nil {
+		t.Fatal(err)
+	}
+	renameat2 = original
+	os.Mkdir(filepath.Join(dir, "folder"), 0o755)
 	if err := setAsideEntry(parent, "folder", fd(aside), stat("folder"), false); err != nil {
 		t.Fatal(err)
 	}
@@ -722,6 +731,31 @@ func TestRenamesNeverClobber(t *testing.T) {
 		t.Fatal("set aside before refusing:", string(data))
 	}
 	os.Remove(filepath.Join(root, stage, "snapshot"))
+	// With something in the way, a whole folder's return needs
+	// RENAME_NOREPLACE too, so without it nothing moves.
+	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
+	if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
+		t.Fatal("set aside without RENAME_NOREPLACE")
+	}
+	renameat2 = original
+	if data, _ := os.ReadFile(filepath.Join(root, "ops.json")); string(data) != "game made" {
+		t.Fatal("moved the live copy:", string(data))
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, stage, "old", "ops.json")); string(data) != "original" {
+		t.Fatal("moved the original:", string(data))
+	}
+	// Something else at the set-aside folder's name, which nothing needed,
+	// doesn't keep the originals from returning.
+	other := filepath.Join(t.TempDir(), "data")
+	os.MkdirAll(filepath.Join(other, stage, "old"), 0o700)
+	os.WriteFile(filepath.Join(other, stage, "old", "ops.json"), []byte("original"), 0o644)
+	os.WriteFile(filepath.Join(other, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")), nil, 0o644)
+	plain, _ := json.Marshal(RestoreRequest{Root: other, Stage: stage, Operation: RestoreRollbackOld,
+		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: other})
+	var said bytes.Buffer
+	if RunRestore(string(plain), &said, io.Discard) != 0 || !strings.Contains(said.String(), `"kept":false`) {
+		t.Fatal("returned nothing past a file at the set-aside name:", said.String())
+	}
 	// One item's return needs RENAME_NOREPLACE, so without it nothing moves.
 	os.MkdirAll(filepath.Join(root, "world"), 0o755)
 	os.WriteFile(filepath.Join(root, "world", "level.dat"), []byte("game made"), 0o644)
