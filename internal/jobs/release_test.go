@@ -253,7 +253,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		// players were given, so it doesn't run.
 		{name: "backup-warning", status: ops.Failed,
 			err:  "Ludock wasn’t running when the server was due to restart for a backup, so it didn’t. Players had been told it would.",
-			data: backedUp, containers: []string{"/mc running unless-stopped 0000"}},
+			data: backedUp, containers: []string{"/mc running unless-stopped 0000"}, sameRun: true},
 		// A restart whose stop was sent and done but not confirmed: recovery
 		// only confirms the stop.
 		{name: "restart-stop-unconfirmed", status: ops.Interrupted, data: backedUp, containers: []string{"/mc exited unless-stopped 0000"},
