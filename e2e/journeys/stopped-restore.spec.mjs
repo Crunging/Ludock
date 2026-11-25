@@ -80,7 +80,15 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
   await expect(page.locator("#action-error")).toContainText(`Undoing the restore of ${server.name}.`);
 
   const aside = join(server.data, `ludock-set-aside-${restoreID}`, "generated.txt");
-  await expect.poll(() => existsSync(aside) && readFileSync(marker, "utf8"), { timeout: 45_000 }).toBe("current");
+  // The undo moves the file aside before it puts the previous one back, so
+  // for a moment there is none to read.
+  await expect.poll(() => {
+    try {
+      return existsSync(aside) && readFileSync(marker, "utf8");
+    } catch {
+      return "";
+    }
+  }, { timeout: 45_000 }).toBe("current");
   expect(readFileSync(aside, "utf8")).toBe("written meanwhile");
   await expect(item).toHaveCount(0, { timeout: 15_000 });
   await expect(page.locator(".needs-attention__list li", { hasText: "Restore failed, then undone" })).toBeVisible();
