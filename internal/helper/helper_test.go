@@ -726,6 +726,26 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(root, "ops.json")); string(data) != "game made" {
 		t.Fatal("set aside before refusing:", string(data))
 	}
+	// Nor is one that gains a second name while what is in its way moves.
+	linked := false
+	renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
+		err := original(fromFD, from, toFD, to, flags)
+		if err == nil && !linked {
+			linked = true
+			os.Link(staging, filepath.Join(root, "alias"))
+		}
+		return err
+	}
+	if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
+		t.Fatal("returned an original that gained a second name")
+	}
+	renameat2 = original
+	os.Remove(filepath.Join(root, "alias"))
+	os.Rename(filepath.Join(root, asideName, "ops.json"), filepath.Join(root, "ops.json"))
+	os.Remove(filepath.Join(root, asideName))
+	if data, _ := os.ReadFile(staging); string(data) != "original" {
+		t.Fatal("moved the original:", string(data))
+	}
 	// The check before the stop refuses an original it can't return as one,
 	// whatever is in another's way, in whichever order the folder lists.
 	os.Symlink("nowhere", filepath.Join(root, stage, "old", "a-link"))
@@ -833,7 +853,7 @@ func TestRenamesNeverClobber(t *testing.T) {
 	os.Remove(filepath.Join(root, asideName, "theirs"))
 	os.Remove(filepath.Join(root, asideName))
 	// Files at the stage's top that Ludock didn't make, such as one named
-	// like its scratch file, survive an undo it refuses.
+	// like its scratch folder, survive an undo it refuses.
 	for _, name := range []string{"probe", "probe.to"} {
 		os.WriteFile(filepath.Join(root, stage, name), []byte("theirs"), 0o644)
 	}
@@ -853,30 +873,39 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if entries, _ := os.ReadDir(filepath.Join(root, stage)); len(entries) != 1 {
 		t.Fatalf("left scratch in the stage: %v", entries)
 	}
-	// A probe removes only its own file, never one that took the name it
-	// was moving to.
-	var theirs string
-	renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
-		if to != "to" {
-			return original(fromFD, from, toFD, to, flags)
+	// A probe never removes a file, whichever of its names one takes, before
+	// its rename or after it.
+	for _, when := range []string{"before", "after success", "after refusal"} {
+		var theirs string
+		renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
+			if to != "to" {
+				return original(fromFD, from, toFD, to, flags)
+			}
+			folder, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(toFD))
+			err := error(unix.EEXIST)
+			switch theirs = filepath.Join(folder, "to"); when {
+			case "after success":
+				err = original(fromFD, from, toFD, to, flags)
+				os.Remove(theirs)
+			case "after refusal":
+				theirs = filepath.Join(folder, "from")
+				os.Remove(theirs)
+			}
+			os.WriteFile(theirs, []byte("theirs"), 0o644)
+			return err
 		}
-		folder, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(toFD))
-		theirs = filepath.Join(folder, to)
-		os.WriteFile(theirs, []byte("theirs"), 0o644)
-		return unix.EEXIST
+		RunRestore(string(argument), io.Discard, io.Discard)
+		renameat2 = original
+		if data, _ := os.ReadFile(theirs); string(data) != "theirs" {
+			t.Fatalf("%s: the probe removed a file it didn't make", when)
+		}
+		os.Remove(theirs)
+		os.Remove(filepath.Dir(theirs))
+		os.WriteFile(filepath.Join(root, stage, "old", "ops.json"), []byte("original"), 0o644)
+		os.WriteFile(filepath.Join(root, "ops.json"), []byte("game made"), 0o644)
+		os.Remove(filepath.Join(root, asideName, "ops.json"))
+		os.Remove(filepath.Join(root, asideName))
 	}
-	if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
-		t.Fatal("set aside past a failed probe")
-	}
-	renameat2 = original
-	if data, _ := os.ReadFile(theirs); string(data) != "theirs" {
-		t.Fatal("the probe removed a file it didn't make")
-	}
-	if entries, _ := os.ReadDir(filepath.Dir(theirs)); len(entries) != 1 {
-		t.Fatalf("the probe left its own file: %v", entries)
-	}
-	os.Remove(theirs)
-	os.Remove(filepath.Dir(theirs))
 	os.Remove(filepath.Join(root, "ops.json"))
 	os.Remove(filepath.Join(root, stage, "old", "ops.json"))
 	// Each original is returned in turn, so an attempt cut short, as by the
@@ -907,10 +936,20 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if RunRestore(string(argument), io.Discard, io.Discard) != 0 || staged() != 0 {
 		t.Fatal("didn't return the rest")
 	}
+	// The mount table is read once for all of them.
+	for index := range 20 {
+		os.Rename(filepath.Join(root, "file"+strconv.Itoa(index)), filepath.Join(root, stage, "old", "file"+strconv.Itoa(index)))
+	}
+	reads := 0
+	mountinfo.Table = func() ([]byte, error) { reads++; return previousTable() }
+	if RunRestore(string(argument), io.Discard, io.Discard) != 0 || staged() != 0 || reads != 1 {
+		t.Fatalf("returned %d of 20 on %d reads of the mount table", 20-staged(), reads)
+	}
+	mountinfo.Table = previousTable
 	for index := range 20 {
 		os.Remove(filepath.Join(root, "file"+strconv.Itoa(index)))
 	}
-	// Finding out about RENAME_NOREPLACE needs a scratch file only where
+	// Finding out about RENAME_NOREPLACE needs a scratch folder only where
 	// something is in the way, which main refuses anyway: on a full disk, a
 	// clear return still finishes, and a clash is refused with nothing made.
 	// A stage it can't write in stands in for the full disk; root writes

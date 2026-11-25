@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/Crunging/Ludock/internal/mountinfo"
 	"golang.org/x/sys/unix"
 )
 
@@ -118,6 +119,10 @@ type restoreHelper struct {
 	// noReplace is what this run found the root's filesystem does with
 	// RENAME_NOREPLACE: unknown until the run's first flagged rename.
 	noReplace noReplaceMode
+	// mounts is the mount table, read once per step for its staged
+	// originals however many there are.
+	mounts     []mountinfo.Mount
+	mountsRead bool
 }
 
 type noReplaceMode int
@@ -274,7 +279,7 @@ func (h *restoreHelper) renameRun(from fd, name string, to fd, target string, re
 
 // knowNoReplace finds out, before the first clash is set aside and its
 // folder made, whether the filesystem has RENAME_NOREPLACE, by a flagged
-// rename of a scratch file in the stage. A probe that can't run, as on a
+// rename of an empty scratch folder in the stage. A probe that can't run, as on a
 // full disk, is no answer, so the clash is refused, as main refuses it.
 func (h *restoreHelper) knowNoReplace(root, stage fd) error {
 	if h.noReplace != noReplaceUnknown {
@@ -283,8 +288,8 @@ func (h *restoreHelper) knowNoReplace(root, stage fd) error {
 	if same, err := sameMount(root, stage); err != nil || !same {
 		return errUnsafe
 	}
-	// A folder only this run makes holds the scratch file, so nothing else
-	// in the stage is touched. One a cut run leaves goes with the stage.
+	// A folder only this run makes holds the probe, so nothing else in the
+	// stage is touched. One a cut run leaves goes with the stage.
 	random := make([]byte, 8)
 	if _, err := rand.Read(random); err != nil {
 		return errUnsafe
@@ -298,19 +303,19 @@ func (h *restoreHelper) knowNoReplace(root, stage fd) error {
 	if err != nil {
 		return errUnsafe
 	}
-	file, err := unix.Openat(int(dir), "from", unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	err = unix.Mkdirat(int(dir), "from", 0o700)
 	if err == nil {
-		unix.Close(file)
 		err = renameat2(int(dir), "from", int(dir), "to", unix.RENAME_NOREPLACE)
-		// Only the name the probe's own file has now is removed.
-		made := "from"
 		switch {
 		case err == nil:
-			h.noReplace, made = noReplaceWorks, "to"
+			h.noReplace = noReplaceWorks
 		case unsupported(err):
 			h.noReplace, err = noReplaceMissing, nil
 		}
-		unix.Unlinkat(int(dir), made, 0)
+		// Removing only empty folders can't take anything another writer
+		// put at either name; whatever stays goes with the stage.
+		unix.Unlinkat(int(dir), "from", unix.AT_REMOVEDIR)
+		unix.Unlinkat(int(dir), "to", unix.AT_REMOVEDIR)
 	}
 	if err != nil {
 		h.noReplace = noReplaceUnknown
@@ -517,7 +522,13 @@ func (h *restoreHelper) stagedEntry(old fd, name string) (*unix.Stat_t, error) {
 	if isRegular(info) && info.Nlink != 1 {
 		return nil, errUnsafe
 	}
-	return info, ownMount(h.request.Base, h.request.Root+"/"+h.request.Stage+"/old/"+name)
+	if !h.mountsRead {
+		if h.mounts, err = mountinfo.Read(); err != nil {
+			return nil, err
+		}
+		h.mountsRead = true
+	}
+	return info, mountFree(h.mounts, h.request.Base, h.request.Root+"/"+h.request.Stage+"/old/"+name)
 }
 
 // checkEntry checks one staged original and, if something is in its way,
@@ -955,6 +966,10 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 				return err
 			}
 			h.movedAside++
+			// It may have gained a second name while that moved.
+			if source, err = h.stagedEntry(old, name); err != nil {
+				return err
+			}
 		}
 		// The checks above looked the original and its name up; the rename
 		// itself refuses a name taken since where it can.

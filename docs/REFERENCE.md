@@ -885,7 +885,7 @@ is taken) unless the undo had begun moving data.
 Restores and undos move data without replacing anything a game makes at the
 same moment, where the filesystem can refuse that as part of the move. Each
 undo step finds out once, from its first such move or, when something is in
-the way, from a scratch file in the restore's folder, whether the data
+the way, from an empty scratch folder in the restore's folder, whether the data
 folder's filesystem can. It counts as unable when the kernel answers with
 `ENOSYS`, `EINVAL`, `EOPNOTSUPP` or `EPERM`; any other answer stops the
 step, to be tried again. If it can, every move of that step is made that
