@@ -671,9 +671,8 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			silent = game == GameNotAnswering
 			healthy = healthy && !silent
 		}
-		if healthy && briefRun(r, container, game, policy, now) {
-			continue
-		}
+		// A run between restarts keeps its outage, which still alerts.
+		healthy = healthy && !briefRun(r, container, game, policy, now)
 		// State is saved before any alert: the saved outage start keys each
 		// alert, so an unsaved state could later alert again under a new key.
 		if healthy {

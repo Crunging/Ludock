@@ -435,8 +435,9 @@ func problem(s *Service, serverID string, now int64) (*Problem, error) {
 
 // A game that keeps exiting under its restart policy shows restarting, with
 // runs too short for anyone to join between restarts. That is one outage,
-// alerted once: a run counts as the server back only once the game answers
-// or it has stayed up for the grace period.
+// alerted once its grace ends even during such a run: a run counts as the
+// server back only once the game answers or it has stayed up for the grace
+// period.
 func TestCrashLoopIsOneOutage(t *testing.T) {
 	const down, back = "Minecraft: the server is down.", "Minecraft: the server is back up."
 	s, events, server := setup(t)
@@ -446,8 +447,10 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 		return map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: started}}
 	}
 	s.Check(ctx, state("restarting", ""), 1000)
-	s.Check(ctx, state("restarting", ""), 61_000)
-	s.Check(ctx, runSince(70_000), 75_000)
+	s.Check(ctx, runSince(58_000), 61_000)
+	if !slices.Equal(events.events, []string{down}) {
+		t.Fatal(events.events)
+	}
 	s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "running", Health: "starting", StateSince: 78_000}}, 80_000)
 	s.Check(ctx, runSince(78_000), 85_000)
 	s.Check(ctx, state("restarting", ""), 90_000)
