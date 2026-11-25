@@ -469,10 +469,12 @@ Recreate it without `--rm` to manage it fully.
   gets only what it and every user the ACL names may do, and others only what
   every named user and group may do. So a tool that ignores ACLs, or storage
   that can't hold them, restores a file with the same permissions or fewer,
-  never more; only the entries for specific users and groups are lost then. A restore onto such storage says
-  so in its **Activity** entry. A data folder keeps the ACL it has now; only
-  its owner and permissions come back. An ACL of more than 1024 entries stops
-  the backup.
+  never more; only the entries for specific users and groups are lost then. A
+  restore onto such storage says so in its **Activity** entry. An entry
+  without an ACL record had none, and restores without one, whatever the data
+  folder's default ACL would give a new file. A data folder itself keeps the
+  ACL it has now; only its owner and permissions come back. An ACL of more
+  than 1024 entries stops the backup.
 
 ## Ludock itself
 
@@ -608,7 +610,15 @@ sudo tar -xpf backup.tar --acls --numeric-owner -C restored --strip-components=1
 Run these as root so owners stay as they were; `--acls` puts back ACLs. Stop the game, then
 replace the contents of its data folder with those of `restored/$id/`, still
 as root and keeping owners and permissions, such as with
-`sudo cp -a "restored/$id/." <folder>/` after emptying the folder. For a data
+`sudo cp -a "restored/$id/." <folder>/` after emptying the folder. If the
+data folder has a default ACL, a copy, like plain `tar` or bsdtar, lets each
+file that had no ACL take it, as any new file there would. For exactly what
+Ludock restores, make `restored` with `sudo mkdir -m 700` on the same
+filesystem as the data folder, and move the entries in instead, which keeps
+each one's ACLs:
+`sudo find "restored/$id" -mindepth 1 -maxdepth 1 -exec mv -t <folder>/ {} +`.
+Moving leaves the data folder's own owner and permissions as they are;
+`restored/$id` itself has the backup's. For a data
 folder that is a whole named volume, the folder is the one
 `docker volume inspect -f '{{.Mountpoint}}' <volume>` prints; for one inside a
 volume, add the rest of its container path to that.
@@ -624,7 +634,9 @@ docker run --rm -v <volume or folder>:/target -v "$PWD/backup.tar:/backup.tar:ro
 ```
 
 Alpine's `tar` and `cp` leave ACLs out, so files keep only the permissions
-in their mode, which never give more than the ACLs did.
+in their mode, which never give more than the ACLs did. Copied into a folder
+with a default ACL, though, they take it, which can give the users it names
+access the backup didn't.
 
 In the backup folder itself, each archive is `<id>.tar`. `ls -lt` lists the
 newest first (a second copy is dated as its backup, not when it was copied),

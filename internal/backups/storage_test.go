@@ -130,6 +130,17 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if err == nil {
 		err = unix.Setxattr(filepath.Join(data, "world"), "system.posix_acl_default", def, 0)
 	}
+	// ops.json (0660) and logs have no ACL, and the data folder gets a
+	// default ACL only after them, so they restore without one: a stage
+	// folder inherits that default ACL, and the archived mode must not
+	// switch on what it gives user 4242.
+	os.WriteFile(filepath.Join(data, "ops.json"), []byte("[]"), 0o600)
+	os.Chmod(filepath.Join(data, "ops.json"), 0o660)
+	os.Mkdir(filepath.Join(data, "logs"), 0o755)
+	if err == nil {
+		err = unix.Setxattr(data, "system.posix_acl_default",
+			aclValue([3]uint32{1, 7}, [3]uint32{2, 6, 4242}, [3]uint32{4, 7}, [3]uint32{16, 7}, [3]uint32{32, 0}), 0)
+	}
 	if err != nil && !errors.Is(err, unix.ENOTSUP) {
 		t.Fatal(err)
 	}
@@ -221,7 +232,8 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if acls {
 		staged := filepath.Join(data, stage, "new")
 		for path, want := range map[string]map[string][]byte{"whitelist.json": {"system.posix_acl_access": access},
-			"world": {"system.posix_acl_default": def, "system.posix_acl_access": nil}} {
+			"world": {"system.posix_acl_default": def, "system.posix_acl_access": nil}, "world/level.dat": {"system.posix_acl_access": nil},
+			"ops.json": {"system.posix_acl_access": nil}, "logs": {"system.posix_acl_default": nil, "system.posix_acl_access": nil}} {
 			for attribute, value := range want {
 				got := make([]byte, 256)
 				n, err := unix.Getxattr(filepath.Join(staged, path), attribute, got)
@@ -232,6 +244,9 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 		}
 		if info, _ := os.Stat(filepath.Join(staged, "whitelist.json")); info == nil || info.Mode().Perm() != 0o644 {
 			t.Fatal("whitelist.json staged as", info)
+		}
+		if info, _ := os.Stat(filepath.Join(staged, "ops.json")); info == nil || info.Mode().Perm() != 0o660 {
+			t.Fatal("ops.json staged as", info)
 		}
 	}
 	if data, _ := os.ReadFile(filepath.Join(data, stage, "new", "world", "level.dat")); string(data) != "level" {

@@ -1688,16 +1688,23 @@ func (x *extractor) metadata(descriptor fd, uid, gid, mode int64, mtime *float64
 	if directory {
 		permissions = uint32(mode & 0o3777)
 	}
-	// An ACL the destination refuses leaves the archive's mode, which gives
-	// no one more than the ACL did, and none inherited from the stage's
-	// folders, which could grant what the entry's own didn't. The mode is
-	// set after the ACL, whose own bits it then matches, since setting an
-	// ACL can clear a folder's setgid.
+	// An entry gets exactly the ACLs its archive records. Ludock records every
+	// ACL a file or folder has, and refuses older archives, so one without a
+	// record had none, and whatever it inherited from the stage's folders is
+	// removed before the mode could switch it on. An ACL the destination
+	// refuses leaves the archive's mode, which gives no one more than the
+	// ACL did. The mode is set after the ACL, whose own bits it then
+	// matches, since setting an ACL can clear a folder's setgid.
 	for _, acl := range []struct {
 		attribute string
 		entries   []aclEntry
 	}{{accessACL, acls.access}, {defaultACL, acls.def}} {
 		if acl.entries == nil {
+			if acl.attribute == accessACL || directory {
+				if err := unix.Fremovexattr(int(descriptor), acl.attribute); err != nil && !unsupportedXattr(err) {
+					return err
+				}
+			}
 			continue
 		}
 		err := fsetxattr(int(descriptor), acl.attribute, encodeACL(acl.entries), 0)
@@ -1712,13 +1719,6 @@ func (x *extractor) metadata(descriptor fd, uid, gid, mode int64, mtime *float64
 		}
 		x.aclsLost = true
 		if err := unix.Fremovexattr(int(descriptor), acl.attribute); err != nil && !unsupportedXattr(err) {
-			return err
-		}
-	}
-	// A folder whose ACL was recorded without a default one gets none from
-	// the stage's folders for what is made in it later.
-	if directory && acls.access != nil && acls.def == nil {
-		if err := unix.Fremovexattr(int(descriptor), defaultACL); err != nil && !unsupportedXattr(err) {
 			return err
 		}
 	}
@@ -1981,13 +1981,6 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		delete(x.dirty, strings.Join(record.names, "/"))
 	}
 	if rootMeta != nil {
-		// The stage's new folder carries the root's ACL to moveNew, so it
-		// keeps none it inherited from the stage.
-		if rootMeta.acls.access == nil {
-			if err := unix.Fremovexattr(int(x.destination), accessACL); err != nil && !unsupportedXattr(err) {
-				return err
-			}
-		}
 		if err := x.metadata(x.destination, rootMeta.uid, rootMeta.gid, rootMeta.mode, nil, true, rootMeta.acls); err != nil {
 			return err
 		}
