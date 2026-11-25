@@ -1194,7 +1194,9 @@ func (s *Service) Announce(ctx context.Context, now int64) {
 		if lead == 0 || slot == "" || runAt-now < (announceCutoff+announceMinimum).Milliseconds() {
 			continue
 		}
-		if !s.claimAnnouncement(ctx, r, slot, lead, now) {
+		// A schedule that can't send its warning, such as one whose owner is
+		// gone, leaves it for whoever takes the schedule over.
+		if !s.canWarn(ctx, r, data) || !s.claimAnnouncement(ctx, r, slot, lead, now) {
 			continue
 		}
 		s.mu.Lock()
@@ -1218,6 +1220,17 @@ func (s *Service) Announce(ctx context.Context, now int64) {
 			}
 		}()
 	}
+}
+
+// canWarn checks, without auditing a refusal, the authority say checks
+// again as the warning goes out.
+func (s *Service) canWarn(ctx context.Context, r *row, data Input) bool {
+	user, _, err := s.authority(ctx, r, data)
+	if err != nil {
+		return false
+	}
+	allowed, err := s.Authz.Has(ctx, user, r.serverID, authz.ConsoleExecute)
+	return err == nil && allowed
 }
 
 // announce sends one warning and records the binding it reached players

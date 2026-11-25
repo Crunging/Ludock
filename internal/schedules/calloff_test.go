@@ -190,12 +190,18 @@ func TestPauseCallsOffOnlyAQueuedRun(t *testing.T) {
 }
 
 // A run the owner can no longer do is suspended when it comes due, and
-// players counted down to it hear it's off.
+// players counted down to it hear it's off. Its warnings meanwhile stay
+// unclaimed, for whoever takes the schedule over.
 func TestRevokedOwnersRunCallsOffCountdown(t *testing.T) {
 	f := setup(t)
 	f.grant(t, authz.ServerView, authz.ServerRestart, authz.SchedulesManage, authz.ConsoleExecute)
 	_, calls := f.warnedRestart(t, friend)
 	f.grant(t, authz.ServerView)
+	f.s.Announce(ctx, due-minute)
+	f.s.Wait()
+	if f.claims(t) != 1 {
+		t.Fatal("a warning the schedule can't send was claimed")
+	}
 	f.s.Run(ctx, due)
 	f.s.Run(ctx, due+30_000)
 	if last := f.first(t, admin); f.operations(t) != 0 || *calls != 1 || last.LastResult == "" {
