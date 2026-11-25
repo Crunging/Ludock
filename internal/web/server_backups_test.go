@@ -184,7 +184,10 @@ func TestRestoreRefusesOtherGamesAndServers(t *testing.T) {
 
 // Only administrators read or delete a server's archives, also once its
 // container is gone; then a member's grant gives nothing, and nothing that
-// needs the server is offered or accepted.
+// needs the server is offered or accepted. Removing it from Ludock is
+// refused while it has backups, which nothing could reach once it left the
+// list; one an install removed before that stays on Settings until its
+// backups are gone.
 func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
@@ -250,11 +253,39 @@ func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 	if kind, _ := p.queued(t); kind != "" {
 		t.Fatal("queued", kind)
 	}
+	if response := p.post("/servers/"+p.server+"/remove", p.admin, CSRFToken(p.admin.Token)); response.Code != http.StatusConflict ||
+		!strings.Contains(response.Body.String(), "Delete this server’s backups on its Backups tab") {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	if page := p.do("GET", "/servers/"+p.server, p.admin, nil, nil).Body.String(); !strings.Contains(page, "move them to its new server") ||
+		strings.Contains(page, "/servers/"+p.server+"/remove") {
+		t.Fatal(page)
+	}
+	storage := func() string {
+		return p.do("GET", "/fragments/settings/backup-storage", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String()
+	}
+	link := `href="/servers/` + p.server + `?tab=backups">valheim</a> (1 backup)`
+	if strings.Contains(storage(), link) {
+		t.Fatal(storage())
+	}
+	if _, err := p.app.DB.Exec(`INSERT INTO settings (key, value_json) SELECT 'server.choice:' || external_identity,
+    '{"managed":false}' FROM logical_servers WHERE id=?`, p.server); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(storage(), link) {
+		t.Fatal(storage())
+	}
 	if response := p.action(backup+"/delete", p.admin, nil); response.StatusCode != http.StatusOK {
 		t.Fatal(response.StatusCode, readBody(t, response))
 	}
 	if _, err := os.Stat(filepath.Join(folder, id+".tar")); !os.IsNotExist(err) {
 		t.Fatal("archive left", err)
+	}
+	if strings.Contains(storage(), link) {
+		t.Fatal(storage())
+	}
+	if response := p.post("/servers/"+p.server+"/remove", p.admin, CSRFToken(p.admin.Token)); response.Header().Get("HX-Redirect") != "/" {
+		t.Fatal(response.Code, response.Body.String())
 	}
 }
 

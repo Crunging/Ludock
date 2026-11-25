@@ -333,6 +333,14 @@ func (s *Store) List(ctx context.Context, hostID string) ([]Server, error) {
 	return listServers(ctx, s.DB, hostID, false)
 }
 
+// Removed reports whether an administrator removed the server and its
+// container has since left discovery.
+func (s *Store) Removed(ctx context.Context, id string) (bool, error) {
+	var removed bool
+	err := s.DB.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM logical_servers WHERE id = ? AND "+RemovedServer+")", id).Scan(&removed)
+	return removed, err
+}
+
 // Get returns a logical server or nil.
 func (s *Store) Get(ctx context.Context, id string) (*Server, error) {
 	return getServer(ctx, s.DB, id)

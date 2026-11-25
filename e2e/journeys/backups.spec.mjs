@@ -138,6 +138,22 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   await page.getByRole("dialog", { name: "Delete this backup?" }).getByRole("button", { name: "Delete backup" }).click();
   await expect(page.locator("#detail-status")).toHaveText("Backup deleted.");
   await expect(rows).toHaveCount(1);
+  // Removed from Ludock, its backups would be out of reach, so that waits
+  // until they are dealt with.
+  const remove = page.locator(".remove-server");
+  await page.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
+  await expect(remove).toContainText("Delete this server’s backups on its Backups tab, or move them to its new server, before removing it from Ludock.");
+  await expect(remove.getByRole("button", { name: "Remove from Ludock" })).toHaveCount(0);
+  await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
+  await (await menuItem(rows.first(), "button", "Delete")).click();
+  await page.getByRole("dialog", { name: "Delete this backup?" }).getByRole("button", { name: "Delete backup" }).click();
+  await expect(rows).toHaveText(["No backups yet."]);
+  await page.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
+  await expect(remove).toContainText("Ludock can’t find this server in Docker.");
+  await remove.getByRole("button", { name: "Remove from Ludock" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Remove server" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(serverRow(page, ownServer.name)).toHaveCount(0);
 });
 
 test("browsing a backup, downloading one file, and restoring it alone", async ({ page, session, ownServer }) => {
