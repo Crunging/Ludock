@@ -37,6 +37,10 @@ type snapshot struct {
 	// made there could become the destination, and one that has appeared
 	// under that name is refused like an excluded entry.
 	stops map[identity][]missingName
+	// bindings are, for a path that reaches its last folder, that folder and
+	// the destination's name in it, looked up live at each check, so an entry
+	// replaced since the snapshot is still recognized.
+	bindings map[identity][]missingName
 }
 
 // missingName is a name a path lacks; only its last one is the destination
@@ -81,7 +85,8 @@ func (h *fileHelper) resolveExclusions() {
 // following links or the tracker's refusal. keep, when set, keeps each
 // descriptor it opens.
 func (h *fileHelper) snapshot(keep func(int)) snapshot {
-	taken := snapshot{entries: map[identity]bool{}, folders: map[identity]bool{}, stops: map[identity][]missingName{}}
+	taken := snapshot{entries: map[identity]bool{}, folders: map[identity]bool{}, stops: map[identity][]missingName{},
+		bindings: map[identity][]missingName{}}
 	for _, destination := range h.request.Blocked {
 		taken.walk(destination, keep)
 	}
@@ -112,6 +117,7 @@ func (s snapshot) walk(destination string, keep func(int)) {
 		}
 		s.folders[identityOf(&folder)] = true
 		if index == len(parts)-1 {
+			s.bindings[identityOf(&folder)] = append(s.bindings[identityOf(&folder)], missingName{part, true})
 			if entry, err := unix.Openat(current, part, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0); err == nil {
 				var info unix.Stat_t
 				if unix.Fstat(entry, &info) == nil {
@@ -133,10 +139,15 @@ func (s snapshot) walk(destination string, keep func(int)) {
 	}
 }
 
+// currentTaken runs after the current snapshot is retaken for folder; tests
+// use it to replace an entry after it.
+var currentTaken = func(folder *unix.Stat_t) {}
+
 // now is where the paths lead as of looking into folder.
 func (h *fileHelper) now(folder *unix.Stat_t) snapshot {
 	if !h.excluded.fresh || h.excluded.at != identityOf(folder) {
 		h.excluded.current, h.excluded.at, h.excluded.fresh = h.snapshot(nil), identityOf(folder), true
+		currentTaken(folder)
 	}
 	return h.excluded.current
 }
@@ -161,7 +172,7 @@ func (h *fileHelper) excludedIn(parent fd, info *unix.Stat_t) bool {
 		if taken.entries[identityOf(info)] {
 			return true
 		}
-		for _, missing := range taken.stops[identityOf(folder)] {
+		for _, missing := range append(taken.bindings[identityOf(folder)], taken.stops[identityOf(folder)]...) {
 			if entry, err := lstatAt(parent, missing.name); err == nil && sameInode(entry, info) && (missing.last || isDir(entry)) {
 				return true
 			}
@@ -230,7 +241,8 @@ func (h *fileHelper) checkIdentityOf(relative string, recursive, entry bool) (er
 			return nil
 		}
 	}
-	if h.excludedIn(folder, target) || (recursive && h.onPath(target)) {
+	// Only a folder can be on the way to a destination.
+	if h.excludedIn(folder, target) || (recursive && isDir(target) && h.onPath(target)) {
 		return errExcluded
 	}
 	return nil

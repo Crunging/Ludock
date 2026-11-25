@@ -1238,6 +1238,26 @@ func TestExclusionsHoldByIdentity(t *testing.T) {
 			t.Error(request.Operation, request.Path, "reached a replaced exclusion")
 		}
 	}
+	// So is one replaced after the current snapshot was taken, part-way
+	// through a listing.
+	exclusionsResolved = func() {}
+	for _, folder := range []string{"h", "spare"} {
+		os.MkdirAll(filepath.Join(root, folder), 0o755)
+	}
+	replaced := false
+	rootInfo, _ := os.Stat(root)
+	currentTaken = func(folder *unix.Stat_t) {
+		if !replaced && folder.Ino == rootInfo.Sys().(*syscall.Stat_t).Ino {
+			replaced = true
+			os.Rename(filepath.Join(root, "h"), filepath.Join(root, "h-old"))
+			os.Rename(filepath.Join(root, "spare"), filepath.Join(root, "h"))
+		}
+	}
+	listing, code = runFile(t, FileRequest{Operation: "list", Root: root, Blocked: []string{root + "//h"}}, nil)
+	currentTaken = func(*unix.Stat_t) {}
+	if !replaced || code != 0 || strings.Contains(listing, `"h"`) || strings.Contains(listing, `"h-old"`) {
+		t.Fatal("listed an exclusion replaced after its snapshot", replaced, code, listing)
+	}
 	// A file where a folder on the way should be can't hold the exclusion,
 	// so it stays listed.
 	exclusionsResolved = func() {}
