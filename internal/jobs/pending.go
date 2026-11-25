@@ -111,7 +111,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	if err != nil {
 		return err
 	}
-	live, missing := false, false
+	live, missing, moved := false, false, false
 	// What Activity says comes from the final journal, which also covers
 	// roots an earlier attempt finished.
 	note := func(final restoreRecovery) string {
@@ -183,6 +183,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		// Until live data moves, a failure leaves the server's data as it
 		// was, so the operation that stopped it can start it again.
 		return j.rollbackRestore(ctx, server, restore, data, func() error {
+			moved = true
 			if job == nil {
 				return nil
 			}
@@ -192,6 +193,9 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	data.Cleanup()
 	restore.Progress("", func(r *ops.Recovery) { r.DataHelperID = "" }, nil)
 	// An undo that failed after keeping newer copies says where they are.
+	if err != nil && moved {
+		j.reconcileKept(ctx, server, restore)
+	}
 	if partial, _ := restoreState(restore); err != nil && partial != nil && partial.Kept {
 		result := restore.Job.Result
 		result.Guidance = endedRestoreGuidance(restore, true)

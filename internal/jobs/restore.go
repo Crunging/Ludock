@@ -202,8 +202,12 @@ func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, 
 		limit = removalLimit
 	}
 	request := helper.RestoreRequest{Root: root, Stage: stageName(job), Operation: operation, Item: item, Base: backups.HelperBaseOf(root)}
-	if operation == helper.RestoreSetAside || operation == helper.RestoreRollbackOld {
+	if operation == helper.RestoreSetAside || operation == helper.RestoreRollbackOld || operation == helper.RestoreKept {
 		request.Aside = helper.SetAsideName(job.Job.ID)
+	}
+	if operation == helper.RestoreRollbackOld {
+		state, _ := restoreState(job)
+		request.AllAside = state != nil && state.SetAside
 	}
 	out, err := j.Backups.Helpers.ExecWithin(ctx, data.Container, helper.Command("restore", request), assertAccess, limit)
 	if err != nil {
@@ -883,6 +887,36 @@ func endedRestoreGuidance(job *ops.Context, touched bool) string {
 	return guidance
 }
 
+// reconcileKept journals whether a failed undo kept copies, which only the
+// set-aside folders show once the helper whose step failed is gone. A check
+// that can't run leaves the journal as it was.
+func (j *Jobs) reconcileKept(ctx context.Context, server *servers.Context, job *ops.Context) {
+	state, err := restoreState(job)
+	if err != nil || state == nil || state.Kept || len(state.Roots) == 0 {
+		return
+	}
+	data, err := j.Backups.Helpers.NewDataHelper(ctx, server, true, job.Job.ID)
+	if err != nil {
+		return
+	}
+	defer data.Cleanup()
+	for _, entry := range state.Roots {
+		rootPath, err := backups.HelperRoot(server, entry.Root)
+		if err != nil {
+			return
+		}
+		found, err := j.restoreStep(ctx, data, rootPath, "", job, helper.RestoreKept, nil)
+		if err != nil {
+			return
+		}
+		if found["kept"] == true {
+			state.Kept = true
+			saveRestore(job, *state, "")
+			return
+		}
+	}
+}
+
 // rollbackAfterFailure rolls back through a fresh helper when the command
 // that failed stopped the old one, as recovery does.
 func (j *Jobs) rollbackAfterFailure(ctx context.Context, server *servers.Context, job *ops.Context, data **backups.DataHelper) error {
@@ -987,13 +1021,17 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 				return err
 			}
 			state, _ := restoreState(job)
+			moved := false
 			if state != nil && state.Status == "committed" {
 				err = j.cleanupRestore(ctx, server, job, data, nil)
 			} else {
-				err = j.rollbackRestore(ctx, server, job, data, nil, nil)
+				err = j.rollbackRestore(ctx, server, job, data, func() error { moved = true; return nil }, nil)
 			}
 			data.Cleanup()
 			if err != nil {
+				if moved {
+					j.reconcileKept(ctx, server, job)
+				}
 				return err
 			}
 		}

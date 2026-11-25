@@ -756,6 +756,32 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if RunRestore(string(plain), &said, io.Discard) != 0 || !strings.Contains(said.String(), `"kept":false`) {
 		t.Fatal("returned nothing past a file at the set-aside name:", said.String())
 	}
+	// An empty set-aside folder kept nothing, and a filesystem that answers
+	// the flagged rename with EOPNOTSUPP still gets the plain one.
+	os.Remove(filepath.Join(other, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")))
+	os.Mkdir(filepath.Join(other, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")), 0o700)
+	os.WriteFile(filepath.Join(other, stage, "old", "whitelist.json"), []byte("original"), 0o644)
+	renameat2 = func(int, string, int, string, uint) error { return unix.EOPNOTSUPP }
+	said.Reset()
+	if RunRestore(string(plain), &said, io.Discard) != 0 || !strings.Contains(said.String(), `"kept":false`) {
+		t.Fatal("returned nothing past EOPNOTSUPP, or claimed an empty folder:", said.String())
+	}
+	renameat2 = original
+	// Once this undo set a copy aside, a retry returns only by
+	// RENAME_NOREPLACE, so a save the game makes in the gap is never
+	// replaced; after a whole-folder set-aside, it returns as main does.
+	os.Rename(filepath.Join(other, "ops.json"), filepath.Join(other, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), "ops.json"))
+	os.WriteFile(filepath.Join(other, stage, "old", "ops.json"), []byte("original"), 0o644)
+	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
+	if RunRestore(string(plain), io.Discard, io.Discard) == 0 {
+		t.Fatal("returned by plain rename after a clash")
+	}
+	whole, _ := json.Marshal(RestoreRequest{Root: other, Stage: stage, Operation: RestoreRollbackOld,
+		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), AllAside: true, Base: other})
+	if RunRestore(string(whole), io.Discard, io.Discard) != 0 {
+		t.Fatal("refused the return after a whole-folder set-aside")
+	}
+	renameat2 = original
 	// One item's return needs RENAME_NOREPLACE, so without it nothing moves.
 	os.MkdirAll(filepath.Join(root, "world"), 0o755)
 	os.WriteFile(filepath.Join(root, "world", "level.dat"), []byte("game made"), 0o644)

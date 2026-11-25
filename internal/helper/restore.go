@@ -29,6 +29,9 @@ type RestoreRequest struct {
 	// Aside names the folder below Root that setAside moves live data into,
 	// and rollbackOld any live entry in an original's way.
 	Aside string `json:"aside,omitempty"`
+	// AllAside says rollbackOld follows a whole-folder setAside, whose
+	// folder says nothing about clashes.
+	AllAside bool `json:"allAside,omitempty"`
 	// Base is the helper's mount that holds Root. Moving live data out
 	// refuses any other mount on its way or inside it.
 	Base string `json:"base,omitempty"`
@@ -49,6 +52,9 @@ const (
 	// RestoreCheckReturn refuses, before the server stops, what rollbackOld
 	// would refuse to set aside, reading only.
 	RestoreCheckReturn = "checkReturn"
+	// RestoreKept reports, reading only, whether the set-aside folder holds
+	// anything, as after a step whose outcome is unknown.
+	RestoreKept = "kept"
 )
 
 // RestoreFailure is the only error text the restore helper prints.
@@ -207,7 +213,7 @@ func (h *restoreHelper) moveContents(source, destination fd, strict bool, omitte
 // something is in the originals' way, use renameStrict instead.
 func renameChecked(from fd, name string, to fd, target string) error {
 	err := renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE)
-	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) {
+	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTSUP) {
 		err = renameat(int(from), name, int(to), target)
 	}
 	return err
@@ -401,8 +407,9 @@ func (h *restoreHelper) checkReturn(root, stage fd) error {
 
 // stagedMovable refuses originals that moveContents would refuse to return,
 // before anything in their way is set aside. Only Ludock writes the stage, so
-// this refusal holds once the server stops and is told apart to refuse
-// before the stop; what is live, a running game may still change.
+// a link or special file there is told apart, to refuse before the stop. A
+// second name for a staged file can be the game's, which it may drop as it
+// stops, so that is refused only once the server is stopped, as main does.
 func stagedMovable(old fd, children []string) error {
 	for _, name := range children {
 		if Reserved(name) {
@@ -412,8 +419,11 @@ func stagedMovable(old fd, children []string) error {
 		if err != nil {
 			return err
 		}
-		if !isDir(info) && (!isRegular(info) || info.Nlink != 1) {
+		if !isDir(info) && !isRegular(info) {
 			return errUnsafeEntry
+		}
+		if isRegular(info) && info.Nlink != 1 {
+			return errUnsafe
 		}
 	}
 	return nil
@@ -471,7 +481,7 @@ func (h *restoreHelper) run() (any, error) {
 	}
 	if h.request.Aside != "" {
 		id, ok := strings.CutPrefix(h.request.Aside, SetAsidePrefix)
-		if !ok || !ValidID(id) || (h.request.Operation != RestoreSetAside && h.request.Operation != RestoreRollbackOld) {
+		if !ok || !ValidID(id) || (h.request.Operation != RestoreSetAside && h.request.Operation != RestoreRollbackOld && h.request.Operation != RestoreKept) {
 			return nil, errUnsafe
 		}
 	} else if h.request.Operation == RestoreSetAside {
@@ -497,6 +507,9 @@ func (h *restoreHelper) run() (any, error) {
 	case RestoreStageExists:
 		stage, err := h.pinStage(root, true)
 		return map[string]bool{"exists": stage >= 0}, err
+	case RestoreKept:
+		kept, _, err := h.keptAside(root)
+		return map[string]bool{"kept": kept}, err
 	case RestoreStage:
 		return ok, h.makeStage(root)
 	}
@@ -551,20 +564,38 @@ func (h *restoreHelper) done(root fd) (any, error) {
 	if (h.request.Operation != RestoreRollbackOld && h.request.Operation != RestoreSetAside) || h.request.Aside == "" {
 		return map[string]bool{"ok": true}, nil
 	}
-	aside, err := h.t.openAt(root, h.request.Aside, directoryFlags, 0)
-	// Something else at the name is no folder this undo kept copies in;
-	// pinAside refuses it whenever one must be.
-	if isNotExist(err) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) {
-		return map[string]bool{"ok": true, "kept": false}, nil
-	} else if err != nil {
+	kept, aside, err := h.keptAside(root)
+	if err != nil {
 		return nil, err
 	}
 	// What an earlier attempt moved in is durable before it is reported
 	// kept, even if that attempt's sync failed.
-	if err := syncAll(aside); err != nil {
-		return nil, err
+	if kept {
+		if err := syncAll(aside); err != nil {
+			return nil, err
+		}
 	}
-	return map[string]bool{"ok": true, "kept": true}, nil
+	return map[string]bool{"ok": true, "kept": kept}, nil
+}
+
+// keptAside says whether copies were kept: the set-aside folder exists and
+// holds at least one entry. Something else at its name holds none; pinAside
+// refuses it whenever one must be set aside.
+func (h *restoreHelper) keptAside(root fd) (bool, fd, error) {
+	if h.request.Aside == "" {
+		return false, -1, nil
+	}
+	aside, err := h.t.openAt(root, h.request.Aside, directoryFlags, 0)
+	if isNotExist(err) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) {
+		return false, -1, nil
+	} else if err != nil {
+		return false, -1, err
+	}
+	children, err := names(aside)
+	if err != nil {
+		return false, -1, err
+	}
+	return len(children) > 0, aside, nil
 }
 
 func (h *restoreHelper) space(root fd) (any, error) {
@@ -797,7 +828,16 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 			return err
 		}
 	}
-	if err := h.moveContents(old, root, aside >= 0); err != nil {
+	// A copy kept from this undo's own clash, on this attempt or an earlier
+	// one, means the same; the whole-folder set-aside fills the folder by
+	// design and keeps main's return.
+	strict := aside >= 0
+	if !strict && !h.request.AllAside {
+		if strict, _, err = h.keptAside(root); err != nil {
+			return err
+		}
+	}
+	if err := h.moveContents(old, root, strict); err != nil {
 		return err
 	}
 	previous, err := rootBefore(root, stage)
