@@ -800,7 +800,8 @@ func (h *Helper) runData(ctx context.Context, old *docker.ContainerSpec, image s
 	// given absolute, in place of the original's entry.
 	env := slices.DeleteFunc(slices.Clone(config.Env), func(entry string) bool { return strings.HasPrefix(entry, "LUDOCK_DATA_DIR=") })
 	body := map[string]any{"Image": image, "Entrypoint": []string{helper.Binary}, "Cmd": cmd, "User": config.User,
-		"Env": append(env, "LUDOCK_DATA_DIR="+dataDir), "Labels": stepLabels, "Healthcheck": map[string]any{"Test": []string{"NONE"}},
+		// The slash keeps a name ending in a space whole, since Ludock trims it.
+		"Env": append(env, "LUDOCK_DATA_DIR="+dataDir+"/"), "Labels": stepLabels, "Healthcheck": map[string]any{"Test": []string{"NONE"}},
 		"HostConfig": map[string]any{"NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": []string{"ALL"}, "CapAdd": host.CapAdd,
 			"GroupAdd": host.GroupAdd, "SecurityOpt": []string{"no-new-privileges:true"}, "Mounts": []map[string]any{mount}}}
 	id, err := h.Docker.Create(ctx, name, "", body)

@@ -473,7 +473,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 						// Go reads the first entry, so there is one.
 						if dirs := slices.DeleteFunc(slices.Clone(create.Env), func(entry string) bool {
 							return !strings.HasPrefix(entry, "LUDOCK_DATA_DIR=")
-						}); !slices.Equal(dirs, []string{"LUDOCK_DATA_DIR=" + g.dataDir}) {
+						}); !slices.Equal(dirs, []string{"LUDOCK_DATA_DIR=" + g.dataDir + "/"}) {
 							t.Errorf("data step data folders %q", dirs)
 						}
 					}
