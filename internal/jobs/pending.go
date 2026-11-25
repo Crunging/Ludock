@@ -168,6 +168,10 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	if err != nil {
 		return "", err
 	}
+	kept := false
+	if final, _ := restoreState(restore); final != nil {
+		kept = final.Kept
+	}
 	var note string
 	switch {
 	case state.Status == "committed":
@@ -175,11 +179,14 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	case missing && !live:
 		note = "Ludock found nothing to put back for a restore that had stopped partway: the folder " + stageName(restore) +
 			" that held the server’s previous data is no longer there, so its data was left as it is."
-	case !live:
-		note = "Ludock removed the backup’s unpacked copy that a stopped restore left in " + stageName(restore) + "."
-	case state.SetAside:
+	case state.SetAside && live:
 		note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place, and what the game wrote meanwhile is kept in the folder " +
 			helper.SetAsideName(restore.Job.ID) + " beside it."
+	case kept:
+		note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. The game had since made newer copies of some of it, which are kept in the folder " +
+			helper.SetAsideName(restore.Job.ID) + " beside it."
+	case !live:
+		note = "Ludock removed the backup’s unpacked copy that a stopped restore left in " + stageName(restore) + "."
 	default:
 		note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place."
 	}

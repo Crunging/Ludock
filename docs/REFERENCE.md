@@ -868,7 +868,10 @@ attention** for administrators. **Undo the restore** stops the server, the one
 case where a data operation stops a server another manager started; it warns
 players first when anyone is online and the game can be messaged. Ludock moves
 whatever is in the data folder now into `ludock-set-aside-<id>` beside it,
-returns the previous data, and starts the server again if it was running. If
+returns the previous data, and starts the server again if it was running. A
+restore stopped while it was still moving data out left some of the previous
+data in place, so only what the game made in place of the rest moves there; a
+name already in that folder gets a number, such as `world (2)`. If
 no one does that, the next backup, restore, update, or restart with a backup
 first finishes the undo the same way before its own work, and so does Ludock's
 next start if the server is stopped then. If the `.ludock-restore-<id>` folder

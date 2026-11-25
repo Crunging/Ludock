@@ -25,7 +25,8 @@ type RestoreRequest struct {
 	// replaced copy waits in the stage as old/item, a rolled-back one as
 	// returned.
 	Item string `json:"item,omitempty"`
-	// Aside names the folder below Root that setAside moves live data into.
+	// Aside names the folder below Root that setAside moves live data into,
+	// and rollbackOld any live entry in an original's way.
 	Aside string `json:"aside,omitempty"`
 	// Base is the helper's mount that holds Root. Moving live data out
 	// refuses any other mount on its way or inside it.
@@ -278,13 +279,52 @@ func (h *restoreHelper) pinAside(root, stage fd) (fd, error) {
 	return aside, nil
 }
 
+// asideFor checks that a live entry in parent, in the way of an original,
+// can move, and pins the set-aside folder once one must: a server started
+// since the restore stopped may have made a newer copy by that name.
+func (h *restoreHelper) asideFor(root, stage, parent, aside fd, name string, info *unix.Stat_t) (fd, error) {
+	if h.request.Aside == "" {
+		return -1, errUnsafe
+	}
+	if isDir(info) {
+		if err := h.safeToMove(parent, name, 0, false); err != nil {
+			return -1, err
+		}
+	}
+	if aside >= 0 {
+		return aside, nil
+	}
+	return h.pinAside(root, stage)
+}
+
+// setAsideEntry moves a live entry into the set-aside folder under a name
+// the folder doesn't hold yet, since an earlier attempt may have set a copy
+// aside by that name.
+func setAsideEntry(parent fd, name string, aside fd, info *unix.Stat_t) error {
+	if info == nil {
+		return syncAll(parent, aside)
+	}
+	target := name
+	for count := 2; ; count++ {
+		if _, err := lstatAt(aside, target); isNotExist(err) {
+			break
+		} else if err != nil {
+			return err
+		} else if count > 1000 {
+			return errUnsafe
+		}
+		target = name + " (" + strconv.Itoa(count) + ")"
+	}
+	return move(parent, name, aside, target, info)
+}
+
 func (h *restoreHelper) run() (any, error) {
 	if !validStage(h.request.Stage) {
 		return nil, errUnsafe
 	}
 	if h.request.Aside != "" {
 		id, ok := strings.CutPrefix(h.request.Aside, SetAsidePrefix)
-		if !ok || !ValidID(id) || h.request.Operation != RestoreSetAside {
+		if !ok || !ValidID(id) || (h.request.Operation != RestoreSetAside && h.request.Operation != RestoreRollbackOld) {
 			return nil, errUnsafe
 		}
 	} else if h.request.Operation == RestoreSetAside {
@@ -322,7 +362,10 @@ func (h *restoreHelper) run() (any, error) {
 		return ok, syncAll(root)
 	}
 	if item != nil && h.request.Operation != RestoreCleanup {
-		return ok, h.runItem(root, stage, item)
+		if err := h.runItem(root, stage, item); err != nil {
+			return nil, err
+		}
+		return h.done(root)
 	}
 	switch h.request.Operation {
 	case RestoreCleanup:
@@ -343,7 +386,24 @@ func (h *restoreHelper) run() (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ok, syncAll(stage, root)
+	if err := syncAll(stage, root); err != nil {
+		return nil, err
+	}
+	return h.done(root)
+}
+
+// done answers a step that ran. rollbackOld also reports whether the root
+// holds the set-aside folder, which a retry after an interruption still
+// finds.
+func (h *restoreHelper) done(root fd) (any, error) {
+	if h.request.Operation != RestoreRollbackOld || h.request.Aside == "" {
+		return map[string]bool{"ok": true}, nil
+	}
+	_, err := lstatAt(root, h.request.Aside)
+	if err != nil && !isNotExist(err) {
+		return nil, err
+	}
+	return map[string]bool{"ok": true, "kept": err == nil}, nil
 }
 
 func (h *restoreHelper) space(root fd) (any, error) {
@@ -505,16 +565,69 @@ func (h *restoreHelper) setAside(root, stage fd) error {
 	if err != nil {
 		return err
 	}
-	if err := h.moveContents(root, aside, h.request.Stage, h.request.Aside); err != nil {
+	rootInfo, err := fstat(root)
+	if err != nil {
 		return err
+	}
+	children, err := names(root)
+	if err != nil {
+		return err
+	}
+	if len(children) > 1000000 {
+		return errUnsafe
+	}
+	for _, name := range children {
+		if name == h.request.Stage || name == h.request.Aside || Reserved(name) {
+			continue
+		}
+		info, err := movable(root, name, rootInfo.Dev)
+		if err != nil {
+			return err
+		}
+		if err := setAsideEntry(root, name, aside, info); err != nil {
+			return err
+		}
 	}
 	return syncAll(aside, stage, root)
 }
 
+// rollbackOld returns the originals. A live entry holding an original's
+// name moves aside first; every move is one rename, so a retry after any
+// interruption finds both copies and goes on from there.
 func (h *restoreHelper) rollbackOld(root, stage fd) error {
 	old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 	if err != nil {
 		return err
+	}
+	rootInfo, err := fstat(root)
+	if err != nil {
+		return err
+	}
+	children, err := names(old)
+	if err != nil {
+		return err
+	}
+	if len(children) > 1000000 {
+		return errUnsafe
+	}
+	var aside fd = -1
+	for _, name := range children {
+		if Reserved(name) {
+			continue
+		}
+		info, err := movable(root, name, rootInfo.Dev)
+		if err != nil {
+			return err
+		}
+		if info == nil {
+			continue
+		}
+		if aside, err = h.asideFor(root, stage, root, aside, name, info); err != nil {
+			return err
+		}
+		if err := setAsideEntry(root, name, aside, info); err != nil {
+			return err
+		}
 	}
 	if err := h.moveContents(old, root); err != nil {
 		return err
@@ -925,7 +1038,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		if err != nil {
 			return err
 		}
-		return move(parent, name, aside, name, info)
+		return setAsideEntry(parent, name, aside, info)
 	case RestoreRollbackOld:
 		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 		if err != nil {
@@ -938,6 +1051,21 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		parent, err := h.itemParent(root, parts)
 		if err != nil {
 			return err
+		}
+		if info != nil {
+			live, err := movable(parent, name, rootInfo.Dev)
+			if err != nil {
+				return err
+			}
+			if live != nil {
+				aside, err := h.asideFor(root, stage, parent, -1, name, live)
+				if err != nil {
+					return err
+				}
+				if err := setAsideEntry(parent, name, aside, live); err != nil {
+					return err
+				}
+			}
 		}
 		return move(old, "item", parent, name, info)
 	}

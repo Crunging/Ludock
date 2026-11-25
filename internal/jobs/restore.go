@@ -40,6 +40,10 @@ type restoreRecovery struct {
 	// put all of the server's previous data back. Without it and
 	// StageMissing, live data never moved.
 	PutBack bool `json:"putBack,omitempty"`
+	// Kept: returning the previous data found the set-aside folder in a
+	// root, as when a server started meanwhile had made a newer copy of
+	// something it returned.
+	Kept bool `json:"kept,omitempty"`
 }
 
 var errJournal = fail("INVALID_RESTORE_JOURNAL", "Restore recovery records are invalid. Keep the server stopped and review its recovery state.")
@@ -128,7 +132,7 @@ func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, 
 		limit = removalLimit
 	}
 	request := helper.RestoreRequest{Root: root, Stage: stageName(job), Operation: operation, Item: item, Base: backups.HelperBaseOf(root)}
-	if operation == helper.RestoreSetAside {
+	if operation == helper.RestoreSetAside || operation == helper.RestoreRollbackOld {
 		request.Aside = helper.SetAsideName(job.Job.ID)
 	}
 	out, err := j.Backups.Helpers.ExecWithin(ctx, data.Container, helper.Command("restore", request), assertAccess, limit)
@@ -253,14 +257,14 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 		return err
 	}
 	var entries []journal
-	setAside, missing := false, false
+	setAside, missing, kept := false, false, false
 	if state != nil {
-		entries, setAside, missing = state.Roots, state.SetAside, state.StageMissing
+		entries, setAside, missing, kept = state.Roots, state.SetAside, state.StageMissing, state.Kept
 	}
 	// A root past staging had live data moved, even one a restart midway
 	// through this undo already put back.
 	touched := slices.ContainsFunc(entries, func(entry journal) bool { return entry.Phase != "staging" })
-	if err := saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries, SetAside: setAside, StageMissing: missing}, ""); err != nil {
+	if err := saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries, SetAside: setAside, StageMissing: missing, Kept: kept}, ""); err != nil {
 		return err
 	}
 	// The helper's callback runs once its command exists, just before it
@@ -311,11 +315,18 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 			if blocked = j.assertStopped(ctx, server, job); blocked != nil {
 				continue
 			}
-			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, helper.RestoreRollbackOld, live); err != nil {
+			returned, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, helper.RestoreRollbackOld, live)
+			if err != nil {
 				return err
 			}
-			current, _ = journals(job)
-			if err := persistJournal(job, indexOf(current, entry.Root.ID), "rolled_back"); err != nil {
+			saved, err := restoreState(job)
+			if err != nil || saved == nil {
+				return errJournal
+			}
+			saved.Roots[indexOf(saved.Roots, entry.Root.ID)].Phase = "rolled_back"
+			kept = kept || returned["kept"] == true
+			saved.Kept = kept
+			if err := saveRestore(job, *saved, "restore_rolled_back"); err != nil {
 				return err
 			}
 		}
@@ -326,7 +337,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 	if blocked != nil {
 		return blocked
 	}
-	return saveRestore(job, restoreRecovery{Status: "rolled_back", StageMissing: missing, PutBack: touched && !missing}, "")
+	return saveRestore(job, restoreRecovery{Status: "rolled_back", StageMissing: missing, PutBack: touched && !missing, Kept: kept}, "")
 }
 
 func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper) error {

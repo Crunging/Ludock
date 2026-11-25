@@ -91,6 +91,9 @@ func (f *fixture) savedJournal(id string) string {
 	if state.PutBack {
 		out += " put back"
 	}
+	if state.Kept {
+		out += " kept"
+	}
 	if recovery.DataUnsafe {
 		out += " unsafe"
 	}
@@ -547,6 +550,112 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 			}
 			if !slices.Equal(f.alerts, alerts) {
 				t.Error("alerts:", f.alerts)
+			}
+		})
+	}
+}
+
+// Ludock is killed while a restore moves the server's data out, or while a
+// later undo returns it, and then something outside Ludock starts the server,
+// whose game writes a new world. Undo stops the server, sets aside each newer
+// copy in the way of what it returns, without overwriting an earlier one, and
+// starts the server again, saying where the newer copies are. Each case is a
+// point between steps where the work was cut; aside is what the set-aside
+// folder holds afterwards. Undo checks the stage before the stop and again
+// once stopped.
+func TestUndoAfterInterruptedMove(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		state   *restoreRecovery
+		arrange func(t *testing.T, f *fixture, stage, aside string)
+		aside   map[string]string
+		trace   []string
+	}{
+		{name: "moving out", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+			}, aside: map[string]string{"world/level.dat": "new run"},
+			trace: []string{"stageExists game: replacing moving_old unsafe", "stageExists game: replacing moving_old unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
+				"cleanup game: rolling_back rolled_back kept unsafe"}},
+		// An earlier undo set the first run's world aside, then was cut
+		// before returning the original; the game ran again since.
+		{name: "set aside, not returned", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolling_back"}}},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+				os.MkdirAll(filepath.Join(f.data, aside, "world"), 0o755)
+				os.WriteFile(filepath.Join(f.data, aside, "world", "level.dat"), []byte("first run"), 0o644)
+			}, aside: map[string]string{"world/level.dat": "first run", "world (2)/level.dat": "new run"},
+			trace: []string{"stageExists game: rolling_back rolling_back unsafe", "stageExists game: rolling_back rolling_back unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
+				"cleanup game: rolling_back rolled_back kept unsafe"}},
+		// Cut once the original was back, before the journal said so.
+		{name: "returned", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolling_back"}}},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+				os.MkdirAll(filepath.Join(f.data, aside, "world"), 0o755)
+				os.WriteFile(filepath.Join(f.data, aside, "world", "level.dat"), []byte("first run"), 0o644)
+			}, aside: map[string]string{"world/level.dat": "first run"},
+			trace: []string{"stageExists game: rolling_back rolling_back unsafe", "stageExists game: rolling_back rolling_back unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
+				"cleanup game: rolling_back rolled_back kept unsafe"}},
+		// Cut once the journal said so, before the stage was removed.
+		{name: "returned and saved", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}, Kept: true},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+				os.MkdirAll(filepath.Join(f.data, aside, "world"), 0o755)
+				os.WriteFile(filepath.Join(f.data, aside, "world", "level.dat"), []byte("first run"), 0o644)
+			}, aside: map[string]string{"world/level.dat": "first run"},
+			trace: []string{"cleanup game: rolling_back rolled_back kept unsafe"}},
+		{name: "one file moving out", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Item: "world/level.dat", Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
+			}, aside: map[string]string{"level.dat": "new run"},
+			trace: []string{"stageExists game: replacing moving_old unsafe", "stageExists game: replacing moving_old unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
+				"cleanup game: rolling_back rolled_back kept unsafe"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			var aside string
+			job, _ := f.interruptedRestore(t, c.state, func(stage string) {
+				aside = helper.SetAsideName(strings.TrimPrefix(filepath.Base(stage), helper.StagePrefix))
+				c.arrange(t, f, stage, aside)
+				if err := f.jobs.Docker.Start(ctx, f.game); err != nil {
+					t.Fatal(err)
+				}
+				// The game makes a new world where it finds none.
+				if _, err := os.Stat(filepath.Join(f.data, "world", "level.dat")); os.IsNotExist(err) {
+					os.MkdirAll(filepath.Join(f.data, "world"), 0o755)
+					os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("new run"), 0o644)
+				}
+			})
+			if !f.running() || f.savedJournal(job.ID) == "rolled_back" {
+				t.Fatalf("recovered before the undo: %s", f.savedJournal(job.ID))
+			}
+			trace := f.traceRestore(nil)
+			undo := f.run(t, ops.KindUndoRestore, nil)
+			if undo.Status != ops.Succeeded || !f.running() || f.staged() || f.savedJournal(job.ID) != "rolled_back put back kept" {
+				t.Fatalf("%s %q, running %v, journal %s", undo.Status, undo.Error, f.running(), f.savedJournal(job.ID))
+			}
+			if data := read(t, filepath.Join(f.data, "world", "level.dat")) + "," + read(t, filepath.Join(f.data, "server.properties")); data != "newer,newer" {
+				t.Errorf("previous data %s", data)
+			}
+			var kept []string
+			filepath.WalkDir(filepath.Join(f.data, aside), func(path string, entry os.DirEntry, err error) error {
+				if err == nil && !entry.IsDir() {
+					name, _ := filepath.Rel(filepath.Join(f.data, aside), path)
+					kept = append(kept, name)
+					if read(t, path) != c.aside[name] {
+						t.Errorf("%s holds %q, want %q", name, read(t, path), c.aside[name])
+					}
+				}
+				return nil
+			})
+			if len(kept) != len(c.aside) {
+				t.Errorf("set aside %q, want %v", kept, c.aside)
+			}
+			if note := undo.Result.UndoNote; !strings.Contains(note, "newer copies") || !strings.Contains(note, aside) {
+				t.Errorf("undo says %q", note)
+			}
+			if got := trace.lines(); !slices.Equal(got, c.trace) {
+				t.Errorf("trace:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(c.trace, "\n"))
 			}
 		})
 	}
