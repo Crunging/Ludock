@@ -115,6 +115,7 @@ func (e *Engine) CrashLoop(id string, run bool) {
 			return
 		}
 		c.State.Status, c.State.Running, c.State.Restarting, c.State.ExitCode = "restarting", true, true, 1
+		c.State.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		e.emitLocked("die", c.ID)
 	}
 }

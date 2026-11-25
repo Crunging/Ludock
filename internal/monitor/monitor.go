@@ -710,7 +710,9 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		// A silent game, or one that kept restarting, keeps its state while
 		// Docker is unreachable, since only the game answering, or a run
 		// that lasts, ends that outage.
-		if unavailable && r.lastState.String != NotAnswering && r.lastState.String != "restarting" {
+		if unavailable && r.lastState.String == "restarting" {
+			lastState = r.lastState.String
+		} else if unavailable && r.lastState.String != NotAnswering {
 			lastState = DockerUnavailable
 		} else if unavailable || silent {
 			lastState = NotAnswering

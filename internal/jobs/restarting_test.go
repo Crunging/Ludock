@@ -178,12 +178,13 @@ func TestWorkOnARestartingServer(t *testing.T) {
 			}
 			if c.brief {
 				if c.stale {
-					f.jobs.Servers.Observer.Now = func() time.Time { return time.Now().Add(-time.Hour) }
+					f.engine.Update(f.game, func(c *fakedocker.Container) {
+						c.State.FinishedAt = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+					})
 				}
 				if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
 					t.Fatal(err)
 				}
-				f.jobs.Servers.Observer.Now = nil
 				f.engine.CrashLoop(f.game, true)
 			}
 			trace.start()

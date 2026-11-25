@@ -477,6 +477,9 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "running", Health: "starting", StateSince: 78_000, RestartCount: 4}}, 80_000)
 		s.Check(ctx, runSince(78_000), 85_000)
 		s.Check(ctx, nil, 87_000)
+		if found, _ := problem(s, server.ID, 87_000); found == nil || found.State != "restarting" {
+			t.Fatal("Docker unreachable during a crash loop:", found)
+		}
 		s.Check(ctx, runSince(78_000), 88_000)
 		s.Check(ctx, state("restarting", ""), 90_000)
 		s.Check(ctx, state("restarting", ""), 151_000)

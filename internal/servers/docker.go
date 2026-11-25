@@ -65,9 +65,11 @@ type Container struct {
 	// RestartCount counts the restart policy's starts since the last start
 	// by hand.
 	RestartCount int
-	Exit         *Exit
-	GameType     string
-	GameName     string
+	// exited is when a restarting container's game last exited, or 0.
+	exited   int64
+	Exit     *Exit
+	GameType string
+	GameName string
 	// AddressLabel is the owner's ludock.address, which replaces port
 	// detection when valid.
 	AddressLabel *games.Address
@@ -204,28 +206,32 @@ type Observer struct {
 	samplesMu sync.Mutex
 	samples   map[string]*statsSample
 
-	// restarting is when each container was last seen restarting (Unix ms),
-	// until it is seen stopped.
+	// restarting is when each container seen restarting last exited (Unix
+	// ms, Docker's clock), until it is seen stopped.
 	restarting sync.Map
 }
 
-// restartEvidence is how soon after Ludock saw a container restarting a run
+// restartEvidence is how soon after a restarting container's exit a run
 // counts as one of that loop's: Docker waits at most a minute between them.
 const restartEvidence = 2 * time.Minute
 
-// note remembers when a container was seen restarting, until it is seen
-// stopped.
+// note remembers when a container seen restarting last exited, until it is
+// seen stopped.
 func (o *Observer) note(observed *Observed) {
 	switch observed.Container.State {
 	case "restarting":
-		o.restarting.Store(observed.Container.ID, o.now().UnixMilli())
+		exited := observed.Container.exited
+		if exited == 0 {
+			exited = o.now().UnixMilli()
+		}
+		o.restarting.Store(observed.Container.ID, exited)
 	case "exited", "created", "dead":
 		o.restarting.Delete(observed.Container.ID)
 	}
 }
 
-// sawRestarting reports a run that began soon after Ludock saw its container
-// restarting.
+// sawRestarting reports a run that began soon after the exit Ludock saw its
+// container restarting from.
 func (o *Observer) sawRestarting(id string, started int64) bool {
 	seen, ok := o.restarting.Load(id)
 	return ok && started >= seen.(int64) && started-seen.(int64) <= restartEvidence.Milliseconds()
@@ -581,6 +587,8 @@ func toContainer(info *docker.ContainerInspect, own self.Info) (*Container, erro
 	switch info.State.Status {
 	case "running":
 		container.StateSince = dockerTime(info.State.StartedAt)
+	case "restarting":
+		container.exited = dockerTime(info.State.FinishedAt)
 	case "exited", "dead":
 		container.StateSince = dockerTime(info.State.FinishedAt)
 		container.Exit = &Exit{Code: info.State.ExitCode, OOMKilled: info.State.OOMKilled, Started: dockerTime(info.State.StartedAt)}
