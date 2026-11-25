@@ -323,8 +323,12 @@ func TestUnpackStagingCleanup(t *testing.T) {
 	}
 	// Its unpacked folder may hold an entry as deep as an archive's may be.
 	deepest := filepath.Join(fresh, "unpacked", strings.Repeat("d/", 63)+"f")
-	os.MkdirAll(filepath.Dir(deepest), 0o755)
-	os.WriteFile(deepest, nil, 0o644)
+	if err := os.MkdirAll(filepath.Dir(deepest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(deepest, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, code := runFile(t, FileRequest{Operation: "unpack-cleanup", Root: root, Path: "other.tar", UploadID: stageID}, nil); code != 0 {
 		t.Fatal(code)
 	}
