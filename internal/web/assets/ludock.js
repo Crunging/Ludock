@@ -514,6 +514,23 @@
   });
   window.addEventListener("online", catchUp);
 
+  // data-expands="id" shows or hides what it controls by marking that
+  // element, which outlives the swaps that replace the button.
+  function syncExpanders() {
+    document.querySelectorAll("[data-expands]").forEach(function (button) {
+      var holder = document.getElementById(button.getAttribute("data-expands"));
+      button.setAttribute("aria-expanded", holder && holder.hasAttribute("data-expanded") ? "true" : "false");
+    });
+  }
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest && event.target.closest("[data-expands]");
+    var holder = button && document.getElementById(button.getAttribute("data-expands"));
+    if (!holder) return;
+    holder.toggleAttribute("data-expanded");
+    syncExpanders();
+  });
+  document.addEventListener("htmx:after:swap", syncExpanders);
+
   // data-autosubmit submits its form on change (a GET form keeps working
   // without scripts through its submit button).
   // A field its form disables while saving loses focus; it gets it back once
