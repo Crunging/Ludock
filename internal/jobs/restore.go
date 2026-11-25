@@ -205,10 +205,6 @@ func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, 
 	if operation == helper.RestoreSetAside || operation == helper.RestoreRollbackOld || operation == helper.RestoreKept {
 		request.Aside = helper.SetAsideName(job.Job.ID)
 	}
-	if operation == helper.RestoreRollbackOld {
-		state, _ := restoreState(job)
-		request.AllAside = state != nil && state.SetAside
-	}
 	out, err := j.Backups.Helpers.ExecWithin(ctx, data.Container, helper.Command("restore", request), assertAccess, limit)
 	if err != nil {
 		return nil, err
@@ -407,6 +403,14 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 	}
 	if blocked != nil {
 		return blocked
+	}
+	// A claim of kept copies is checked against the folders as they are
+	// now, also those of roots an earlier attempt finished: their owner may
+	// have moved them away since.
+	if kept {
+		if found, all := j.keptOnDisk(ctx, server, data, job, &restoreRecovery{Roots: entries}); all {
+			kept = found
+		}
 	}
 	return j.saveFinal(ctx, job, restoreRecovery{Status: "rolled_back", StageMissing: missing, PutBack: touched && !missing, Kept: kept}, finish)
 }
@@ -831,6 +835,14 @@ func (r *restoreRun) failed(err error) (*ops.Result, error) {
 	if (r.data != nil || r.stageMade) && (state == nil || (state.Status != "committed" && state.Status != "cleaned")) {
 		if rollbackErr := r.j.rollbackAfterFailure(ctx, r.server, job, &r.data); rollbackErr != nil {
 			err = errors.Join(err, rollbackErr)
+			// What the failed rollback kept shows once its helper is gone.
+			if r.data != nil {
+				r.data.Cleanup()
+				r.data = nil
+			}
+			if touched {
+				r.j.reconcileKept(ctx, r.server, job)
+			}
 		}
 	} else if r.data == nil && state != nil && state.Status == "staging" {
 		// Without a helper no stage folder was made.
@@ -888,33 +900,42 @@ func endedRestoreGuidance(job *ops.Context, touched bool) string {
 }
 
 // reconcileKept journals whether a failed undo kept copies, which only the
-// set-aside folders show once the helper whose step failed is gone. A check
-// that can't run leaves the journal as it was.
+// set-aside folders show once the helper whose step failed is removed. It
+// runs even if the work was cancelled, and a check that can't run leaves
+// the journal as it was.
 func (j *Jobs) reconcileKept(ctx context.Context, server *servers.Context, job *ops.Context) {
 	state, err := restoreState(job)
 	if err != nil || state == nil || state.Kept || len(state.Roots) == 0 {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	defer cancel()
 	data, err := j.Backups.Helpers.NewDataHelper(ctx, server, true, job.Job.ID)
 	if err != nil {
 		return
 	}
 	defer data.Cleanup()
+	if kept, _ := j.keptOnDisk(ctx, server, data, job, state); kept {
+		state.Kept = true
+		saveRestore(job, *state, "")
+	}
+}
+
+// keptOnDisk reports whether any root's set-aside folder holds a copy, and
+// whether every root could be checked.
+func (j *Jobs) keptOnDisk(ctx context.Context, server *servers.Context, data *backups.DataHelper, job *ops.Context, state *restoreRecovery) (kept, all bool) {
+	all = true
 	for _, entry := range state.Roots {
 		rootPath, err := backups.HelperRoot(server, entry.Root)
-		if err != nil {
-			return
+		if err == nil {
+			var found map[string]any
+			if found, err = j.restoreStep(ctx, data, rootPath, "", job, helper.RestoreKept, nil); err == nil && found["kept"] == true {
+				kept = true
+			}
 		}
-		found, err := j.restoreStep(ctx, data, rootPath, "", job, helper.RestoreKept, nil)
-		if err != nil {
-			return
-		}
-		if found["kept"] == true {
-			state.Kept = true
-			saveRestore(job, *state, "")
-			return
-		}
+		all = all && err == nil
 	}
+	return kept, all
 }
 
 // rollbackAfterFailure rolls back through a fresh helper when the command

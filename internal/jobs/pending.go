@@ -155,7 +155,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		}
 		if state.Status != "committed" {
 			var err error
-			if live, missing, err = j.checkUndo(ctx, server, data, restore, state, nil); err != nil {
+			if live, missing, err = j.checkUndo(ctx, server, data, restore, state, nil, true); err != nil {
 				return err
 			}
 		}
@@ -219,7 +219,7 @@ func keptNote(restore *ops.Context) string {
 // another restore's stage. It reports whether any root has a stage to put
 // back and whether any had none.
 func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *backups.DataHelper, restore *ops.Context, state *restoreRecovery,
-	assertAccess func() error) (live, missing bool, err error) {
+	assertAccess func() error, stopped bool) (live, missing bool, err error) {
 	// A root whose stage folder is gone has nothing to put back, for
 	// whatever removed it, such as the restore finishing after
 	// Ludock's data was saved.
@@ -240,9 +240,12 @@ func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *bac
 		case true:
 			live = true
 			// Returning originals sets aside what is in their way, which is
-			// refused before anything moves, and before a stop.
+			// refused before anything moves. Before the stop, only what the
+			// game can't change is: a mount or a second name in its data may
+			// go as it shuts down.
 			if entry.Phase == "moving_old" || entry.Phase == "rolling_back" {
-				if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, restore, helper.RestoreCheckReturn, assertAccess); err != nil {
+				if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, restore, helper.RestoreCheckReturn, assertAccess); err != nil &&
+					(stopped || apperr.Is(err, backups.ErrUndoEntryUnsafe.Code)) {
 					return false, false, err
 				}
 			}
@@ -300,7 +303,7 @@ func (j *Jobs) assertPendingUndoable(ctx context.Context, server *servers.Contex
 				return nil
 			}
 		}
-		if _, _, err := j.checkUndo(ctx, server, data, restore, state, assertAccess); err != nil {
+		if _, _, err := j.checkUndo(ctx, server, data, restore, state, assertAccess, false); err != nil {
 			if apperr.Is(err, backups.StageInside("").Code) || apperr.Is(err, backups.ErrHostMount.Code) || apperr.Is(err, backups.ErrUndoEntryUnsafe.Code) {
 				return err
 			}

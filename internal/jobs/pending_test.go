@@ -45,7 +45,8 @@ func (f *fixture) stoppedRestore(t *testing.T) (*ops.Job, *restoreTrace) {
 var undoneLines = []string{"stageExists world: rolling_back old_moved,staging unsafe", "cleanup config: rolling_back old_moved,staging unsafe",
 	"setAside world: rolling_back old_moved,staging unsafe",
 	"rollbackOld world: rolling_back rolling_back,staging kept unsafe",
-	"cleanup world: rolling_back rolled_back,staging kept unsafe"}
+	"cleanup world: rolling_back rolled_back,staging kept unsafe",
+	"kept world: rolling_back rolled_back,staging kept unsafe", "kept config: rolling_back rolled_back,staging kept unsafe"}
 
 // checkUndone confirms stoppedRestore was finished: previous data in place,
 // what the game wrote kept beside it, no stage folder, and both Activity

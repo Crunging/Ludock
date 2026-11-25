@@ -767,21 +767,45 @@ func TestRenamesNeverClobber(t *testing.T) {
 		t.Fatal("returned nothing past EOPNOTSUPP, or claimed an empty folder:", said.String())
 	}
 	renameat2 = original
-	// Once this undo set a copy aside, a retry returns only by
+	// Once this undo set a copy aside, every retry returns only by
 	// RENAME_NOREPLACE, so a save the game makes in the gap is never
-	// replaced; after a whole-folder set-aside, it returns as main does.
-	os.Rename(filepath.Join(other, "ops.json"), filepath.Join(other, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), "ops.json"))
+	// replaced. Here the set-aside works and the return finds no
+	// RENAME_NOREPLACE; the retry, with the name free, still refuses.
+	os.WriteFile(filepath.Join(other, "ops.json"), []byte("game made"), 0o644)
 	os.WriteFile(filepath.Join(other, stage, "old", "ops.json"), []byte("original"), 0o644)
-	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
-	if RunRestore(string(plain), io.Discard, io.Discard) == 0 {
-		t.Fatal("returned by plain rename after a clash")
+	renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
+		if folder, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(fromFD)); strings.HasSuffix(folder, "/old") {
+			return unix.EINVAL
+		}
+		return original(fromFD, from, toFD, to, flags)
 	}
-	whole, _ := json.Marshal(RestoreRequest{Root: other, Stage: stage, Operation: RestoreRollbackOld,
-		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), AllAside: true, Base: other})
-	if RunRestore(string(whole), io.Discard, io.Discard) != 0 {
+	if RunRestore(string(plain), io.Discard, io.Discard) == 0 {
+		t.Fatal("returned without RENAME_NOREPLACE after a clash")
+	}
+	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
+	plainRename, renamed := renameat, false
+	renameat = func(fromFD int, from string, toFD int, to string) error {
+		renamed = true
+		return plainRename(fromFD, from, toFD, to)
+	}
+	if RunRestore(string(plain), io.Discard, io.Discard) == 0 || renamed {
+		t.Fatal("a retry returned by plain rename after a clash")
+	}
+	// A whole folder's set-aside, which fills the folder by design and met
+	// no clash, returns as main does.
+	whole := filepath.Join(t.TempDir(), "data")
+	os.MkdirAll(filepath.Join(whole, stage, "old"), 0o700)
+	os.WriteFile(filepath.Join(whole, stage, "old", "ops.json"), []byte("original"), 0o644)
+	os.MkdirAll(filepath.Join(whole, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff")), 0o700)
+	os.WriteFile(filepath.Join(whole, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), "ops.json"), []byte("game made"), 0o644)
+	wholeReturn, _ := json.Marshal(RestoreRequest{Root: whole, Stage: stage, Operation: RestoreRollbackOld,
+		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: whole})
+	// EPERM is a seccomp profile that refuses renameat2 alone.
+	renameat2 = func(int, string, int, string, uint) error { return unix.EPERM }
+	if RunRestore(string(wholeReturn), io.Discard, io.Discard) != 0 || !renamed {
 		t.Fatal("refused the return after a whole-folder set-aside")
 	}
-	renameat2 = original
+	renameat2, renameat = original, plainRename
 	// One item's return needs RENAME_NOREPLACE, so without it nothing moves.
 	os.MkdirAll(filepath.Join(root, "world"), 0o755)
 	os.WriteFile(filepath.Join(root, "world", "level.dat"), []byte("game made"), 0o644)

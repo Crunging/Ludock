@@ -29,9 +29,6 @@ type RestoreRequest struct {
 	// Aside names the folder below Root that setAside moves live data into,
 	// and rollbackOld any live entry in an original's way.
 	Aside string `json:"aside,omitempty"`
-	// AllAside says rollbackOld follows a whole-folder setAside, whose
-	// folder says nothing about clashes.
-	AllAside bool `json:"allAside,omitempty"`
 	// Base is the helper's mount that holds Root. Moving live data out
 	// refuses any other mount on its way or inside it.
 	Base string `json:"base,omitempty"`
@@ -213,7 +210,9 @@ func (h *restoreHelper) moveContents(source, destination fd, strict bool, omitte
 // something is in the originals' way, use renameStrict instead.
 func renameChecked(from fd, name string, to fd, target string) error {
 	err := renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE)
-	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTSUP) {
+	// EPERM: a seccomp profile that refuses renameat2 but allows renameat.
+	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTSUP) ||
+		errors.Is(err, unix.EPERM) {
 		err = renameat(int(from), name, int(to), target)
 	}
 	return err
@@ -824,18 +823,18 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 		if aside, err = h.asideFor(root, stage, root, aside, name, name, info); err != nil {
 			return err
 		}
+		if err := markClash(stage); err != nil {
+			return err
+		}
 		if err := setAsideEntry(root, name, aside, info, true); err != nil {
 			return err
 		}
 	}
-	// A copy kept from this undo's own clash, on this attempt or an earlier
-	// one, means the same; the whole-folder set-aside fills the folder by
-	// design and keeps main's return.
-	strict := aside >= 0
-	if !strict && !h.request.AllAside {
-		if strict, _, err = h.keptAside(root); err != nil {
-			return err
-		}
+	// The mark, made before the first clash moved, keeps every later
+	// attempt at this root as strict.
+	strict, err := clashMarked(stage)
+	if err != nil {
+		return err
 	}
 	if err := h.moveContents(old, root, strict); err != nil {
 		return err
@@ -845,6 +844,29 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 		return err
 	}
 	return ownRoot(root, previous)
+}
+
+// clashRecord is the file in a stage that says an undo met something in the
+// originals' way, which only a game run since the restore stopped makes.
+const clashRecord = "clash"
+
+func markClash(stage fd) error {
+	file, err := unix.Openat(int(stage), clashRecord, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	if errors.Is(err, unix.EEXIST) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	unix.Close(file)
+	return syncAll(stage)
+}
+
+func clashMarked(stage fd) (bool, error) {
+	_, err := lstatAt(stage, clashRecord)
+	if isNotExist(err) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // rootBefore returns the root's owner and mode from before the restore.
