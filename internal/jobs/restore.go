@@ -962,7 +962,7 @@ func (j *Jobs) reconcileKept(ctx context.Context, server *servers.Context, job *
 	if kept != state.Kept {
 		state.Kept = kept
 		if saveRestore(job, *state, "") != nil {
-			unknown = true
+			return keptSeen{unknown: true}
 		}
 	}
 	return keptSeen{kept: kept, unknown: unknown}

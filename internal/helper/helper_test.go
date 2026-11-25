@@ -738,11 +738,18 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if code := RunRestore(string(check), io.Discard, io.Discard); code != RestoreUnsafeEntry {
 		t.Fatalf("check said %d, not that an original can't be returned", code)
 	}
-	os.Remove(filepath.Join(root, stage, "old", "a-link"))
 	for index := range 30 {
 		name := "clash" + strconv.Itoa(index)
-		os.Remove(filepath.Join(root, stage, "old", name))
 		os.Remove(filepath.Join(root, name))
+		os.Remove(filepath.Join(root, stage, "old", name))
+		os.Link(filepath.Join(root, stage, "old", "ops.json"), filepath.Join(root, stage, "old", name))
+	}
+	if code := RunRestore(string(check), io.Discard, io.Discard); code != RestoreUnsafeEntry {
+		t.Fatalf("check said %d past hard links, not that an original can't be returned", code)
+	}
+	os.Remove(filepath.Join(root, stage, "old", "a-link"))
+	for index := range 30 {
+		os.Remove(filepath.Join(root, stage, "old", "clash"+strconv.Itoa(index)))
 	}
 	tree := func(top string) string {
 		var all []string
@@ -846,18 +853,44 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if entries, _ := os.ReadDir(filepath.Join(root, stage)); len(entries) != 1 {
 		t.Fatalf("left scratch in the stage: %v", entries)
 	}
+	// A probe removes only its own file, never one that took the name it
+	// was moving to.
+	var theirs string
+	renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
+		if to != "to" {
+			return original(fromFD, from, toFD, to, flags)
+		}
+		folder, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(toFD))
+		theirs = filepath.Join(folder, to)
+		os.WriteFile(theirs, []byte("theirs"), 0o644)
+		return unix.EEXIST
+	}
+	if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
+		t.Fatal("set aside past a failed probe")
+	}
+	renameat2 = original
+	if data, _ := os.ReadFile(theirs); string(data) != "theirs" {
+		t.Fatal("the probe removed a file it didn't make")
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(theirs)); len(entries) != 1 {
+		t.Fatalf("the probe left its own file: %v", entries)
+	}
+	os.Remove(theirs)
+	os.Remove(filepath.Dir(theirs))
 	os.Remove(filepath.Join(root, "ops.json"))
 	os.Remove(filepath.Join(root, stage, "old", "ops.json"))
 	// Each original is returned in turn, so an attempt cut short, as by the
 	// time limit on slow storage, keeps what it returned and the next goes
-	// on from there. Lookups past a budget stand in for the limit.
+	// on from there. Lookups past a budget stand in for the limit, and with
+	// nothing in the way each return takes three: the original, its name,
+	// and the check after the move.
 	for index := range 20 {
 		os.WriteFile(filepath.Join(root, stage, "old", "file"+strconv.Itoa(index)), []byte("original"), 0o644)
 	}
 	staged := func() int { entries, _ := os.ReadDir(filepath.Join(root, stage, "old")); return len(entries) }
 	lookup := lstatAt
 	for attempt := range 2 {
-		budget := 40
+		budget := 31
 		lstatAt = func(parent fd, name string) (*unix.Stat_t, error) {
 			if budget--; budget < 0 {
 				return nil, unix.ETIMEDOUT
@@ -866,8 +899,8 @@ func TestRenamesNeverClobber(t *testing.T) {
 		}
 		before := staged()
 		RunRestore(string(argument), io.Discard, io.Discard)
-		if staged() >= before {
-			t.Fatalf("attempt %d returned nothing of %d", attempt+1, before)
+		if returned := before - staged(); returned < 10 {
+			t.Fatalf("attempt %d returned %d of %d", attempt+1, returned, before)
 		}
 	}
 	lstatAt = lookup
@@ -905,6 +938,18 @@ func TestRenamesNeverClobber(t *testing.T) {
 	os.WriteFile(filepath.Join(root, stage, "old", "item"), []byte("original"), 0o644)
 	item, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreRollbackOld, Item: "world/level.dat",
 		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: root})
+	// Nor is anything set aside for one with a mount on it.
+	setAside, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreSetAside, Item: "world/level.dat",
+		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: root})
+	staging = filepath.Join(root, stage, "old", "item")
+	mountinfo.Table = func() ([]byte, error) { return []byte("40 22 0:45 / " + staging + " rw - ext4 /dev/sdb rw\n"), nil }
+	if RunRestore(string(setAside), io.Discard, io.Discard) == 0 {
+		t.Fatal("set one item aside past a mount on its original")
+	}
+	mountinfo.Table = previousTable
+	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "game made" {
+		t.Fatal("moved the live copy:", string(data))
+	}
 	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
 	if RunRestore(string(item), io.Discard, io.Discard) == 0 {
 		t.Fatal("returned one item without RENAME_NOREPLACE")

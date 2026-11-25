@@ -732,6 +732,14 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
 			}, failStep: helper.RestoreCleanup, rereadUnsaved: true, guidance: "couldn’t check the folder"},
+		// Likewise, with copies back in the folder after an earlier read found
+		// none.
+		{name: "copies back, read unsaved", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}},
+			arrange: func(t *testing.T, f *fixture, stage, aside string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+				os.MkdirAll(filepath.Join(f.data, aside), 0o755)
+				os.WriteFile(filepath.Join(f.data, aside, "level.dat"), []byte("new run"), 0o644)
+			}, failStep: helper.RestoreCleanup, rereadUnsaved: true, guidance: "couldn’t check the folder"},
 		// Cut likewise, with nothing set aside.
 		{name: "returned and saved, nothing kept", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
@@ -1048,9 +1056,9 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				if c.rereadUnsaved {
 					// Startup read the folder and saved what it found; an earlier
 					// attempt's finding is back, and the next read can't replace it.
-					f.jobs.DB.Exec(`UPDATE operations SET recovery_json=json_set(recovery_json,'$.restore.kept',json('true')) WHERE id=?`, job.ID)
+					f.jobs.DB.Exec(`UPDATE operations SET recovery_json=json_set(recovery_json,'$.restore.kept',json(IIF(?,'true','false'))) WHERE id=?`, c.state.Kept, job.ID)
 					f.jobs.DB.Exec(`CREATE TRIGGER read_unsaved BEFORE UPDATE OF recovery_json ON operations
-						WHEN NEW.kind='restore' AND json_extract(OLD.recovery_json,'$.restore.kept')=1 AND json_extract(NEW.recovery_json,'$.restore.kept') IS NULL
+						WHEN NEW.kind='restore' AND IFNULL(json_extract(OLD.recovery_json,'$.restore.kept'),0)!=IFNULL(json_extract(NEW.recovery_json,'$.restore.kept'),0)
 						BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`)
 				}
 				if c.lostStep != "" {
@@ -1067,7 +1075,7 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				// It names the folder, which holds copies, and claims nothing
 				// about the stage folder it can't know.
 				if guidance := restore.Result.Guidance; undo.Status != ops.Failed || !strings.Contains(guidance, c.guidance) ||
-					strings.Contains(guidance, aside) == c.plain || (err != nil) != (c.plain || c.rereadUnsaved) || strings.Contains(guidance, "still in") ||
+					strings.Contains(guidance, aside) == c.plain || (err != nil) != (c.plain || c.rereadUnsaved && c.state.Kept) || strings.Contains(guidance, "still in") ||
 					// The work that failed says the same.
 					!strings.Contains(undo.Result.UndoNote, guidance) {
 					t.Errorf("%s %q, Activity says %q", undo.Status, undo.Error, guidance)

@@ -302,15 +302,15 @@ func (h *restoreHelper) knowNoReplace(root, stage fd) error {
 	if err == nil {
 		unix.Close(file)
 		err = renameat2(int(dir), "from", int(dir), "to", unix.RENAME_NOREPLACE)
+		// Only the name the probe's own file has now is removed.
+		made := "from"
 		switch {
 		case err == nil:
-			h.noReplace = noReplaceWorks
+			h.noReplace, made = noReplaceWorks, "to"
 		case unsupported(err):
 			h.noReplace, err = noReplaceMissing, nil
 		}
-	}
-	for _, name := range []string{"from", "to"} {
-		unix.Unlinkat(int(dir), name, 0)
+		unix.Unlinkat(int(dir), made, 0)
 	}
 	if err != nil {
 		h.noReplace = noReplaceUnknown
@@ -472,78 +472,74 @@ func (h *restoreHelper) checkReturn(root, stage fd) error {
 	}
 	// Every original first, so one the undo can't return is refused before
 	// the stop whatever is in another's way.
+	var deferred error
 	for _, name := range children {
-		if err := h.stagedEntry(old, name); err != nil {
+		// A second name, refused only once stopped, mustn't hide a link
+		// refused before the stop.
+		if _, err := h.stagedEntry(old, name); errors.Is(err, errUnsafeEntry) {
 			return err
+		} else if err != nil && deferred == nil {
+			deferred = err
 		}
+	}
+	if deferred != nil {
+		return deferred
 	}
 	for _, name := range children {
 		if Reserved(name) {
 			continue
 		}
-		if _, err := h.checkEntry(old, root, rootInfo.Dev, name); err != nil {
+		if _, _, err := h.checkEntry(old, root, rootInfo.Dev, name); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// stagedEntry checks one staged original, also that no mount is on or
-// inside it: renaming it back would fail after what is in its way moved.
-func (h *restoreHelper) stagedEntry(old fd, name string) error {
+// stagedEntry checks, and returns, one staged original that moveContents
+// would return: also that no mount is on or inside it, since renaming it
+// back would fail after what is in its way moved. Only Ludock writes the
+// stage, so a link or special file there is told apart, to refuse before
+// the stop. A second name for a staged file can be the game's, which it may
+// drop as it stops, so that is refused only once the server is stopped, as
+// main does.
+func (h *restoreHelper) stagedEntry(old fd, name string) (*unix.Stat_t, error) {
 	if Reserved(name) {
-		return nil
+		return nil, nil
 	}
-	if err := stagedMovable(old, []string{name}); err != nil {
-		return err
+	info, err := lstatAt(old, name)
+	if err != nil {
+		return nil, err
 	}
-	return ownMount(h.request.Base, h.request.Root+"/"+h.request.Stage+"/old/"+name)
+	if !isDir(info) && !isRegular(info) {
+		return nil, errUnsafeEntry
+	}
+	if isRegular(info) && info.Nlink != 1 {
+		return nil, errUnsafe
+	}
+	return info, ownMount(h.request.Base, h.request.Root+"/"+h.request.Stage+"/old/"+name)
 }
 
 // checkEntry checks one staged original and, if something is in its way,
 // that it can be set aside, and returns what is in the way.
-func (h *restoreHelper) checkEntry(old, root fd, device uint64, name string) (*unix.Stat_t, error) {
-	if err := h.stagedEntry(old, name); err != nil {
-		return nil, err
+func (h *restoreHelper) checkEntry(old, root fd, device uint64, name string) (source, live *unix.Stat_t, err error) {
+	if source, err = h.stagedEntry(old, name); err != nil {
+		return nil, nil, err
 	}
 	if _, err := lstatAt(root, name); isNotExist(err) {
-		return nil, nil
+		return source, nil, nil
 	} else if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// A mount on the entry itself is reported as one, not by movable.
 	if err := ownMount(h.request.Base, h.request.Root+"/"+name); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	info, err := movable(root, name, device)
-	if err != nil || info == nil {
-		return nil, err
+	live, err = movable(root, name, device)
+	if err != nil || live == nil {
+		return source, nil, err
 	}
-	return info, h.clashMovable(root, name, name, info)
-}
-
-// stagedMovable refuses originals that moveContents would refuse to return,
-// before anything in their way is set aside. Only Ludock writes the stage, so
-// a link or special file there is told apart, to refuse before the stop. A
-// second name for a staged file can be the game's, which it may drop as it
-// stops, so that is refused only once the server is stopped, as main does.
-func stagedMovable(old fd, children []string) error {
-	for _, name := range children {
-		if Reserved(name) {
-			continue
-		}
-		info, err := lstatAt(old, name)
-		if err != nil {
-			return err
-		}
-		if !isDir(info) && !isRegular(info) {
-			return errUnsafeEntry
-		}
-		if isRegular(info) && info.Nlink != 1 {
-			return errUnsafe
-		}
-	}
-	return nil
+	return source, live, h.clashMovable(root, name, name, live)
 }
 
 // setAsideEntry moves a live entry into the set-aside folder under a name
@@ -941,7 +937,7 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 		if Reserved(name) {
 			continue
 		}
-		info, err := h.checkEntry(old, root, rootInfo.Dev, name)
+		source, info, err := h.checkEntry(old, root, rootInfo.Dev, name)
 		if err != nil {
 			return err
 		}
@@ -960,7 +956,19 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 			}
 			h.movedAside++
 		}
-		if err := moveEntry(old, root, name, returnOld); err != nil {
+		// The checks above looked the original and its name up; the rename
+		// itself refuses a name taken since where it can.
+		if err := returnOld(old, name, root, name); err != nil {
+			return err
+		}
+		moved, err := lstatAt(root, name)
+		if err != nil {
+			return err
+		}
+		if !sameInode(source, moved) {
+			return errUnsafe
+		}
+		if err := syncAll(old, root); err != nil {
 			return err
 		}
 	}
@@ -1373,7 +1381,12 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		}
 		return move(parent, name, stage, "returned", info)
 	case RestoreSetAside:
-		if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
+		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
+		if err != nil {
+			return err
+		}
+		// The original's return would fail with a mount on it.
+		if _, err := h.stagedEntry(old, "item"); err != nil && !isNotExist(err) {
 			return err
 		}
 		parent, err := h.itemParent(root, parts)
@@ -1412,7 +1425,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		if info != nil {
-			if err := h.stagedEntry(old, "item"); err != nil {
+			if _, err := h.stagedEntry(old, "item"); err != nil {
 				return err
 			}
 			live, err := movable(parent, name, rootInfo.Dev)
@@ -1447,7 +1460,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		if info, err := movable(old, "item", rootInfo.Dev); err != nil || info == nil {
 			return err
 		}
-		if err := h.stagedEntry(old, "item"); err != nil {
+		if _, err := h.stagedEntry(old, "item"); err != nil {
 			return err
 		}
 		// A mount on the item or a folder on its way is reported as one.
