@@ -883,10 +883,13 @@ for the undo starts again (for a restart with a backup first, once its backup
 is taken) unless the undo had begun moving data.
 
 Restores and undos move data without replacing anything a game makes at the
-same moment, where the filesystem can refuse that as part of the move. An
-undo checks once, before it moves anything, whether the data folder's
-filesystem can. If it can, every move of that undo is made that way, and
-something the game made in the way of the previous data moves to
+same moment, where the filesystem can refuse that as part of the move. Each
+undo step finds out once, from its first such move or, when something is in
+the way, from a scratch file in the restore's folder, whether the data
+folder's filesystem can. It counts as unable when the kernel answers with
+`ENOSYS`, `EINVAL`, `EOPNOTSUPP` or `EPERM`; any other answer stops the
+step, to be tried again. If it can, every move of that step is made that
+way, and something the game made in the way of the previous data moves to
 `ludock-set-aside-<id>`. If it can't, such as on NFS, the undo moves as
 restores always have: it refuses when something is in the way, as does
 restoring or undoing one file or folder, and otherwise uses a plain rename.

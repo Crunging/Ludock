@@ -635,8 +635,10 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 		// run, which refuses nothing.
 		unreadable, checkFails bool
 		// finalFails: the final journal's write fails; helperFails: no
-		// helper can start once the server stops.
-		finalFails, helperFails bool
+		// helper can start once the server stops; cutAfterFinal: startup is
+		// cut right after its final journal and runs again; rereadUnsaved:
+		// what a failed attempt reads can't be saved.
+		finalFails, helperFails, cutAfterFinal, rereadUnsaved bool
 		// plain: nothing was set aside, so Activity says only that the
 		// previous data is back.
 		plain bool
@@ -705,6 +707,12 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
 			}, failStep: helper.RestoreCleanup, plain: true, guidance: "undone"},
+		// Likewise, and what that attempt reads can't be saved: Activity says
+		// where to look, not what the earlier read found.
+		{name: "kept copies moved away, read unsaved", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}, Kept: true},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+			}, failStep: helper.RestoreCleanup, rereadUnsaved: true, guidance: "couldn’t check the folder"},
 		// Cut likewise, with nothing set aside.
 		{name: "returned and saved, nothing kept", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
@@ -831,6 +839,24 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 					return code
 				})
 			}, recovered: true, unreadable: true, aside: map[string]string{"world/level.dat": "new run"}},
+		// Likewise, and startup is cut right after its final journal: the
+		// next start still says where to look.
+		{name: "recovered, folder unread, cut", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
+				f.traceRestore(func(_ *fakedocker.Container, op, _ string, code int) int {
+					if op == helper.RestoreKept {
+						return 1
+					}
+					return code
+				})
+				// What the final journal's write leaves, before anything after it.
+				f.jobs.DB.Exec(`CREATE TABLE final_row (result_json TEXT)`)
+				f.jobs.DB.Exec(`CREATE TRIGGER final_seen AFTER UPDATE OF recovery_json ON operations
+					WHEN NEW.kind='restore' AND json_extract(NEW.recovery_json,'$.restore.status')='rolled_back'
+					AND coalesce(json_extract(OLD.recovery_json,'$.restore.status'),'')<>'rolled_back'
+					BEGIN INSERT INTO final_row VALUES (NEW.result_json); END`)
+			}, recovered: true, unreadable: true, cutAfterFinal: true, aside: map[string]string{"world/level.dat": "new run"}},
 		{name: "checks can't run", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
@@ -895,6 +921,16 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				if len(kept) != len(c.aside) {
 					t.Errorf("set aside %q, want %v", kept, c.aside)
 				}
+			}
+			if c.cutAfterFinal {
+				f.runner.Stop()
+				if _, err := f.jobs.DB.Exec(`UPDATE operations SET status='running', result_json=(SELECT result_json FROM final_row) WHERE id=?`, job.ID); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.runner.Start(ctx, nil); err != nil {
+					t.Fatal(err)
+				}
+				job, _ = f.runner.Get(ctx, job.ID)
 			}
 			if c.recovered {
 				journal, says := "rolled_back put back kept", "Anything Ludock moved"
@@ -978,6 +1014,14 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				f.mu.Lock()
 				f.failStep = c.failStep
 				f.mu.Unlock()
+				if c.rereadUnsaved {
+					// Startup read the folder and saved what it found; an earlier
+					// attempt's finding is back, and the next read can't replace it.
+					f.jobs.DB.Exec(`UPDATE operations SET recovery_json=json_set(recovery_json,'$.restore.kept',json('true')) WHERE id=?`, job.ID)
+					f.jobs.DB.Exec(`CREATE TRIGGER read_unsaved BEFORE UPDATE OF recovery_json ON operations
+						WHEN NEW.kind='restore' AND json_extract(OLD.recovery_json,'$.restore.kept')=1 AND json_extract(NEW.recovery_json,'$.restore.kept') IS NULL
+						BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`)
+				}
 				if c.lostStep != "" {
 					f.traceRestore(once(c.lostStep, "game", func(helperContainer *fakedocker.Container, _ int) int {
 						if c.lostHelper {
@@ -992,7 +1036,7 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				// It names the folder, which holds copies, and claims nothing
 				// about the stage folder it can't know.
 				if guidance := restore.Result.Guidance; undo.Status != ops.Failed || !strings.Contains(guidance, c.guidance) ||
-					strings.Contains(guidance, aside) == c.plain || (err != nil) != c.plain || strings.Contains(guidance, "still in") ||
+					strings.Contains(guidance, aside) == c.plain || (err != nil) != (c.plain || c.rereadUnsaved) || strings.Contains(guidance, "still in") ||
 					// The work that failed says the same.
 					!strings.Contains(undo.Result.UndoNote, guidance) {
 					t.Errorf("%s %q, Activity says %q", undo.Status, undo.Error, guidance)

@@ -795,6 +795,58 @@ func TestRenamesNeverClobber(t *testing.T) {
 	mountOf = mountID
 	os.Remove(filepath.Join(root, asideName, "theirs"))
 	os.Remove(filepath.Join(root, asideName))
+	// Files at the stage's top that Ludock didn't make, such as one named
+	// like its scratch file, survive an undo it refuses.
+	for _, name := range []string{"probe", "probe.to"} {
+		os.WriteFile(filepath.Join(root, stage, name), []byte("theirs"), 0o644)
+	}
+	os.WriteFile(filepath.Join(root, stage, "old", "ops.json"), []byte("original"), 0o644)
+	os.WriteFile(filepath.Join(root, "ops.json"), []byte("game made"), 0o644)
+	renameat2 = func(int, string, int, string, uint) error { return unix.EOPNOTSUPP }
+	if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
+		t.Fatal("set aside without RENAME_NOREPLACE")
+	}
+	renameat2 = original
+	for _, name := range []string{"probe", "probe.to"} {
+		if data, _ := os.ReadFile(filepath.Join(root, stage, name)); string(data) != "theirs" {
+			t.Fatalf("removed %s from the stage", name)
+		}
+		os.Remove(filepath.Join(root, stage, name))
+	}
+	if entries, _ := os.ReadDir(filepath.Join(root, stage)); len(entries) != 1 {
+		t.Fatalf("left scratch in the stage: %v", entries)
+	}
+	os.Remove(filepath.Join(root, "ops.json"))
+	os.Remove(filepath.Join(root, stage, "old", "ops.json"))
+	// Each original is returned in turn, so an attempt cut short, as by the
+	// time limit on slow storage, keeps what it returned and the next goes
+	// on from there. Lookups past a budget stand in for the limit.
+	for index := range 20 {
+		os.WriteFile(filepath.Join(root, stage, "old", "file"+strconv.Itoa(index)), []byte("original"), 0o644)
+	}
+	staged := func() int { entries, _ := os.ReadDir(filepath.Join(root, stage, "old")); return len(entries) }
+	lookup := lstatAt
+	for attempt := range 2 {
+		budget := 40
+		lstatAt = func(parent fd, name string) (*unix.Stat_t, error) {
+			if budget--; budget < 0 {
+				return nil, unix.ETIMEDOUT
+			}
+			return lookup(parent, name)
+		}
+		before := staged()
+		RunRestore(string(argument), io.Discard, io.Discard)
+		if staged() >= before {
+			t.Fatalf("attempt %d returned nothing of %d", attempt+1, before)
+		}
+	}
+	lstatAt = lookup
+	if RunRestore(string(argument), io.Discard, io.Discard) != 0 || staged() != 0 {
+		t.Fatal("didn't return the rest")
+	}
+	for index := range 20 {
+		os.Remove(filepath.Join(root, "file"+strconv.Itoa(index)))
+	}
 	// Finding out about RENAME_NOREPLACE needs a scratch file only where
 	// something is in the way, which main refuses anyway: on a full disk, a
 	// clear return still finishes, and a clash is refused with nothing made.
