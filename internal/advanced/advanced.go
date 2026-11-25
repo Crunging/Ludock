@@ -121,7 +121,7 @@ func (s *Service) Logging(ctx context.Context) Logging {
 	if _, err := s.DB.Setting(ctx, loggingKey, &saved); err != nil {
 		log.Warn("Could not read the logging setting")
 	}
-	if saved.VerboseUntil <= time.Now().UnixMilli() {
+	if saved.VerboseUntil <= now().UnixMilli() {
 		return Logging{Level: logging.LevelInfo.String()}
 	}
 	return Logging{Level: logging.LevelDebug.String(), VerboseUntil: saved.VerboseUntil}
@@ -134,7 +134,7 @@ func (s *Service) SetVerbose(ctx context.Context, adminID, tokenHash string, on 
 	}
 	var until int64
 	if on {
-		until = time.Now().Add(VerboseFor).UnixMilli()
+		until = now().Add(VerboseFor).UnixMilli()
 	}
 	audit.Action, audit.TargetType, audit.Details = "settings.verbose_logging.updated", "settings", map[string]any{"enabled": on}
 	err := s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
@@ -149,6 +149,12 @@ func (s *Service) SetVerbose(ctx context.Context, adminID, tokenHash string, on 
 	return err
 }
 
+// The clock and timer verbose logging ends by; tests replace them.
+var (
+	now       = time.Now
+	afterFunc = time.AfterFunc
+)
+
 // applyLogging sets the log level and, while verbose logging is on, a timer
 // that turns it off.
 func (s *Service) applyLogging(ctx context.Context) {
@@ -162,7 +168,7 @@ func (s *Service) applyLogging(ctx context.Context) {
 	level, _ := logging.ParseLevel(current.Level)
 	logging.SetLevel(level)
 	if current.VerboseUntil > 0 {
-		s.timer = time.AfterFunc(time.Until(time.UnixMilli(current.VerboseUntil)), func() {
+		s.timer = afterFunc(time.UnixMilli(current.VerboseUntil).Sub(now()), func() {
 			s.applyLogging(context.Background())
 		})
 	}
