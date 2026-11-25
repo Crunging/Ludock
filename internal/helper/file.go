@@ -35,6 +35,9 @@ type FileRequest struct {
 	UploadID    string   `json:"uploadId,omitempty"`
 	// Expected makes an upload replace only this exact existing file.
 	Expected *FileVersion `json:"expected,omitempty"`
+	// Replace lets a batch upload replace existing files; without it, a file
+	// whose name is taken is refused with FileNameTaken.
+	Replace bool `json:"replace,omitempty"`
 	// Paths are the entries of one folder that a selection acts on.
 	Paths []string `json:"paths,omitempty"`
 	// Mounts are the nested mounts the helper has, which a move can't cross.
@@ -648,6 +651,12 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	if err != nil {
 		return err
 	}
+	// A batch upload not confirmed to replace refuses a name taken now, or
+	// by the time the file would be published, having written nothing to it.
+	keep := h.request.Operation == "upload-files" && !h.request.Replace
+	if keep && original != nil {
+		return errNameTaken
+	}
 	owner := original
 	if owner == nil {
 		if owner, err = fstat(parent); err != nil {
@@ -746,6 +755,9 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 		current, err := uploadTarget(parent, name)
 		if err != nil {
 			return err
+		}
+		if keep && original == nil && current != nil {
+			return errNameTaken
 		}
 		if (current == nil) != (original == nil) || (original != nil && (original.Dev != current.Dev || original.Ino != current.Ino ||
 			original.Mode != current.Mode || original.Uid != current.Uid || original.Gid != current.Gid ||

@@ -156,6 +156,26 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   expect(readFileSync(join(ownServer.data, "mods", "pack", "config", "b.toml"), "utf8")).toBe("new b\n");
   expect(readFileSync(join(ownServer.data, "mods", "pack", "a.toml"), "utf8")).toBe("a\n");
   expect(readFileSync(join(ownServer.data, "mods", "shaders", "deep", "three.glsl"), "utf8")).toBe("3");
+
+  // The server never replaces a file unasked: one made since the folder was
+  // listed is asked about after it answers, once for all such files, and
+  // declining leaves it.
+  writeFileSync(join(ownServer.data, "mods", "behind.txt"), "game\n");
+  await page.locator("[data-upload-input]").setInputFiles([{ name: "behind.txt", mimeType: "text/plain", buffer: Buffer.from("mine\n") }]);
+  await expect(question.locator("#confirm-dialog-detail")).toHaveText("1 file you chose is already here: “behind.txt”. " +
+    "Replacing it can’t be undone; otherwise it stays as it is.");
+  await question.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.locator("#file-feedback")).toHaveText("Uploaded 0 of 1 file. “behind.txt” wasn’t uploaded: a file with that name is already here.");
+  expect(readFileSync(join(ownServer.data, "mods", "behind.txt"), "utf8")).toBe("game\n");
+  mkdirSync(join(ownServer.data, "mods", "late"));
+  writeFileSync(join(ownServer.data, "mods", "late", "x.toml"), "game\n");
+  writeFileSync(join(ownServer.data, "mods", "late", "y.toml"), "game\n");
+  await dropTree(page, { late: { "x.toml": "mine x\n", "y.toml": "mine y\n", "z.toml": "mine z\n" } });
+  await expect(question.locator("#confirm-dialog-detail")).toHaveText("2 files you chose are already here: “late/x.toml” and “late/y.toml”. " +
+    "Replacing them can’t be undone; otherwise they stay as they are.");
+  await question.getByRole("button", { name: "Upload and replace" }).click();
+  await expect(page.locator("#file-feedback")).toHaveText("3 files uploaded.");
+  expect(readFileSync(join(ownServer.data, "mods", "late", "y.toml"), "utf8")).toBe("mine y\n");
   await page.locator(".file-breadcrumbs").getByRole("link", { name: ownServer.container }).click();
 
   await page.locator(".file-row", { hasText: "mods" }).getByRole("button", { name: "Actions for mods" }).click();

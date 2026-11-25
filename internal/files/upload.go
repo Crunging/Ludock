@@ -53,12 +53,13 @@ func BatchFits(sizes []int64) bool {
 
 // UploadFiles writes entries into one folder through one helper command:
 // folder, or its subfolder into, whose missing folders it first creates as
-// New folder does. Each file commits only after its trailer, which is sent
-// after its whole body and an access check. It returns each entry's result,
-// and the error that stopped the batch, after which later entries were not
-// written.
-func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder, into string, entries []UploadEntry, body io.Reader,
-	assertAccess func() error) ([]error, error) {
+// New folder does. Without replace, an entry whose name is taken is refused
+// with launch.ErrNameTaken. Each file commits only after its trailer, which
+// is sent after its whole body and an access check. It returns each entry's
+// result, and the error that stopped the batch, after which later entries
+// were not written.
+func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder, into string, replace bool, entries []UploadEntry,
+	body io.Reader, assertAccess func() error) ([]error, error) {
 	results := make([]error, len(entries))
 	// Every result left nil by a failure is that failure.
 	fail := func(err error) ([]error, error) {
@@ -164,7 +165,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	input.trailer = append(input.trailer, list...)
 	acks := &uploadAcks{limit: len(files), ready: make(chan struct{}, len(files))}
 	input.ready = acks.ready
-	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized},
+	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized, Replace: replace},
 		launch.ExecOptions{Input: input, Stdout: acks})
 	// Exec can return while its input is still being read; once stopped, no
 	// further trailer is handed on, so sent covers every file that may be
