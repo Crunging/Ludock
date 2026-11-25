@@ -12,6 +12,7 @@ import (
 	"errors"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -399,6 +400,72 @@ func lifecycleResult(recovery ops.Recovery) *ops.Result {
 	return result
 }
 
+var errRestartTakenOver = errors.New("the server changed before its restart's start")
+
+// finishRestart starts, once, the server a restart had stopped when Ludock
+// restarted, as the restart would have: only while it is still the run the
+// restart stopped. One started, run, or replaced since by anything else is
+// left as it is. A stop whose answer was lost can't be told apart from
+// another manager's stop of the same run. It says what it did, or "".
+func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission authz.Capability) (string, error) {
+	const started, runningAgain = "Ludock started the server again.", "The server was running again, so Ludock left it as it was."
+	recovery := job.Job.Recovery
+	stopped := recovery.StopInitialStartedAt
+	if recovery.StopRecoveryTimedOut || stopped == nil {
+		return "", nil
+	}
+	// Only a start this recovery saw take is saved with both; a newer run
+	// after a start that was only requested may be anyone's.
+	if recovery.StateRestored {
+		if recovery.StartRequested {
+			return started, nil
+		}
+		return runningAgain, nil
+	}
+	server, err := j.resolve(ctx, job, permission, true)
+	if err != nil {
+		return "", err
+	}
+	if server.Container.ID != job.Job.Recovery.ContainerID {
+		return "", nil
+	}
+	restored := func(r *ops.Recovery) { r.StateRestored = true }
+	if server.Container.State == "running" && server.Container.StateSince != *stopped {
+		return runningAgain, record(job, "state_restored", func(r *ops.Recovery) { r.StateRestored, r.StartRequested = true, false })
+	}
+	if server.Container.Exit == nil || server.Container.Exit.Started != *stopped {
+		return "", nil
+	}
+	if err := j.suppressFor(job)(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.allowedIn(ctx, tx, job, permission) }); err != nil {
+		return "", err
+	}
+	if err := record(job, "starting", func(r *ops.Recovery) { r.StartRequested = true }); err != nil {
+		return "", err
+	}
+	// Startup recovery doesn't ride out Docker restarts by itself.
+	err = j.Servers.Observer.ChangeStateExact(docker.RideOut(ctx, nil), server.Container.ID, servers.Start, func(observation identity.Observation, info *docker.ContainerInspect) error {
+		if err := j.assertCapability(ctx, job, permission); err != nil {
+			return err
+		}
+		if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observation, job.Job.BindingRevision); err != nil {
+			return err
+		}
+		run, err := time.Parse(time.RFC3339Nano, info.State.StartedAt)
+		if servers.IsRunning(info) || err != nil || run.UnixMilli() != *stopped {
+			return errRestartTakenOver
+		}
+		return nil
+	})
+	if errors.Is(err, errRestartTakenOver) || errors.Is(err, servers.ErrUnchanged) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
+	return started, record(job, "state_restored", restored)
+}
+
 // noteAvailability logs a monitoring state that could not be saved after Docker
 // already changed.
 func (j *Jobs) noteAvailability(err error) {
@@ -555,9 +622,17 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			if err := record(job, phase, func(r *ops.Recovery) { r.ContainerID = server.Container.ID }); err != nil {
 				return err
 			}
-			change := j.Servers.Observer.ChangeState
+			change := j.Servers.Observer.ChangeStateUnsent
 			if recovery {
-				change = j.Servers.Observer.ChangeStateExact
+				change = j.Servers.Observer.ChangeStateExactUnsent
+			}
+			// A stop known never to have reached Docker is not one recovery
+			// waits for or finishes.
+			unsent := func() error {
+				if mutation != servers.Stop || !job.Job.Recovery.StopStarted {
+					return nil
+				}
+				return record(job, job.Job.Phase, func(r *ops.Recovery) { r.StopStarted = false })
 			}
 			err := change(ctx, server.Container.ID, mutation, func(observation identity.Observation, info *docker.ContainerInspect) error {
 				if err := j.assertCapability(ctx, job, permission); err != nil {
@@ -579,7 +654,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 					})
 				}
 				return nil
-			})
+			}, unsent)
 			if recovery && errors.Is(err, servers.ErrUnchanged) {
 				return errRecoveryStopped
 			}
@@ -714,9 +789,9 @@ func forcedExit(r *ops.Recovery, exit *servers.Exit) bool {
 	return !r.Restarting || r.StopInitialStartedAt == nil || exit.Started != *r.StopInitialStartedAt
 }
 
-// recoverLifecycle only observes: Docker may still be handling the
-// original stop, so the lock is kept until it settles, without starting or
-// stopping again.
+// recoverLifecycle waits for a stop Docker may still be handling, holding
+// the lock until it settles, without sending it again. A restart whose stop
+// was sent is then finished (finishRestart).
 func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 	permission := capabilityFor(servers.Action(job.Job.Kind))
 	if job.Job.Kind != ops.KindStart && job.Job.Kind != ops.KindStop && job.Job.Kind != ops.KindRestart {
@@ -798,5 +873,13 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (*ops.Res
 			}
 		}
 	}
-	return lifecycleResult(job.Job.Recovery), nil
+	said := ""
+	if job.Job.Kind == ops.KindRestart && recovery.StopStarted {
+		if said, err = j.finishRestart(ctx, job, permission); err != nil {
+			return nil, err
+		}
+	}
+	result := lifecycleResult(job.Job.Recovery)
+	result.Guidance = strings.TrimSpace(result.Guidance + " " + said)
+	return result, nil
 }

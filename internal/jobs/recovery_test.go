@@ -4,11 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -126,6 +130,144 @@ func TestRecoveryRestartSkipsUnlessStillWanted(t *testing.T) {
 			job := f.recoveryRestart(t, hung, scenario.forgotten, scenario.newerRun)
 			if job.Status != scenario.status || f.startedAt() != before || f.running() == scenario.stop {
 				t.Fatalf("%+v", job)
+			}
+		})
+	}
+}
+
+// Ludock restarts while a restart or stop is under way. The table gives the
+// phase it was in, what happened to the server while Ludock was down, and
+// what recovery then sent to Docker, in order. A restart whose stop Ludock
+// sent is finished: its server is started once, unless something else
+// started, replaced, or ran it since. A stop stays stopped, and a restart
+// that never sent its stop is only marked interrupted.
+func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
+	stopped := func(f *fixture, run string) {
+		f.engine.Update(f.game, func(c *fakedocker.Container) {
+			c.State.Status, c.State.Running, c.State.ExitCode, c.State.StartedAt = "exited", false, 0, run
+			c.State.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		})
+	}
+	later := func() string { return time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano) }
+	for _, c := range []struct {
+		name, kind, phase string
+		// settled: the stop's end was saved before Ludock restarted;
+		// requested: so was an earlier recovery's start, unconfirmed.
+		settled, requested bool
+		// meanwhile is what happened while Ludock was down; run is the start
+		// time of the run the work stopped.
+		meanwhile func(f *fixture, run string)
+		sent      []string
+		running   bool
+		// guidance is what Activity adds; with it, the server is as the work
+		// left it, so the entry doesn't ask to check it.
+		guidance string
+		// err, when set, is the entry's error instead.
+		err      string
+		recovery bool
+	}{
+		{name: "restart, stop done unconfirmed", kind: "restart", phase: "stopping", meanwhile: stopped,
+			sent: []string{"start mc"}, running: true, guidance: "Ludock started the server again."},
+		{name: "restart, stop confirmed", kind: "restart", phase: "verifying_stop", settled: true, meanwhile: stopped,
+			sent: []string{"start mc"}, running: true, guidance: "Ludock started the server again."},
+		{name: "restart, start sent but not taken", kind: "restart", phase: "starting", settled: true, meanwhile: stopped,
+			sent: []string{"start mc"}, running: true, guidance: "Ludock started the server again."},
+		{name: "restart, started elsewhere", kind: "restart", phase: "stopping", meanwhile: func(f *fixture, _ string) {
+			f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.StartedAt = later() })
+		}, running: true, guidance: "The server was running again, so Ludock left it as it was."},
+		{name: "restart, recovery's start unconfirmed, then started elsewhere", kind: "restart", phase: "starting", settled: true, requested: true,
+			meanwhile: func(f *fixture, _ string) {
+				f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.StartedAt = later() })
+			}, running: true, guidance: "The server was running again, so Ludock left it as it was."},
+		{name: "restart, run elsewhere and stopped", kind: "restart", phase: "verifying_stop", settled: true,
+			meanwhile: func(f *fixture, _ string) { stopped(f, later()) }},
+		{name: "restart, replaced", kind: "restart", phase: "stopping", meanwhile: func(f *fixture, run string) {
+			stopped(f, run)
+			f.game = f.engine.Recreate(f.game, nil)
+			stopped(f, later())
+		}, err: "Recovery requires administrator attention. The server has been left stopped where possible."},
+		{name: "stop", kind: "stop", phase: "stopping", meanwhile: stopped},
+		{name: "restart, stop not sent", kind: "restart", phase: "saving_world", running: true},
+		{name: "recovery restart, stop done unconfirmed", kind: "restart", phase: "stopping", recovery: true, meanwhile: stopped,
+			sent: []string{"start mc"}, running: true, guidance: "Ludock started the server again."},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
+			info := f.engine.Container(f.game)
+			run := info.State.StartedAt
+			startedAt, _ := time.Parse(time.RFC3339Nano, run)
+			started := startedAt.UnixMilli()
+			actor, input := "admin", map[string]any{}
+			if c.recovery {
+				f.setRecovery(t, true)
+				actor, input = ops.RecoveryActor, map[string]any{"run": started, "answered": 42}
+			}
+			recovery := ops.Recovery{ContainerID: f.game, LockKeys: []string{locks.ServerKey(f.serverID)}}
+			if c.phase != "saving_world" {
+				recovery.StopStarted, recovery.StopInitialStartedAt = true, &started
+				recovery.StopRecoveryDeadlineAt = time.Now().UnixMilli()
+				recovery.StopSettled, recovery.StartRequested = c.settled, c.requested
+			}
+			if c.meanwhile != nil {
+				c.meanwhile(f, run)
+			}
+			encoded, _ := json.Marshal(recovery)
+			inputJSON, _ := json.Marshal(input)
+			id := identity.NewUUID()
+			if _, err := f.jobs.DB.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at)
+				VALUES (?,?,?,?,'running',?,?,?,?,?,?)`, id, f.serverID, actor, c.kind, c.phase, string(inputJSON), string(encoded),
+				logical.BindingRevision, db.Now(), db.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if c.recovery {
+				state, _ := json.Marshal(monitor.Recovery{OperationID: id, Pending: true})
+				if _, err := f.jobs.DB.Exec("UPDATE availability SET recovery_json=? WHERE server_id=?", string(state), f.serverID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := len(f.engine.Requests)
+			runner := &ops.Runner{DB: f.jobs.DB, Locks: f.jobs.Locks}
+			f.jobs.Register(runner)
+			if err := runner.Start(ctx, nil); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(runner.Stop)
+			job, err := runner.Get(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var sent []string
+			for _, request := range f.engine.Requests[before:] {
+				method, path, _ := strings.Cut(request, " ")
+				parts := strings.Split(path, "/")
+				if method != "POST" || len(parts) < 5 || parts[2] != "containers" || !slices.Contains([]string{"start", "stop", "restart", "kill"}, parts[4]) {
+					continue
+				}
+				name := "removed"
+				if container := f.engine.Container(parts[3]); container != nil {
+					name = strings.TrimPrefix(container.Name, "/")
+				}
+				sent = append(sent, parts[4]+" "+name)
+			}
+			want := "Ludock restarted while this ran. Check the server before trying again."
+			if c.guidance != "" {
+				want = "Ludock restarted while this ran."
+			} else if c.err != "" {
+				want = c.err
+			}
+			if job.Status != ops.Interrupted || job.Error != want || job.Result.Guidance != c.guidance || !slices.Equal(sent, c.sent) || f.running() != c.running {
+				t.Fatalf("%s %q %q, sent %v, running %v", job.Status, job.Error, job.Result.Guidance, sent, f.running())
+			}
+			// Only a stop is one on purpose, and a start pauses outage tracking
+			// past itself, so the time the server was down alerts no one.
+			availability, err := f.jobs.Monitor.Get(ctx, f.serverID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state := availability.State; state.IntentionallyStopped != (c.kind == "stop") || state.OutageStartedAt != 0 ||
+				(len(c.sent) > 0 && state.SuppressedUntil <= time.Now().UnixMilli()) {
+				t.Fatalf("monitoring %+v", state)
 			}
 		})
 	}

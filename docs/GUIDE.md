@@ -358,7 +358,8 @@ stopped it first, which leaves it stopped after the backup. If the backup
 fails, the server stays stopped and Ludock sends an alert, since starting may
 update the game with no backup to go back to. If Ludock itself restarts during
 the backup, the server is started again when Ludock is back, without the
-backup, and **Activity** says so.
+backup, and **Activity** says so. A restart without a backup that Ludock's own
+restart cut short after the server stopped is finished the same way.
 
 Every start, stop, restart, backup, restore, and update is listed in
 **Activity**, with who started it. If Docker itself restarts for a few seconds

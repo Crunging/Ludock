@@ -90,22 +90,32 @@ func TestUpdateStopWaitsForDocker(t *testing.T) {
 	}
 }
 
-// Docker stays away past the time Ludock waits, so an update's stop never
-// reaches it. The update fails at once instead of holding the server for
-// the five minutes a stop that did arrive may take, and the server keeps
-// running.
-func TestUpdateStopThatNeverArrived(t *testing.T) {
-	f := setup(t)
-	f.jobs.Docker.OutageLimit = 500 * time.Millisecond
-	f.refuseBeforeStop(2 * time.Second)
-	started := time.Now()
-	job := f.run(t, "update", skipBackup)
-	if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") || time.Since(started) > 15*time.Second {
-		t.Fatalf("after %v: %+v", time.Since(started), job)
-	}
-	time.Sleep(2 * time.Second)
-	if !f.running() {
-		t.Fatal("server stopped")
+// Docker stays away past the time Ludock waits, so an update's or a
+// restart's stop never reaches it. The work fails at once instead of
+// holding the server for the five minutes a stop that did arrive may take,
+// the server keeps running, and no stop is left saved for recovery to wait
+// for or finish.
+func TestStopThatNeverArrived(t *testing.T) {
+	for kind, c := range map[string]struct {
+		input map[string]any
+		// phases are those of the last inspection before the stop.
+		phases string
+	}{"update": {skipBackup, "'save_skipped','waiting_for_save'"}, "restart": {nil, "'stopping'"}} {
+		t.Run(kind, func(t *testing.T) {
+			f := setup(t)
+			f.jobs.Docker.OutageLimit = 500 * time.Millisecond
+			f.refuseAfter(2*time.Second, "/containers/"+f.game+"/json", c.phases, "%")
+			started := time.Now()
+			job := f.run(t, kind, c.input)
+			if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") || time.Since(started) > 15*time.Second ||
+				job.Recovery.StopStarted {
+				t.Fatalf("after %v: %+v", time.Since(started), job)
+			}
+			time.Sleep(2 * time.Second)
+			if !f.running() {
+				t.Fatal("server stopped")
+			}
+		})
 	}
 }
 
