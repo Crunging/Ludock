@@ -442,10 +442,29 @@ func (h *restoreHelper) moveNew(root, stage fd) error {
 	if err := h.moveContents(next, root); err != nil {
 		return err
 	}
-	// The extractor gave new the archived root's owner and mode.
+	// The extractor gave new the archived root's owner, mode, and ACL. The
+	// root keeps its own ACL; one without takes the archived ACL's fallback
+	// mode, not its mask as the group's rights.
 	archived, err := fstat(next)
 	if err != nil {
 		return err
+	}
+	restored, err := getxattr(next, accessACL)
+	if err != nil {
+		return err
+	}
+	if restored != nil {
+		live, err := getxattr(root, accessACL)
+		if err != nil {
+			return err
+		}
+		if live == nil {
+			entries, err := decodeACL(restored)
+			if err != nil {
+				return err
+			}
+			archived.Mode = fallbackMode(archived.Mode, entries)
+		}
 	}
 	return ownRoot(root, archived)
 }
@@ -957,16 +976,41 @@ type ExtractRequest struct {
 }
 
 // ExtractRecord is the line before each entry restore-extract reads. The
-// extractor refuses one with a missing or null number, except mtime.
+// extractor refuses one with a missing or null number, except mtime. ACL and
+// DefaultACL are the entry's ACLs in ACLText's form, if it has them.
 type ExtractRecord struct {
-	GID   *int64   `json:"gid"`
-	Mode  *int64   `json:"mode"`
-	Mtime *float64 `json:"mtime"`
-	Name  string   `json:"name"`
-	Size  *int64   `json:"size"`
-	Type  string   `json:"type"`
-	UID   *int64   `json:"uid"`
+	ACL        string   `json:"acl,omitempty"`
+	DefaultACL string   `json:"defaultAcl,omitempty"`
+	GID        *int64   `json:"gid"`
+	Mode       *int64   `json:"mode"`
+	Mtime      *float64 `json:"mtime"`
+	Name       string   `json:"name"`
+	Size       *int64   `json:"size"`
+	Type       string   `json:"type"`
+	UID        *int64   `json:"uid"`
 }
+
+// acls returns the record's ACLs in the kernel's form. Only a folder has a
+// default ACL.
+func (r *ExtractRecord) acls() (entryACLs, bool) {
+	var acls entryACLs
+	for _, field := range []struct {
+		text   string
+		target *[]aclEntry
+	}{{r.ACL, &acls.access}, {r.DefaultACL, &acls.def}} {
+		if field.text == "" {
+			continue
+		}
+		value, err := ParseACLText(field.text)
+		if err != nil {
+			return acls, false
+		}
+		*field.target, _ = decodeACL(value)
+	}
+	return acls, acls.def == nil || r.Type == "directory"
+}
+
+type entryACLs struct{ access, def []aclEntry }
 
 // checked returns the record's numbers when it is a file or directory with
 // all of them in range.
@@ -1005,6 +1049,8 @@ func recordParts(name string) ([]string, error) {
 type extractor struct {
 	t           tracker
 	destination fd
+	// aclsLost says the destination refused an ACL an entry had.
+	aclsLost bool
 	// The last parent stays open: archive entries arrive grouped by
 	// directory.
 	parentKey string
@@ -1056,9 +1102,9 @@ func (x *extractor) changed(names []string) {
 	x.dirty[strings.Join(names, "/")] = names
 }
 
-// metadata gives an extracted entry its owner, then its mode, since chown
-// can clear setgid.
-func metadata(descriptor fd, uid, gid, mode int64, mtime *float64, directory bool) error {
+// metadata gives an extracted entry its owner, then its ACLs and mode, since
+// chown can clear setgid.
+func (x *extractor) metadata(descriptor fd, uid, gid, mode int64, mtime *float64, directory bool, acls entryACLs) error {
 	if err := unix.Fchown(int(descriptor), int(uid), int(gid)); err != nil {
 		return err
 	}
@@ -1066,11 +1112,45 @@ func metadata(descriptor fd, uid, gid, mode int64, mtime *float64, directory boo
 	// and gives entries the archive's owners, so honoring setuid, or setgid
 	// on a file, would let whoever can write to the backup folder plant a
 	// privileged program in a game's data. Folders keep setgid and sticky.
-	permissions := mode & 0o777
+	permissions := uint32(mode & 0o777)
 	if directory {
-		permissions = mode & 0o3777
+		permissions = uint32(mode & 0o3777)
 	}
-	if err := unix.Fchmod(int(descriptor), uint32(permissions)); err != nil {
+	// An ACL the destination refuses leaves the archive's mode, which gives
+	// no one more than the ACL did, and none inherited from the stage's
+	// folders, which could grant what the entry's own didn't. The mode is
+	// set after the ACL, whose own bits it then matches, since setting an
+	// ACL can clear a folder's setgid.
+	for _, acl := range []struct {
+		attribute string
+		entries   []aclEntry
+	}{{accessACL, acls.access}, {defaultACL, acls.def}} {
+		if acl.entries == nil {
+			continue
+		}
+		err := fsetxattr(int(descriptor), acl.attribute, encodeACL(acl.entries), 0)
+		if err == nil {
+			if acl.attribute == accessACL {
+				permissions = permissions&^0o777 | aclMode(acl.entries)
+			}
+			continue
+		}
+		if !refusedACL(err) {
+			return err
+		}
+		x.aclsLost = true
+		if err := unix.Fremovexattr(int(descriptor), acl.attribute); err != nil && !unsupportedXattr(err) {
+			return err
+		}
+	}
+	// A folder whose ACL was recorded without a default one gets none from
+	// the stage's folders for what is made in it later.
+	if directory && acls.access != nil && acls.def == nil {
+		if err := unix.Fremovexattr(int(descriptor), defaultACL); err != nil && !unsupportedXattr(err) {
+			return err
+		}
+	}
+	if err := unix.Fchmod(int(descriptor), permissions); err != nil {
 		return err
 	}
 	if mtime != nil && !math.IsInf(*mtime, 0) && !math.IsNaN(*mtime) {
@@ -1084,6 +1164,13 @@ func metadata(descriptor fd, uid, gid, mode int64, mtime *float64, directory boo
 		}
 	}
 	return nil
+}
+
+// refusedACL is an ACL the destination's filesystem can't hold: one without
+// ACLs, or one that can't store its IDs or its size.
+func refusedACL(err error) bool {
+	return errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EINVAL) ||
+		errors.Is(err, unix.E2BIG) || errors.Is(err, unix.EOVERFLOW)
 }
 
 // ExtractFull is printed, with exit status ExtractFullStatus, when an entry
@@ -1128,6 +1215,14 @@ var statfs = unix.Fstatfs
 // writers to the same filesystem cannot push it far into the reserve.
 const copyChunk = 1 << 20
 
+// ExtractACLsLost follows the count restore-extract prints when the
+// destination refused an entry's ACLs.
+const ExtractACLsLost = "acls-lost"
+
+// maxRecordLine bounds a record line: a name escaped to its longest and two
+// ACLs of MaxACLEntries entries fit.
+const maxRecordLine = 1 << 17
+
 // RunRestoreExtract writes a staged restore from stdin: each entry is one
 // JSON record line followed by exactly its file bytes. Directories get their
 // metadata last so file writes cannot change their times or modes.
@@ -1141,7 +1236,11 @@ func RunRestoreExtract(argument string, stdin io.Reader, stdout, stderr io.Write
 	}
 	// The count lets the sender tell a complete stream from one that ended
 	// between records.
-	io.WriteString(stdout, "ok "+strconv.Itoa(x.records))
+	report := "ok " + strconv.Itoa(x.records)
+	if x.aclsLost {
+		report += " " + ExtractACLsLost
+	}
+	io.WriteString(stdout, report)
 	return 0
 }
 
@@ -1185,16 +1284,17 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		names          []string
 		uid, gid, mode int64
 		mtime          *float64
+		acls           entryACLs
 	}
 	var directories []directoryRecord
 	var rootMeta *directoryRecord
-	reader := bufio.NewReaderSize(stdin, 64*1024)
+	reader := bufio.NewReaderSize(stdin, maxRecordLine)
 	chunk := make([]byte, copyChunk)
 	count := 0
 	var total float64
 	for {
 		line, err := reader.ReadSlice('\n')
-		if err == bufio.ErrBufferFull || len(line) > 16385 {
+		if err == bufio.ErrBufferFull || len(line) > maxRecordLine {
 			return errUnsafe
 		}
 		if err == io.EOF {
@@ -1213,7 +1313,8 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		count++
 		x.records = count
 		size, uid, gid, mode, ok := record.checked()
-		if count > 100000 || !ok {
+		acls, aclsOK := record.acls()
+		if count > 100000 || !ok || !aclsOK {
 			return errUnsafe
 		}
 		// Kept in float64: past 2^53 its rounding refuses streams an exact
@@ -1227,7 +1328,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 			if count != 1 || record.Type != "directory" || size != 0 {
 				return errUnsafe
 			}
-			rootMeta = &directoryRecord{nil, uid, gid, mode, nil}
+			rootMeta = &directoryRecord{nil, uid, gid, mode, nil, acls}
 			continue
 		}
 		names, err := recordParts(record.Name)
@@ -1257,7 +1358,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 				return err
 			}
 			x.t.close(directory)
-			directories = append(directories, directoryRecord{names, uid, gid, mode, record.Mtime})
+			directories = append(directories, directoryRecord{names, uid, gid, mode, record.Mtime, acls})
 		} else {
 			file, err := x.t.openAt(owner, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 			if err != nil {
@@ -1276,7 +1377,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 				}
 				remaining -= n
 			}
-			if err := metadata(file, uid, gid, mode, record.Mtime, false); err != nil {
+			if err := x.metadata(file, uid, gid, mode, record.Mtime, false, acls); err != nil {
 				return err
 			}
 			if err := unix.Fsync(int(file)); err != nil {
@@ -1298,7 +1399,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		if err != nil {
 			return err
 		}
-		if err := metadata(directory, record.uid, record.gid, record.mode, record.mtime, true); err != nil {
+		if err := x.metadata(directory, record.uid, record.gid, record.mode, record.mtime, true, record.acls); err != nil {
 			return err
 		}
 		if err := unix.Fsync(int(directory)); err != nil {
@@ -1308,7 +1409,14 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		delete(x.dirty, strings.Join(record.names, "/"))
 	}
 	if rootMeta != nil {
-		if err := metadata(x.destination, rootMeta.uid, rootMeta.gid, rootMeta.mode, nil, true); err != nil {
+		// The stage's new folder carries the root's ACL to moveNew, so it
+		// keeps none it inherited from the stage.
+		if rootMeta.acls.access == nil {
+			if err := unix.Fremovexattr(int(x.destination), accessACL); err != nil && !unsupportedXattr(err) {
+				return err
+			}
+		}
+		if err := x.metadata(x.destination, rootMeta.uid, rootMeta.gid, rootMeta.mode, nil, true, rootMeta.acls); err != nil {
 			return err
 		}
 	}

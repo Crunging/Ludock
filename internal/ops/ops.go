@@ -130,6 +130,8 @@ type Recovery struct {
 	// LeftOut names a folder holding a restore's stage folder, which the
 	// backup this operation takes leaves out.
 	LeftOut string `json:"leftOut,omitempty"`
+	// ACLsLost says a restore's storage refused some files' ACLs.
+	ACLsLost bool `json:"aclsLost,omitempty"`
 
 	// WarnUntil (Unix ms) is when players were told the action happens,
 	// saved before the warning is sent; WarnSent once it was.

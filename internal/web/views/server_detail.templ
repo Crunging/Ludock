@@ -930,6 +930,9 @@ templ SelectedOperation(a ActivityView) {
 			if detail := LeftOutDetail(operation.Result); detail != "" {
 				<p class="section-note">{ detail }</p>
 			}
+			if detail := ACLsLostDetail(operation.Result); detail != "" {
+				<p class="section-note">{ detail }</p>
+			}
 			if detail := DockerWaitDetail(operation.Result); detail != "" {
 				<p class="section-note">{ detail }</p>
 			}
@@ -1033,6 +1036,9 @@ templ OperationList(operations []history.Operation, empty string, showContext bo
 								<p class="muted">{ detail }</p>
 							}
 							if detail := LeftOutDetail(operation.Result); detail != "" {
+								<p class="muted">{ detail }</p>
+							}
+							if detail := ACLsLostDetail(operation.Result); detail != "" {
 								<p class="muted">{ detail }</p>
 							}
 							if detail := DockerWaitDetail(operation.Result); detail != "" {

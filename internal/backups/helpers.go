@@ -685,12 +685,13 @@ var (
 // ExtractToStage streams an archive into the helper's restore stage of
 // every target in one pass, each root through its own extraction. The
 // checksum covers the whole archive, so a changed archive is detected before
-// any game data is replaced.
+// any game data is replaced. aclsLost says a target's storage refused some
+// entry's ACLs, so those entries were staged without them.
 func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID string, targets []StageTarget, stage string,
-	roots []Root, maxBytes, reserveBytes int64, checksum string, assertAccess func() error) error {
+	roots []Root, maxBytes, reserveBytes int64, checksum string, assertAccess func() error) (aclsLost bool, err error) {
 	run := h.newStageRun(ctx, helperID)
 	defer run.cancel()
-	err := run.unpack(directory, id, targets, helper.ExtractRequest{MaxBytes: maxBytes, ReserveBytes: &reserveBytes, Stage: stage},
+	err = run.unpack(directory, id, targets, helper.ExtractRequest{MaxBytes: maxBytes, ReserveBytes: &reserveBytes, Stage: stage},
 		roots, maxBytes, checksum, assertAccess)
 	if err != nil {
 		// Every extraction is stopped and collected before the deadline is
@@ -698,8 +699,9 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		// deadline, collecting one stops the whole helper.
 		run.closeAll()
 		run.wait()
+		return false, err
 	}
-	return err
+	return run.aclsLost, nil
 }
 
 // stageRun is one ExtractToStage: an extraction in the helper for each
@@ -716,6 +718,8 @@ type stageRun struct {
 	// waited and extracted are wait's one collection.
 	waited    bool
 	extracted error
+	// aclsLost says a destination refused an entry's ACLs.
+	aclsLost bool
 }
 
 type rootExtraction struct {
@@ -886,8 +890,12 @@ func (r *stageRun) send(archive io.Reader, roots []Root, maxBytes int64, checksu
 		if err != nil {
 			return err
 		}
-		record, _ := json.Marshal(helper.ExtractRecord{GID: &gid, Mode: &header.Mode, Mtime: &mtime, Name: entry, Size: &header.Size,
-			Type: header.Type, UID: &uid})
+		access, def, err := EntryACLs(header)
+		if err != nil {
+			return err
+		}
+		record, _ := json.Marshal(helper.ExtractRecord{ACL: access, DefaultACL: def, GID: &gid, Mode: &header.Mode, Mtime: &mtime,
+			Name: entry, Size: &header.Size, Type: header.Type, UID: &uid})
 		if err := write(extraction.conn, append(record, '\n')); err != nil {
 			return err
 		}
@@ -964,9 +972,11 @@ func (r *stageRun) finish() error {
 	// Every record was sent: a helper that read fewer saw the stream end
 	// cleanly between two.
 	for _, extraction := range r.extractions {
-		if extraction.report != "ok "+strconv.Itoa(extraction.sent) {
+		count, lost := strings.CutSuffix(extraction.report, " "+helper.ExtractACLsLost)
+		if count != "ok "+strconv.Itoa(extraction.sent) {
 			return cut(r.ping())
 		}
+		r.aclsLost = r.aclsLost || lost
 	}
 	return nil
 }

@@ -452,10 +452,25 @@ Recreate it without `--rm` to manage it fully.
   that is, or holds, a folder mounted separately, such as `./mods:/data/mods`
   inside `./data:/data`.
 - **What a backup keeps:** permissions, including folders' setgid and sticky
-  bits, owners, and modification times, and a whole restore gives each data
-  folder its own owner and permissions back. Single-file mounts, links, and
-  special files are refused; ACLs, extended attributes, sparse files, setuid,
-  and files' setgid aren't kept.
+  bits, owners, modification times, and ACLs (the extra permissions for
+  specific users and groups that NAS systems often set), and a whole restore
+  gives each data folder its own owner and permissions back. Single-file
+  mounts, links, and special files are refused; other extended attributes
+  (such as SELinux labels and file capabilities), sparse files, setuid, and
+  files' setgid aren't kept.
+- **ACLs in the archive:** each file's and folder's access ACL, and each
+  folder's default ACL, are stored as GNU tar and bsdtar store them with
+  `--acls`: in `SCHILY.acl.access` and `SCHILY.acl.default` records, as
+  `user::rw-,user:1001:rw-,group::r--,mask::rw-,other::---`, with numeric
+  user and group IDs, since names differ between the host and containers. The
+  mode in the archive gives no one more than the ACL did: the owning group
+  gets only what it and every user the ACL names may do, and others only what
+  every named user and group may do. So a tool that ignores ACLs, or storage
+  that can't hold them, restores a file with the same permissions or fewer,
+  never more; only the entries for specific users and groups are lost then. A restore onto such storage says
+  so in its **Activity** entry. A data folder keeps the ACL it has now; only
+  its owner and permissions come back. An ACL of more than 1024 entries stops
+  the backup.
 
 ## Ludock itself
 
@@ -585,10 +600,10 @@ of the folder's container path. Most servers have one folder, such as `/data`:
 id=root-$(printf %s /data | sha256sum | cut -c1-12)
 tar -tf backup.tar | head          # shows snapshot/$id/...
 sudo mkdir restored
-sudo tar -xpf backup.tar --numeric-owner -C restored --strip-components=1 "snapshot/$id"
+sudo tar -xpf backup.tar --acls --numeric-owner -C restored --strip-components=1 "snapshot/$id"
 ```
 
-Run these as root so owners stay as they were. Stop the game, then
+Run these as root so owners stay as they were; `--acls` puts back ACLs. Stop the game, then
 replace the contents of its data folder with those of `restored/$id/`, still
 as root and keeping owners and permissions, such as with
 `sudo cp -a "restored/$id/." <folder>/` after emptying the folder. For a data
@@ -605,6 +620,9 @@ docker run --rm -v <volume or folder>:/target -v "$PWD/backup.tar:/backup.tar:ro
   "mkdir /restored && tar -xpf /backup.tar --numeric-owner -C /restored --strip-components=1 snapshot/$id \
    && find /target -mindepth 1 -delete && cp -a /restored/$id/. /target/"
 ```
+
+Alpine's `tar` and `cp` leave ACLs out, so files keep only the permissions
+in their mode, which never give more than the ACLs did.
 
 In the backup folder itself, each archive is `<id>.tar`. `ls -lt` lists the
 newest first (a second copy is dated as its backup, not when it was copied),
