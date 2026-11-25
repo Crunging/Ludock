@@ -511,6 +511,7 @@ func (h *Helpers) copyRoot(ctx context.Context, snapshot *snapshotFile, context 
 	if err != nil {
 		return err
 	}
+	defer input.Close()
 	copied := &rootCopy{root: root, data: data, names: map[string]bool{}}
 	err = tarstream.Walk(input, func(header *tarstream.Header, body io.Reader) error {
 		return snapshot.copyEntry(copied, header, body)
@@ -521,7 +522,6 @@ func (h *Helpers) copyRoot(ctx context.Context, snapshot *snapshotFile, context 
 		docker.Unavailable(completeErr) {
 		err = completeErr
 	}
-	input.Close()
 	if err != nil {
 		if _, ok := apperr.As(err); !ok && !docker.Unavailable(err) {
 			err = fail("UNSAFE_ARCHIVE", "Ludock couldn’t read everything in the server’s data folders, so the backup was stopped. A backup takes only ordinary files and folders that Ludock can read, not links (symbolic or hard) or device files.")
@@ -694,11 +694,10 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		roots, maxBytes, checksum, assertAccess)
 	if err != nil {
 		// Every extraction is stopped and collected before the deadline is
-		// released; one that stopped at the reserve is why the unpack failed.
+		// released, so none is still writing when this returns: past the
+		// deadline, collecting one stops the whole helper.
 		run.closeAll()
-		if extracted := run.wait(); errors.Is(extracted, errStagingCapacity) {
-			err = extracted
-		}
+		run.wait()
 	}
 	return err
 }
@@ -756,9 +755,6 @@ func (r *stageRun) unpack(directory, id string, targets []StageTarget, request h
 		return r.whyCut()
 	}
 	if err != nil {
-		if _, ok := apperr.As(err); !ok {
-			err = fail("INVALID_BACKUP", "The backup archive is invalid or truncated.")
-		}
 		return err
 	}
 	return r.finish()
@@ -824,7 +820,9 @@ func (r *stageRun) closeAll() {
 
 // wait collects every extraction once. A helper that stopped at the
 // reserve, or refused what it was sent, is why writing to it failed; one
-// that only saw its input end, or whose exit is unknown, isn't.
+// that only saw its input end, or whose exit is unknown, isn't. A known
+// reserve stop outranks the deadline too: a full disk fails every retry
+// until space is freed.
 func (r *stageRun) wait() error {
 	if !r.waited {
 		r.waited = true
@@ -852,9 +850,11 @@ func (r *stageRun) wait() error {
 // and its body, and checks the checksum against every byte read.
 func (r *stageRun) send(archive io.Reader, roots []Root, maxBytes int64, checksum string, assertAccess func() error) error {
 	stillAllowed := launch.Periodic(assertAccess)
+	refused := false
 	write := func(conn *docker.Conn, data []byte) error {
 		if stillAllowed != nil {
 			if err := stillAllowed(); err != nil {
+				refused = true
 				return err
 			}
 		}
@@ -906,6 +906,9 @@ func (r *stageRun) send(archive io.Reader, roots []Root, maxBytes int64, checksu
 	if err == nil && hex.EncodeToString(hash.Sum(nil)) != checksum {
 		err = fail("BACKUP_CHECKSUM", "The backup archive changed while it was being unpacked. No game data was replaced.")
 	}
+	if _, ok := apperr.As(err); err != nil && !ok && !refused && !errors.Is(err, errExtractCut) {
+		err = fail("INVALID_BACKUP", "The backup archive is invalid or truncated.")
+	}
 	return err
 }
 
@@ -931,10 +934,13 @@ func (r *stageRun) whyCut() error {
 	pingErr := r.ping()
 	r.closeAll()
 	extracted := r.wait()
+	if errors.Is(extracted, errStagingCapacity) {
+		return extracted
+	}
 	if r.expired() {
 		return context.Cause(r.deadline)
 	}
-	if errors.Is(extracted, errStagingCapacity) || errors.Is(extracted, errExtraction) {
+	if errors.Is(extracted, errExtraction) {
 		return extracted
 	}
 	return cut(pingErr)
@@ -946,7 +952,9 @@ func (r *stageRun) finish() error {
 	for _, extraction := range r.extractions {
 		extraction.conn.CloseWrite()
 	}
-	if err := r.wait(); r.expired() {
+	if err := r.wait(); errors.Is(err, errStagingCapacity) {
+		return err
+	} else if r.expired() {
 		return context.Cause(r.deadline)
 	} else if errors.Is(err, errInputCut) || errors.Is(err, errExitUnknown) {
 		return cut(r.ping())

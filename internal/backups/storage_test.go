@@ -1,14 +1,19 @@
 package backups
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
@@ -19,6 +24,7 @@ import (
 	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/servers"
+	"github.com/Crunging/Ludock/internal/tarstream"
 )
 
 var ctx = context.Background()
@@ -111,6 +117,15 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 		t.Fatal(logging)
 	}
 	settings := Settings{Destination: destination, MaxBytes: 1 << 30, ReserveBytes: 0}
+	// A folder holding the archive's name fails the rename that publishes it.
+	taken := "5f9619ff-8b86-4011-b42d-00c04fc964ff"
+	os.MkdirAll(filepath.Join(destination, taken+".tar", "kept"), 0o755)
+	if _, _, err := helpers.WriteSnapshot(ctx, context, dataHelper, settings, taken, 1<<30, func() error { return nil }, nil); !errors.Is(err, unix.EISDIR) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, taken+".tar.partial")); !os.IsNotExist(err) {
+		t.Fatal("partial left behind after the rename failed")
+	}
 	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
 	stoppedChecks := 0
 	size, checksum, err := helpers.WriteSnapshot(ctx, context, dataHelper, settings, id, 1<<30,
@@ -172,6 +187,58 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(data, full, "new")); len(entries) != 0 {
 		t.Fatal("wrote past the reserve", entries)
+	}
+	// An archive that ends inside a file fails as one, though its helper
+	// reached the reserve on that file, and the unpack returns only once
+	// that helper, slow to exit, has.
+	truncated := "3f9619ff-8b86-4011-b42d-00c04fc964ff"
+	var archive []byte
+	for _, header := range []tarstream.Header{{Name: "snapshot/", Type: "directory", Mode: 0o755}, {Name: "snapshot/root-0/", Type: "directory", Mode: 0o755},
+		{Name: "snapshot/root-0/world.dat", Type: "file", Mode: 0o644, Size: 1 << 20}} {
+		encoded, _ := tarstream.EncodeHeader(header)
+		archive = append(archive, encoded...)
+	}
+	os.WriteFile(filepath.Join(destination, truncated+".tar"), archive, 0o600)
+	cut := ".ludock-restore-3f9619ff-8b86-4011-b42d-00c04fc964ff"
+	if _, err := helpers.Exec(ctx, writer.Container, helper.Command("restore", helper.RestoreRequest{Root: rootPath, Stage: cut, Operation: "stage"}), nil); err != nil {
+		t.Fatal(err)
+	}
+	var exited atomic.Bool
+	var code atomic.Int64
+	engine.RunHelpers(func(_ *fakedocker.Container, _, args []string, stdin *bufio.Reader, stdout, stderr func([]byte)) (int, bool) {
+		if len(args) == 0 || args[0] != "restore-extract" {
+			return 0, false
+		}
+		var out, errs bytes.Buffer
+		status := helper.Main(args, stdin, &out, &errs)
+		if errs.Len() > 0 {
+			stderr(errs.Bytes())
+		}
+		code.Store(int64(status))
+		time.Sleep(100 * time.Millisecond)
+		exited.Store(true)
+		return status, true
+	})
+	err = helpers.ExtractToStage(ctx, destination, truncated, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, cut, roots, 1<<30, 1<<52, checksum, nil)
+	if !apperr.Is(err, "INVALID_BACKUP") || !exited.Load() || code.Load() != helper.ExtractFullStatus {
+		t.Fatal(err, exited.Load(), code.Load())
+	}
+	engine.RunHelpers(nil)
+	// A check of the requester's access that fails is reported as itself.
+	refused := ".ludock-restore-4f9619ff-8b86-4011-b42d-00c04fc964ff"
+	if _, err := helpers.Exec(ctx, writer.Container, helper.Command("restore", helper.RestoreRequest{Root: rootPath, Stage: refused, Operation: "stage"}), nil); err != nil {
+		t.Fatal(err)
+	}
+	unreachable, checks := errors.New("database unreachable"), 0
+	err = helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, refused, roots, 1<<30, 0, checksum,
+		func() error {
+			if checks++; checks > 1 {
+				return unreachable
+			}
+			return nil
+		})
+	if err != unreachable {
+		t.Fatal(err)
 	}
 	if err := storage.Remove(destination, id, nil); err != nil {
 		t.Fatal(err)
