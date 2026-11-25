@@ -182,7 +182,9 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 	undone := "The restore was undone: the server’s data is as it was. Ludock started the server again."
 	finishedUndo := "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. " +
 		"Anything Ludock moved out of its way went to the folder {aside} beside it."
-	interrupted := "Ludock restarted while this ran. Check the server before trying again."
+	// Work that left the server as it was doesn't ask the owner to check it.
+	interrupted := "Ludock restarted while this ran."
+	check := interrupted + " Check the server before trying again."
 	for _, c := range []struct {
 		name string
 		// status, err, and guidance are the interrupted operation's outcome,
@@ -233,11 +235,11 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		// elsewhere, killed once it set aside what the game wrote meanwhile
 		// and before it journaled that it kept anything.
 		{name: "undo-set-aside", status: ops.Interrupted, guidance: "The server was stopped before this began, so Ludock didn’t start it.",
-			pending: finishedUndo, data: merged(now, setAside), containers: []string{"/mc exited unless-stopped 0000"}},
+			err: check, pending: finishedUndo, data: merged(now, setAside), containers: []string{"/mc exited unless-stopped 0000"}},
 		// The same undo killed later, as it put the previous data back, with
 		// kept journaled.
 		{name: "undo-set-aside-kept", status: ops.Interrupted, guidance: "The server was stopped before this began, so Ludock didn’t start it.",
-			pending: finishedUndo, data: merged(now, setAside), containers: []string{"/mc exited unless-stopped 0000"}},
+			err: check, pending: finishedUndo, data: merged(now, setAside), containers: []string{"/mc exited unless-stopped 0000"}},
 		// A backup written but not published: the partial archive goes.
 		{name: "backup-copying", status: ops.Interrupted,
 			guidance: "Ludock restarted before the backup finished, so there’s no new backup. Ludock started the server again.",
@@ -256,7 +258,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 			data: backedUp, containers: []string{"/mc running unless-stopped 0000"}, sameRun: true},
 		// A restart whose stop was sent and done but not confirmed: recovery
 		// only confirms the stop.
-		{name: "restart-stop-unconfirmed", status: ops.Interrupted, data: backedUp, containers: []string{"/mc exited unless-stopped 0000"},
+		{name: "restart-stop-unconfirmed", status: ops.Interrupted, err: check, data: backedUp, containers: []string{"/mc exited unless-stopped 0000"},
 			stopConfirmed: true},
 		// A restart with a backup, its archive written but not published:
 		// the partial archive goes and the server runs again.
@@ -276,7 +278,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 			data:     backedUp, containers: []string{"/mc running unless-stopped 0000"}},
 		// The replacement started but not yet verified: removed, and the
 		// original kept stopped.
-		{name: "update-started", status: ops.Interrupted,
+		{name: "update-started", status: ops.Interrupted, err: check,
 			guidance: "Ludock restarted while it checked the updated container, so the update was undone and the previous container kept. " +
 				"The server was left stopped, since the new version may already have run and changed the game data. Check the server, then start it.",
 			data: backedUp, containers: []string{"/mc exited unless-stopped 0000"},
