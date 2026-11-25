@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
@@ -157,8 +158,10 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 		want          []string
 		stillDown     bool
 		answersBack   bool
-		// queued: other work is queued while the check within the pause runs.
-		queued bool
+		// late: the server stays stopped within the pause. queued: other work
+		// is queued while the first check that can end the outage runs, within
+		// the pause or, if late, after it.
+		late, queued bool
 	}{
 		{name: "started", alerted: true, act: start, after: "running", health: "healthy", want: []string{down, back}},
 		{name: "started but unhealthy", alerted: true, act: start, after: "running", health: "unhealthy", want: []string{down}, stillDown: true},
@@ -173,6 +176,8 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 			s.Suppress(ctx, id, nil)
 		}},
 		{name: "started within grace", act: start, after: "running"},
+		{name: "started after the pause as other work is queued", alerted: true, act: start, after: "running", health: "healthy", want: []string{down},
+			late: true, queued: true},
 		{name: "started as other work is queued", alerted: true, act: start, after: "running", health: "healthy", want: []string{down}, queued: true},
 		{name: "restarted automatically", silent: true, alerted: true, after: "running", game: GameAnswering, want: []string{silent},
 			act: func(s *Service, id string) {
@@ -199,14 +204,20 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 			c.act(s, server.ID)
 			game = c.game
 			s.Check(ctx, state("exited", ""), now+5_000)
-			if c.queued {
+			queue := func() {
 				hookAt(t, "active", func() {
 					if _, err := (&ops.Runner{DB: s.DB}).Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: server.ID, ActorID: "admin", Kind: "backup"}); err != nil {
 						t.Fatal(err)
 					}
 				})
 			}
-			s.Check(ctx, state(c.after, c.health), now+10_000)
+			within := state(c.after, c.health)
+			if c.late {
+				within = state("exited", "")
+			} else if c.queued {
+				queue()
+			}
+			s.Check(ctx, within, now+10_000)
 			if !slices.Equal(events.events, c.want) {
 				t.Fatal("within the pause:", events.events)
 			}
@@ -215,10 +226,34 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 			release, _ := s.Locks.Acquire([]string{locks.ServerKey(server.ID)}, nil)
 			s.Check(ctx, state(c.after, c.health), now+80_000)
 			release()
-			if found, _ := problem(s, server.ID, now+90_000); found != nil {
-				t.Fatal("outage shown before a check after the pause:", found)
+			var timers []func()
+			afterFunc = func(d time.Duration, f func()) {
+				if d < 29*time.Second || d > 31*time.Second {
+					t.Error("pages told at the wrong time:", d)
+				}
+				timers = append(timers, f)
 			}
-			if found, _ := problem(s, server.ID, now+130_000); (found != nil) != c.stillDown {
+			t.Cleanup(func() { afterFunc = func(d time.Duration, f func()) { time.AfterFunc(d, f) } })
+			changes := 0
+			s.Changed = func(string) { changes++ }
+			for _, at := range []int64{now + 90_000, now + 91_000} {
+				if found, _ := problem(s, server.ID, at); found != nil {
+					t.Fatal("outage shown before a check after the pause:", found)
+				}
+			}
+			// Pages hear when the outage shows again, a minute after the pause,
+			// although no check has judged the server.
+			if hidden := c.stillDown || c.late; (len(timers) == 1) != hidden || len(timers) > 1 {
+				t.Fatal("pages told", len(timers), "times")
+			}
+			for _, f := range timers {
+				f()
+			}
+			if changes != len(timers) {
+				t.Fatal("pages weren't told when the outage shows again")
+			}
+			changes = 0
+			if found, _ := problem(s, server.ID, now+130_000); (found != nil) != (c.stillDown || c.late) {
 				t.Fatal("outage shown with no check:", found)
 			}
 			hookAt(t, "read", func() {
@@ -226,8 +261,9 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 					t.Error("outage shown while the check after the pause runs:", found)
 				}
 			})
-			changes := 0
-			s.Changed = func(string) { changes++ }
+			if c.late && c.queued {
+				queue()
+			}
 			for _, at := range []int64{now + 90_000, now + 100_000, now + 200_000} {
 				s.Check(ctx, state(c.after, c.health), at)
 				if found, _ := problem(s, server.ID, at); (found != nil) != c.stillDown {
