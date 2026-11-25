@@ -414,13 +414,13 @@ func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission a
 	if recovery.StopRecoveryTimedOut || stopped == nil {
 		return "", nil
 	}
-	// A start sent by an earlier attempt took if the run changed.
-	said := runningAgain
-	if recovery.StartRequested {
-		said = started
-	}
+	// Only a start this recovery saw take is saved with both; a newer run
+	// after a start that was only requested may be anyone's.
 	if recovery.StateRestored {
-		return said, nil
+		if recovery.StartRequested {
+			return started, nil
+		}
+		return runningAgain, nil
 	}
 	server, err := j.resolve(ctx, job, permission, true)
 	if err != nil {
@@ -431,7 +431,7 @@ func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission a
 	}
 	restored := func(r *ops.Recovery) { r.StateRestored = true }
 	if server.Container.State == "running" && server.Container.StateSince != *stopped {
-		return said, record(job, "state_restored", restored)
+		return runningAgain, record(job, "state_restored", func(r *ops.Recovery) { r.StateRestored, r.StartRequested = true, false })
 	}
 	if server.Container.Exit == nil || server.Container.Exit.Started != *stopped {
 		return "", nil

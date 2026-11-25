@@ -151,8 +151,9 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 	later := func() string { return time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano) }
 	for _, c := range []struct {
 		name, kind, phase string
-		// settled: the stop's end was saved before Ludock restarted.
-		settled bool
+		// settled: the stop's end was saved before Ludock restarted;
+		// requested: so was an earlier recovery's start, unconfirmed.
+		settled, requested bool
 		// meanwhile is what happened while Ludock was down; run is the start
 		// time of the run the work stopped.
 		meanwhile func(f *fixture, run string)
@@ -174,6 +175,10 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 		{name: "restart, started elsewhere", kind: "restart", phase: "stopping", meanwhile: func(f *fixture, _ string) {
 			f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.StartedAt = later() })
 		}, running: true, guidance: "The server was running again, so Ludock left it as it was."},
+		{name: "restart, recovery's start unconfirmed, then started elsewhere", kind: "restart", phase: "starting", settled: true, requested: true,
+			meanwhile: func(f *fixture, _ string) {
+				f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.StartedAt = later() })
+			}, running: true, guidance: "The server was running again, so Ludock left it as it was."},
 		{name: "restart, run elsewhere and stopped", kind: "restart", phase: "verifying_stop", settled: true,
 			meanwhile: func(f *fixture, _ string) { stopped(f, later()) }},
 		{name: "restart, replaced", kind: "restart", phase: "stopping", meanwhile: func(f *fixture, run string) {
@@ -202,7 +207,7 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 			if c.phase != "saving_world" {
 				recovery.StopStarted, recovery.StopInitialStartedAt = true, &started
 				recovery.StopRecoveryDeadlineAt = time.Now().UnixMilli()
-				recovery.StopSettled = c.settled
+				recovery.StopSettled, recovery.StartRequested = c.settled, c.requested
 			}
 			if c.meanwhile != nil {
 				c.meanwhile(f, run)
