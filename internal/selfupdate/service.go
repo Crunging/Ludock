@@ -350,7 +350,7 @@ func (s *Service) run(ctx context.Context, record Record, plan *update.Plan) {
 		failed(errPull)
 		return
 	}
-	target, err := s.Docker.InspectImage(ctx, plan.Image)
+	target, err := pulledImage(ctx, s.Docker, plan)
 	if err != nil {
 		failed(errPull)
 		return
@@ -492,10 +492,11 @@ func (s *Service) watch(ctx context.Context, record Record) {
 			if s.judge(ctx, record) == nil {
 				return
 			}
-		case err == nil && labels(spec)[operationLabel] == record.ID && spec.State.Status == "exited":
+		case err == nil && labels(spec)[operationLabel] == record.ID && spec.State.Status == "exited" && s.marked(ctx, record.ID):
 			// Stopped by abandon as it recorded its marker, it goes on.
 			s.Docker.Start(ctx, spec.ID)
-		case err == nil && labels(spec)[operationLabel] == record.ID && (spec.State.Status == "created" || time.Since(began) >= handshake):
+		case err == nil && labels(spec)[operationLabel] == record.ID &&
+			(spec.State.Status == "created" || spec.State.Status == "exited" || time.Since(began) >= handshake):
 			if s.abandon(ctx, record, spec.ID) {
 				return
 			}
@@ -508,13 +509,17 @@ func (s *Service) watch(ctx context.Context, record Record) {
 	}
 }
 
+// marked reports that the helper recorded its marker, or that Docker
+// couldn't say.
+func (s *Service) marked(ctx context.Context, operation string) bool {
+	_, err := s.Docker.InspectSpec(ctx, stateName(operation))
+	return !docker.IsNotFound(err)
+}
+
 // abandon ends an update whose helper changed nothing: with no marker once
 // it is stopped, it never got that far. It reports whether it ended it.
 func (s *Service) abandon(ctx context.Context, record Record, helper string) bool {
-	marked := func() bool {
-		_, err := s.Docker.InspectSpec(ctx, stateName(record.ID))
-		return !docker.IsNotFound(err)
-	}
+	marked := func() bool { return s.marked(ctx, record.ID) }
 	if marked() {
 		return false
 	}
@@ -573,11 +578,22 @@ func (s *Service) judge(ctx context.Context, record Record) error {
 		// Its name, which Ludock may find itself by, is the new container's.
 		s.Own.Forget()
 	}
+	if state == StatePutBack {
+		if settled, err := os.ReadFile(filepath.Join(s.DataDir, asideName(record.ID), "settled")); err == nil && strings.TrimSpace(string(settled)) == "kept" {
+			reason += ", and Ludock couldn’t put its data back as it was saved, so it kept the newer data; the save " + SaveName(record.ID) +
+				" is beside it"
+		}
+	}
+	// The outcome is recorded before its evidence goes, so a restart between
+	// the two records it the same way; the next start removes what is left.
+	if err := s.finish(ctx, record, state, reason); err != nil {
+		return err
+	}
 	if err := s.removeMarkers(ctx, record.ID); err != nil {
 		log.Warn("Could not remove a container Ludock's update left; remove it with docker rm")
 	}
 	s.removeLeftovers(record.ID)
-	return s.finish(ctx, record, state, reason)
+	return nil
 }
 
 // removeLeftovers removes the newer data a put-back moved aside, and every
@@ -706,6 +722,13 @@ func (s *Service) Recover(ctx, base context.Context) error {
 	if !record.InProgress() {
 		return s.removeMarkers(ctx, record.ID)
 	}
+	// Startup retries recovery; a watcher already settles this update.
+	s.mu.Lock()
+	_, watched := s.lifts[record.ID]
+	s.mu.Unlock()
+	if watched {
+		return nil
+	}
 	if record.State == StatePreparing {
 		return s.finish(ctx, *record, StateFailed, "Ludock restarted before the update began, so nothing changed.")
 	}
@@ -716,13 +739,7 @@ func (s *Service) Recover(ctx, base context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Startup retries recovery; the update is watched once.
-	s.mu.Lock()
-	_, watched := s.lifts[record.ID]
-	s.mu.Unlock()
-	if !watched {
-		s.hold(record.ID, s.Locks.Hold(errUpdating))
-		go s.watch(base, *record)
-	}
+	s.hold(record.ID, s.Locks.Hold(errUpdating))
+	go s.watch(base, *record)
 	return nil
 }

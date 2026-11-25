@@ -276,7 +276,7 @@ func (h *Helper) create(ctx context.Context, old *docker.ContainerSpec) (id, rea
 		return "", "", err
 	}
 	// The replacement names the tag, which must still be the pulled image.
-	if current, err := h.Docker.InspectImage(ctx, plan.Image); err != nil || current != h.Image {
+	if current, err := pulledImage(ctx, h.Docker, plan); err != nil || current != h.Image {
 		return "", ReasonImage, nil
 	}
 	image, err := h.Docker.InspectImageConfig(ctx, h.Image)
@@ -579,6 +579,19 @@ func (h *Helper) runData(ctx context.Context, old *docker.ContainerSpec, image s
 		err = removeErr
 	}
 	return code, err
+}
+
+// pulledImage is the image ID the plan's tag gives the container's own
+// platform, which the pull fetched.
+func pulledImage(ctx context.Context, client *docker.Client, plan *update.Plan) (string, error) {
+	if running := plan.Spec.ImageManifestDescriptor; running != nil && running.Platform != nil {
+		image, err := client.InspectImageVariant(ctx, plan.Image, *running.Platform)
+		if err != nil {
+			return "", err
+		}
+		return image.ID, nil
+	}
+	return client.InspectImage(ctx, plan.Image)
 }
 
 func labels(spec *docker.ContainerSpec) map[string]string {

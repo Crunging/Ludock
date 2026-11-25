@@ -193,7 +193,6 @@ func (s *Server) authed(handler func(http.ResponseWriter, *http.Request, *Reques
 	}
 }
 
-// admin additionally requires an administrator session.
 // updating reports that Ludock is updating itself, when changes are
 // refused: putting a failed update back restores the data saved before it,
 // which would undo them, such as a sign-out or a password set.
@@ -201,6 +200,7 @@ func (s *Server) updating() bool {
 	return s.App != nil && s.App.SelfUpdate != nil && s.App.SelfUpdate.Updating()
 }
 
+// admin additionally requires an administrator session.
 func (s *Server) admin(handler func(http.ResponseWriter, *http.Request, *Request)) http.HandlerFunc {
 	return s.authed(func(w http.ResponseWriter, r *http.Request, request *Request) {
 		if err := auth.RequireAdmin(request.Principal); err != nil {
