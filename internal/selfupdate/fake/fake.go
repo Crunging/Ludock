@@ -37,9 +37,12 @@ type Options struct {
 
 // Dev are the options for a development daemon, whose Ludock isn't in the
 // container it stands for: that Ludock keeps its data open while its
-// container is "stopped", so putting a version back leaves the data alone.
+// container is "stopped", so putting a version back leaves the data alone
+// and only records that it settled.
 func Dev() Options {
-	return Options{Unhealthy: "sha256:" + strings.Repeat("b", 64), Ready: true, Step: func([]string) (int, bool) { return 0, true }}
+	return Options{Unhealthy: "sha256:" + strings.Repeat("b", 64), Ready: true, Step: func(cmd []string) (int, bool) {
+		return 0, !(len(cmd) > 1 && cmd[0] == "self-update-data" && (cmd[1] == "mark" || cmd[1] == "settled"))
+	}}
 }
 
 // Run installs the helpers on engine.

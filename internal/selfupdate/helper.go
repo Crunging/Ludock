@@ -1,6 +1,7 @@
 package selfupdate
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -274,8 +275,9 @@ func (h *Helper) marker(ctx context.Context) (marker, error) {
 		if original.ID != h.Container {
 			return marker{}, errors.New("another container answers to the previous container's ID")
 		}
-		record := map[string]string{nameLabel: strings.TrimPrefix(original.Name, "/"), policyLabel: string(original.HostConfig["RestartPolicy"]),
-			saveLabel: save}
+		// Docker reports a policy; none would mean no restarts.
+		policy := cmp.Or(string(original.HostConfig["RestartPolicy"]), string(noRestart))
+		record := map[string]string{nameLabel: strings.TrimPrefix(original.Name, "/"), policyLabel: policy, saveLabel: save}
 		if err := h.createMarker(ctx, stateName(h.Operation), stateKind, record); err != nil {
 			return marker{}, err
 		}

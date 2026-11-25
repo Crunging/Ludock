@@ -63,7 +63,9 @@ func DataMain(args []string, dataDir string, stderr io.Writer) int {
 	case args[0] == "back" && len(args) == 2:
 		err = moveBack(dataDir, aside)
 	case args[0] == "mark" && len(args) == 3 && (args[2] == "restored" || args[2] == "kept"):
-		err = writeFile(filepath.Join(aside, "settled"), []byte(args[2]+"\n"))
+		if err = os.MkdirAll(aside, 0o700); err == nil {
+			err = writeFile(filepath.Join(aside, "settled"), []byte(args[2]+"\n"))
+		}
 	default:
 		fmt.Fprintln(stderr, "Usage: ludock self-update-data aside|back|mark <operation> [outcome]")
 		return 2
