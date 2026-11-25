@@ -186,7 +186,7 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 			meanwhile: startedElsewhere, running: true, done: true, guidance: runningAgain},
 		{name: "restart, run elsewhere and stopped", kind: "restart", phase: "verifying_stop", settled: true,
 			meanwhile: func(f *fixture, _ string) { stopped(f, later()) },
-			guidance:  "Something outside Ludock ran the server meanwhile, so Ludock left it stopped."},
+			guidance:  "The server ran again and had stopped when Ludock checked it, so Ludock left it stopped."},
 		{name: "restart, replaced", kind: "restart", phase: "stopping", meanwhile: func(f *fixture, run string) {
 			stopped(f, run)
 			f.game = f.engine.Recreate(f.game, nil)

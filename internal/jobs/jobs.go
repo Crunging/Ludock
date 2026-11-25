@@ -449,7 +449,7 @@ func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission a
 		return "", nil
 	}
 	if server.Container.Exit.Started != *stopped {
-		return "Something outside Ludock ran the server meanwhile, so Ludock left it stopped.", nil
+		return "The server ran again and had stopped when Ludock checked it, so Ludock left it stopped.", nil
 	}
 	if err := j.suppressFor(job)(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.allowedIn(ctx, tx, job, permission) }); err != nil {
 		return "", err

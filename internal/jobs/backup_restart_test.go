@@ -88,8 +88,7 @@ func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 // Ludock is killed while a restart that backs up first waits for the world
 // to save, before anything stopped, after its check of the data left a
 // helper. Recovery leaves the server running, removes the helper, says
-// nothing changed without asking to check the server, and alerts once that
-// there's no new backup.
+// there's no new backup without asking to check the server, and alerts once.
 func TestBackupRestartInterruptedBeforeStop(t *testing.T) {
 	f := setup(t)
 	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
@@ -109,7 +108,7 @@ func TestBackupRestartInterruptedBeforeStop(t *testing.T) {
 	}
 	recovered, _ := f.runner.Get(ctx, job.ID)
 	if want := []string{"mc: " + backupInterrupted}; recovered.Status != ops.Interrupted || recovered.Error != "Ludock restarted while this ran." ||
-		recovered.Result.Guidance != "Ludock restarted before this stopped the server, so nothing changed and there’s no new backup." ||
+		recovered.Result.Guidance != "Ludock restarted before this stopped the server, so there’s no new backup." ||
 		!f.running() || !slices.Equal(f.alerts, want) {
 		t.Fatalf("%+v, alerts %v", recovered, f.alerts)
 	}
