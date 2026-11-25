@@ -221,29 +221,38 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 			if !slices.Equal(events.events, c.want) {
 				t.Fatal("within the pause:", events.events)
 			}
+			// A page reads during the pause, its read done 5 s after it began;
+			// nothing reads or checks again until the outage shows, a minute
+			// after the pause, which pages hear of then.
+			var timers []func()
+			afterFunc = func(d time.Duration, f func()) {
+				if d < 94*time.Second || d > 96*time.Second {
+					t.Error("pages told at the wrong time:", d)
+				}
+				timers = append(timers, f)
+			}
+			clock := db.Now
+			db.Now = func() int64 { return now + 25_000 }
+			t.Cleanup(func() { afterFunc, db.Now = func(d time.Duration, f func()) { time.AfterFunc(d, f) }, clock })
+			changes := 0
+			s.Changed = func(string) { changes++ }
+			problem(s, server.ID, now+20_000)
+			kept, _ := s.Get(ctx, server.ID)
+			if (len(timers) == 1) != kept.State.Notified || len(timers) > 1 {
+				t.Fatal("pages told", len(timers), "times")
+			}
 			// Other work holds the server through the first check after the
 			// pause, which skips it.
 			release, _ := s.Locks.Acquire([]string{locks.ServerKey(server.ID)}, nil)
 			s.Check(ctx, state(c.after, c.health), now+80_000)
 			release()
-			var timers []func()
-			afterFunc = func(d time.Duration, f func()) {
-				if d < 29*time.Second || d > 31*time.Second {
-					t.Error("pages told at the wrong time:", d)
-				}
-				timers = append(timers, f)
-			}
-			t.Cleanup(func() { afterFunc = func(d time.Duration, f func()) { time.AfterFunc(d, f) } })
-			changes := 0
-			s.Changed = func(string) { changes++ }
 			for _, at := range []int64{now + 90_000, now + 91_000} {
 				if found, _ := problem(s, server.ID, at); found != nil {
 					t.Fatal("outage shown before a check after the pause:", found)
 				}
 			}
-			// Pages hear when the outage shows again, a minute after the pause,
-			// although no check has judged the server.
-			if hidden := c.stillDown || c.late; (len(timers) == 1) != hidden || len(timers) > 1 {
+			db.Now = clock
+			if len(timers) > 1 {
 				t.Fatal("pages told", len(timers), "times")
 			}
 			for _, f := range timers {

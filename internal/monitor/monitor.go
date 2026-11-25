@@ -440,14 +440,17 @@ func (s *Service) Problems(ctx context.Context, now int64) (map[string]*Problem,
 		if err != nil {
 			return nil, err
 		}
+		// An outage kept across a pause may have ended in it unseen: it shows
+		// again once a check has looked at the server since the pause ended.
+		waiting := r.suppressed > looked[serverID] && now-r.suppressed < unchecked.Milliseconds()
+		if waiting && r.notified == 1 {
+			s.announceAt(serverID, r.suppressed+unchecked.Milliseconds())
+		}
 		if s.suppressed(serverID, policy, r.suppressed, now, active[serverID]) || r.intentional == 1 ||
 			!r.outage.Valid || r.outage.Int64 == 0 || now-r.outage.Int64 < int64(policy.GraceSeconds)*1000 {
 			continue
 		}
-		// An outage kept across a pause may have ended in it unseen: it shows
-		// again once a check has looked at the server since the pause ended.
-		if r.suppressed > looked[serverID] && now-r.suppressed < unchecked.Milliseconds() {
-			s.announceAt(serverID, r.suppressed+unchecked.Milliseconds(), now)
+		if waiting {
 			continue
 		}
 		last := r.lastState.String
@@ -462,10 +465,11 @@ func (s *Service) Problems(ctx context.Context, now int64) (map[string]*Problem,
 // afterFunc runs f after d; tests replace it.
 var afterFunc = func(d time.Duration, f func()) { time.AfterFunc(d, f) }
 
-// announceAt tells pages once, at deadline, that an outage Problems hides
-// until then shows again, since no check may judge the server first and
-// nothing else would: startup recovery can still be retrying.
-func (s *Service) announceAt(serverID string, deadline, now int64) {
+// announceAt tells pages once, at deadline, that an outage Problems hides,
+// during its pause or after, shows again, since no check may judge the
+// server first and nothing else would: startup recovery can still be
+// retrying.
+func (s *Service) announceAt(serverID string, deadline int64) {
 	s.lookMu.Lock()
 	if s.announced == nil {
 		s.announced = map[string]int64{}
@@ -474,7 +478,7 @@ func (s *Service) announceAt(serverID string, deadline, now int64) {
 	s.announced[serverID] = deadline
 	s.lookMu.Unlock()
 	if due {
-		afterFunc(time.Duration(deadline-now)*time.Millisecond, func() { s.changed(serverID) })
+		afterFunc(time.Duration(deadline-db.Now())*time.Millisecond, func() { s.changed(serverID) })
 	}
 }
 
