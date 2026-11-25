@@ -206,7 +206,7 @@ func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, 
 }
 
 // watchedStep is restoreStep, stopped early once watch fails.
-func (j *Jobs) watchedStep(ctx context.Context, data *backups.DataHelper, root, item string, job *ops.Context, operation string, assertAccess, watch func() error) (map[string]any, error) {
+func (j *Jobs) watchedStep(ctx context.Context, data *backups.DataHelper, root, item string, job *ops.Context, operation string, assertAccess func() error, watch func(context.Context) error) (map[string]any, error) {
 	limit := 2 * time.Minute
 	if operation == helper.RestoreCleanup || operation == helper.RestoreRollbackClean || operation == helper.RestoreSetAside {
 		limit = removalLimit
@@ -619,8 +619,8 @@ func (r *restoreRun) stillSafe() error {
 // notStarted stops a move once something outside Ludock starts the server,
 // so the game doesn't run on data still moving. Other errors wait for the
 // check after the move.
-func (r *restoreRun) notStarted() error {
-	if err := r.j.assertStillStopped(r.ctx, r.server, r.job); errors.Is(err, errServerChanged) {
+func (r *restoreRun) notStarted(ctx context.Context) error {
+	if err := r.j.assertStillStopped(ctx, r.server, r.job); errors.Is(err, errServerChanged) {
 		return err
 	}
 	return nil

@@ -94,9 +94,10 @@ type ExecOptions struct {
 	Settle bool
 	// Poll is how often a settling command is inspected; zero means 250ms.
 	Poll time.Duration
-	// Watch runs every second while a settling command runs. An error from
-	// it stops the helper, as the Limit does, and Exec returns that error.
-	Watch func() error
+	// Watch runs every second while a settling command runs, with a context
+	// that ends before Exec returns. An error from it stops the helper, as
+	// the Limit does, and Exec returns that error.
+	Watch func(context.Context) error
 }
 
 var errOutputLimit = errors.New("helper output exceeded its limit")
@@ -240,7 +241,9 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	})
 	defer stop()
 	if watched != nil {
+		done := make(chan struct{})
 		go func() {
+			defer close(done)
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
 			for {
@@ -248,13 +251,15 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 				case <-deadline.Done():
 					return
 				case <-ticker.C:
-					if err := options.Watch(); err != nil {
+					if err := options.Watch(deadline); err != nil {
 						watched(err)
 						return
 					}
 				}
 			}
 		}()
+		// The watch reads the caller's state, so it ends before Exec does.
+		defer func() { stop(); watched(nil); <-done }()
 	}
 	if options.Input == nil && options.Limit > 0 && !options.Settle {
 		ticker := time.NewTicker(time.Second)
