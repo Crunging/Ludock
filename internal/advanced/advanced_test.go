@@ -56,9 +56,20 @@ func TestApplyIgnoresInvalidSavedProxies(t *testing.T) {
 func TestVerboseLoggingEnds(t *testing.T) {
 	d := dbtest.Open(t)
 	t.Cleanup(func() { logging.SetLevel(logging.LevelInfo) })
-	// On is checked against a time far off, so a slow machine can't reach it
-	// before the check; only then is it brought close.
-	until := time.Now().Add(time.Hour).UnixMilli()
+	// The test's own clock and timer: nothing waits, and the timer is seen
+	// to be armed before its time comes.
+	clock := time.Now()
+	var wait time.Duration
+	var fire func()
+	defer func(savedNow func() time.Time, savedAfter func(time.Duration, func()) *time.Timer) {
+		now, afterFunc = savedNow, savedAfter
+	}(now, afterFunc)
+	now = func() time.Time { return clock }
+	afterFunc = func(d time.Duration, f func()) *time.Timer {
+		wait, fire = d, f
+		return time.NewTimer(time.Hour)
+	}
+	until := clock.Add(time.Hour).UnixMilli()
 	if err := d.SetSetting(ctx, nil, loggingKey, loggingSetting{VerboseUntil: until}); err != nil {
 		t.Fatal(err)
 	}
@@ -67,16 +78,13 @@ func TestVerboseLoggingEnds(t *testing.T) {
 	if logging.CurrentLevel() != logging.LevelDebug || s.Logging(ctx).VerboseUntil != until {
 		t.Fatal(logging.CurrentLevel())
 	}
-	if err := d.SetSetting(ctx, nil, loggingKey, loggingSetting{VerboseUntil: time.Now().Add(50 * time.Millisecond).UnixMilli()}); err != nil {
-		t.Fatal(err)
+	if fire == nil || wait <= 59*time.Minute || wait > time.Hour {
+		t.Fatal("no timer for the end", wait)
 	}
-	s.Apply(ctx)
-	deadline := time.Now().Add(5 * time.Second)
-	for logging.CurrentLevel() != logging.LevelInfo {
-		if time.Now().After(deadline) {
-			t.Fatal("verbose logging stayed on")
-		}
-		time.Sleep(20 * time.Millisecond)
+	clock = clock.Add(wait)
+	fire()
+	if logging.CurrentLevel() != logging.LevelInfo {
+		t.Fatal("verbose logging stayed on")
 	}
 	if s.Logging(ctx).VerboseUntil != 0 {
 		t.Fatal("still reported on")
