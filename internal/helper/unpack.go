@@ -51,6 +51,9 @@ var (
 	errStopped       = errors.New("the unpack was stopped")
 )
 
+// unpackedName is the folder in the staging folder that entries go into.
+const unpackedName = "unpacked"
+
 func unpackName(id string) (string, error) {
 	if !uploadIDPattern.MatchString(id) {
 		return "", errors.New("invalid unpack identifier")
@@ -402,8 +405,8 @@ func (h *fileHelper) removeStage(parent fd, name string) error {
 	if err != nil {
 		return err
 	}
-	// Anything but a folder isn't the staging folder, which was renamed into
-	// place or replaced by the game.
+	// Anything but a folder isn't the staging folder, which the game
+	// replaced.
 	if !isDir(info) {
 		return nil
 	}
@@ -465,12 +468,26 @@ func (h *fileHelper) unpack(parent fd, name string) error {
 	if stageInfo, err = fstat(stage); err != nil {
 		return err
 	}
+	// Entries go into a folder made inside the root-only staging folder, so
+	// the kernel gives it what a new folder beside the archive gets, its
+	// folder's default ACL and setgid included, and no one reaches it before
+	// it has its owner.
+	if err := unix.Mkdirat(int(stage), unpackedName, 0o777); err != nil {
+		return err
+	}
+	unpacked, err := h.t.openAt(stage, unpackedName, directoryFlags, 0)
+	if err != nil {
+		return err
+	}
+	if err := unix.Fchown(int(unpacked), int(owner.Uid), int(owner.Gid)); err != nil {
+		return err
+	}
 	limits := Unpack
 	allowed := limits.Floor
 	if info.Size <= (1<<62-limits.Floor)/max(limits.Ratio, 1) {
 		allowed += info.Size * limits.Ratio
 	}
-	u := &unpacker{h: h, stage: stage, owner: owner, limits: limits, allowed: allowed, reserve: *h.request.Reserve,
+	u := &unpacker{h: h, stage: unpacked, owner: owner, limits: limits, allowed: allowed, reserve: *h.request.Reserve,
 		umask: currentUmask(), buffer: make([]byte, 64*1024)}
 	if err := u.room(0); err != nil {
 		return err
@@ -508,10 +525,10 @@ func (h *fileHelper) unpack(parent fd, name string) error {
 		return err
 	}
 	// Written data is durable before its name appears.
-	if err := unix.Syncfs(int(stage)); err != nil {
+	if err := unix.Syncfs(int(unpacked)); err != nil {
 		return err
 	}
-	result, err := h.finishUnpack(parent, name, stageName, stage, stageInfo, owner, u.umask, u.longest, u.result)
+	result, err := h.finishUnpack(parent, name, stageName, stage, unpacked, stageInfo, u.longest, u.result)
 	if err != nil {
 		return err
 	}
@@ -526,25 +543,17 @@ func (h *fileHelper) isStage(parent fd, name string, stage *unix.Stat_t) bool {
 
 // finishUnpack publishes the result. Once it has a name the unpack has
 // happened, so later steps are best effort.
-func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd, stageInfo, owner *unix.Stat_t, umask, longest int,
+func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage, unpacked fd, stageInfo *unix.Stat_t, longest int,
 	result UnpackResult) (UnpackResult, error) {
-	children, err := names(stage)
+	children, err := names(unpacked)
 	if err != nil {
 		return result, err
 	}
 	// inside is the longest path an entry makes inside the new folder.
-	source, sourceName, base, inside := parent, stageName, unpackBase(archive), longest
+	source, sourceName, base, inside := stage, unpackedName, unpackBase(archive), longest
 	if len(children) == 1 {
-		if info, err := lstatAt(stage, children[0]); err == nil && isDir(info) {
-			source, sourceName, base, inside = stage, children[0], children[0], max(longest-len(children[0])-1, 0)
-		}
-	}
-	if source == parent {
-		if err := createMode(stage, parent, 0o777, umask); err != nil {
-			return result, err
-		}
-		if err := unix.Fchown(int(stage), int(owner.Uid), int(owner.Gid)); err != nil {
-			return result, err
+		if info, err := lstatAt(unpacked, children[0]); err == nil && isDir(info) {
+			source, sourceName, base, inside = unpacked, children[0], children[0], max(longest-len(children[0])-1, 0)
 		}
 	}
 	info, err := lstatAt(source, sourceName)
@@ -589,7 +598,10 @@ func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd
 		result.Name = candidate
 		break
 	}
-	if source == stage && h.isStage(parent, stageName, stageInfo) {
+	if source == unpacked {
+		unix.Unlinkat(int(stage), unpackedName, unix.AT_REMOVEDIR)
+	}
+	if h.isStage(parent, stageName, stageInfo) {
 		unix.Unlinkat(int(parent), stageName, unix.AT_REMOVEDIR)
 	}
 	unix.Fsync(int(parent))

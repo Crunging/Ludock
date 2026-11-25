@@ -334,16 +334,19 @@ func createdACL(folder fd, mode uint32) ([]byte, error) {
 
 // narrowACL caps what an ACL gives the future owner uid at the owner entry's
 // rights, as the mode is when the owner changes: until then that user holds
-// its own named entry, or what a group it may be in or others get. Other
-// named users keep theirs. It returns nil for a value it can't read.
+// its own named entry if it has one, else what a group it may be in or
+// others get. Other named users keep theirs. It returns nil for a value it
+// can't read.
 func narrowACL(value []byte, uid uint32) []byte {
 	entries, err := decodeACL(value)
 	if err != nil {
 		return nil
 	}
 	owner, _ := aclPerm(entries, aclUserObj)
+	named := slices.ContainsFunc(entries, func(entry aclEntry) bool { return entry.tag == aclUser && entry.id == uid })
 	for index, entry := range entries {
-		if entry.tag == aclGroupObj || entry.tag == aclGroup || entry.tag == aclOther || (entry.tag == aclUser && entry.id == uid) {
+		if entry.tag == aclUser && entry.id == uid ||
+			!named && (entry.tag == aclGroupObj || entry.tag == aclGroup || entry.tag == aclOther) {
 			entries[index].perm &= uint16(owner)
 		}
 	}

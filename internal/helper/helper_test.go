@@ -1386,9 +1386,11 @@ func TestUploadKeepsAccessACL(t *testing.T) {
 	reference.Close()
 	sameAsCreated(t, filepath.Join(root, "new.txt"), filepath.Join(root, "reference.txt"),
 		"user::r--,user:4242:rwx,group::rwx,group:4343:rw-,mask::r--,other::---", 0o440)
-	// When the owner changes, what the future owner may hold until then, as
-	// the owning group, a named group, or others, is capped at the owner's
-	// rights; other named users keep what the folder's ACL gives them.
+	// When the owner changes, what the future owner may hold until then, its
+	// own named entry or else what the owning group, a named group, or
+	// others get, is capped at the owner's rights; other named users keep
+	// what the folder's ACL gives them.
+	future := strconv.Itoa(os.Getuid())
 	helperUID = func() int { return -2 }
 	defer func() { helperUID = os.Geteuid }()
 	for index, test := range []struct {
@@ -1397,6 +1399,7 @@ func TestUploadKeepsAccessACL(t *testing.T) {
 	}{
 		{"user::r-x,user:4242:rwx,group::rw-,group:4343:rw-,mask::rwx,other::rw-", "user::r--,user:4242:rwx,group::r--,group:4343:r--,mask::rw-,other::r--", 0o464},
 		{"user::r-x,group::rwx,other::---", "", 0o440},
+		{"user::r-x,user:" + future + ":rwx,group::rw-,mask::rwx,other::rw-", "user::r--,user:" + future + ":r--,group::rw-,mask::rw-,other::rw-", 0o466},
 	} {
 		unix.Setxattr(root, defaultACL, mustACL(t, test.folder), 0)
 		name := "handed-" + strconv.Itoa(index)
