@@ -728,6 +728,16 @@ func TestUploadFolderLimits(t *testing.T) {
 	if err != nil || !apperr.Is(results[0], "UPLOAD_TOO_DEEP") || results[1] != nil {
 		t.Fatal(results, err)
 	}
+	// A file too deep counts no folders toward the batch's.
+	var near []UploadEntry
+	for index := range 77 {
+		near = append(near, UploadEntry{Name: fmt.Sprintf("g%02d/a/b/c.txt", index), Size: 1})
+	}
+	near = append(near, UploadEntry{Name: deep, Size: 1})
+	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", near, strings.NewReader(strings.Repeat("x", len(near))), nil)
+	if err != nil || results[0] != nil || !apperr.Is(results[len(near)-1], "UPLOAD_TOO_DEEP") {
+		t.Fatal(results[0], results[len(near)-1], err)
+	}
 	var spread []UploadEntry
 	for index := range 100 {
 		spread = append(spread, UploadEntry{Name: fmt.Sprintf("f%03d/a/b/c.txt", index)})
@@ -737,6 +747,20 @@ func TestUploadFolderLimits(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.data, "d")); !os.IsNotExist(err) {
 		t.Fatal("made folders for a file too deep", err)
+	}
+	// A folder the upload made and the game then removed isn't asked for
+	// again: only its files are refused, and the rest of the batch goes on.
+	removed := false
+	gone := func() error {
+		if _, err := os.Stat(filepath.Join(f.data, "gone")); err == nil && !removed {
+			removed = os.RemoveAll(filepath.Join(f.data, "gone")) == nil
+		}
+		return nil
+	}
+	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "gone/a.txt", Size: 1}, {Name: "gone/b.txt", Size: 1},
+		{Name: "kept.txt", Size: 1}}, strings.NewReader("abc"), gone)
+	if err != nil || !removed || results[0] == nil || results[1] == nil || results[2] != nil {
+		t.Fatal(results, err)
 	}
 	if _, err := os.Stat(filepath.Join(f.data, "f000")); !os.IsNotExist(err) {
 		t.Fatal("made folders for a batch in too many", err)

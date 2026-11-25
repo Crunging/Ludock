@@ -35,6 +35,9 @@ type FileRequest struct {
 	UploadID    string   `json:"uploadId,omitempty"`
 	// Expected makes an upload replace only this exact existing file.
 	Expected *FileVersion `json:"expected,omitempty"`
+	// List says an upload's prepare or cleanup reads its files from stdin;
+	// without it, prepare is for one file in Path and reads nothing.
+	List bool `json:"list,omitempty"`
 	// Paths are the entries of one folder that a selection acts on.
 	Paths []string `json:"paths,omitempty"`
 	// Mounts are the nested mounts the helper has, which a move can't cross.
@@ -1116,20 +1119,20 @@ func (h *fileHelper) uploadFiles(relative string) error {
 	if err := checkUploadList(relative, h.request.Files, true); err != nil {
 		return err
 	}
-	// Folders whose making failed after the backend approved it, so no file
-	// asks for one again.
-	unmade := map[string]error{}
+	// The folders the backend approved, so no file asks for one again.
+	asked := map[string]error{}
 	h.buffer = make([]byte, 64*1024)
 	for _, file := range h.request.Files {
 		h.part, h.leftover = nil, false
 		opened := len(h.t.open)
 		parts, _ := ownParts(file.Name)
-		err := h.check(path.Join(relative, file.Name), false)
 		// The root and folders are found again for each file, as for a single
-		// upload, in case any was moved or replaced meanwhile.
-		var folder fd
+		// upload, in case any was moved or replaced meanwhile. The file is
+		// checked against exclusions once its folders are there, right before
+		// it is written, since making them waits on the backend.
+		folder, err := h.uploadPin(relative, parts[:len(parts)-1], file.Size, asked)
 		if err == nil {
-			folder, err = h.uploadPin(relative, parts[:len(parts)-1], file.Size, unmade)
+			err = h.check(path.Join(relative, file.Name), false)
 		}
 		if errors.Is(err, errUploadStream) {
 			return err
@@ -1276,9 +1279,10 @@ func (h *fileHelper) readList(relative string) error {
 // batch's folder at relative, without following links. Missing folders are
 // made only if the file fits on the disk they would be made on, each as New
 // folder makes it: after the backend confirms access again, in its parent
-// found again from the root, and checked against exclusions. A folder that
-// failed after approval is in unmade, and isn't asked for again.
-func (h *fileHelper) uploadPin(relative string, dirs []string, size int64, unmade map[string]error) (fd, error) {
+// found again from the root, and checked against exclusions. asked holds
+// each folder the backend approved and how making it went; none is asked
+// for twice, so one made and then removed refuses the file.
+func (h *fileHelper) uploadPin(relative string, dirs []string, size int64, asked map[string]error) (fd, error) {
 	pin := func(depth int) (fd, error) {
 		folder, err := h.pinRoot()
 		if err == nil && relative != "" {
@@ -1291,31 +1295,35 @@ func (h *fileHelper) uploadPin(relative string, dirs []string, size int64, unmad
 	}
 	opened := len(h.t.open)
 	folder, err := pin(0)
-	checked := false
 	for depth := 0; err == nil && depth < len(dirs); depth++ {
 		at := path.Join(append([]string{relative}, dirs[:depth+1]...)...)
-		if failed := unmade[at]; failed != nil {
-			return -1, failed
-		}
 		next, openErr := h.openFolders(folder, dirs[depth:depth+1])
 		if openErr == nil || !isNotExist(openErr) {
 			folder, err = next, openErr
 			continue
 		}
-		// Every missing folder is on the disk of the deepest that exists.
-		if !checked {
-			if err = fits(folder, size); err != nil {
-				break
+		if failed, approved := asked[at]; approved {
+			if failed == nil {
+				failed = errUnsafe
 			}
-			checked = true
+			return -1, failed
+		}
+		// Every missing folder is on the disk of the deepest that exists; one
+		// that doesn't fit the file isn't asked for.
+		if err = fits(folder, size); err != nil {
+			break
 		}
 		h.t.closeFrom(opened)
 		if err = h.confirmFolder(); err != nil {
 			break
 		}
-		// The answer can take a while, and the parent can change meanwhile.
+		// The answer can take a while, and the parent and its disk can change
+		// meanwhile.
 		if folder, err = pin(depth); err == nil {
 			err = h.check(at, false)
+		}
+		if err == nil {
+			err = fits(folder, size)
 		}
 		var owner *unix.Stat_t
 		if err == nil {
@@ -1327,8 +1335,8 @@ func (h *fileHelper) uploadPin(relative string, dirs []string, size int64, unmad
 				next, err = h.openFolders(folder, dirs[depth:depth+1])
 			}
 		}
-		if err != nil && !errors.Is(err, errUploadStream) {
-			unmade[at] = err
+		if !errors.Is(err, errUploadStream) {
+			asked[at] = err
 		}
 		folder = next
 	}
@@ -1647,7 +1655,9 @@ func (h *fileHelper) run() error {
 	case "upload-files":
 		return h.uploadFiles(relative)
 	case "upload-prepare":
-		if err := h.readList(relative); err != nil {
+		if !h.request.List {
+			h.request.Files = nil
+		} else if err := h.readList(relative); err != nil {
 			return err
 		}
 		folder, err := h.pinDirectory(root, relative)
@@ -1693,6 +1703,9 @@ func (h *fileHelper) run() error {
 		}
 		return h.json(UploadPrepared{FileSpace: Space(&stat), Stuck: stuck})
 	case "upload-files-cleanup":
+		if !h.request.List {
+			return errUnsafe
+		}
 		if err := h.readList(relative); err != nil {
 			return err
 		}

@@ -53,12 +53,18 @@ var ErrHelperOutdated = apperr.New("HELPER_IMAGE_OUTDATED", 503,
 	"Ludock’s helper image is older than Ludock, so uploads can’t run. Remove LUDOCK_HELPER_IMAGE, or set it to the image Ludock runs.")
 
 // BatchFolders counts the folders below an upload's folder that files with
-// these paths are in, each folder on the way once.
+// these paths are in, each folder on the way once. A path refused on its own
+// counts none, and counting stops once past UploadBatchFolders.
 func BatchFolders(names []string) int {
 	folders := map[string]bool{}
 	for _, name := range names {
-		for folder := path.Dir(name); folder != "." && folder != "/" && !folders[folder]; folder = path.Dir(folder) {
-			folders[folder] = true
+		if validateUploadName(name) != nil {
+			continue
+		}
+		for folder := path.Dir(name); folder != "." && !folders[folder]; folder = path.Dir(folder) {
+			if folders[folder] = true; len(folders) > helper.UploadBatchFolders {
+				return len(folders)
+			}
 		}
 	}
 	return len(folders)
@@ -232,7 +238,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		// It runs even once the uploader's access is gone.
 		access = &Access{service: s, container: access.container, blocked: access.blocked}
 		_, err := access.exec(context.WithoutCancel(ctx), helper.FileRequest{Operation: "upload-files-cleanup", Root: root.Path,
-			Path: normalized}, launch.ExecOptions{Input: bytes.NewReader(fileList(staged)), Limit: time.Minute})
+			Path: normalized, List: true}, launch.ExecOptions{Input: bytes.NewReader(fileList(staged)), Limit: time.Minute})
 		if err != nil {
 			log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
 		}
@@ -536,8 +542,12 @@ func (a *Access) prepareUpload(ctx context.Context, target Target, root Root, fo
 		files = append(files, helper.UploadFile{Name: name})
 	}
 	// Only a list goes in, so the bound stays a command's without input.
-	out, err := a.exec(ctx, helper.FileRequest{Operation: "upload-prepare", Root: root.Path, Path: folder},
-		launch.ExecOptions{Input: bytes.NewReader(fileList(files)), Limit: time.Minute})
+	// A single file's prepare sends no list, which any helper reads alike.
+	request, options := helper.FileRequest{Operation: "upload-prepare", Root: root.Path, Path: folder}, launch.ExecOptions{Limit: time.Minute}
+	if len(names) > 0 {
+		request.List, options.Input = true, bytes.NewReader(fileList(files))
+	}
+	out, err := a.exec(ctx, request, options)
 	if err != nil {
 		return nil, err
 	}

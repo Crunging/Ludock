@@ -104,6 +104,26 @@ func TestUploadChecks(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"failed","message":"File exceeds the upload size limit of 3 B"`) {
 		t.Fatal("size", response.Code, response.Body.String())
 	}
+	// A batch in more folders than the page sends is refused unread; a file
+	// too deep is refused on its own, counting none of its folders.
+	spread := func(count int, extra string) string {
+		var list []string
+		for index := range count {
+			list = append(list, fmt.Sprintf(`{"name":"f%03d/a/b/c.txt","size":0}`, index))
+		}
+		if extra != "" {
+			list = append(list, `{"name":"`+extra+`","size":0}`)
+		}
+		return `{"files":[` + strings.Join(list, ",") + "]}\n"
+	}
+	headers := map[string]string{"Content-Type": "application/octet-stream", "X-CSRF-Token": csrf}
+	if code := upload(headers, spread(86, "")).Code; code != http.StatusRequestEntityTooLarge {
+		t.Fatal("folders", code)
+	}
+	response = upload(headers, spread(77, strings.Repeat("d/", 40)+"deep.txt"))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "more than 32 folders") {
+		t.Fatal("deep", response.Code, response.Body.String())
+	}
 	// A route ID that is no server's is refused like a hidden server, and its
 	// denial is audited without it.
 	server = strings.Repeat("x", 5000)

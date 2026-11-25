@@ -311,14 +311,14 @@ func TestUploadSweepsStaleStaging(t *testing.T) {
 	// A stream that ends before its list, as from a backend gone before it
 	// sent it, does nothing; so does a list with a file too deep.
 	for _, stdin := range [][]byte{nil, listed(UploadFile{Name: strings.Repeat("a/", UploadDepth+1) + "f"})} {
-		if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root, Blocked: []string{hidden}}, stdin); code == 0 {
+		if _, code := runFile(t, FileRequest{Operation: "upload-prepare", List: true, Root: root, Blocked: []string{hidden}}, stdin); code == 0 {
 			t.Fatal("prepared without a whole list")
 		}
 		if _, err := os.Lstat(filepath.Join(root, stage(0))); err != nil {
 			t.Fatal("swept without a whole list", err)
 		}
 	}
-	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root, Blocked: []string{hidden}}, listed()); code != 0 || largest != 3 {
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", List: true, Root: root, Blocked: []string{hidden}}, listed()); code != 0 || largest != 3 {
 		t.Fatal("prepare", code, "read", largest, "names at once")
 	}
 	for index := range 20 {
@@ -336,7 +336,7 @@ func TestUploadSweepsStaleStaging(t *testing.T) {
 		seen += len(names)
 		return names, err
 	}
-	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root, Blocked: []string{hidden}}, listed()); code != 0 || seen > 5 {
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", List: true, Root: root, Blocked: []string{hidden}}, listed()); code != 0 || seen > 5 {
 		t.Fatal("prepare past the budget", code, seen)
 	}
 	sweepEntries = 10000
@@ -351,7 +351,7 @@ func TestUploadSweepsStaleStaging(t *testing.T) {
 		time.Sleep(30 * time.Millisecond)
 		return names, err
 	}
-	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root, Blocked: []string{hidden}}, listed()); code != 0 {
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", List: true, Root: root, Blocked: []string{hidden}}, listed()); code != 0 {
 		t.Fatal("prepare past its time", code)
 	}
 	if _, err := os.Lstat(old2); err != nil {
@@ -360,11 +360,11 @@ func TestUploadSweepsStaleStaging(t *testing.T) {
 	sweepTime = 2 * time.Second
 	// A folder that can't be read is left unswept, and the upload goes ahead.
 	readNames = func(*os.File, int) ([]string, error) { return nil, unix.EIO }
-	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root}, listed()); code != 0 {
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", List: true, Root: root}, listed()); code != 0 {
 		t.Fatal("a sweep that couldn't read the folder stopped the upload", code)
 	}
 	for _, request := range []FileRequest{
-		{Operation: "upload-files-cleanup", Root: root, Files: []UploadFile{{UploadID: stage(3)[15:51]}}, Blocked: []string{hidden}},
+		{Operation: "upload-files-cleanup", List: true, Root: root, Files: []UploadFile{{UploadID: stage(3)[15:51]}}, Blocked: []string{hidden}},
 		{Operation: "upload-cleanup", Root: root, Path: "server.properties", UploadID: stage(3)[15:51], Blocked: []string{hidden}},
 	} {
 		var stdin []byte
@@ -386,7 +386,7 @@ func TestUploadSweepsStaleStaging(t *testing.T) {
 	below := filepath.Join(root, "sub", stage(40))
 	os.WriteFile(below, []byte("cut off"), 0o600)
 	os.Chtimes(below, old, old)
-	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root}, listed(UploadFile{Name: "sub/new.jar"})); code != 0 {
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", List: true, Root: root}, listed(UploadFile{Name: "sub/new.jar"})); code != 0 {
 		t.Fatal("prepare", code)
 	}
 	if _, err := os.Lstat(below); !os.IsNotExist(err) {
@@ -1579,7 +1579,7 @@ func TestExclusionsHoldByIdentity(t *testing.T) {
 		{Operation: "list", Path: "MODS"},
 		{Operation: "download", Path: "MODS/hidden.txt"},
 		{Operation: "upload", Path: "MODS/new.txt", Size: &size, UploadID: id},
-		{Operation: "upload-prepare", Path: "MODS"},
+		{Operation: "upload-prepare", List: true, Path: "MODS"},
 		{Operation: "mkdir", Path: "MODS/new"},
 		{Operation: "delete", Path: "MODS"},
 		{Operation: "rename", Path: "MODS", Destination: "other"},
@@ -1631,7 +1631,7 @@ func TestExclusionsHoldByIdentity(t *testing.T) {
 			t.Error(request.Operation, "wrote where an exclusion it couldn't find could appear")
 		}
 	}
-	for _, request := range []FileRequest{{Operation: "list"}, {Operation: "mkdir", Path: "world/new"}, {Operation: "upload-prepare", Path: "world"},
+	for _, request := range []FileRequest{{Operation: "list"}, {Operation: "mkdir", Path: "world/new"}, {Operation: "upload-prepare", List: true, Path: "world"},
 		{Operation: "move", Path: "world", Paths: []string{"level.dat"}, Destination: "private"}} {
 		request.Root, request.Blocked = root, missing
 		var stdin []byte
