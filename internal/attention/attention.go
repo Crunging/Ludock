@@ -1,6 +1,7 @@
 // Package attention lists what needs a viewer's attention: unavailable
 // bindings, outages, disk and memory alerts, suspended schedules, recent
-// failed work, and, for administrators, alerts that aren't being delivered.
+// failed work, and, for administrators, alerts that aren't being delivered
+// and a failed update of Ludock.
 package attention
 
 import (
@@ -55,6 +56,8 @@ type Item struct {
 	Undone bool
 	// notifications, with Since and Reason
 	Destination notify.Destination
+	// ludock, with Since and Reason: the version it is still on.
+	Version string
 }
 
 type Result struct {
@@ -74,9 +77,12 @@ type Service struct {
 	Notify *notify.Service
 	// Refresh reconciles discovery first.
 	Refresh func(ctx context.Context) error
+	// Ludock, when set, is a failed update of Ludock itself for
+	// administrators, with Reason, Version, and Since, or nil.
+	Ludock func(ctx context.Context) *Item
 }
 
-var priority = map[string]int{"notifications": 0, "binding": 0, "sharing": 0, "restore": 1, "availability": 1, "disk": 2, "memory": 2, "schedule": 3, "operation": 4}
+var priority = map[string]int{"ludock": 0, "notifications": 0, "binding": 0, "sharing": 0, "restore": 1, "availability": 1, "disk": 2, "memory": 2, "schedule": 3, "operation": 4}
 
 // List reads current authority after discovery: a stale principal never
 // exposes a revoked server's saved history.
@@ -222,6 +228,11 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 			return nil, err
 		}
 		hasVisible = true
+	}
+	if s.Ludock != nil && current != nil && current.Role == db.RoleAdmin {
+		if item := s.Ludock(ctx); item != nil {
+			result.Items = append(result.Items, *item)
+		}
 	}
 	if s.Notify != nil && current != nil && current.Role == db.RoleAdmin {
 		problems, err := s.Notify.Problems(ctx)

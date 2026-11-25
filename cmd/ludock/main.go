@@ -2,6 +2,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,7 +23,9 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/logging"
+	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/web"
 )
 
@@ -48,10 +52,14 @@ func main() {
 		code = healthcheck()
 	case "helper":
 		code = helper.Main(args, os.Stdin, os.Stdout, os.Stderr)
+	case "self-update":
+		code = selfUpdate(args)
+	case "self-update-data":
+		code = selfupdate.DataMain(args, cmp.Or(os.Getenv("LUDOCK_DATA_DIR"), "data"), os.Stderr)
 	case "version", "--version":
 		fmt.Println(version)
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: ludock [serve|recover <username>|restore-data <file>|healthcheck|helper …|version]\n")
+		fmt.Fprintf(os.Stderr, "Usage: ludock [serve|recover <username>|restore-data <file>|healthcheck|helper …|self-update …|version]\n")
 		code = 2
 	}
 	os.Exit(code)
@@ -98,6 +106,7 @@ func serve() int {
 		log.Error(startupError(err, "Could not start Ludock's services."))
 		return 1
 	}
+	services.SelfUpdate.Version = version
 	accounts := services.Auth
 	server := &web.Server{App: services, DB: database, Auth: accounts, ClientIP: services.ClientIP, Docker: services.Docker.Ping, Version: version}
 
@@ -187,6 +196,31 @@ func socketReplaced(ctx context.Context, socket string) <-chan struct{} {
 		}
 	}()
 	return replaced
+}
+
+var (
+	containerID = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	imageID     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+)
+
+// selfUpdate runs the helper that replaces Ludock's container, in its own
+// container from the new image (selfupdate.Version describes the
+// arguments). It removes itself once done; Docker runs it again if it is
+// killed. Arguments it can't read leave nothing to do, so it waits to be
+// removed instead of exiting into its restart policy.
+func selfUpdate(args []string) int {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if len(args) != 4 || args[0] != selfupdate.Version || !containerID.MatchString(args[1]) || !imageID.MatchString(args[2]) ||
+		!identity.ValidID(args[3]) {
+		log.Error("Ludock's update helper got arguments it can't read; remove this container")
+		<-ctx.Done()
+		return 2
+	}
+	client := docker.New(cmp.Or(os.Getenv("LUDOCK_DOCKER_SOCKET"), config.DefaultDockerSocket))
+	(&selfupdate.Helper{Docker: client, Container: args[1], Image: args[2], Operation: args[3]}).Run(ctx)
+	<-ctx.Done()
+	return 0
 }
 
 // shutdownGrace is how long a stopping Ludock waits for running work.

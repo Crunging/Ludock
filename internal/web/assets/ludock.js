@@ -945,9 +945,32 @@
     });
   }
 
+  // data-await-restart: Ludock is replacing itself. The health check stops
+  // answering while it restarts; once it answers again, the page reloads
+  // from the new version. Polling stops if the element goes without a drop,
+  // as when the update ends before Ludock restarts.
+  var awaiting = false;
+  function awaitRestart() {
+    if (awaiting || !document.querySelector("[data-await-restart]")) return;
+    awaiting = true;
+    var dropped = false;
+    var timer = setInterval(function () {
+      if (!dropped && !document.querySelector("[data-await-restart]")) {
+        clearInterval(timer);
+        awaiting = false;
+        return;
+      }
+      fetch("/api/v1/health", { cache: "no-store" }).then(function (response) {
+        if (!response.ok) dropped = true;
+        else if (dropped) window.location.reload();
+      }, function () { dropped = true; });
+    }, 2000);
+  }
+
   // htmx processes each element it adds or morphs.
   document.addEventListener("htmx:after:process", function (event) {
     var root = event.target;
+    awaitRestart();
     collapseLists(root);
     confirmations(root);
     timezones(root);
@@ -955,6 +978,7 @@
   });
 
   onReady(function () {
+    awaitRestart();
     formatTimes();
     collapseLists();
     confirmations();

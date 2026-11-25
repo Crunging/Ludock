@@ -477,21 +477,57 @@ Recreate it without `--rm` to manage it fully.
 
 ### Update Ludock
 
-Ludock doesn't update itself. **Settings** says at the top when a newer image
-is published. In the folder with its `compose.yaml`:
+When a newer image is published for Ludock's tag, **Settings** says so at the
+top and offers **Update Ludock**. An administrator chooses it and confirms:
+
+1. Ludock downloads the new image, with the credentials server updates use
+   (`LUDOCK_DOCKER_CONFIG`), and saves a copy of its data.
+2. A short-lived helper container, started from the new image, stops Ludock
+   and starts the new version beside it under a temporary name.
+3. Once the new version's health check passes, the helper removes the old
+   container, gives the new one Ludock's name and restart policy, and
+   removes itself.
+
+The page waits and comes back by itself on the new version, usually within a
+minute. Game servers keep running throughout. **Settings → System** shows the
+version, and **Activity → Everything** records who updated Ludock, from which
+version to which, and how it ended.
+
+If the new version doesn't start, stops, or doesn't report healthy within 3
+minutes, the helper removes it, puts Ludock's data back as it was saved (the
+new version may already have changed it), and starts the previous container
+again. **Needs attention** then says why. While an update runs no other work
+can start, and Ludock doesn't begin one while other work is queued or
+running. If the helper is stopped or the host restarts partway, Docker runs
+the helper again and it finishes or undoes the update.
+
+The new container keeps everything the old one had: environment, mounts,
+ports, networks and addresses, restart policy, and labels, including
+Compose's, so `docker compose` still treats it as its own. The data copy is
+`ludock-update-<id>.tar` in Ludock's data folder. Ludock keeps the newest one
+and removes older ones; it restores with `ludock restore-data` like any
+[save](#ludocks-own-data).
+
+Settings shows commands instead of the button when Ludock can't update
+itself: outside a container it can find, started with `--rm`, with its health
+check turned off, reaching Docker other than through a mounted socket, with
+its data outside a volume or mounted folder, or sharing a network or
+processes with another container. In the folder with its `compose.yaml`:
 
 ```bash
 docker compose pull ludock
 docker compose up -d ludock
 ```
 
-Its data and your servers stay as they are. Work Ludock is stopped in the
-middle of is recovered at the next start.
+These work any time. Its data and your servers stay as they are, and work
+Ludock is stopped in the middle of is recovered at the next start.
 
 `latest` follows every release. Each release is also published under its
 version, such as `1.2.3`, and moves the shorter tags `1.2` and `1`. To stay
 on one major version, set `image: ghcr.io/crunging/ludock:1` in
-`compose.yaml`. `nightly` is the newest unreleased build.
+`compose.yaml`; **Update Ludock** follows that tag, so it never moves to 2.0.
+`nightly` is the newest unreleased build. An image pinned by digest has
+nothing to update to.
 
 Ludock can't use data from a newer version than the one starting, from a
 pre-1.0 build, or from another program. It says which in its log and on its
@@ -759,6 +795,10 @@ Ludock runs short-lived helper containers from its own image:
   symlinked sources and Docker Desktop path aliases can prevent access. Named
   volumes must use the `local` driver without options that remap the host
   path.
+- **The update helper** runs from the image Ludock just pulled, with only
+  Docker's socket mounted as Ludock's own is, and no network. Putting the
+  previous version back runs its data steps in short containers with only
+  Ludock's data mount.
 - **Console, player, and status-check helpers** share the game container's
   network and connect on `127.0.0.1`, so console and query ports needn't be
   published. A console password reaches its helper over standard input.

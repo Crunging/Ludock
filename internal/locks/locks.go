@@ -51,6 +51,8 @@ type Table struct {
 	released chan struct{}
 	drained  []chan struct{}
 	fences   int
+	// holds are the reasons of Hold calls not yet lifted.
+	holds []error
 }
 
 var Default = New()
@@ -83,6 +85,28 @@ func (t *Table) Fence() (lift func()) {
 			t.mu.Lock()
 			defer t.mu.Unlock()
 			t.fences--
+			t.wakeLocked()
+		})
+	}
+}
+
+// Hold refuses Acquire with reason until lifted, as Fence does, also for
+// recovery: Ludock replacing itself must not be stopped with work running.
+func (t *Table) Hold(reason error) (lift func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.holds = append(t.holds, reason)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			for index, held := range t.holds {
+				if held == reason {
+					t.holds = append(t.holds[:index], t.holds[index+1:]...)
+					break
+				}
+			}
 			t.wakeLocked()
 		})
 	}
@@ -175,6 +199,9 @@ func (t *Table) acquire(keys []string, background func(), recovering bool) (func
 	sort.Strings(ordered)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if len(t.holds) > 0 {
+		return nil, t.holds[0]
+	}
 	if t.fences > 0 && !recovering {
 		return nil, ErrRecovering
 	}

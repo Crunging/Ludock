@@ -51,6 +51,10 @@ func (e *Engine) create(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 	e.mu.Lock()
 	imageID, known := e.images[body.Image]
+	// Docker creates from any local image by its ID.
+	if !known && strings.HasPrefix(body.Image, "sha256:") {
+		imageID, known = body.Image, true
+	}
 	defaults := e.imageConfigs[imageID]
 	taken := name != "" && e.find(name) != nil
 	e.Creates = append(e.Creates, body)
@@ -85,6 +89,7 @@ func (e *Engine) create(w http.ResponseWriter, r *http.Request) {
 		c.CreateRequest, c.ExtraConfig, c.HostConfig, c.Networks = body, config, host, networking.EndpointsConfig
 		c.Platform = r.URL.Query().Get("platform")
 		c.Mounts = append(c.Mounts, mounts...)
+		c.State.Status, c.State.StartedAt = "created", "0001-01-01T00:00:00Z"
 	})
 	e.mu.Lock()
 	hang := e.HangCreates > 0
@@ -257,8 +262,11 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 			}
 		}
 		e.emitLocked("start", id)
-		hook := e.OnStart
+		hook, run := e.OnStart, e.Starts[c.CreateRequest.Labels["ludock.internal"]]
 		e.mu.Unlock()
+		if run != nil {
+			run(c)
+		}
 		if hook != nil {
 			hook(c)
 		}

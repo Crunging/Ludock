@@ -227,6 +227,9 @@ func (c *Checks) Forget(serverID string) {
 	}
 }
 
+// ForgetSelf is Forget for Ludock's own image.
+func (c *Checks) ForgetSelf() { c.Forget(selfID) }
+
 func jitter(base, spread time.Duration) int64 {
 	return (base - spread/2 + rand.N(spread)).Milliseconds()
 }

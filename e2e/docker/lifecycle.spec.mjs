@@ -1,9 +1,10 @@
 // The built image against real Docker: the shell and logs, image updates,
-// cleanup when Ludock starts, and account recovery.
+// Ludock updating itself, cleanup when Ludock starts, and account recovery.
 import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { test, expect, asAdmin, openServer, expectOperationSucceeded } from "../journeys/fixtures.mjs";
-import { docker, gameImage, ludock, game, stack, gameContainer, healthy } from "../docker-setup.mjs";
+import { test, expect, asAdmin, admin, openServer, expectOperationSucceeded, expectOffline } from "../journeys/fixtures.mjs";
+import { docker, gameImage, ludock, game, stack, gameContainer, healthy, ludockImage, nextImage } from "../docker-setup.mjs";
 
 asAdmin();
 
@@ -58,6 +59,122 @@ test("an update recreates the server with its settings and unnamed volume", asyn
   const plan = spawnSync("docker", [...game(), "up", "--detach", "--dry-run", "game"], { encoding: "utf8" });
   expect(plan.status).toBe(0);
   expect(plan.stdout + plan.stderr).not.toMatch(/Recreat/);
+});
+
+// A registry on the host, which Docker trusts over plain HTTP on localhost.
+const registry = "localhost:5000/ludock";
+
+/** Points the registry's e2e tag at what another of its tags holds, leaving local tags alone. */
+async function publish(from) {
+  const accept = ["application/vnd.oci.image.index.v1+json", "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json", "application/vnd.docker.distribution.manifest.v2+json"].join(", ");
+  const manifest = await fetch(`http://127.0.0.1:5000/v2/ludock/manifests/${from}`, { headers: { Accept: accept } });
+  expect(manifest.ok).toBe(true);
+  const put = await fetch("http://127.0.0.1:5000/v2/ludock/manifests/e2e", { method: "PUT",
+    headers: { "Content-Type": manifest.headers.get("content-type") }, body: Buffer.from(await manifest.arrayBuffer()) });
+  expect(put.status).toBe(201);
+}
+
+const ludockContainers = () => docker("ps", "--all", "--quiet", "--no-trunc", "--filter", "label=com.docker.compose.project=ludocktest-e2e-ludock",
+  "--filter", "label=com.docker.compose.service=ludock").split("\n").filter(Boolean);
+const inspect = (id) => JSON.parse(docker("inspect", id))[0];
+const mounts = (container) => container.Mounts.map((mount) => `${mount.Type} ${mount.Name || mount.Source} ${mount.Destination}`).sort();
+const composeLabels = (container) => Object.fromEntries(Object.entries(container.Config.Labels)
+  .filter(([key]) => key.startsWith("com.docker.compose.") && key !== "com.docker.compose.image"));
+
+/** Presses Update Ludock once Settings offers it, and confirms. */
+async function updateLudock(page) {
+  const check = page.locator("#ludock-check");
+  const notice = page.locator("#ludock-notice");
+  // Manual checks are 10 seconds apart.
+  await expect(async () => {
+    await page.goto("/settings");
+    const advanced = page.locator("#advanced-settings");
+    if (!(await advanced.evaluate((details) => details.open))) await advanced.locator(":scope > summary").click();
+    await check.getByRole("button", { name: "Check now" }).click({ timeout: 2_000 });
+    await expect(notice.getByRole("button", { name: "Update Ludock" })).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 60_000, intervals: [1_000, 3_000] });
+  expectOffline(page);
+  await notice.getByRole("button", { name: "Update Ludock" }).click();
+  await page.getByRole("dialog", { name: "Update Ludock?" }).getByRole("button", { name: "Update Ludock" }).click();
+  await expect(notice).toContainText("Ludock is updating.");
+  return notice;
+}
+
+// Ludock runs from a tag in a registry, which then points to a build that
+// reports another version. Update Ludock replaces its container through a
+// helper and the page comes back on the new version, with the game left
+// running. A version whose health check never passes is then put back.
+test("Ludock updates itself, and puts itself back when the new version fails", async ({ page }) => {
+  test.skip(!nextImage, "LUDOCK_TEST_NEXT_IMAGE names a second build of the image");
+  test.setTimeout(600_000);
+  docker("run", "--detach", "--name", "ludocktest-registry", "--publish", "127.0.0.1:5000:5000", "registry:2");
+  try {
+    await expect.poll(async () => (await fetch("http://127.0.0.1:5000/v2/").catch(() => ({ ok: false }))).ok, { timeout: 30_000 }).toBe(true);
+    for (const [local, tag] of [[ludockImage, "e2e"], [nextImage, "next"]]) {
+      docker("tag", local, `${registry}:${tag}`);
+      docker("push", `${registry}:${tag}`);
+    }
+    // Ludock runs from the registry's tag, as from ghcr.io.
+    const override = join(stack(), "..", "..", "compose.registry.yaml");
+    writeFileSync(override, `services:\n  ludock:\n    image: ${registry}:e2e\n    pull_policy: missing\n`);
+    docker(...ludock(), "-f", override, "up", "--detach", "ludock");
+    await expect.poll(healthy, { timeout: 60_000 }).toBe(true);
+    const [original] = ludockContainers();
+    const before = inspect(original);
+    const gameStarted = inspect(gameContainer()).State.StartedAt;
+    const nextID = inspect(nextImage).Id;
+
+    await publish("next");
+    const notice = await updateLudock(page);
+    // The page reloads once the new version answers.
+    await expect(notice).toContainText("Ludock was updated from version dev to e2e-next.", { timeout: 180_000 });
+    await page.goto("/settings/system");
+    await expect(page.locator("dd", { hasText: "e2e-next" })).toBeVisible();
+    const [replaced, ...others] = ludockContainers();
+    expect(others).toEqual([]);
+    const after = inspect(replaced);
+    expect(after.Id).not.toBe(original);
+    expect(after.Image).toBe(nextID);
+    expect(after.Name).toBe(before.Name);
+    expect(after.State.Running).toBe(true);
+    expect(mounts(after)).toEqual(mounts(before));
+    expect(composeLabels(after)).toEqual(composeLabels(before));
+    expect(after.HostConfig.RestartPolicy).toEqual(before.HostConfig.RestartPolicy);
+    expect(inspect(gameContainer()).State.StartedAt).toBe(gameStarted);
+    expect(docker("ps", "--all", "--quiet", "--filter", "name=ludock-self-update-")).toBe("");
+    // Compose sees the new container as its own.
+    const plan = spawnSync("docker", [...ludock(), "-f", override, "up", "--detach", "--dry-run", "ludock"], { encoding: "utf8" });
+    expect(plan.status).toBe(0);
+    expect(plan.stdout + plan.stderr).not.toMatch(/Recreat/);
+    await page.goto("/activity?show=everything&action=Updated Ludock");
+    const entry = page.locator(".audit-entry").first();
+    await expect(entry).toContainText("Updated Ludock from dev to e2e-next");
+    await expect(entry).toContainText("Succeeded");
+    await expect(entry).toContainText(admin.username);
+
+    // A version whose health check never passes.
+    const draft = docker("create", nextImage);
+    docker("commit", "--change", 'HEALTHCHECK --interval=1s --timeout=2s --retries=1 CMD ["/bin/false"]', draft, `${registry}:unhealthy`);
+    docker("rm", draft);
+    docker("push", `${registry}:unhealthy`);
+    await publish("unhealthy");
+    const failing = await updateLudock(page);
+    await expect(failing).toContainText("Ludock couldn’t update itself: the new version reported itself unhealthy. It is still on version e2e-next.",
+      { timeout: 180_000 });
+    const [kept, ...extra] = ludockContainers();
+    expect(extra).toEqual([]);
+    expect(kept).toBe(replaced);
+    expect(inspect(kept).Image).toBe(nextID);
+    expect(inspect(kept).State.Running).toBe(true);
+    expect(inspect(gameContainer()).State.StartedAt).toBe(gameStarted);
+    expect(docker("ps", "--all", "--quiet", "--filter", "name=ludock-self-update-")).toBe("");
+    await page.goto("/");
+    await expect(page.locator(".needs-attention__list li", { hasText: "Ludock’s update didn’t finish" }))
+      .toContainText("The new version reported itself unhealthy, so Ludock is still on version e2e-next");
+  } finally {
+    docker("rm", "--force", "ludocktest-registry");
+  }
 });
 
 // A file command interrupted by a restart may still be writing through its

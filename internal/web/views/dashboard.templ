@@ -619,6 +619,8 @@ func describeAttention(item attention.Item) attentionText {
 	switch item.Kind {
 	case "notifications":
 		return attentionText{"Alerts aren’t reaching " + item.Destination.Label(), DestinationURL(item.Destination), "Check " + item.Destination.Label()}
+	case "ludock":
+		return attentionText{"Ludock’s update didn’t finish", "/settings", "Open Settings"}
 	case "operation":
 		title := Capitalize(item.OperationKind) + " " + item.Status
 		if item.Undone {
@@ -665,8 +667,11 @@ func renamedTo(view AttentionView, item attention.Item) *TakeOver {
 
 // attentionSubject is what an item is about: its server, or notifications.
 func attentionSubject(item attention.Item) string {
-	if item.Kind == "notifications" {
+	switch item.Kind {
+	case "notifications":
 		return "Notifications"
+	case "ludock":
+		return "Ludock"
 	}
 	return item.ServerName
 }
@@ -675,6 +680,11 @@ templ attentionDetail(item attention.Item) {
 	switch item.Kind {
 		case "notifications":
 			<span class="muted">Last tried @Time(item.Since, "", "")<span>.</span> { item.Reason }</span>
+		case "ludock":
+			<span class="muted">
+				@Time(item.Since, "", "")
+				<span>· { Capitalize(strings.TrimSuffix(item.Reason, ".")) }, so Ludock is still on version { item.Version }. Try again later. To see what goes wrong, update it from a terminal with <code>docker compose pull ludock</code> and <code>docker compose up -d ludock</code>, then read <code>docker compose logs ludock</code>.</span>
+			</span>
 		case "operation":
 			<span class="muted">
 				@Time(item.UpdatedAt, "", "")

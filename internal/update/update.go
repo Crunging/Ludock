@@ -62,6 +62,13 @@ func (s *Service) Check(ctx context.Context, server *servers.Context) (*Plan, er
 	return s.check(ctx, server, nil, true)
 }
 
+// CheckContainer is Check for a container that isn't a server, such as
+// Ludock's own. dependents also scans the host for containers sharing its
+// namespaces.
+func (s *Service) CheckContainer(ctx context.Context, id string, dependents bool) (*Plan, error) {
+	return s.check(ctx, &servers.Context{Container: servers.Container{ID: id}}, nil, dependents)
+}
+
 // Recheck checks the server again, as Check does, keeping what earlier read
 // that Docker may since have dropped: the old image's defaults, which a pull
 // can remove, and each network's MAC and address, which a stop clears.

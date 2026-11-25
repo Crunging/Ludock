@@ -41,6 +41,8 @@ const (
 // answer has the rest.
 type Info struct {
 	Answer Answer
+	// ID is the container's full ID.
+	ID string
 	// Image is the content-addressed image ID.
 	Image  string
 	Mounts []identity.Mount
@@ -88,7 +90,7 @@ func (c *Container) Read(ctx context.Context) (Info, error) {
 			if err != nil {
 				return Info{}, err
 			}
-			answer = Info{Answer: Found, Image: info.Image, Mounts: identity.DockerMounts(info)}
+			answer = Info{Answer: Found, ID: info.ID, Image: info.Image, Mounts: identity.DockerMounts(info)}
 		}
 	}
 	c.mu.Lock()
@@ -98,6 +100,14 @@ func (c *Container) Read(ctx context.Context) (Info, error) {
 	known = c.known
 	c.mu.Unlock()
 	return clone(*known), nil
+}
+
+// Forget drops the remembered answer, after an update gave Ludock's name to
+// a new container.
+func (c *Container) Forget() {
+	c.mu.Lock()
+	c.known = nil
+	c.mu.Unlock()
 }
 
 func clone(info Info) Info {

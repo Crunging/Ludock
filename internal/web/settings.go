@@ -61,6 +61,7 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request, request *R
 		Advanced: views.AdvancedSettings{Upload: s.uploadLimitView(r), Logging: s.loggingView(r),
 			Proxies: s.proxyView(r)},
 		Ludock: s.App.Checks.SelfStatus(r.Context()),
+		Offer:  s.App.SelfUpdate.Offer(r.Context()),
 	}
 	healths := s.notificationHealth(r.Context())
 	for _, configuration := range s.App.Notify.Configurations(r.Context()) {
@@ -157,7 +158,25 @@ func (s *Server) checkLudock(w http.ResponseWriter, r *http.Request, request *Re
 	if !s.App.Checks.Enabled(r.Context()) {
 		check = nil
 	}
-	render(w, r, http.StatusOK, views.LudockCheckSaved(check))
+	render(w, r, http.StatusOK, views.LudockCheckSaved(check, s.App.SelfUpdate.Offer(r.Context())))
+}
+
+// updateLudock starts updating Ludock itself; the notice then waits for it.
+func (s *Server) updateLudock(w http.ResponseWriter, r *http.Request, request *Request) {
+	err := s.App.SelfUpdate.Start(r.Context(), request.User().ID, request.Principal.TokenHash, request.Client.IP)
+	if s.adminRefused(w, r, request, err) {
+		return
+	}
+	offer := s.App.SelfUpdate.Offer(r.Context())
+	if err != nil {
+		offer.Reason, _ = apperr.Public(err)
+	}
+	render(w, r, http.StatusOK, views.LudockNotice(s.App.Checks.SelfStatus(r.Context()), offer))
+}
+
+// ludockUpdate is the notice again, which a waiting page polls.
+func (s *Server) ludockUpdate(w http.ResponseWriter, r *http.Request, request *Request) {
+	s.renderAdmin(w, r, request, http.StatusOK, views.LudockNotice(s.App.Checks.SelfStatus(r.Context()), s.App.SelfUpdate.Offer(r.Context())))
 }
 
 func (s *Server) saveImageUpdateSettings(w http.ResponseWriter, r *http.Request, request *Request) {
@@ -183,7 +202,7 @@ func (s *Server) saveImageUpdateSettings(w http.ResponseWriter, r *http.Request,
 	}
 	ludock := s.App.Checks.SelfStatus(r.Context())
 	// SelfStatus waits on Docker; the session may have lost the role meanwhile.
-	s.renderAdmin(w, r, request, status, views.ImageUpdateSettingsSaved(u, ludock))
+	s.renderAdmin(w, r, request, status, views.ImageUpdateSettingsSaved(u, ludock, s.App.SelfUpdate.Offer(r.Context())))
 }
 
 func (s *Server) uploadLimitView(r *http.Request) views.UploadLimitSettings {

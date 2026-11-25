@@ -13,6 +13,7 @@ import (
 	"github.com/Crunging/Ludock/internal/jobs"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -344,4 +345,16 @@ func BrowserName(userAgent string) string {
 		return "A browser on " + system
 	}
 	return "Unknown browser"
+}
+
+// recentUpdate reports an update of Ludock that ended in the last day.
+func recentUpdate(last *selfupdate.Record) bool {
+	return last != nil && !last.InProgress() && time.Since(time.UnixMilli(last.FinishedAt)) < 24*time.Hour
+}
+
+func ludockUpdated(record selfupdate.Record) string {
+	if record.To != "" && record.To != record.From {
+		return "Ludock was updated from version " + record.From + " to " + record.To + "."
+	}
+	return "Ludock was updated to the newest image its tag points to."
 }

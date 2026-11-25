@@ -38,8 +38,14 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	e.mu.Lock()
 	e.Requests = append(e.Requests, r.Method+" "+r.URL.Path)
-	injected, hang := e.faultLocked(r.Method+" "+r.URL.Path), e.Hang
+	injected, hang, intercept := e.faultLocked(r.Method+" "+r.URL.Path), e.Hang, e.Intercept
 	e.mu.Unlock()
+	if intercept != nil {
+		if status := intercept(r); status != 0 {
+			fail(w, status)
+			return
+		}
+	}
 	if hang != nil && hang(r.Method+" "+r.URL.Path) {
 		io.Copy(io.Discard, r.Body)
 		<-r.Context().Done()

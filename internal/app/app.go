@@ -33,6 +33,7 @@ import (
 	"github.com/Crunging/Ludock/internal/resources"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/self"
+	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
 )
@@ -68,6 +69,8 @@ type App struct {
 	Updates   *update.Service
 	Players   *players.Service
 	Checks    *update.Checks
+	// SelfUpdate updates Ludock's own container; its Version is set by main.
+	SelfUpdate *selfupdate.Service
 
 	tick       sync.Mutex
 	sampling   sync.Mutex
@@ -140,6 +143,14 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 		Sessions:  &console.Sessions{DB: database, Authz: authorization, Identity: store, Servers: serverService, Locks: table, Runtime: runtime},
 		Resources: &resources.Service{DB: database, Identity: store, Authz: authorization, Sample: serverService.Sample},
 		stop:      make(chan struct{})}
+	a.SelfUpdate = &selfupdate.Service{DB: database, Docker: client, Own: own, Updates: updates, Checks: checks, Locks: table,
+		Notify: notifications.Notify, DataDir: cfg.DataDir, Socket: cfg.DockerSocket,
+		Snapshot: func(ctx context.Context) (*db.Snapshot, error) {
+			// Saves share a work folder that each new one clears.
+			a.saving.Lock()
+			defer a.saving.Unlock()
+			return database.Snapshot(ctx)
+		}}
 	a.Events = &events.Hub{Docker: client, Identity: store, Authz: authorization, Refresh: func(ctx context.Context) error {
 		_, err := serverService.RefreshNow(ctx)
 		return err
@@ -167,6 +178,13 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 			_, err := serverService.Refresh(ctx)
 			return err
 		}}
+	a.Attention.Ludock = func(ctx context.Context) *attention.Item {
+		failed := a.SelfUpdate.Failed(ctx)
+		if failed == nil {
+			return nil
+		}
+		return &attention.Item{ID: "ludock:" + failed.ID, Kind: "ludock", Since: failed.FinishedAt, Reason: failed.Reason, Version: failed.From}
+	}
 	return a, nil
 }
 
@@ -195,6 +213,9 @@ func (a *App) Start(ctx context.Context) {
 			return err
 		}
 		if err := a.Files.RemoveStages(ctx, a.fileTarget); err != nil {
+			return err
+		}
+		if err := a.SelfUpdate.Recover(ctx, ctx); err != nil {
 			return err
 		}
 		return a.Runner.Start(ctx, lift)

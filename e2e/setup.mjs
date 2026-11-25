@@ -87,7 +87,7 @@ async function startStack(bin, dir, port, { found = false, children = [] } = {})
   // for second copies.
   const backups = join(dir, "backups") + ":" + join(dir, "copies");
   const mounted = found ? backups + ":" + join(dir, "found") : backups;
-  const fake = start(join(bin, "fakedocker"), ["-dir", dockerDir, "-backups", mounted], {}, "fakedocker");
+  const fake = start(join(bin, "fakedocker"), ["-dir", dockerDir, "-backups", mounted, "-data", join(dir, "data")], {}, "fakedocker");
   children.push(fake);
   const socket = join(dockerDir, "docker.sock");
   await waitFor(() => existsSync(socket), "the fake Docker socket", fake);

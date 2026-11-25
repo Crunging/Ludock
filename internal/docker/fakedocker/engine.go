@@ -68,6 +68,9 @@ type Engine struct {
 	// the logs a helper process would print; OnStop when one stops.
 	OnStart func(c *Container)
 	OnStop  func(c *Container)
+	// Starts runs a helper container's process when it starts, by its
+	// ludock.internal label, under no lock and before OnStart.
+	Starts map[string]func(c *Container)
 	// OnPull runs, under no lock, before an image pull answers.
 	OnPull func(reference string)
 	// AddGame adds a fake game server for POST /fake/game, or reports false
@@ -100,6 +103,9 @@ type Engine struct {
 	Hang func(request string) bool
 	// Requests records "METHOD path" for each request.
 	Requests []string
+	// Intercept sees each Engine API request before it is served, under no
+	// lock, and fails it with a status other than 0.
+	Intercept func(r *http.Request) int
 	// Creates records each container create body.
 	Creates []docker.ContainerCreate
 	// RegistryAuth records the X-Registry-Auth header of each registry lookup.
