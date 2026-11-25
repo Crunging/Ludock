@@ -45,7 +45,11 @@ func selection(target Target, rootID, folder string, names []string) (Root, stri
 		if size += len(name); size > selectionBytes || slices.Contains(names[:index], name) {
 			return Root{}, "", nil, Error("INVALID_SELECTION", 400)
 		}
-		paths = append(paths, joinRelative(normalized, name))
+		joined, err := joinChecked(normalized, name)
+		if err != nil {
+			return Root{}, "", nil, err
+		}
+		paths = append(paths, joined)
 	}
 	return root, normalized, paths, nil
 }
@@ -79,9 +83,12 @@ func (s *Service) Move(ctx context.Context, target Target, rootID, folder string
 	if destination == normalized {
 		return Error("MOVE_SAME_FOLDER", 400)
 	}
-	for _, item := range paths {
+	for index, item := range paths {
 		if Within(destination, item) {
 			return Error("MOVE_INTO_ITSELF", 400)
+		}
+		if _, err := joinChecked(destination, names[index]); err != nil {
+			return err
 		}
 	}
 	access, err := s.Acquire(ctx, target, root, false, assertAccess)

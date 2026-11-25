@@ -74,13 +74,15 @@ func TestFileSaveNeedsWriteGrant(t *testing.T) {
 	}
 }
 
-// Forged uploads: without the CSRF token, as another type, or with a file
-// over the size limit, which the page never sends.
+// Forged uploads: without the CSRF token, as another type, with a file over
+// the size limit, which the page never sends, or to a server ID that isn't
+// one.
 func TestUploadChecks(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
+	server := p.server
 	upload := func(headers map[string]string, body string) *httptest.ResponseRecorder {
-		request, _ := http.NewRequest("PUT", "http://panel.example/files/"+p.server+"/upload?root=0", strings.NewReader(body))
+		request, _ := http.NewRequest("PUT", "http://panel.example/files/"+server+"/upload?root=0", strings.NewReader(body))
 		request.AddCookie(&http.Cookie{Name: auth.SessionCookie, Value: p.admin.Token})
 		for name, value := range headers {
 			request.Header.Set(name, value)
@@ -100,6 +102,21 @@ func TestUploadChecks(t *testing.T) {
 	response := upload(map[string]string{"Content-Type": "application/octet-stream", "X-CSRF-Token": csrf}, `{"files":[{"name":"a.txt","size":4}]}`+"\nfour")
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"failed","message":"File exceeds the upload size limit of 3 B"`) {
 		t.Fatal("size", response.Code, response.Body.String())
+	}
+	// A route ID that is no server's is refused like a hidden server, and its
+	// denial is audited without it.
+	server = strings.Repeat("x", 5000)
+	if code := upload(map[string]string{"Content-Type": "application/octet-stream", "X-CSRF-Token": csrf}, "").Code; code != http.StatusNotFound {
+		t.Fatal("forged server", code)
+	}
+	var longest int
+	p.app.DB.QueryRow(`SELECT COALESCE(MAX(LENGTH(target_id)), 0) FROM audit_log WHERE action = 'authorization.denied'`).Scan(&longest)
+	if longest > 36 {
+		t.Fatal("audited a forged server ID of", longest, "bytes")
+	}
+	long := "/fragments/files/" + p.server + "/dialog?action=delete&root=0&path=" + strings.Repeat("d", 4097)
+	if code := p.do("GET", long, p.admin, nil, map[string]string{"HX-Request": "true"}).Code; code != http.StatusBadRequest {
+		t.Fatal("opened a dialog for a path past the bound", code)
 	}
 }
 
@@ -212,6 +229,7 @@ func TestUploadFollowsGrant(t *testing.T) {
 	}
 	stale := filepath.Join(data, ".ludock-upload-6f9619ff-8b86-4011-b42d-00c04fc964ff.tmp")
 	os.WriteFile(stale, []byte("cut off"), 0o600)
+	os.Chtimes(stale, time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour))
 	var batch []string
 	for index := range 20 {
 		batch = append(batch, fmt.Sprintf("mod-%d.jar", index))

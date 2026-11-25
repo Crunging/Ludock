@@ -685,11 +685,15 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 		return err
 	}
 	// The destination must be as it was, the folder, found again from the
-	// root by its path, still the one written into (a rename while the file
-	// arrived could have moved it out of the root), and the staging name,
+	// root by its path, still the one written into, and the staging name,
 	// which publishing goes by, still the inode written. Checked before the
-	// game may read the file and again right before publishing; a change in
-	// the moment between that and the publish can't be caught from here.
+	// game may read the file and again right before publishing. Moving the
+	// folder out of the root on the same filesystem needs a rename across
+	// the container's mount, which a process in the game's container can't
+	// do (it gets EXDEV); it takes someone acting on the host's filesystem,
+	// who can already write anywhere the helper can. So this catches a move
+	// during a long transfer and reports it; it is not a boundary against that
+	// actor, and a move between the last check and the publish goes unseen.
 	unchanged := func() error {
 		current, err := uploadTarget(parent, name)
 		if err != nil {
@@ -711,9 +715,12 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	if err := unchanged(); err != nil {
 		return err
 	}
-	// Only now may the game read it. Set permissions while the helper still
-	// owns the new inode; CHOWN is enough to restore game ownership without
-	// granting FOWNER.
+	// Only now may the game read it. Once it has its owner the game may also
+	// write to it, as it may a moment later once it has its name, so nothing
+	// is gained by changing it in between; the owner is set before the publish
+	// so a published file never appears with the wrong one. Set permissions
+	// while the helper still owns the new inode; CHOWN is enough to restore
+	// game ownership without granting FOWNER.
 	mode := uint32(0o666 &^ currentUmask())
 	if original != nil {
 		mode = original.Mode & 0o777
@@ -733,15 +740,27 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	if err := unchanged(); err != nil {
 		return err
 	}
+	// link never replaces an existing name, unlike rename.
+	var publishErr error
 	if original != nil {
-		if err := unix.Renameat(int(parent), temporary, int(parent), name); err != nil {
-			return err
-		}
+		publishErr = renameat(int(parent), temporary, int(parent), name)
 	} else {
-		// link never replaces an existing name, unlike rename.
-		if err := unix.Linkat(int(parent), temporary, int(parent), name, 0); err != nil {
-			return err
+		publishErr = linkat(int(parent), temporary, int(parent), name, 0)
+	}
+	// A publish can take effect and still fail, as on NFS when its reply is
+	// lost, so the name is what decides: the file is published if it has the
+	// name, failed only if the name is provably something else.
+	if publishErr != nil {
+		published, err := lstatAt(parent, name)
+		switch {
+		case err == nil && published.Dev == written.Dev && published.Ino == written.Ino:
+		case err == nil || isNotExist(err):
+			return publishErr
+		default:
+			return errPublished
 		}
+	}
+	if original == nil {
 		if err := unix.Unlinkat(int(parent), temporary, 0); err != nil {
 			return errPublished
 		}
@@ -783,28 +802,77 @@ func (h *fileHelper) sameFolder(parent fd) error {
 	return nil
 }
 
-// sweepStaging removes the staging files left in folder by uploads cut off
-// earlier. The server's file lock is held, so no other upload is writing.
-func (h *fileHelper) sweepStaging(folder fd) error {
-	children, err := names(folder)
+// stagingAge is how long ago a staging file must last have been written
+// for a sweep to remove it. An upload command ends within 30 minutes and
+// writes its file as it goes, so one untouched for an hour belongs to no
+// upload still running, here or through another path to the same storage,
+// with room for the clocks of hosts that share it.
+const stagingAge = time.Hour
+
+// sweepChunk is how many names a sweep reads at a time; tests shrink it and
+// watch readNames.
+var (
+	sweepChunk = 1024
+	readNames  = (*os.File).Readdirnames
+)
+
+// sweepStaging removes the staging files that uploads cut off earlier left
+// in folder, reading it a chunk at a time. It returns how many it could not
+// remove, such as in a folder only its owner may delete from; those are
+// left, and free space still decides each upload.
+func (h *fileHelper) sweepStaging(folder fd) (int, error) {
+	duplicate, err := unix.Dup(int(folder))
+	if err != nil {
+		return 0, err
+	}
+	directory := os.NewFile(uintptr(duplicate), "directory")
+	defer directory.Close()
+	if _, err := directory.Seek(0, 0); err != nil {
+		return 0, err
+	}
+	stuck := 0
+	for {
+		children, readErr := readNames(directory, sweepChunk)
+		for _, name := range children {
+			id, found := strings.CutPrefix(name, ".ludock-upload-")
+			id, staged := strings.CutSuffix(id, ".tmp")
+			// What an excluded mount hides from the game is never touched.
+			if !found || !staged || !uploadIDPattern.MatchString(id) || h.blocked(h.absolute(path.Join(h.folder, name)), false) {
+				continue
+			}
+			info, err := lstatAt(folder, name)
+			if err != nil || !isRegular(info) || time.Since(time.Unix(info.Mtim.Unix())) < stagingAge {
+				continue
+			}
+			// The folder must still be the approved one, in case it moved.
+			if err := h.sameFolder(folder); err != nil {
+				return stuck, err
+			}
+			if err := unix.Unlinkat(int(folder), name, 0); err != nil && !isNotExist(err) {
+				stuck++
+			}
+		}
+		if readErr == io.EOF {
+			return stuck, nil
+		}
+		if readErr != nil {
+			return stuck, readErr
+		}
+	}
+}
+
+// removeStaging removes the staging file of the upload id in folder, at
+// relative below the root, unless an excluded mount hides it from the game.
+func (h *fileHelper) removeStaging(folder fd, relative, id string) error {
+	temporary, err := uploadName(id)
 	if err != nil {
 		return err
 	}
-	for _, name := range children {
-		id, found := strings.CutPrefix(name, ".ludock-upload-")
-		id, staged := strings.CutSuffix(id, ".tmp")
-		if !found || !staged || !uploadIDPattern.MatchString(id) {
-			continue
-		}
-		// The folder must still be the approved one, in case it moved. One
-		// that can't be removed, such as in a folder only its owner may delete
-		// from, is left; free space still decides each upload.
-		if info, err := lstatAt(folder, name); err == nil && isRegular(info) {
-			if err := h.sameFolder(folder); err != nil {
-				return err
-			}
-			unix.Unlinkat(int(folder), name, 0)
-		}
+	if h.blocked(h.absolute(path.Join(relative, temporary)), false) {
+		return errors.New("this path overlaps an excluded mount")
+	}
+	if err := unix.Unlinkat(int(folder), temporary, 0); err != nil && !isNotExist(err) {
+		return err
 	}
 	return nil
 }
@@ -847,6 +915,13 @@ const (
 	UploadBatchFiles = 100
 	UploadBatchBytes = 16 << 20
 )
+
+// UploadPrepared is the free space a batch upload starts with, after its
+// folder's sweep, and how many staging files the sweep could not remove.
+type UploadPrepared struct {
+	FileSpace
+	Stuck int `json:"stuck,omitempty"`
+}
 
 // UploadResult is the file helper's line for each file of a batch upload.
 type UploadResult struct {
@@ -1135,27 +1210,28 @@ func (h *fileHelper) run() error {
 		if err != nil {
 			return err
 		}
-		if err := h.sweepStaging(folder); err != nil {
+		stuck, err := h.sweepStaging(folder)
+		if err != nil {
 			return err
 		}
 		var stat unix.Statfs_t
 		if err := unix.Fstatfs(int(folder), &stat); err != nil {
 			return err
 		}
-		return h.json(Space(&stat))
+		return h.json(UploadPrepared{FileSpace: Space(&stat), Stuck: stuck})
 	case "upload-files-cleanup":
 		folder, err := h.pinDirectory(root, relative)
 		if err != nil {
 			return err
 		}
+		var refused error
 		for _, file := range h.request.Files {
-			temporary, err := uploadName(file.UploadID)
-			if err != nil {
-				return err
+			if err := h.removeStaging(folder, relative, file.UploadID); err != nil {
+				refused = err
 			}
-			if err := unix.Unlinkat(int(folder), temporary, 0); err != nil && !isNotExist(err) {
-				return err
-			}
+		}
+		if refused != nil {
+			return refused
 		}
 		return h.json(map[string]bool{"ok": true})
 	}
@@ -1240,19 +1316,16 @@ func (h *fileHelper) run() error {
 			return errors.New("invalid upload size")
 		}
 		h.folder = path.Dir(relative)
-		if err := h.sweepStaging(parent); err != nil {
+		stuck, err := h.sweepStaging(parent)
+		if err != nil {
 			return err
 		}
 		if err := h.upload(parent, name, *h.request.Size, h.request.UploadID, h.request.Expected); err != nil {
 			return err
 		}
-		return h.json(map[string]bool{"ok": true})
+		return h.json(map[string]any{"ok": true, "stuck": stuck})
 	case "upload-cleanup":
-		temporary, err := uploadName(h.request.UploadID)
-		if err != nil {
-			return err
-		}
-		if err := unix.Unlinkat(int(parent), temporary, 0); err != nil && !isNotExist(err) {
+		if err := h.removeStaging(parent, path.Dir(relative), h.request.UploadID); err != nil {
 			return err
 		}
 		return h.json(map[string]bool{"ok": true})
@@ -1400,8 +1473,12 @@ func nameTaken(err error) error {
 }
 
 // renameat2 is swapped in tests to act like a kernel without
-// RENAME_NOREPLACE.
-var renameat2 = unix.Renameat2
+// RENAME_NOREPLACE, and renameat and linkat to fail after taking effect.
+var (
+	renameat2 = unix.Renameat2
+	renameat  = unix.Renameat
+	linkat    = unix.Linkat
+)
 
 // renameNoReplace moves an entry without ever replacing what is at the
 // destination: game servers write these trees while files are managed.

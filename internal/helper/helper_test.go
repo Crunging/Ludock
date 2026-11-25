@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -211,6 +212,68 @@ func TestMutationsAndUploads(t *testing.T) {
 	}
 	if _, code := runFile(t, FileRequest{Operation: "download", Root: root, Path: "linked"}, nil); code == 0 {
 		t.Fatal("downloaded a hard link")
+	}
+
+	// A publish that took effect and then failed, as on NFS, is a success.
+	renameat = func(fromDirectory int, from string, toDirectory int, to string) error {
+		unix.Renameat(fromDirectory, from, toDirectory, to)
+		return unix.EIO
+	}
+	defer func() { renameat = unix.Renameat }()
+	if _, code := runFile(t, upload, []byte("again"+id)); code != 0 {
+		t.Fatal("reported a published file as failed")
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "server.properties")); string(data) != "again" {
+		t.Fatal(string(data))
+	}
+}
+
+// An upload first removes the staging files that cut-off uploads left in its
+// folder, reading the folder a few names at a time: only regular files with
+// a staging name untouched for an hour, since a younger one may belong to an
+// upload still running elsewhere, and never one an excluded mount hides from
+// the game, which the targeted cleanups leave too.
+func TestUploadSweepsStaleStaging(t *testing.T) {
+	root, _ := dataRoot(t)
+	largest := 0
+	sweepChunk = 3
+	readNames = func(directory *os.File, count int) ([]string, error) {
+		names, err := directory.Readdirnames(count)
+		largest = max(largest, len(names))
+		return names, err
+	}
+	defer func() { sweepChunk, readNames = 1024, (*os.File).Readdirnames }()
+	stage := func(index int) string {
+		return fmt.Sprintf(".ludock-upload-6f9619ff-8b86-4011-b42d-00c04fc964%02d.tmp", index)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	for index := range 20 {
+		os.WriteFile(filepath.Join(root, fmt.Sprintf("game-%d.dat", index)), nil, 0o644)
+		os.WriteFile(filepath.Join(root, stage(index)), []byte("cut off"), 0o600)
+		if index != 7 {
+			os.Chtimes(filepath.Join(root, stage(index)), old, old)
+		}
+	}
+	hidden := filepath.Join(root, stage(3))
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root, Blocked: []string{hidden}}, nil); code != 0 || largest != 3 {
+		t.Fatal("prepare", code, "read", largest, "names at once")
+	}
+	for index := range 20 {
+		_, err := os.Lstat(filepath.Join(root, stage(index)))
+		if kept := index == 3 || index == 7; kept != (err == nil) {
+			t.Fatal(stage(index), "kept", err == nil)
+		}
+	}
+	for _, request := range []FileRequest{
+		{Operation: "upload-files-cleanup", Root: root, Files: []UploadFile{{UploadID: stage(3)[15:51]}}, Blocked: []string{hidden}},
+		{Operation: "upload-cleanup", Root: root, Path: "server.properties", UploadID: stage(3)[15:51], Blocked: []string{hidden}},
+	} {
+		if _, code := runFile(t, request, nil); code == 0 {
+			t.Fatal(request.Operation, "removed a staging file over an excluded mount")
+		}
+		if _, err := os.Lstat(hidden); err != nil {
+			t.Fatal(request.Operation, err)
+		}
 	}
 }
 

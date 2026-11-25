@@ -205,7 +205,12 @@ func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Req
 		return
 	}
 	view := snapshot.Server
-	d := views.FileDialog{ServerID: view.ID, ServerName: view.DisplayName, Action: query.Get("action"), Path: query.Get("path"),
+	path, err := files.NormalizeRelativePath(query.Get("path"))
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	d := views.FileDialog{ServerID: view.ID, ServerName: view.DisplayName, Action: query.Get("action"), Path: path,
 		Type: query.Get("type")}
 	index := slices.IndexFunc(view.FileRoots, func(root files.Root) bool { return root.ID == query.Get("root") })
 	if index < 0 || !slices.Contains([]string{"create", "rename", "delete", "unpack", "delete-selection"}, d.Action) {

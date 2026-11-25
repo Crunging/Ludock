@@ -1,6 +1,7 @@
 package files
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -50,5 +51,35 @@ func TestSelectionRefusesForgedRequests(t *testing.T) {
 		if err := service.Mkdir(ctx, target, root, parent, "x", nil); !apperr.Is(err, "INVALID_PATH") {
 			t.Errorf("%.20s: %v", parent, err)
 		}
+	}
+	// The path each change uses, composed from its parts, is at most MaxPath
+	// bytes; one at the bound gets as far as Docker, and one only spelled
+	// longer is fine.
+	folder := strings.Repeat("d", 200) + strings.Repeat("/"+strings.Repeat("d", 200), 19)
+	for _, test := range []struct {
+		name   string
+		change func(name string) error
+	}{
+		{"mkdir", func(name string) error { return service.Mkdir(ctx, target, root, folder, name, nil) }},
+		{"rename", func(name string) error { return service.Rename(ctx, target, root, folder+"/old", name, nil) }},
+		{"selection", func(name string) error {
+			return service.DeleteSelection(ctx, target, root, folder, []string{name}, nil)
+		}},
+		{"move", func(name string) error { return service.Move(ctx, target, root, "logs", []string{name}, folder, nil) }},
+		{"upload", func(name string) error {
+			results, err := service.UploadFiles(ctx, target, root, folder, []UploadEntry{{Name: name}}, strings.NewReader(""), nil)
+			return errors.Join(err, results[0])
+		}},
+	} {
+		fits := strings.Repeat("n", MaxPath-len(folder)-1)
+		if err := test.change(fits); apperr.Is(err, "INVALID_PATH") {
+			t.Error(test.name, "refused a path at the bound")
+		}
+		if err := test.change(fits + "n"); !apperr.Is(err, "INVALID_PATH") {
+			t.Error(test.name, "allowed a path past the bound:", err)
+		}
+	}
+	if err := service.Mkdir(ctx, target, root, strings.Repeat("./", MaxPath)+"logs", "x", nil); apperr.Is(err, "INVALID_PATH") {
+		t.Error("refused a path only spelled long")
 	}
 }

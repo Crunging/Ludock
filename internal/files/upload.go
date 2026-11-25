@@ -77,6 +77,11 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		results[index] = entry.Err
 	}
 	root, normalized, err := resolve(target, rootID, folder)
+	for index, entry := range entries {
+		if results[index] == nil && err == nil {
+			_, results[index] = joinChecked(normalized, entry.Name)
+		}
+	}
 	sizes := make([]int64, len(entries))
 	for index, entry := range entries {
 		sizes[index] = entry.Size
@@ -97,7 +102,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		// disk is refused before anything is written; the helper checks each
 		// file again as the batch fills the disk.
 		var space *helper.FileSpace
-		if space, err = access.prepareUpload(ctx, root, normalized); err != nil {
+		if space, err = access.prepareUpload(ctx, target, root, normalized); err != nil {
 			// Its sweep may still be removing files.
 			access.Cleanup(true)
 		} else {
@@ -372,14 +377,23 @@ func uploadNoSpace(space helper.FileSpace, size int64) error {
 
 // prepareUpload removes the staging files cut-off uploads left in folder,
 // which may be what fills the disk, then measures its free space.
-func (a *Access) prepareUpload(ctx context.Context, root Root, folder string) (*helper.FileSpace, error) {
+func (a *Access) prepareUpload(ctx context.Context, target Target, root Root, folder string) (*helper.FileSpace, error) {
 	out, err := a.request(ctx, helper.FileRequest{Operation: "upload-prepare", Root: root.Path, Path: folder}, nil, nil)
 	if err != nil {
 		return nil, err
 	}
-	var space helper.FileSpace
-	if err := json.Unmarshal(out, &space); err != nil || space.Total <= 0 {
+	var prepared helper.UploadPrepared
+	if err := json.Unmarshal(out, &prepared); err != nil || prepared.Total <= 0 {
 		return nil, Error("FILE_OPERATION_FAILED", 409)
 	}
-	return &space, nil
+	logStuck(target, prepared.Stuck)
+	return &prepared.FileSpace, nil
+}
+
+// logStuck says once per upload that its folder holds staging files of cut-off
+// uploads that could not be removed, without their paths.
+func logStuck(target Target, stuck int) {
+	if stuck > 0 {
+		log.Warn("Some files left by interrupted uploads could not be removed", logging.F("server", target.ServerID), logging.F("count", stuck))
+	}
 }

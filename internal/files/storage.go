@@ -98,12 +98,19 @@ type lister struct {
 	timer  *time.Timer
 }
 
-// MaxPath bounds a path below a root, as Linux's PATH_MAX bounds a whole
-// path, so no request carries a longer one into a helper or the audit log.
+// MaxPath bounds the canonical path below a root that any file change, as
+// composed from its parts, may use: Linux's PATH_MAX, 4096 bytes. A file
+// deeper than that can't be opened by path, by the game or the host's
+// tools, in one call, and the bound keeps helper arguments and audit rows
+// small. Requests longer only in their spelling, such as "./" repeated, are
+// still accepted.
 const MaxPath = 4096
 
+// errLongPath refuses a composed path past MaxPath.
+func errLongPath() error { return Error("INVALID_PATH", 400) }
+
 func NormalizeRelativePath(value string) (string, error) {
-	if len(value) > MaxPath || strings.Contains(value, "\x00") || strings.HasPrefix(value, "/") || slices.Contains(strings.Split(value, "/"), "..") {
+	if strings.Contains(value, "\x00") || strings.HasPrefix(value, "/") || slices.Contains(strings.Split(value, "/"), "..") {
 		return "", Error("INVALID_PATH", 400)
 	}
 	if value == "" {
@@ -118,6 +125,9 @@ func NormalizeRelativePath(value string) (string, error) {
 	}
 	if slices.ContainsFunc(strings.Split(normalized, "/"), helper.Reserved) {
 		return "", Error("RESERVED_NAME", 400)
+	}
+	if len(normalized) > MaxPath {
+		return "", errLongPath()
 	}
 	return normalized, nil
 }
@@ -141,6 +151,15 @@ func joinRelative(parent, name string) string {
 		return name
 	}
 	return path.Join(parent, name)
+}
+
+// joinChecked is joinRelative for a normalized parent and a valid name,
+// refusing a path past MaxPath.
+func joinChecked(parent, name string) (string, error) {
+	if joined := joinRelative(parent, name); len(joined) <= MaxPath {
+		return joined, nil
+	}
+	return "", errLongPath()
 }
 
 func resolve(target Target, rootID, relative string) (Root, string, error) {
@@ -576,16 +595,20 @@ func (s *Service) Rename(ctx context.Context, target Target, rootID, relative, n
 	if normalized == "" {
 		return Error("ROOT_MUTATION", 400)
 	}
-	access, err := s.Acquire(ctx, target, root, false, assertAccess)
-	if err != nil {
-		return err
-	}
 	dir := path.Dir(normalized)
 	if dir == "." {
 		dir = ""
 	}
+	destination, err := joinChecked(dir, newName)
+	if err != nil {
+		return err
+	}
+	access, err := s.Acquire(ctx, target, root, false, assertAccess)
+	if err != nil {
+		return err
+	}
 	_, err = access.request(ctx, helper.FileRequest{Operation: "rename", Root: root.Path, Path: normalized,
-		Destination: joinRelative(dir, newName)}, nil, nil)
+		Destination: destination}, nil, nil)
 	access.Cleanup(err != nil)
 	return err
 }
@@ -614,8 +637,12 @@ func (s *Service) write(ctx context.Context, target Target, root Root, normalize
 		return err
 	}
 	uploadID := identity.NewUUID()
-	_, err = access.request(ctx, helper.FileRequest{Operation: "upload", Root: root.Path, Path: normalized, Size: &size,
+	out, err := access.request(ctx, helper.FileRequest{Operation: "upload", Root: root.Path, Path: normalized, Size: &size,
 		UploadID: uploadID, Expected: expected}, io.LimitReader(body, size+1), []byte(uploadID))
+	var answer struct{ Stuck int }
+	if err == nil && json.Unmarshal(out, &answer) == nil {
+		logStuck(target, answer.Stuck)
+	}
 	// A helper that finished removed its own staging file; one cut off may not
 	// have, so only a failed upload sends the cleanup request.
 	if err != nil {
