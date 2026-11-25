@@ -73,23 +73,34 @@ func withSave(job *ops.Context, result *ops.Result) *ops.Result {
 // stopForBackup stops the server for a backup, making room for it first as
 // retention would after it. A restore's source stays.
 func (j *Jobs) stopForBackup(ctx context.Context, server *servers.Context, job *ops.Context) error {
+	// Refused before any backup is removed for it.
+	if err := j.assertPendingBeforeStop(ctx, server, job); err != nil {
+		return err
+	}
 	source, _ := text(job.Job.Input["backupId"])
 	if err := j.Backups.MakeRoom(ctx, server, func() error { return j.dataAuthority(ctx, server, job) },
 		func(tx *sql.Tx) error { return j.dataAuthorityIn(ctx, tx, server, job) }, source); err != nil {
 		return err
 	}
+	// Checked again: making room takes time, and the server can change.
 	return j.stopForData(ctx, server, job)
+}
+
+// assertPendingBeforeStop refuses, while the game still runs, work whose
+// stop would kick players for nothing; see assertPendingUndoable. Work
+// resuming after its stop has none to avoid.
+func (j *Jobs) assertPendingBeforeStop(ctx context.Context, server *servers.Context, job *ops.Context) error {
+	if job.Job.Recovery.InitialRunning != nil {
+		return nil
+	}
+	return j.assertPendingUndoable(ctx, server, job, func() error { return j.dataAuthority(ctx, server, job) })
 }
 
 // stopForData stops the server, recording its initial state and the locks
 // it needs before the stop is dispatched.
 func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *ops.Context) error {
-	// Refused while the game still runs, rather than once its stop has
-	// kicked players for nothing.
-	if job.Job.Recovery.InitialRunning == nil {
-		if err := j.assertPendingUndoable(ctx, server, job, func() error { return j.dataAuthority(ctx, server, job) }); err != nil {
-			return err
-		}
+	if err := j.assertPendingBeforeStop(ctx, server, job); err != nil {
+		return err
 	}
 	// The copy is only as fresh as the game's last save. A job that already
 	// saved, or resumes after its stop, doesn't save again.

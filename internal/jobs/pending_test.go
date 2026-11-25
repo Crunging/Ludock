@@ -12,6 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/mountinfo"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -84,8 +85,9 @@ func TestNextBackupFinishesStoppedRestore(t *testing.T) {
 	if backup.Status != ops.Succeeded || !f.running() {
 		t.Fatalf("%+v", backup)
 	}
-	// The undo is checked once before the stop and again once stopped.
-	want := append([]string{undoneLines[0]}, undoneLines...)
+	// The undo is checked before room is made for the backup, again before
+	// the stop, and once more when stopped.
+	want := append([]string{undoneLines[0], undoneLines[0]}, undoneLines...)
 	if got := trace.lines()[before:]; !slices.Equal(got, want) {
 		t.Errorf("trace:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
@@ -172,21 +174,24 @@ func TestTakeOverFinishesStoppedRestore(t *testing.T) {
 	}
 }
 
-// A restore that can't be finished, because its roots no longer match the
-// server, still blocks the backup, which refuses before copying.
-func TestBackupRefusesUnfinishableRestore(t *testing.T) {
+// A restore stops partway, then the owner moves the server's data folders
+// in Docker, so Ludock can't finish undoing it there. Work that would finish
+// it is refused before the server stops, as in refusedBeforeStop, with the
+// plain message about that restore, and retention removes no backup for it.
+func TestUnfinishableRestoreRefusesBeforeStop(t *testing.T) {
 	f := setup(t)
+	for range 2 {
+		f.jobs.DB.Exec("UPDATE backups SET reason='restore' WHERE id=?", f.run(t, "backup", nil).Result.BackupID)
+	}
 	restore, _ := f.stoppedRestore(t)
-	if _, err := f.jobs.DB.Exec(`UPDATE operations SET recovery_json=json_set(recovery_json,'$.restore.roots[0].root.path','/elsewhere') WHERE id=?`, restore.ID); err != nil {
+	f.moveData(t)
+	// The next backup fits only once retention removes those safety backups.
+	settings, _, _ := f.jobs.Backups.SavedSettings(ctx)
+	settings.MaxBytes, _, _ = f.jobs.Backups.FoundBytes(ctx)
+	if _, err := f.jobs.Backups.SaveSettings(ctx, *settings, f.admin, f.adminSession); err != nil {
 		t.Fatal(err)
 	}
-	backup := f.run(t, "backup", nil)
-	if backup.Status != ops.Failed || !strings.Contains(backup.Error, "can’t finish undoing it safely") {
-		t.Fatalf("%+v", backup)
-	}
-	if f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" {
-		t.Fatal(f.savedJournal(restore.ID))
-	}
+	f.refusedBeforeStop(t, restore.ID, errPendingBlocked.Error())
 }
 
 // Ludock's data is saved while a restore moves the backup's data in, the
@@ -217,40 +222,67 @@ func TestNextBackupAfterStaleRestoreJournal(t *testing.T) {
 	}
 }
 
+// refusedBeforeStop runs a backup, a restart with a backup first, an undo,
+// an update, and the restore again, each with and without a warning to
+// players, and requires each to fail with message before anyone is warned,
+// a backup is removed to make room, or the server stops, leaving the
+// restore's journal as it was.
+func (f *fixture) refusedBeforeStop(t *testing.T, restoreID, message string) {
+	t.Helper()
+	f.jobs.WarningLead = 100 * time.Millisecond
+	journal := f.savedJournal(restoreID)
+	restore, _ := f.runner.Get(ctx, restoreID)
+	backupCount := func() (count int) {
+		f.jobs.DB.QueryRow("SELECT COUNT(*) FROM backups WHERE state='complete'").Scan(&count)
+		return count
+	}
+	for _, warn := range []bool{false, true} {
+		for _, work := range []struct {
+			kind  string
+			input map[string]any
+		}{
+			{ops.KindBackup, map[string]any{}},
+			{ops.KindRestart, map[string]any{"createBackup": true}},
+			{ops.KindUndoRestore, map[string]any{}},
+			{ops.KindUpdate, map[string]any{"request": skipBackup["request"]}},
+			{ops.KindRestore, map[string]any{"backupId": restore.Input["backupId"], "confirmation": "mc", MovedInput: true}},
+		} {
+			if warn {
+				work.input[WarnInput] = true
+			}
+			before, backups := len(f.engine.Requests), backupCount()
+			job := f.run(t, work.kind, work.input)
+			stopped := slices.ContainsFunc(f.engine.Requests[before:], func(request string) bool { return strings.Contains(request, f.game+"/stop") })
+			if job.Status != ops.Failed || job.Error != message || job.Recovery.WarnUntil != 0 || stopped || !f.running() ||
+				backupCount() != backups || f.savedJournal(restoreID) != journal {
+				t.Errorf("%s, warn %v: %s %q, warned %v, stopped %v, running %v, backups %d of %d, journal %s", work.kind, warn, job.Status, job.Error,
+					job.Recovery.WarnUntil != 0, stopped, f.running(), backupCount(), backups, f.savedJournal(restoreID))
+			}
+		}
+	}
+}
+
 // Finishing a restore that stopped partway would move live data holding
-// another restore's stage folder: a backup, a restart with a backup first,
-// an undo, and an update, each asked to warn players, are refused before
-// anyone is warned or the server stops. A step that fails after the stop,
-// before any live data moves, fails the backup, but the server it stopped
-// is running again and the undo is left for the next operation.
+// another restore's stage folder, or a mount the host added: work that would
+// finish it is refused before the server stops, as in refusedBeforeStop. A
+// step that fails after the stop, before any live data moves, fails the
+// backup, but the server it stopped is running again and the undo is left
+// for the next operation.
 func TestFailedUndoReturnsServerToRunning(t *testing.T) {
 	f := setup(t)
 	restore, _ := f.stoppedRestore(t)
 	region := filepath.Join(f.data, "world", "region")
 	other := filepath.Join(region, helper.StageName("2f9619ff-8b86-4011-b42d-00c04fc964ff"))
 	os.MkdirAll(filepath.Join(other, "old"), 0o700)
-	f.jobs.WarningLead = 100 * time.Millisecond
-	for _, work := range []struct {
-		kind  string
-		input map[string]any
-	}{
-		{ops.KindBackup, map[string]any{WarnInput: true}},
-		{ops.KindRestart, map[string]any{"createBackup": true, WarnInput: true}},
-		{ops.KindUndoRestore, map[string]any{WarnInput: true}},
-		{ops.KindUpdate, map[string]any{"request": skipBackup["request"], WarnInput: true}},
-	} {
-		before := len(f.engine.Requests)
-		job := f.run(t, work.kind, work.input)
-		stopped := slices.ContainsFunc(f.engine.Requests[before:], func(request string) bool { return strings.Contains(request, f.game+"/stop") })
-		if job.Status != ops.Failed || job.Error != backups.StageInside(region).Message || job.Recovery.WarnUntil != 0 || stopped || !f.running() ||
-			f.savedJournal(restore.ID) != "rolling_back old_moved,staging unsafe" {
-			t.Errorf("%s: %s %q, warned %v, stopped %v, running %v, journal %s", work.kind, job.Status, job.Error,
-				job.Recovery.WarnUntil != 0, stopped, f.running(), f.savedJournal(restore.ID))
-		}
-	}
+	f.refusedBeforeStop(t, restore.ID, backups.StageInside(region).Message)
 	if _, err := os.Stat(filepath.Join(other, "old")); err != nil {
 		t.Fatal("moved the other stage")
 	}
+	previous := mountinfo.Table
+	t.Cleanup(func() { mountinfo.Table = previous })
+	mountinfo.Table = func() ([]byte, error) { return []byte("40 22 0:45 / " + region + " rw - nfs4 server:/share rw\n"), nil }
+	f.refusedBeforeStop(t, restore.ID, backups.ErrHostMount.Message)
+	mountinfo.Table = previous
 	os.RemoveAll(region)
 	f.failStep, f.failTimes = helper.RestoreCleanup, 1
 	backup := f.run(t, "backup", nil)
