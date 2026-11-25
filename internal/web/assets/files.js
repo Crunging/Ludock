@@ -154,12 +154,12 @@
   function top(item) { return item.folder ? item.folder.split("/")[0] : item.file.name; }
   var collator = new Intl.Collator(undefined, { numeric: true });
   // Folders go outermost first and each folder's files together, those to
-  // replace last, by name, so a batch is one folder's and its files read in
-  // order.
+  // replace first, since they can free space, by name, so a batch is one
+  // folder's and its files read in order.
   function ordered(items) {
     return items.slice().sort(function (a, b) {
       if (a.folder !== b.folder) return a.folder < b.folder ? -1 : 1;
-      if (!a.replace !== !b.replace) return a.replace ? 1 : -1;
+      if (!a.replace !== !b.replace) return a.replace ? -1 : 1;
       return collator.compare(a.file.name, b.file.name);
     });
   }
