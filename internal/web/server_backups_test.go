@@ -258,6 +258,42 @@ func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 	}
 }
 
+// One of two backups lost its archive: Settings and the server's Backups tab
+// count only the one still there. While the folder can't be read, both pages
+// count both backups as recorded and say so.
+func TestBackupSpaceCountsArchivesFound(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	folder := t.TempDir()
+	p.app.Backups.Storage.Roots = []string{folder}
+	const there, lost = "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"
+	if err := os.WriteFile(filepath.Join(folder, there+".tar"), []byte("archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{there, lost} {
+		p.backup(t, id, p.server, "")
+		p.app.DB.Exec("UPDATE backups SET destination=?, size=7 WHERE id=?", folder, id)
+	}
+	if page := p.do("GET", "/servers/"+p.server+"?tab=backups", p.admin, nil, nil).Body.String(); !strings.Contains(page, "1 backup uses 7 B.") {
+		t.Fatal(page)
+	}
+	storage := func() string {
+		return p.do("GET", "/fragments/settings/backup-storage", p.admin, nil, nil).Body.String()
+	}
+	if page := storage(); !strings.Contains(page, "<dd>7 B") || strings.Contains(page, "As recorded") {
+		t.Fatal(page)
+	}
+	if err := os.Rename(folder, folder+"-away"); err != nil {
+		t.Fatal(err)
+	}
+	if page := storage(); !strings.Contains(page, "<dd>14 B") || !strings.Contains(page, "As recorded; a folder can’t be read") {
+		t.Fatal(page)
+	}
+	if page := p.do("GET", "/servers/"+p.server+"?tab=backups", p.admin, nil, nil).Body.String(); !strings.Contains(page, "2 backups use 14 B. As recorded; a folder can’t be read.") {
+		t.Fatal(page)
+	}
+}
+
 // Updating needs an administrator, skipping its backup needs the server's
 // name typed, and a container Docker removes on stop is never replaced.
 func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {

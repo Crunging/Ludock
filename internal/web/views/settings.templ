@@ -448,7 +448,15 @@ templ BackupStorage(status backups.StorageStatus) {
 	<section class="backup-storage" aria-label="Backup storage" id="backup-storage" hx-get="/fragments/settings/backup-storage" hx-trigger="every 60s" hx-swap="outerMorph">
 		<dl class="backup-storage__values">
 			<div class="backup-storage__folder"><dt>Saved in</dt><dd><code>{ status.Destination }</code></dd></div>
-			<div><dt>Backups use</dt><dd>{ FormatBytes(status.ArchiveBytes) }</dd></div>
+			<div>
+				<dt>Backups use</dt>
+				<dd>
+					{ FormatBytes(status.ArchiveBytes) }
+					if status.Unlisted {
+						<small class="backup-storage__found">As recorded; a folder can’t be read</small>
+					}
+				</dd>
+			</div>
 			if status.KeptBytes > 0 {
 				<div><dt>Kept backups</dt><dd>{ FormatBytes(status.KeptBytes) }</dd></div>
 			}
