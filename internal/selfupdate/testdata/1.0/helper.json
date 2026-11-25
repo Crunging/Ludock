@@ -11,7 +11,7 @@
     "HostConfig": {
       "NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": ["ALL"], "CapAdd": null,
       "SecurityOpt": ["no-new-privileges:true"], "GroupAdd": null,
-      "RestartPolicy": {"Name": "unless-stopped"},
+      "RestartPolicy": {"Name": "always"},
       "Mounts": [{"Type": "bind", "Source": "{{socket-source}}", "Target": "{{socket}}", "ReadOnly": true}]
     }
   }

@@ -17,6 +17,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/events"
 	"github.com/Crunging/Ludock/internal/logging"
+	"github.com/Crunging/Ludock/internal/selfupdate"
 )
 
 // A page read just before the background tick does not stand in for the
@@ -334,5 +335,50 @@ func TestStopIsBounded(t *testing.T) {
 	}
 	if waited := time.Since(started); waited > 2*time.Second {
 		t.Fatal("stopping waited", waited)
+	}
+}
+
+// A Ludock that comes up during its own update tells the update's helper it
+// opened its data before startup cleanup that writes, which waits for the
+// update to end: here an unpack's staging record whose removal is a write.
+func TestStartSignalsAnUpdateBeforeCleanupThatWrites(t *testing.T) {
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	ctx := context.Background()
+	operation := "0d3e7b1c-5a2f-4c6e-9b8d-1f2a3b4c5d6e"
+	own := engine.AddContainer(fakedocker.GameOptions{Name: "ludock", Image: "ludock", Running: true})
+	engine.AddContainer(fakedocker.GameOptions{Name: selfupdate.HelperName(operation), Image: "ludock", Running: true,
+		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "self-update", "ludock.update.operation": operation}})
+	d := dbtest.Open(t)
+	for key, value := range map[string]any{
+		"ludock.update":    map[string]string{"id": operation, "state": "handed_over", "container": own, "from": "1.0.0", "target": "sha256:" + strings.Repeat("3", 64)},
+		"unpack-stage:one": map[string]string{"server": "gone", "root": "/data", "archive": "/data/mods.zip", "id": "one"},
+	} {
+		if err := d.SetSetting(ctx, nil, key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := New(config.Config{DockerSocket: engine.Socket, SelfContainer: own, MountID: own}, d, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	a.Start(runCtx)
+	defer a.Stop(time.Now().Add(time.Minute))
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		ready := false
+		for _, id := range engine.SortedIDs() {
+			ready = ready || engine.Container(id).Config.Labels["ludock.internal"] == "self-update-ready"
+		}
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Ludock never said it opened its data")
+		}
 	}
 }

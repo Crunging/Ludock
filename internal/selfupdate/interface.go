@@ -18,8 +18,8 @@ import (
 //
 // The older Ludock starts the helper from the image it pulled, by its ID,
 // with entrypoint /usr/local/bin/ludock, the Docker socket mounted at the
-// path in LUDOCK_DOCKER_SOCKET and nothing else, restart policy
-// unless-stopped, and these arguments:
+// path in LUDOCK_DOCKER_SOCKET and nothing else, restart policy always, and
+// these arguments:
 //
 //	self-update 1 <container> <image> <operation>
 //

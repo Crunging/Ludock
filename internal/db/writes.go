@@ -85,17 +85,22 @@ func (d *DB) CloseWrites(ctx context.Context) (reopen func(), err error) {
 	return reopen, nil
 }
 
-// writes reports whether a statement outside a transaction may write.
+// writes reports whether a statement may write: anything but a single
+// SELECT or EXPLAIN, or a PRAGMA that only reads.
 func writes(query string) bool {
+	query = strings.TrimSuffix(strings.TrimSpace(query), ";")
 	words := strings.Fields(query)
 	if len(words) == 0 {
 		return false
 	}
+	if strings.Contains(query, ";") {
+		return true
+	}
 	switch strings.ToUpper(words[0]) {
-	case "SELECT", "WITH", "EXPLAIN":
+	case "SELECT", "EXPLAIN":
 		return false
 	case "PRAGMA":
-		return strings.Contains(query, "=")
+		return strings.ContainsAny(query, "=(")
 	}
 	return true
 }

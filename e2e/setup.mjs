@@ -99,6 +99,8 @@ async function startStack(bin, dir, port, { found = false, children = [] } = {})
       LUDOCK_DOCKER_SOCKET: socket,
       LUDOCK_SETUP_CODE: setupCode,
       LUDOCK_SELF_CONTAINER: "ludock-dev",
+      // Outside the fake container it stands for, Ludock proves it by its data.
+      LUDOCK_DEV_SELF_PROOF: "1",
       LUDOCK_BACKUP_ROOTS: backups,
       LUDOCK_HELPER_IMAGE: "ghcr.io/crunging/ludock@sha256:" + "ab".repeat(32),
       // Its default level logs the address it listens on, which this reads.

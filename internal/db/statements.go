@@ -40,7 +40,7 @@ type statementConn struct {
 	driver.Conn
 	statements map[string]*cachedStatement
 	writes     *writeGate
-	// inTx: a transaction admitted by the write gate is open.
+	// inTx: a transaction the write gate admitted is open.
 	inTx bool
 }
 
@@ -114,17 +114,22 @@ func (c *statementConn) Close() error {
 
 // BeginTx admits every transaction through the write gate: each is
 // immediate, taking SQLite's write lock.
+// A read-only transaction, such as for a consistent page of Activity, isn't
+// admitted: its statements are, one by one, as outside a transaction.
 func (c *statementConn) BeginTx(ctx context.Context, options driver.TxOptions) (driver.Tx, error) {
-	leave, err := c.writes.enter(ctx)
-	if err != nil {
-		return nil, err
+	leave := func() {}
+	if !options.ReadOnly {
+		var err error
+		if leave, err = c.writes.enter(ctx); err != nil {
+			return nil, err
+		}
 	}
 	tx, err := c.Conn.(driver.ConnBeginTx).BeginTx(ctx, options)
 	if err != nil {
 		leave()
 		return nil, err
 	}
-	c.inTx = true
+	c.inTx = !options.ReadOnly
 	return &gatedTx{Tx: tx, end: func() { c.inTx = false; leave() }}, nil
 }
 

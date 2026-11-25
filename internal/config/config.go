@@ -41,8 +41,6 @@ type Config struct {
 	// SelfContainer identifies Ludock's own container (LUDOCK_SELF_CONTAINER,
 	// else detected from its mounts, else HOSTNAME).
 	SelfContainer string
-	// SelfFound is how: "env", "mounts" (its full ID), or "hostname".
-	SelfFound string
 	// MountID is the container's ID as its mounts show it, or "".
 	MountID string
 	// BackupRoots are approved backup destinations (LUDOCK_BACKUP_ROOTS,
@@ -61,6 +59,11 @@ type Config struct {
 	// DevCopyRoot is a folder treated as mounted at /backups-copy, for
 	// development against cmd/fakedocker (LUDOCK_DEV_COPY_ROOT).
 	DevCopyRoot string
+	// DevSelfProof lets Ludock outside a container prove the container it
+	// stands for by reading back a file in its data folder, for development
+	// against cmd/fakedocker (LUDOCK_DEV_SELF_PROOF=1). A real container's
+	// mounts name its ID instead; shared data proves nothing there.
+	DevSelfProof bool
 }
 
 const (
@@ -142,13 +145,13 @@ func Load() (Config, error) {
 	if mounts, err := mountinfo.Read(); err == nil {
 		c.MountID = containerID(mounts)
 	}
-	c.SelfFound = "env"
 	if c.SelfContainer == "" {
-		c.SelfContainer, c.SelfFound = value("HOSTNAME", ""), "hostname"
+		c.SelfContainer = value("HOSTNAME", "")
 		if c.MountID != "" {
-			c.SelfContainer, c.SelfFound = c.MountID, "mounts"
+			c.SelfContainer = c.MountID
 		}
 	}
+	c.DevSelfProof = os.Getenv("LUDOCK_DEV_SELF_PROOF") == "1"
 	var problems []error
 	if host, port, err := net.SplitHostPort(c.Listen); err != nil || port == "" {
 		problems = append(problems, errors.New("LUDOCK_LISTEN must be host:port, for example :3000"))

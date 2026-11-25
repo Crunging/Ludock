@@ -96,13 +96,14 @@ type Service struct {
 	Quiesce func(ctx context.Context) (resume func(), err error)
 	// DataDir and Socket are Ludock's data folder and Docker socket.
 	DataDir, Socket string
-	// SelfFound says how Ludock found its own container: "mounts" (its own
-	// ID), "env" (LUDOCK_SELF_CONTAINER), or "hostname".
-	SelfFound string
-	// MountID is the container ID read from Ludock's own mounts, or "".
+	// MountID is the container ID read from Ludock's own mounts, or "":
+	// the only proof of which container this process runs in.
 	MountID string
-	Version string
-	Poll    time.Duration
+	// DevSelfProof accepts reading back a file in the data folder as that
+	// proof instead, for a Ludock outside the fake container it stands for.
+	DevSelfProof bool
+	Version      string
+	Poll         time.Duration
 
 	// admit serializes starting an update with settling one, whose cleanup
 	// prunes data saves.
@@ -140,7 +141,7 @@ var (
 	errNoSocket = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
 		"Ludock doesn’t reach Docker through a mounted socket, so it can’t hand its update to a helper. Update it with the commands below.")
 	errSelfUnsure = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
-		"Ludock couldn’t confirm which container is its own, so it won’t replace one. Use the commands below.")
+		"Ludock couldn’t confirm which container it runs in, so it won’t replace one. Use the commands below.")
 	errNoDataMount = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
 		"Ludock can’t reach its data folder the same way from a helper, so it couldn’t put its data back after a failed update. Update it with the commands below.")
 	errPortNotFixed = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
@@ -154,7 +155,7 @@ var (
 	errDrain = apperr.New("LUDOCK_UPDATE_BUSY", 409,
 		"Ludock was still saving other changes, so nothing was changed. Try again in a moment.")
 	errNoLongerAdmin = apperr.New("LUDOCK_UPDATE_ACTOR", 409,
-		"The administrator who asked for the update isn’t one any more, so nothing was changed.")
+		"The administrator who asked for the update signed out or isn’t one any more, so nothing was changed.")
 )
 
 // reasons are the words for the helper's reason codes.
@@ -259,13 +260,17 @@ func (s *Service) busy(ctx context.Context, q queryer) (bool, error) {
 	return busy, err
 }
 
-// current reads Ludock's own container afresh: an update gives its name to
-// a new container.
+// current reads Ludock's own container afresh: the one its mounts name,
+// whatever its name is meanwhile, or, for development, the one it is called.
 func (s *Service) current(ctx context.Context) (*docker.ContainerInspect, error) {
-	if s.Own == nil || s.Own.Name() == "" {
+	reference := s.MountID
+	if reference == "" && s.DevSelfProof && s.Own != nil {
+		reference = s.Own.Name()
+	}
+	if reference == "" {
 		return nil, errNotHere
 	}
-	info, err := s.Docker.Inspect(ctx, s.Own.Name())
+	info, err := s.Docker.Inspect(ctx, reference)
 	if status := docker.StatusCode(err); status == 404 || status == 403 {
 		return nil, errNotHere
 	}
@@ -340,12 +345,19 @@ func (s *Service) socket(spec *docker.ContainerSpec) *docker.MountPoint {
 	return nil
 }
 
-// proveSelf confirms this process runs in own: by the ID its mounts show,
-// or by reading back through Docker a file it just wrote in its data folder.
-// A name or hostname alone could name another container.
+// proveSelf confirms this process runs in own: by the ID its mounts show.
+// A name or hostname could name another container, and a file only proves
+// access to a folder another container may share, so that is accepted only
+// for development.
 func (s *Service) proveSelf(ctx context.Context, own *docker.ContainerInspect) error {
-	if s.SelfFound == "mounts" && s.MountID == own.ID {
+	if s.MountID != "" {
+		if s.MountID != own.ID {
+			return errSelfUnsure
+		}
 		return nil
+	}
+	if !s.DevSelfProof {
+		return errSelfUnsure
 	}
 	s.mu.Lock()
 	proven := s.proven[own.ID]
@@ -421,7 +433,7 @@ func (s *Service) Start(ctx context.Context, adminID, tokenHash, ip string) erro
 		return authz.AdminMutationError(err)
 	}
 	s.keep(record.ID, &hold{lift: lift})
-	go s.run(s.background(), record, plan)
+	go s.run(s.background(), record, plan, tokenHash)
 	return nil
 }
 
@@ -437,7 +449,7 @@ func (s *Service) background() context.Context {
 // run pulls the image, saves the data, and hands the update to a helper
 // from the new image. Ludock stopping meanwhile leaves the record for the
 // next start to settle.
-func (s *Service) run(ctx context.Context, record Record, plan *update.Plan) {
+func (s *Service) run(ctx context.Context, record Record, plan *update.Plan, tokenHash string) {
 	failed := func(err error) {
 		if ctx.Err() == nil {
 			message, _ := apperr.Public(err)
@@ -484,11 +496,6 @@ func (s *Service) run(ctx context.Context, record Record, plan *update.Plan) {
 			", older than this one, which can’t use the data this version keeps. Change the image in its compose.yaml to update."))
 		return
 	}
-	// The pull can take minutes; the handover needs an administrator still.
-	if user, err := s.DB.FindUserByID(ctx, record.ActorID); err != nil || user == nil || user.Role != db.RoleAdmin || user.Disabled {
-		failed(errNoLongerAdmin)
-		return
-	}
 	// Nothing is admitted after the save, since putting the old version back
 	// restores it; what was admitted finishes first.
 	if err := s.closeWrites(ctx, record.ID); err != nil {
@@ -496,11 +503,25 @@ func (s *Service) run(ctx context.Context, record Record, plan *update.Plan) {
 		return
 	}
 	maintenance := db.Maintenance(ctx)
-	// Saved before the data save, so the save restored after a failed update
-	// shows the update handed over.
+	// The pull can take minutes: the handover needs the same administrator's
+	// session still, and no work queued meanwhile, which the save would
+	// leave interrupted. It is saved before the data save, so the save
+	// restored after a failed update shows the update handed over.
 	record.State, record.Target = StateHandedOver, target
-	if err := s.DB.SetSetting(maintenance, nil, recordSetting, record); err != nil {
-		failed(err)
+	err = s.DB.AdminMutation(maintenance, record.ActorID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		if busy, err := s.busy(maintenance, tx); err != nil || busy {
+			return cmpErr(err, errBusy)
+		}
+		return s.DB.SetSetting(maintenance, tx, recordSetting, record)
+	})
+	if err != nil {
+		if public, ok := apperr.As(err); ok && public == errBusy {
+			failed(errBusy)
+		} else if errors.Is(err, db.ErrSessionGone) || errors.Is(err, db.ErrNotAdmin) {
+			failed(errNoLongerAdmin)
+		} else {
+			failed(err)
+		}
 		return
 	}
 	if err := s.save(maintenance, record.ID); err != nil {
@@ -602,7 +623,8 @@ func (s *Service) save(ctx context.Context, operation string) error {
 
 // startHelper starts the helper from the pulled image, by ID, with only the
 // Docker socket, mounted as Ludock's own is, and the interface's arguments.
-// Docker runs it again after a host restart; it removes itself.
+// Docker runs it again when it exits and after a daemon restart, even one
+// stopped through Docker meanwhile; it removes itself.
 func (s *Service) startHelper(ctx context.Context, record Record) error {
 	spec, err := s.Docker.InspectSpec(ctx, record.Container)
 	if err != nil {
@@ -624,7 +646,7 @@ func (s *Service) startHelper(ctx context.Context, record Record) error {
 		"User": config.User, "Labels": helperLabels, "Healthcheck": map[string]any{"Test": []string{"NONE"}},
 		"HostConfig": map[string]any{"NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": []string{"ALL"},
 			"CapAdd": host.CapAdd, "SecurityOpt": []string{"no-new-privileges:true"}, "GroupAdd": host.GroupAdd,
-			"RestartPolicy": map[string]any{"Name": "unless-stopped"},
+			"RestartPolicy": map[string]any{"Name": "always"},
 			"Mounts":        []map[string]any{{"Type": "bind", "Source": socket.Source, "Target": socket.Destination, "ReadOnly": !socket.RW}}}}
 	id, err := s.Docker.Create(ctx, HelperName(record.ID), "", body)
 	if err != nil {
@@ -863,10 +885,15 @@ func (s *Service) removeLeftovers(operation string) {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasPrefix(name, "ludock-update-") || !entry.Type().IsRegular() || name == SaveName(operation) {
+		id, partial := strings.CutSuffix(strings.TrimPrefix(name, "ludock-update-"), ".tar.partial")
+		if !partial {
+			id = strings.TrimSuffix(strings.TrimPrefix(name, "ludock-update-"), ".tar")
+		}
+		// Only saves an update named; an owner's own archive is left alone.
+		if !identity.ValidID(id) || SaveName(id) != strings.TrimSuffix(name, ".partial") || !entry.Type().IsRegular() || name == SaveName(operation) {
 			continue
 		}
-		if strings.HasSuffix(name, ".tar.partial") || (complete && strings.HasSuffix(name, ".tar")) {
+		if partial || complete {
 			os.Remove(filepath.Join(s.DataDir, name))
 		}
 	}

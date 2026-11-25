@@ -67,6 +67,8 @@ type rig struct {
 	onStart, onStop func(c *fakedocker.Container)
 	helpers         []helperRun
 	foreign         map[string]bool
+	// name is how every Ludock finds itself by name, as boot takes it.
+	name string
 }
 
 type helperRun struct {
@@ -123,7 +125,7 @@ func newRig(t *testing.T) *rig {
 			g.onStart(c)
 		}
 		if c.CreateRequest.Labels["ludock.internal"] == "" && c.Config.Labels["com.docker.compose.service"] == "ludock" {
-			go g.boot(c.ID, c.Image, "")
+			go g.boot(c.ID, c.Image, g.name, c.State.StartedAt)
 		}
 	}
 	engine.OnStop = func(c *fakedocker.Container) {
@@ -260,7 +262,7 @@ func (g *rig) role(reference string) string {
 
 // boot starts the Ludock of container, which settles an update it finds.
 // name, when set, is how that Ludock finds itself by name.
-func (g *rig) boot(container, image, name string) *process {
+func (g *rig) boot(container, image, name string, run ...string) *process {
 	d, err := db.Open(filepath.Join(g.dataDir, "ludock.db"))
 	if err != nil {
 		// As Ludock does, it waits with data it can't open, settling nothing.
@@ -270,12 +272,17 @@ func (g *rig) boot(container, image, name string) *process {
 	ctx, cancel := context.WithCancel(context.Background())
 	g.t.Cleanup(cancel)
 	version := map[string]string{oldImage: "1.0.0", newImage: "1.1.0"}[image]
-	found, own, mountID := "mounts", container, container
-	if name != "" {
-		found, own, mountID = "env", name, ""
+	// A name stands in for LUDOCK_SELF_CONTAINER, which the ID read from the
+	// container's mounts still proves; "?" is a container whose mounts don't
+	// say.
+	own, mountID := container, container
+	if name == "?" {
+		own, mountID = "ludock", ""
+	} else if name != "" {
+		own = name
 	}
 	p := &process{d: d, cancel: cancel, svc: &selfupdate.Service{DB: d, Docker: g.client, Own: self.New(g.client, own),
-		Updates: &update.Service{Docker: g.client}, Locks: locks.New(), DataDir: g.dataDir, Socket: socket, SelfFound: found, MountID: mountID,
+		Updates: &update.Service{Docker: g.client}, Locks: locks.New(), DataDir: g.dataDir, Socket: socket, MountID: mountID,
 		Version: version, Poll: 5 * time.Millisecond,
 		Snapshot: func(ctx context.Context) (*db.Snapshot, error) {
 			g.add("save")
@@ -284,6 +291,11 @@ func (g *rig) boot(container, image, name string) *process {
 	g.mu.Lock()
 	g.processes[container] = p
 	g.mu.Unlock()
+	// A run that already ended, before its process was there to die, has none.
+	if info := g.engine.Container(container); len(run) > 0 && (info == nil || !info.State.Running || info.State.StartedAt != run[0]) {
+		cancel()
+		return nil
+	}
 	p.svc.Prepare(ctx)
 	for p.svc.Recover(ctx, ctx) != nil && ctx.Err() == nil {
 		time.Sleep(5 * time.Millisecond)
@@ -408,7 +420,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 		// returning the error a second request got, if it made one.
 		before func(g *rig, p *process)
 		act    func(g *rig, p *process) error
-		// self is how Ludock finds itself by name instead of its mounts.
+		// self is how Ludock finds itself by name, as boot takes it.
 		self   func(g *rig) string
 		trace  []string
 		image  string
@@ -501,6 +513,32 @@ func TestSelfUpdateOrder(t *testing.T) {
 		}, trace: join(begin, swap, []string{"start new", "create undo", "remove new", "settled", "policy old", "stop old", "aside", "restore"},
 			[]string{"settled", "policy old", "stop old", "aside", "restore", "mark restored", "policy old", "start old", "remove helper"}, backDone),
 			image: oldImage, state: selfupdate.StatePutBack, reason: "Docker couldn’t start the new container, for example because its port was still in use"},
+		{name: "the Ludock put back dies before it opens its data, and is started again", arrange: func(g *rig) {
+			g.fail["start new"] = 500
+			once := sync.Once{}
+			g.onStart = func(c *fakedocker.Container) {
+				if c.ID == g.old {
+					once.Do(func() { g.engine.Exit(c.ID, 1) })
+				}
+			}
+		}, trace: join(begin, swap, []string{"start new", "create undo", "remove new", "settled", "policy old", "stop old", "aside", "restore", "mark restored",
+			"policy old", "start old", "settled", "policy old", "start old", "remove helper"}, backDone),
+			image: oldImage, state: selfupdate.StatePutBack, reason: "Docker couldn’t start the new container, for example because its port was still in use"},
+		{name: "work queued while the image downloads stops the update before the save", arrange: func(g *rig) {
+			g.at["pull"] = func(*http.Request) {
+				g.mu.Lock()
+				old := g.processes[g.old]
+				g.mu.Unlock()
+				_, err := old.d.Exec(`INSERT OR IGNORE INTO docker_hosts (id,name,created_at) VALUES ('host','local',1);
+          INSERT INTO logical_servers (id,host_id,external_identity,display_name,game_type,status,binding_revision,binding_fingerprint,first_seen_at,last_seen_at)
+          VALUES ('server','host','valheim','Valheim','valheim','active',1,'x',1,1);
+          INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at)
+          VALUES ('op','server','admin','restart','queued','queued','{}',1,1,1)`)
+				if err != nil {
+					t.Error(err)
+				}
+			}
+		}, trace: []string{"pull"}, image: oldImage, state: selfupdate.StateFailed, reason: "Wait for the work in progress to finish, then update Ludock."},
 		{name: "a save the old version can't restore keeps the newer data, and the helper waits", arrange: func(g *rig) {
 			g.onStart = func(c *fakedocker.Container) {
 				if isNew(c) {
@@ -568,11 +606,9 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 		}, refused: "OPERATION_CONFLICT"},
 		{name: "startup recovery hasn't finished", before: func(g *rig, p *process) { p.svc.Locks.Fence() }, refused: "RECOVERY_PENDING"},
-		{name: "a name in the environment that isn't Ludock's own container", self: func(g *rig) string {
-			g.engine.AddContainer(fakedocker.GameOptions{Name: "another-panel", Image: tag, Running: true,
-				Mounts: []docker.MountPoint{{Type: "bind", Source: t.TempDir(), Destination: g.dataDir, RW: true}}})
-			return "another-panel"
-		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
+		{name: "a container that can't show it is Ludock's own", self: func(g *rig) string { return "?" }, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
+		{name: "LUDOCK_SELF_CONTAINER naming the container", self: func(g *rig) string { return "ludock" },
+			trace: join(begin, swap, []string{"start new"}, forward, forwardDone), image: newImage, state: selfupdate.StateSucceeded},
 		{name: "a second click while it updates", arrange: func(g *rig) { g.pulled = make(chan struct{}) },
 			act: func(g *rig, p *process) error {
 				if !p.svc.Updating() {
@@ -590,11 +626,10 @@ func TestSelfUpdateOrder(t *testing.T) {
 				c.arrange(g)
 			}
 			started := g.engine.Container(g.game).State.StartedAt
-			name := ""
 			if c.self != nil {
-				name = c.self(g)
+				g.name = c.self(g)
 			}
-			p := g.boot(g.old, oldImage, name)
+			p := g.boot(g.old, oldImage, g.name)
 			if c.before != nil {
 				c.before(g, p)
 			}

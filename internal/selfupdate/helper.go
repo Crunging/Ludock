@@ -554,9 +554,13 @@ func (h *Helper) leave(ctx context.Context, expected, name string) error {
 			return ctx.Err()
 		case <-time.After(h.poll()):
 		}
-		if again, err := h.inspect(ctx, name); err != nil || again == nil || again.ID != expected || again.State.StartedAt != current.State.StartedAt {
-			return cmpErr(err, errNotReady)
+		if err := h.sameRun(ctx, current); err != nil {
+			return err
 		}
+	}
+	// Its readiness counts only for the run still going.
+	if err := h.sameRun(ctx, current); err != nil {
+		return err
 	}
 	log.Info("Ludock's update is settled; removing its helper")
 	// Removing itself ends this process, so the answer may never come; one
@@ -569,6 +573,16 @@ func (h *Helper) leave(ctx context.Context, expected, name string) error {
 		if still, inspectErr := h.inspect(ctx, self.ID); inspectErr != nil || still != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// sameRun confirms the Ludock under the name is still current's run; one
+// that stopped or restarted sends the pass back to start or check it again.
+func (h *Helper) sameRun(ctx context.Context, current *docker.ContainerSpec) error {
+	again, err := h.inspect(ctx, strings.TrimPrefix(current.Name, "/"))
+	if err != nil || again == nil || again.ID != current.ID || !again.State.Running || again.State.StartedAt != current.State.StartedAt {
+		return cmpErr(err, errNotReady)
 	}
 	return nil
 }

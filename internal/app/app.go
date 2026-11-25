@@ -150,7 +150,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 		Resources: &resources.Service{DB: database, Identity: store, Authz: authorization, Sample: serverService.Sample},
 		stop:      make(chan struct{})}
 	a.SelfUpdate = &selfupdate.Service{DB: database, Docker: client, Own: own, Updates: updates, Checks: checks, Locks: table,
-		Notify: notifications.Notify, DataDir: cfg.DataDir, Socket: cfg.DockerSocket, SelfFound: cfg.SelfFound, MountID: cfg.MountID,
+		Notify: notifications.Notify, DataDir: cfg.DataDir, Socket: cfg.DockerSocket, MountID: cfg.MountID, DevSelfProof: cfg.DevSelfProof,
 		// Saves share a work folder that each new one clears; the update
 		// saves only once Quiesce holds back the others.
 		Snapshot: database.Snapshot, Quiesce: a.quiesce}
@@ -265,6 +265,11 @@ func (a *App) Start(ctx context.Context) {
 	// middle of updating itself.
 	a.SelfUpdate.Prepare(ctx)
 	recoverStartup := func() error {
+		// First, since an update's helper waits for it; cleanup below that
+		// writes is retried once the update ends.
+		if err := a.SelfUpdate.Recover(ctx, ctx); err != nil {
+			return err
+		}
 		// A file command interrupted by the restart may still be writing,
 		// and a console helper may still be sending a command.
 		if err := a.Files.RemoveLeftovers(ctx); err != nil {
@@ -274,9 +279,6 @@ func (a *App) Start(ctx context.Context) {
 			return err
 		}
 		if err := a.Files.RemoveStages(ctx, a.fileTarget); err != nil {
-			return err
-		}
-		if err := a.SelfUpdate.Recover(ctx, ctx); err != nil {
 			return err
 		}
 		return a.Runner.Start(ctx, lift)

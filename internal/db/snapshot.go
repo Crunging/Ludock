@@ -348,13 +348,31 @@ func writeRestored(path string, body io.Reader, size int64, mode os.FileMode) er
 		return err
 	}
 	defer file.Close()
-	if written, err := io.Copy(file, body); err != nil || written != size {
+	// A failed write, such as a full disk, is worth trying again; only a
+	// short or unreadable archive is the copy's fault.
+	destination := &recordingWriter{w: file}
+	if written, err := io.Copy(destination, body); destination.err != nil {
+		return destination.err
+	} else if err != nil || written != size {
 		return errRestoreArchive
 	}
 	if err := file.Chmod(mode); err != nil {
 		return err
 	}
 	return file.Sync()
+}
+
+type recordingWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (r *recordingWriter) Write(p []byte) (int, error) {
+	n, err := r.w.Write(p)
+	if err != nil {
+		r.err = err
+	}
+	return n, err
 }
 
 func syncPath(path string) error {
