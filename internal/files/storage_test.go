@@ -414,7 +414,8 @@ func TestFailedChangeRemovesHelper(t *testing.T) {
 			return f.service.Rename(ctx, f.target, f.root, "missing.txt", "other.txt", nil)
 		},
 		"upload": func() error {
-			return f.service.Upload(ctx, f.target, f.root, "", "short.txt", 10, strings.NewReader("short"), nil)
+			_, err := f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "short.txt", Size: 10}}, strings.NewReader("short"), nil)
+			return err
 		},
 	} {
 		// The changed data may still be written, so removal is retried until
@@ -454,7 +455,7 @@ func TestLeftoverHelpersAreRemovedAtStartup(t *testing.T) {
 }
 
 // With no upload size limit, a file that would leave the disk less than its
-// spare space is refused before anything is written, and the helper removed.
+// spare space is refused before anything is written.
 func TestUploadNeedsFreeSpace(t *testing.T) {
 	f := setup(t)
 	var stat unix.Statfs_t
@@ -464,22 +465,18 @@ func TestUploadNeedsFreeSpace(t *testing.T) {
 	space := helper.Space(&stat)
 	// Within the free space, but not with the spare kept; the margin covers
 	// other writers freeing space meanwhile.
-	size := space.Available - UploadSpare(space.Total) + 256<<20
-	err := f.service.Upload(ctx, f.target, f.root, "", "huge.bin", size, strings.NewReader("x"), nil)
-	if public, ok := apperr.As(err); !ok || public.Code != "NOT_ENOUGH_SPACE" || public.Status != 507 {
-		t.Fatal(err)
+	size := space.Available - helper.UploadSpare(space.Total) + 256<<20
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "huge.bin", Size: size}}, zeroFree{}, nil)
+	if public, ok := apperr.As(results[0]); err != nil || !ok || public.Code != "NOT_ENOUGH_SPACE" || public.Status != 507 {
+		t.Fatal(results, err)
 	}
 	if _, err := os.Stat(filepath.Join(f.data, "huge.bin")); !os.IsNotExist(err) {
 		t.Fatal("file written", err)
 	}
-	f.helpersLeft(t)
-	if err := f.service.Upload(ctx, f.target, f.root, "", "small.txt", 5, strings.NewReader("small"), nil); err != nil {
-		t.Fatal(err)
-	}
-	if got := UploadSpare(10 << 30); got != 512<<20 {
+	if got := helper.UploadSpare(10 << 30); got != 512<<20 {
 		t.Fatal("a small disk keeps a twentieth", got)
 	}
-	if got := UploadSpare(1 << 40); got != 1<<30 {
+	if got := helper.UploadSpare(1 << 40); got != 1<<30 {
 		t.Fatal("a large disk keeps 1 GiB", got)
 	}
 }

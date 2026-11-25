@@ -2,6 +2,7 @@ package fakedocker
 
 import (
 	"bufio"
+	"bytes"
 	"io"
 	"net"
 	"net/http"
@@ -102,12 +103,24 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 			conn.Write(Frame(1, []byte("DeadlineExceeded: failed to start io pipe copy\r\n")))
 			return
 		}
+		e.mu.Lock()
+		lose := e.LoseUploads > 0 && slices.ContainsFunc(instance.options.Cmd, func(arg string) bool {
+			return strings.Contains(arg, `"operation":"upload"`) || strings.Contains(arg, `"operation":"upload-files"`)
+		})
+		if lose {
+			e.LoseUploads--
+		}
+		e.mu.Unlock()
 		var mu sync.Mutex
 		write := func(channel byte) func([]byte) {
 			return func(data []byte) {
 				mu.Lock()
 				defer mu.Unlock()
-				conn.Write(Frame(channel, data))
+				// A lost result loses the helper's answers too, but not a batch
+				// upload's requests for its next trailer, which it needs to go on.
+				if !lose || channel != 1 || bytes.Contains(data, []byte(`"ready":true`)) {
+					conn.Write(Frame(channel, data))
+				}
 			}
 		}
 		code := 0
@@ -127,10 +140,7 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 		e.mu.Lock()
 		instance.running = false
 		instance.exitCode = &code
-		if e.LoseUploads > 0 && slices.ContainsFunc(instance.options.Cmd, func(arg string) bool { return strings.Contains(arg, `"operation":"upload"`) }) {
-			e.LoseUploads--
-			instance.lost = true
-		}
+		instance.lost = lose
 		e.mu.Unlock()
 	})
 }

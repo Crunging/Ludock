@@ -45,8 +45,10 @@ var fileErrors = &ExecErrors{Timeout: ErrTimeout, Failed: ErrFailed, Unsafe: Err
 		datasize.Format(helper.Unpack.Bytes)+" or 100 times its own size, or has too many entries or nested folders."),
 	helper.FileArchiveFull: apperr.New("ARCHIVE_NO_SPACE", 409, "The archive wasn’t unpacked: the disk would run short of free space."),
 	helper.FileNotArchive:  apperr.New("NOT_AN_ARCHIVE", 415, "This file isn’t a zip, tar, or tar.gz archive, or it is damaged."),
+	helper.FileArchiveDeep: apperr.New("ARCHIVE_TOO_DEEP", 409, "The archive wasn’t unpacked: its files would sit deeper than Files can open. Move it to a folder nearer the top and unpack it there."),
 	// A 5xx status reports the result as unconfirmed.
 	helper.FilePartial:      apperr.New("FILE_PARTIAL", 500, "Only part of the selection was changed"),
+	helper.FileUncertain:    apperr.New("FILE_UNCERTAIN", 500, "The file change may have completed"),
 	helper.FileMounted:      apperr.New("MOUNTED_FOLDER", 409, "This is, or holds, a folder mounted into the server separately, which Ludock won’t delete, rename, or move. Change what’s inside that folder instead."),
 	helper.FileHoldsRestore: apperr.New("RESTORE_FOLDER_INSIDE", 409, "This folder holds a hidden .ludock-restore-… folder, where a restore keeps the server’s previous data, so Ludock won’t delete, rename, or move it. Finish or undo that restore from Activity or Needs attention; if no restore needs the folder, keep what you need from it and delete it on the host."),
 }}
@@ -69,9 +71,13 @@ type ExecOptions struct {
 	Cmd []string
 	// Input is streamed to stdin; Trailer follows it only after the whole
 	// input arrived and every access check passed, so the helper commits the
-	// upload only then.
+	// upload only then. A public error from Input fails the command with it.
 	Input   io.Reader
 	Trailer []byte
+	// Stdout, when set, receives the output as it arrives, including what a
+	// command that then fails printed; Exec returns no output. It is not
+	// limited.
+	Stdout io.Writer
 	// AssertAccess runs before the exec, after it is created, and between
 	// input chunks; with Limit, also every second while the command runs.
 	// A settling command checks it only after the create.
@@ -284,7 +290,11 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 					break
 				}
 				if readErr != nil {
-					fail(ErrUpload)
+					if _, public := apperr.As(readErr); public {
+						fail(readErr)
+					} else {
+						fail(ErrUpload)
+					}
 					break
 				}
 			}
@@ -295,7 +305,11 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		}()
 	}
 	var stdout limitedBuffer
-	demuxErr := docker.Demux(conn, &stdout, nil)
+	var output io.Writer = &stdout
+	if options.Stdout != nil {
+		output = options.Stdout
+	}
+	demuxErr := docker.Demux(conn, output, nil)
 	var info *docker.ExecInspect
 	if options.Settle {
 		conn.Close()
@@ -412,4 +426,10 @@ func stopHelper(client *docker.Client, container string) bool {
 		return true
 	}
 	return err == nil && !info.State.Running
+}
+
+// FileExitError is the public error of a file helper exit code, or nil for
+// success.
+func FileExitError(code int) error {
+	return fileErrors.exit(&docker.ExecInspect{ExitCode: &code})
 }

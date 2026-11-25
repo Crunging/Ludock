@@ -44,17 +44,20 @@ func (e *Engine) RunHelpers(hook HelperHook) {
 		if args == nil {
 			return 127
 		}
-		var out, errs bytes.Buffer
-		code := helper.Main(args, stdin, &out, &errs)
-		// Docker sends no empty frames.
-		if out.Len() > 0 {
-			stdout(out.Bytes())
-		}
-		if errs.Len() > 0 {
-			stderr(errs.Bytes())
-		}
-		return code
+		// Output streams as the helper writes it, as Docker's does: a batch
+		// upload waits on the helper's lines while it runs.
+		return helper.Main(args, stdin, frames(stdout), frames(stderr))
 	}
+}
+
+// frames writes each write as a frame; Docker sends no empty frames.
+type frames func([]byte)
+
+func (f frames) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		f(p)
+	}
+	return len(p), nil
 }
 
 // hostArgs rewrites the paths a helper sees under its mounts' targets to

@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -20,9 +24,14 @@ import (
 
 func runFile(t *testing.T, request FileRequest, stdin []byte) (string, int) {
 	t.Helper()
+	return runFileFrom(t, request, bytes.NewReader(stdin))
+}
+
+func runFileFrom(t *testing.T, request FileRequest, stdin io.Reader) (string, int) {
+	t.Helper()
 	argument, _ := json.Marshal(request)
 	var stdout, stderr bytes.Buffer
-	code := RunFile(string(argument), bytes.NewReader(stdin), &stdout, &stderr)
+	code := RunFile(string(argument), stdin, &stdout, &stderr)
 	if code != 0 && stderr.String() != FileFailure {
 		t.Fatalf("stderr %q", stderr.String())
 	}
@@ -30,6 +39,31 @@ func runFile(t *testing.T, request FileRequest, stdin []byte) (string, int) {
 		t.Fatal("failure leaked a path")
 	}
 	return stdout.String(), code
+}
+
+// trailerHook is an upload's stdin that runs before once the helper has the
+// body and reads on for the trailer.
+type trailerHook struct {
+	body, trailer []byte
+	before        func() error
+	err           error
+}
+
+func (h *trailerHook) Read(p []byte) (int, error) {
+	if len(h.body) > 0 {
+		n := copy(p, h.body)
+		h.body = h.body[n:]
+		return n, nil
+	}
+	if h.before != nil {
+		h.err, h.before = h.before(), nil
+	}
+	if len(h.trailer) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, h.trailer)
+	h.trailer = h.trailer[n:]
+	return n, nil
 }
 
 func dataRoot(t *testing.T) (string, string) {
@@ -133,6 +167,42 @@ func TestMutationsAndUploads(t *testing.T) {
 			t.Fatal("staging file left behind")
 		}
 	}
+	// What happens once the body is in, when the helper asks for the trailer:
+	// the staged file is still root's alone, and a folder moved out of the
+	// root or a staging name swapped meanwhile publishes nothing.
+	os.Mkdir(filepath.Join(root, "moving"), 0o755)
+	os.WriteFile(filepath.Join(root, "other"), []byte("other"), 0o644)
+	staging := ".ludock-upload-" + id + ".tmp"
+	for _, test := range []struct {
+		path   string
+		before func() error
+		ok     bool
+	}{
+		{"staged.txt", func() error {
+			if info, err := os.Lstat(filepath.Join(root, staging)); err != nil || info.Mode().Perm() != 0o600 {
+				return fmt.Errorf("staged file readable: %v %v", info.Mode(), err)
+			}
+			return nil
+		}, true},
+		{"moving/moved.txt", func() error { return os.Rename(filepath.Join(root, "moving"), filepath.Join(outside, "moving")) }, false},
+		{"swapped.txt", func() error { return os.Rename(filepath.Join(root, "other"), filepath.Join(root, staging)) }, false},
+	} {
+		request := FileRequest{Operation: "upload", Root: root, Path: test.path, Size: &size, UploadID: id}
+		stdin := &trailerHook{body: []byte("12345"), trailer: []byte(id), before: test.before}
+		if _, code := runFileFrom(t, request, stdin); (code == 0) != test.ok || stdin.err != nil {
+			t.Fatal(test.path, code, stdin.err)
+		}
+		published := filepath.Join(root, test.path)
+		if test.path == "moving/moved.txt" {
+			published = filepath.Join(outside, test.path)
+		}
+		if data, err := os.ReadFile(published); test.ok != (err == nil) || (test.ok && string(data) != "12345") {
+			t.Fatal(test.path, "published", string(data), err)
+		}
+	}
+	if info, _ := os.Stat(filepath.Join(root, "staged.txt")); info.Mode().Perm() != 0o666&^fs.FileMode(currentUmask()) {
+		t.Fatal("published with mode", info.Mode())
+	}
 	created := FileRequest{Operation: "upload", Root: root, Path: "new.txt", Size: &size, UploadID: id}
 	if _, code := runFile(t, created, []byte("12345"+id)); code != 0 {
 		t.Fatal("new upload")
@@ -144,6 +214,147 @@ func TestMutationsAndUploads(t *testing.T) {
 	}
 	if _, code := runFile(t, FileRequest{Operation: "download", Root: root, Path: "linked"}, nil); code == 0 {
 		t.Fatal("downloaded a hard link")
+	}
+
+	// The file gets its group before its final mode, and its owner last, so
+	// the mode's group bits never apply to the helper's own group.
+	var steps []string
+	parent, _ := os.Stat(root)
+	want := parent.Sys().(*syscall.Stat_t)
+	fchown = func(descriptor, uid, gid int) error {
+		steps = append(steps, fmt.Sprintf("owner %d group %d", uid, gid))
+		return unix.Fchown(descriptor, uid, gid)
+	}
+	fchmod = func(descriptor int, mode uint32) error {
+		var stat unix.Stat_t
+		unix.Fstat(descriptor, &stat)
+		steps = append(steps, fmt.Sprintf("mode with group %d", stat.Gid))
+		return unix.Fchmod(descriptor, mode)
+	}
+	defer func() { fchown, fchmod = unix.Fchown, unix.Fchmod }()
+	if _, code := runFile(t, created, []byte("12345"+id)); code != 0 || !slices.Equal(steps, []string{fmt.Sprintf("owner -1 group %d", want.Gid),
+		fmt.Sprintf("mode with group %d", want.Gid), fmt.Sprintf("owner %d group -1", want.Uid)}) {
+		t.Fatal(code, steps)
+	}
+	// A mode whose group grants more than its owner is kept when the owner
+	// stays the helper, and narrowed to the owner's when it changes, since
+	// the future owner holds the group's rights until it is set.
+	fchown, fchmod = unix.Fchown, unix.Fchmod
+	for _, test := range []struct {
+		helper func() int
+		want   fs.FileMode
+	}{{os.Geteuid, 0o460}, {func() int { return -2 }, 0o440}} {
+		helperUID = test.helper
+		os.Chmod(filepath.Join(root, "new.txt"), 0o460)
+		if _, code := runFile(t, created, []byte("12345"+id)); code != 0 {
+			t.Fatal("replace", code)
+		}
+		if info, _ := os.Stat(filepath.Join(root, "new.txt")); info.Mode().Perm() != test.want {
+			t.Fatal("replaced 0460 as", info.Mode())
+		}
+	}
+	helperUID = os.Geteuid
+	// A publish that took effect and then failed, as on NFS, is a success.
+	renameat = func(fromDirectory int, from string, toDirectory int, to string) error {
+		unix.Renameat(fromDirectory, from, toDirectory, to)
+		return unix.EIO
+	}
+	defer func() { renameat = unix.Renameat }()
+	if _, code := runFile(t, upload, []byte("again"+id)); code != 0 {
+		t.Fatal("reported a published file as failed")
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "server.properties")); string(data) != "again" {
+		t.Fatal(string(data))
+	}
+	// One that failed with nothing to show it did nothing is unconfirmed.
+	renameat = func(int, string, int, string) error { return unix.EIO }
+	if _, code := runFile(t, upload, []byte("third"+id)); code != FileUncertain {
+		t.Fatal("reported an unknown publish as", code)
+	}
+}
+
+// An upload first removes the staging files that cut-off uploads left in its
+// folder, reading the folder a few names at a time: only regular files with
+// a staging name untouched for an hour, since a younger one may belong to an
+// upload still running elsewhere, and never one an excluded mount hides from
+// the game, which the targeted cleanups leave too.
+func TestUploadSweepsStaleStaging(t *testing.T) {
+	root, _ := dataRoot(t)
+	largest := 0
+	sweepChunk = 3
+	readNames = func(directory *os.File, count int) ([]string, error) {
+		names, err := directory.Readdirnames(count)
+		largest = max(largest, len(names))
+		return names, err
+	}
+	defer func() { sweepChunk, sweepTime, readNames = 1024, 2*time.Second, (*os.File).Readdirnames }()
+	stage := func(index int) string {
+		return fmt.Sprintf(".ludock-upload-6f9619ff-8b86-4011-b42d-00c04fc964%02d.tmp", index)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	for index := range 20 {
+		os.WriteFile(filepath.Join(root, fmt.Sprintf("game-%d.dat", index)), nil, 0o644)
+		os.WriteFile(filepath.Join(root, stage(index)), []byte("cut off"), 0o600)
+		if index != 7 {
+			os.Chtimes(filepath.Join(root, stage(index)), old, old)
+		}
+	}
+	hidden := filepath.Join(root, stage(3))
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root, Blocked: []string{hidden}}, nil); code != 0 || largest != 3 {
+		t.Fatal("prepare", code, "read", largest, "names at once")
+	}
+	for index := range 20 {
+		_, err := os.Lstat(filepath.Join(root, stage(index)))
+		if kept := index == 3 || index == 7; kept != (err == nil) {
+			t.Fatal(stage(index), "kept", err == nil)
+		}
+	}
+	// A folder past the sweep's budget is swept only so far, and the upload
+	// goes ahead.
+	seen := 0
+	sweepEntries = 5
+	readNames = func(directory *os.File, count int) ([]string, error) {
+		names, err := directory.Readdirnames(count)
+		seen += len(names)
+		return names, err
+	}
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root, Blocked: []string{hidden}}, nil); code != 0 || seen > 5 {
+		t.Fatal("prepare past the budget", code, seen)
+	}
+	sweepEntries = 10000
+	// Time runs out mid-chunk, as on slow storage: no candidate after that is
+	// touched, and the upload still goes ahead.
+	old2 := filepath.Join(root, stage(30))
+	os.WriteFile(old2, nil, 0o600)
+	os.Chtimes(old2, old, old)
+	sweepTime = 20 * time.Millisecond
+	readNames = func(directory *os.File, count int) ([]string, error) {
+		names, err := directory.Readdirnames(count)
+		time.Sleep(30 * time.Millisecond)
+		return names, err
+	}
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root, Blocked: []string{hidden}}, nil); code != 0 {
+		t.Fatal("prepare past its time", code)
+	}
+	if _, err := os.Lstat(old2); err != nil {
+		t.Fatal("swept on past its time", err)
+	}
+	sweepTime = 2 * time.Second
+	// A folder that can't be read is left unswept, and the upload goes ahead.
+	readNames = func(*os.File, int) ([]string, error) { return nil, unix.EIO }
+	if _, code := runFile(t, FileRequest{Operation: "upload-prepare", Root: root}, nil); code != 0 {
+		t.Fatal("a sweep that couldn't read the folder stopped the upload", code)
+	}
+	for _, request := range []FileRequest{
+		{Operation: "upload-files-cleanup", Root: root, Files: []UploadFile{{UploadID: stage(3)[15:51]}}, Blocked: []string{hidden}},
+		{Operation: "upload-cleanup", Root: root, Path: "server.properties", UploadID: stage(3)[15:51], Blocked: []string{hidden}},
+	} {
+		if _, code := runFile(t, request, nil); code == 0 {
+			t.Fatal(request.Operation, "removed a staging file over an excluded mount")
+		}
+		if _, err := os.Lstat(hidden); err != nil {
+			t.Fatal(request.Operation, err)
+		}
 	}
 }
 

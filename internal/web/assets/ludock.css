@@ -337,6 +337,7 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 .alert::before { content: ""; flex: none; width: 12px; height: 12px; margin-top: 5px; border-radius: 3px; background: var(--ink-3); }
 .alert > p, .alert > div, .alert > span { flex: 1; min-width: 0; }
 .alert p { margin: 0; }
+.alert ul { margin: 6px 0 0; padding-left: 20px; overflow-wrap: anywhere; }
 .alert--error { background: color-mix(in srgb, var(--halt) 15%, var(--block)); }
 .alert--error::before {
   border-radius: 0; --stroke: 1.4px;

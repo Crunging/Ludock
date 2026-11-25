@@ -1,5 +1,6 @@
-// File uploads: one raw PUT per file, in order, into the folder shown.
-// The server checks the size limit, the name, and access while it writes.
+// File uploads: raw PUTs of up to 100 files or 16 MiB each, one after
+// another, into the folder shown; a larger file goes alone. The server
+// checks the size limit, each name, and access while it writes.
 "use strict";
 // The file editor saves raw text with a PUT, since form bodies are capped
 // far below the preview limit; the response replaces the dialog's content.
@@ -89,23 +90,39 @@
   var feedback = document.getElementById("file-feedback");
   var csrf = document.querySelector('meta[name="csrf-token"]');
   var maxUpload = Number(page.getAttribute("data-max-upload")) || 0;
+  var batchFiles = 100, batchBytes = 16 * 1024 * 1024;
   var controller = null;
 
   function disabled() { return zone.getAttribute("aria-disabled") === "true" || controller !== null; }
-  function showNotice(kind, message) {
+  // A notice is a sentence and, for files that didn't upload, one line each.
+  function showNotice(kind, message, lines) {
     if (!feedback) return;
     var alert = document.createElement("div");
     alert.className = "alert alert--" + kind;
     alert.setAttribute("role", kind === "error" ? "alert" : "status");
-    alert.textContent = message;
+    if (!lines || lines.length === 0) {
+      alert.textContent = message;
+    } else {
+      var body = document.createElement("div");
+      var summary = document.createElement("p");
+      summary.textContent = message;
+      var list = document.createElement("ul");
+      lines.forEach(function (line) {
+        var item = document.createElement("li");
+        item.textContent = line;
+        list.append(item);
+      });
+      body.append(summary, list);
+      alert.append(body);
+    }
     feedback.replaceChildren(alert);
   }
   // Errors come back as an alert fragment; show only its text.
-  function errorText(response, body) {
+  function errorText(status, body) {
     var template = document.createElement("template");
     template.innerHTML = body;
     var text = template.content.textContent.trim();
-    return text || "Upload failed (HTTP " + response.status + ").";
+    return text || "Upload failed (HTTP " + status + ").";
   }
 
   // The notice waits for the folder, so no row from before the upload is on
@@ -120,63 +137,146 @@
     }
   }
 
-  async function upload(files) {
-    if (disabled() || files.length === 0) return;
-    var notice = null;
-    function show(kind, message) { notice = [kind, message]; }
+  function batches(files) {
+    var all = [], batch = [], bytes = 0;
+    files.forEach(function (file) {
+      if (batch.length > 0 && (batch.length >= batchFiles || bytes + file.size > batchBytes)) {
+        all.push(batch);
+        batch = [];
+        bytes = 0;
+      }
+      batch.push(file);
+      bytes += file.size;
+    });
+    if (batch.length > 0) all.push(batch);
+    return all;
+  }
+
+  // send uploads one batch, calling progress with the file being sent.
+  // fetch can't report upload progress, so this uses XMLHttpRequest.
+  function send(batch, progress) {
+    return new Promise(function (resolve, reject) {
+      var manifest = JSON.stringify({ files: batch.map(function (file) { return { name: file.name, size: file.size }; }) }) + "\n";
+      var head = new Blob([manifest]).size;
+      var query = new URLSearchParams({ root: page.getAttribute("data-files-root"), path: page.getAttribute("data-files-path") });
+      var request = new XMLHttpRequest();
+      request.open("PUT", "/files/" + encodeURIComponent(page.getAttribute("data-files")) + "/upload?" + query);
+      request.setRequestHeader("Content-Type", "application/octet-stream");
+      request.setRequestHeader("X-CSRF-Token", csrf ? csrf.content : "");
+      request.setRequestHeader("HX-Request", "true");
+      request.upload.addEventListener("progress", function (event) {
+        var sent = event.loaded - head, index = 0;
+        while (index < batch.length - 1 && sent >= batch[index].size) {
+          sent -= batch[index].size;
+          index++;
+        }
+        progress(index);
+      });
+      request.addEventListener("load", function () { resolve({ status: request.status, body: request.responseText }); });
+      request.addEventListener("error", function () { reject(new TypeError("The connection was lost.")); });
+      request.addEventListener("abort", function () { reject(new DOMException("Aborted", "AbortError")); });
+      controller.signal.addEventListener("abort", function () { request.abort(); }, { once: true });
+      request.send(new Blob([manifest].concat(batch), { type: "application/octet-stream" }));
+    });
+  }
+
+  async function upload(chosen) {
+    if (disabled() || chosen.length === 0) return;
     controller = new AbortController();
-    var completed = 0, current = files[0].name;
+    var completed = 0, offset = 0, current = chosen[0].name;
+    // lines has one entry per file that didn't upload; stop says why the
+    // files after offset weren't tried.
+    var lines = [], stop = "";
     zone.setAttribute("aria-disabled", "true");
     if (choose) choose.disabled = true;
     progress.hidden = false;
     cancel.disabled = false;
     if (feedback) feedback.replaceChildren();
+    var files = chosen.filter(function (file) {
+      if (!maxUpload || file.size <= maxUpload) return true;
+      lines.push("Could not upload “" + file.name + "”: File exceeds the upload size limit of " + page.getAttribute("data-max-upload-text"));
+      return false;
+    });
+    function report(index) {
+      current = files[offset + index].name;
+      status.textContent = "Uploading " + (chosen.length - files.length + offset + index + 1) + " of " + chosen.length + ": " + current;
+    }
     try {
-      for (var index = 0; index < files.length; index++) {
-        var file = files[index];
-        current = file.name;
+      var queue = batches(files);
+      for (var position = 0; position < queue.length; position++) {
+        var batch = queue[position];
         if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
-        status.textContent = "Uploading " + (completed + 1) + " of " + files.length + ": " + file.name;
-        if (maxUpload && file.size > maxUpload) {
-          throw new Error("File exceeds the upload size limit of " + page.getAttribute("data-max-upload-text"));
-        }
-        var query = new URLSearchParams({ root: page.getAttribute("data-files-root"), path: page.getAttribute("data-files-path"), name: file.name });
-        var response = await fetch("/files/" + encodeURIComponent(page.getAttribute("data-files")) + "/upload?" + query, {
-          method: "PUT",
-          headers: { "Content-Type": "application/octet-stream", "X-CSRF-Token": csrf ? csrf.content : "", "HX-Request": "true" },
-          body: file,
-          signal: controller.signal,
-          credentials: "same-origin",
-        });
+        report(0);
+        var response = await send(batch, report);
         if (response.status === 401) {
           window.location.assign("/login");
           return;
         }
-        if (response.status === 202) {
-          // The server could not tell whether the file was written.
-          var unknown = new Error(errorText(response, await response.text()));
-          unknown.unconfirmed = true;
-          throw unknown;
+        // A bare 413 is a body limit, a proxy's or a batch's, not a refused
+        // file, which comes in the results: its files go again one at a time.
+        if (response.status === 413) {
+          if (batch.length > 1) {
+            queue.splice(position + 1, 0, ...batch.map(function (file) { return [file]; }));
+          } else {
+            lines.push("Could not upload “" + batch[0].name + "”: " + errorText(response.status, response.body));
+            offset += 1;
+          }
+          continue;
         }
-        if (!response.ok) throw new Error(errorText(response, await response.text()));
-        completed += 1;
+        // A proxy's error or timeout can come after the server wrote some of
+        // the batch.
+        if (response.status >= 500 || response.status === 408) {
+          stop = "The results for " + (batch.length === 1 ? "“" + batch[0].name + "”" : batch.length + " files from “" + batch[0].name + "”") +
+            " could not be confirmed: " + errorText(response.status, response.body) + " Review the folder before uploading again.";
+          offset += batch.length;
+          break;
+        }
+        if (response.status !== 200) {
+          stop = "Could not upload “" + batch[0].name + "”: " + errorText(response.status, response.body);
+          offset += 1;
+          break;
+        }
+        var answer = JSON.parse(response.body), unsure = false;
+        answer.results.forEach(function (result) {
+          if (result.status === "uploaded") {
+            completed += 1;
+          } else {
+            unsure = unsure || result.status === "unconfirmed";
+            lines.push(result.status === "unconfirmed" ? result.message : "Could not upload “" + result.name + "”: " + result.message);
+          }
+        });
+        offset += batch.length;
+        // After an unknown result, the rest waits until someone checks the folder.
+        if (answer.stop || unsure) break;
       }
-      show("success", completed + " file" + (completed === 1 ? "" : "s") + " uploaded.");
     } catch (error) {
-      if (controller.signal.aborted) {
-        show("success", "Upload cancelled. " + completed + " of " + files.length + " files finished. Check “" + current +
-          "” before trying again; cancelling doesn’t undo data already written.");
-      } else if (error && error.unconfirmed) {
-        show("error", "Uploaded " + completed + " of " + files.length + " files. " + error.message);
-      } else {
-        show("error", "Uploaded " + completed + " of " + files.length + " files. Could not upload “" + current + "”: " +
-          (error && error.message ? error.message : "Upload failed."));
+      if (!controller.signal.aborted) {
+        // Files sent before the one cut off may have been written.
+        stop = "The upload stopped at “" + current + "”: " + (error && error.message ? error.message : "Upload failed.") +
+          " Review the folder before uploading again.";
+        offset = files.length;
       }
     } finally {
+      var kind = "error", message = "Uploaded " + completed + " of " + chosen.length + " files.";
+      if (stop) lines.push(stop);
+      var left = files.length - offset;
+      if (left > 0) lines.push(left === 1 ? "The remaining file wasn’t uploaded." : "The remaining " + left + " files weren’t uploaded.");
+      if (controller.signal.aborted) {
+        kind = "success";
+        message = "Upload cancelled. " + completed + " of " + chosen.length + " files finished. Check the folder before trying again; " +
+          "files sent with “" + current + "” may have been written, and cancelling doesn’t undo them.";
+        lines = [];
+      } else if (completed === chosen.length) {
+        kind = "success";
+        message = completed + " file" + (completed === 1 ? "" : "s") + " uploaded.";
+      } else if (lines.length === 1) {
+        // One line reads as one sentence.
+        message += " " + lines.pop();
+      }
       status.textContent = "Refreshing folder…";
       cancel.disabled = true;
       await refreshFolder();
-      if (notice) showNotice(notice[0], notice[1]);
+      showNotice(kind, message, lines);
       document.dispatchEvent(new CustomEvent("files-updated"));
       controller = null;
       progress.hidden = true;

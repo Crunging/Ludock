@@ -48,6 +48,14 @@ func (t *tracker) close(descriptor fd) {
 	unix.Close(int(descriptor))
 }
 
+// closeFrom closes the descriptors opened since the first count.
+func (t *tracker) closeFrom(count int) {
+	for _, descriptor := range t.open[count:] {
+		unix.Close(int(descriptor))
+	}
+	t.open = t.open[:count]
+}
+
 func (t *tracker) closeAll() {
 	for _, descriptor := range t.open {
 		unix.Close(int(descriptor))

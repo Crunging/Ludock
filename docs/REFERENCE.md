@@ -229,12 +229,12 @@ needs `ludock.address`.
 
 | What | Limit |
 | --- | --- |
-| Upload | No size limit by default, but an upload must leave 1 GiB free on the server's disk (a twentieth of a disk under 20 GiB); set a limit in **Settings → Advanced** |
+| Upload | No size limit by default, but a file is refused if it would leave less than 1 GiB free on the server's disk (a twentieth of a disk under 20 GiB), a margin for the game that the disk's own rounding can dip into slightly; set a limit in **Settings → Advanced** |
 | Text preview and editing | 512 KiB; larger or binary files download instead |
 | Unpacking an archive | 20 GiB, 100,000 entries, 64 nested folders, and 100 times the archive's size plus 1 MiB; 30 minutes |
 | Selection | 500 entries of one folder |
 | Folder listing | 10,000 entries |
-| Upload or download | 30 minutes, or 60 seconds without data for an upload |
+| Upload or download | 30 minutes, or 30 seconds without data for an upload |
 | Other file actions | 55 seconds |
 | Backup archive | 100,000 entries and 64 folder levels; use `ludock.files` for smaller folders |
 | Shell command | 60 seconds |
@@ -742,7 +742,7 @@ Every name that starts with `.ludock-`, in any letter case, is Ludock's:
 | --- | --- | --- |
 | `.ludock-restore-<id>` | A restore's staging folder, at the top of a data folder: the backup's data before it moves in, then the data it replaced | When the restore ends, or once [one that stopped partway](#a-restore-that-stopped-partway) is finished or undone |
 | `.ludock-unpack-<id>` | An unpack in progress, beside the archive | When the unpack ends, or at Ludock's next start |
-| `.ludock-upload-<id>.tmp` | An upload or edit in progress, beside the file | When the upload ends |
+| `.ludock-upload-<id>.tmp` | An upload or edit in progress, beside the file | When the upload ends, or, if Ludock stopped meanwhile, by an upload to that folder once it is an hour old |
 
 Files doesn't show these names, and no one can create, rename, move, upload,
 unpack, download, or delete one there. A folder holding one can be deleted as

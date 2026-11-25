@@ -205,8 +205,19 @@ func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Req
 		return
 	}
 	view := snapshot.Server
-	d := views.FileDialog{ServerID: view.ID, ServerName: view.DisplayName, Action: query.Get("action"), Path: query.Get("path"),
+	path, err := files.NormalizeRelativePath(query.Get("path"))
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	d := views.FileDialog{ServerID: view.ID, ServerName: view.DisplayName, Action: query.Get("action"), Path: path,
 		Type: query.Get("type")}
+	if d.Action == "delete-selection" {
+		if err := files.CheckSelection(d.Path, query["name"]); err != nil {
+			s.fail(w, r, request, err)
+			return
+		}
+	}
 	index := slices.IndexFunc(view.FileRoots, func(root files.Root) bool { return root.ID == query.Get("root") })
 	if index < 0 || !slices.Contains([]string{"create", "rename", "delete", "unpack", "delete-selection"}, d.Action) {
 		s.fail(w, r, request, files.Error("ROOT_NOT_FOUND", 404))
@@ -214,10 +225,7 @@ func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Req
 	}
 	d.Root = view.FileRoots[index]
 	if d.Action == "delete-selection" {
-		if d.Names = query["name"]; len(d.Names) == 0 || len(d.Names) > files.MaxSelection {
-			s.fail(w, r, request, files.Error("INVALID_SELECTION", 400))
-			return
-		}
+		d.Names = query["name"]
 	} else if d.Action != "create" {
 		d.Name = d.Path[strings.LastIndex(d.Path, "/")+1:]
 	}
@@ -225,6 +233,13 @@ func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Req
 		d.Value = d.Name
 	}
 	render(w, r, http.StatusOK, views.FileActionDialog(d))
+}
+
+// canonicalPath is the path a file change used, which the audit records
+// instead of the request's spelling of it.
+func canonicalPath(value string) string {
+	normalized, _ := files.NormalizeRelativePath(value)
+	return normalized
 }
 
 var fileAudit = map[string]string{"create": "server.file.directory.created", "rename": "server.file.renamed", "delete": "server.file.deleted",
@@ -260,7 +275,7 @@ func (s *Server) fileChange(kind string) func(http.ResponseWriter, *http.Request
 		}
 		target := fileTarget(action)
 		var message string
-		details := map[string]any{"root": root, "path": path}
+		details := map[string]any{"root": root, "path": canonicalPath(path)}
 		switch kind {
 		case "create":
 			err = s.App.Files.Mkdir(action.Ctx, target, root, path, name, action.Assert)
@@ -445,7 +460,7 @@ func (s *Server) fileSave(w http.ResponseWriter, r *http.Request, request *Reque
 			s.fail(w, r, request, err)
 			return
 		}
-		details := map[string]any{"root": root, "path": path, "size": len(content)}
+		details := map[string]any{"root": root, "path": canonicalPath(path), "size": len(content)}
 		if unconfirmed(err) {
 			// The draft stays in the editor in case the write did not happen.
 			details["confirmed"] = false
@@ -458,7 +473,7 @@ func (s *Server) fileSave(w http.ResponseWriter, r *http.Request, request *Reque
 		render(w, r, public.Status, views.FilePreviewContent(p))
 		return
 	}
-	s.audit(r, request, "server.file.edited", action.Logical.ID, map[string]any{"root": root, "path": path, "size": len(content)})
+	s.audit(r, request, "server.file.edited", action.Logical.ID, map[string]any{"root": root, "path": canonicalPath(path), "size": len(content)})
 	saved, _ := files.ReadPreview(bytes.NewReader(content))
 	saved.Name, saved.Size = p.Name, int64(len(content))
 	p = s.previewView(action, id, root, path)
@@ -500,7 +515,7 @@ func (s *Server) fileDownload(w http.ResponseWriter, r *http.Request, request *R
 		return
 	}
 	defer download.Close()
-	s.audit(r, request, "server.file.downloaded", action.Logical.ID, map[string]any{"root": root, "path": path})
+	s.audit(r, request, "server.file.downloaded", action.Logical.ID, map[string]any{"root": root, "path": canonicalPath(path)})
 	s.streamDownload(w, action, download)
 }
 
@@ -544,48 +559,4 @@ func (s *Server) streamDownload(w http.ResponseWriter, action *serverAction, dow
 			panic(http.ErrAbortHandler)
 		}
 	}
-}
-
-// fileUpload stores one uploaded file. The body is the raw file
-// (application/octet-stream) with its exact Content-Length; the CSRF token
-// comes in the X-CSRF-Token header.
-func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Request) {
-	kind, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if kind != "application/octet-stream" {
-		http.Error(w, "Uploads must use application/octet-stream", http.StatusUnsupportedMediaType)
-		return
-	}
-	query := r.URL.Query()
-	root, path, name := query.Get("root"), query.Get("path"), query.Get("name")
-	size := r.ContentLength
-	if size < 0 || root == "" || name == "" {
-		s.fail(w, r, request, apperr.New("INVALID_REQUEST", 400, "Invalid upload request"))
-		return
-	}
-	if limit, _ := s.App.Advanced.UploadLimit(r.Context()); limit > 0 && size > limit {
-		s.fail(w, r, request, apperr.New("UPLOAD_TOO_LARGE", 413, "File exceeds the upload size limit of "+datasize.Format(limit)))
-		return
-	}
-	action, err := s.startAction(r, request, r.PathValue("id"), authz.FilesWrite)
-	if err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	defer action.Done()
-	// The upload helper stops after 30 minutes or 60 seconds without data.
-	http.NewResponseController(w).SetReadDeadline(time.Now().Add(31 * time.Minute))
-	details := map[string]any{"root": root, "path": path, "name": name, "size": size}
-	if err := s.App.Files.Upload(action.Ctx, fileTarget(action), root, path, name, size, r.Body, action.Assert); err != nil {
-		if !unconfirmed(err) {
-			s.fail(w, r, request, err)
-			return
-		}
-		// 202 tells the page the upload stopped without a known result.
-		details["confirmed"] = false
-		s.audit(r, request, "server.file.uploaded", action.Logical.ID, details)
-		render(w, r, http.StatusAccepted, views.Alert("error", "The result for “"+name+"” could not be confirmed. The upload may have completed. Review the folder before uploading again."))
-		return
-	}
-	s.audit(r, request, "server.file.uploaded", action.Logical.ID, details)
-	w.WriteHeader(http.StatusCreated)
 }

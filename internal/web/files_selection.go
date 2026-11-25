@@ -42,9 +42,20 @@ func (s *Server) fileMoveDialog(w http.ResponseWriter, r *http.Request, request 
 	if !query.Has("to") {
 		m.To = m.Path
 	}
-	if len(m.Names) == 0 || len(m.Names) > files.MaxSelection {
-		s.fail(w, r, request, files.Error("INVALID_SELECTION", 400))
+	// The folder must hold the names within the path bound; a destination
+	// that can't is said inside the dialog, which keeps its controls.
+	if err := files.CheckSelection(m.Path, m.Names); err != nil {
+		s.fail(w, r, request, err)
 		return
+	}
+	// Both are shown as their canonical paths, which are bounded; a
+	// destination that isn't a valid path shows the folder instead.
+	m.Path, _ = files.NormalizeRelativePath(m.Path)
+	to, destination := files.NormalizeRelativePath(m.To)
+	if destination == nil {
+		m.To, destination = to, files.CheckSelection(to, m.Names)
+	} else {
+		m.To = m.Path
 	}
 	action, err := s.startAction(r, request, m.ServerID, authz.FilesWrite)
 	if err != nil {
@@ -53,6 +64,9 @@ func (s *Server) fileMoveDialog(w http.ResponseWriter, r *http.Request, request 
 	}
 	defer action.Done()
 	s.moveView(action, &m)
+	if destination != nil {
+		m.Error = publicMessage(destination)
+	}
 	if htmxTarget(r) == "file-action" {
 		render(w, r, http.StatusOK, views.FileMoveContent(m))
 		return
@@ -76,7 +90,7 @@ func (s *Server) fileMove(w http.ResponseWriter, r *http.Request, request *Reque
 	} else {
 		destination = "“" + destination + "”"
 	}
-	details := map[string]any{"root": m.Root.ID, "path": m.Path, "names": m.Names, "destination": m.To}
+	details := map[string]any{"root": m.Root.ID, "path": canonicalPath(m.Path), "names": m.Names, "destination": canonicalPath(m.To)}
 	s.fileOutcome(w, r, request, action, err, "server.file.moved", details, "Moved "+views.ItemCount(len(m.Names))+" to "+destination+".",
 		"the selected items", func(message string) templ.Component {
 			s.moveView(action, &m)
@@ -101,6 +115,6 @@ func (s *Server) fileSelectionDownload(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	defer download.Close()
-	s.audit(r, request, "server.file.downloaded", action.Logical.ID, map[string]any{"root": root, "path": path, "names": names})
+	s.audit(r, request, "server.file.downloaded", action.Logical.ID, map[string]any{"root": root, "path": canonicalPath(path), "names": names})
 	s.streamDownload(w, action, download)
 }

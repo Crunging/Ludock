@@ -386,6 +386,10 @@ func (s *Service) auditDenial(ctx context.Context, actor *db.SessionUser, server
 	if slices.Contains(readCapabilities, capability) {
 		return
 	}
+	// An ID that is no server's, such as a forged route's, isn't stored.
+	if !identity.ValidID(serverID) {
+		serverID = ""
+	}
 	entry := db.AuditEntry{Action: "authorization.denied", TargetType: "server", TargetID: serverID,
 		Details: map[string]string{"capability": string(capability)}}
 	if current, _ := s.CurrentActor(ctx, actor); current != nil {

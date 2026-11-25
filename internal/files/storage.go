@@ -19,7 +19,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/Crunging/Ludock/internal/apperr"
-	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/games"
@@ -99,6 +98,17 @@ type lister struct {
 	timer  *time.Timer
 }
 
+// MaxPath bounds the canonical path below a root that any file change, as
+// composed from its parts, may use: Linux's PATH_MAX, 4096 bytes. A file
+// deeper than that can't be opened by path, by the game or the host's
+// tools, in one call, and the bound keeps helper arguments and audit rows
+// small. Requests longer only in their spelling, such as "./" repeated, are
+// still accepted.
+const MaxPath = helper.MaxPath
+
+// errLongPath refuses a composed path past MaxPath.
+func errLongPath() error { return Error("INVALID_PATH", 400) }
+
 func NormalizeRelativePath(value string) (string, error) {
 	if strings.Contains(value, "\x00") || strings.HasPrefix(value, "/") || slices.Contains(strings.Split(value, "/"), "..") {
 		return "", Error("INVALID_PATH", 400)
@@ -115,6 +125,9 @@ func NormalizeRelativePath(value string) (string, error) {
 	}
 	if slices.ContainsFunc(strings.Split(normalized, "/"), helper.Reserved) {
 		return "", Error("RESERVED_NAME", 400)
+	}
+	if len(normalized) > MaxPath {
+		return "", errLongPath()
 	}
 	return normalized, nil
 }
@@ -138,6 +151,15 @@ func joinRelative(parent, name string) string {
 		return name
 	}
 	return path.Join(parent, name)
+}
+
+// joinChecked is joinRelative for a normalized parent and a valid name,
+// refusing a path past MaxPath.
+func joinChecked(parent, name string) (string, error) {
+	if joined := joinRelative(parent, name); len(joined) <= MaxPath {
+		return joined, nil
+	}
+	return "", errLongPath()
 }
 
 func resolve(target Target, rootID, relative string) (Root, string, error) {
@@ -183,9 +205,13 @@ func (a *Access) Cleanup(retry bool) error {
 }
 
 func (a *Access) request(ctx context.Context, request helper.FileRequest, input io.Reader, trailer []byte) ([]byte, error) {
+	return a.exec(ctx, request, launch.ExecOptions{Input: input, Trailer: trailer})
+}
+
+func (a *Access) exec(ctx context.Context, request helper.FileRequest, options launch.ExecOptions) ([]byte, error) {
 	request.Blocked, request.Mounts = a.blocked, a.mounts
-	return launch.Exec(ctx, a.service.Docker, a.container, launch.ExecOptions{Cmd: helper.Command("file", request),
-		Input: input, Trailer: trailer, AssertAccess: a.assertAccess})
+	options.Cmd, options.AssertAccess = helper.Command("file", request), a.assertAccess
+	return launch.Exec(ctx, a.service.Docker, a.container, options)
 }
 
 // signature is what must not change while file access is prepared.
@@ -519,7 +545,12 @@ func (s *Service) Mkdir(ctx context.Context, target Target, rootID, parent, name
 	if err := ValidateName(name); err != nil {
 		return err
 	}
-	root, normalized, err := resolve(target, rootID, joinRelative(parent, name))
+	// Joining would clean away a parent's ".." before it is checked.
+	folder, err := NormalizeRelativePath(parent)
+	if err != nil {
+		return err
+	}
+	root, normalized, err := resolve(target, rootID, joinRelative(folder, name))
 	if err != nil {
 		return err
 	}
@@ -564,36 +595,22 @@ func (s *Service) Rename(ctx context.Context, target Target, rootID, relative, n
 	if normalized == "" {
 		return Error("ROOT_MUTATION", 400)
 	}
-	access, err := s.Acquire(ctx, target, root, false, assertAccess)
-	if err != nil {
-		return err
-	}
 	dir := path.Dir(normalized)
 	if dir == "." {
 		dir = ""
 	}
-	_, err = access.request(ctx, helper.FileRequest{Operation: "rename", Root: root.Path, Path: normalized,
-		Destination: joinRelative(dir, newName)}, nil, nil)
-	access.Cleanup(err != nil)
-	return err
-}
-
-// Upload writes a file of exactly size bytes. The helper commits only after
-// the upload ID trailer, which is sent after the complete body and the
-// last access check. Staging cleanup has no user-controlled input and runs
-// even after cancellation or revocation.
-func (s *Service) Upload(ctx context.Context, target Target, rootID, parent, name string, size int64, body io.Reader, assertAccess func() error) error {
-	if err := ValidateName(name); err != nil {
-		return err
-	}
-	if size < 0 || size > 1<<53-1 {
-		return Error("INVALID_UPLOAD_SIZE", 400)
-	}
-	root, normalized, err := resolve(target, rootID, joinRelative(parent, name))
+	destination, err := joinChecked(dir, newName)
 	if err != nil {
 		return err
 	}
-	return s.write(ctx, target, root, normalized, size, body, nil, true, assertAccess)
+	access, err := s.Acquire(ctx, target, root, false, assertAccess)
+	if err != nil {
+		return err
+	}
+	_, err = access.request(ctx, helper.FileRequest{Operation: "rename", Root: root.Path, Path: normalized,
+		Destination: destination}, nil, nil)
+	access.Cleanup(err != nil)
+	return err
 }
 
 // Save replaces an existing file's content only while it still matches
@@ -610,39 +627,24 @@ func (s *Service) Save(ctx context.Context, target Target, rootID, relative stri
 	if normalized == "" {
 		return Error("ROOT_MUTATION", 400)
 	}
-	return s.write(ctx, target, root, normalized, int64(len(content)), bytes.NewReader(content), &expected, false, assertAccess)
+	return s.write(ctx, target, root, normalized, int64(len(content)), bytes.NewReader(content), &expected, assertAccess)
 }
 
-// UploadSpare is the free space an upload leaves on the server's disk: 1 GiB,
-// or a twentieth of a smaller disk, so the game can still save.
-func UploadSpare(total int64) int64 { return min(1<<30, total/20) }
-
 func (s *Service) write(ctx context.Context, target Target, root Root, normalized string, size int64, body io.Reader,
-	expected *helper.FileVersion, checkSpace bool, assertAccess func() error) error {
+	expected *helper.FileVersion, assertAccess func() error) error {
 	access, err := s.Acquire(ctx, target, root, false, assertAccess)
 	if err != nil {
 		return err
 	}
-	if checkSpace {
-		// Uploads have no size limit by default, so one that would fill the
-		// disk is refused before anything is written.
-		folder := path.Dir(normalized)
-		if folder == "." {
-			folder = ""
-		}
-		out, err := access.request(ctx, helper.FileRequest{Operation: "space", Root: root.Path, Path: folder}, nil, nil)
-		var space helper.FileSpace
-		if err == nil && (json.Unmarshal(out, &space) != nil || space.Total <= 0) {
-			err = Error("FILE_OPERATION_FAILED", 409)
-		}
-		if err == nil && size > space.Available-UploadSpare(space.Total) {
-			err = apperr.New("NOT_ENOUGH_SPACE", 507, fmt.Sprintf("Not enough free space: the file needs %s, and %s is free on the server’s disk, of which Ludock leaves %s for the game.",
-				datasize.Format(size), datasize.Format(space.Available), datasize.Format(UploadSpare(space.Total))))
-		}
-		if err != nil {
-			access.Cleanup(false)
-			return err
-		}
+	// Its own step, so what the sweep left is said even if the save fails.
+	folder := path.Dir(normalized)
+	if folder == "." {
+		folder = ""
+	}
+	if _, err := access.prepareUpload(ctx, target, root, folder); err != nil {
+		// Its sweep may still be removing files.
+		access.Cleanup(true)
+		return err
 	}
 	uploadID := identity.NewUUID()
 	_, err = access.request(ctx, helper.FileRequest{Operation: "upload", Root: root.Path, Path: normalized, Size: &size,
