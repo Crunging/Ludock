@@ -487,9 +487,10 @@ func TestSilentOutageSurvivesDockerOutage(t *testing.T) {
 }
 
 // An outage already shown on pages that turns out to be a silent game tells
-// open pages its new reason, though no new alert goes out.
+// open pages its new reason, though no new alert goes out, even after its
+// wait before alerting was raised past how long it has lasted.
 func TestOutageReasonChangeUpdatesPages(t *testing.T) {
-	s, events, _ := setup(t)
+	s, events, _, configure := setupWith(t, nil)
 	var changes int
 	s.Changed = func(string) { changes++ }
 	game := GameAnswering
@@ -499,6 +500,7 @@ func TestOutageReasonChangeUpdatesPages(t *testing.T) {
 	if len(events.events) != 1 || changes != 1 {
 		t.Fatal(events.events, changes)
 	}
+	configure(testPolicy(func(p *Policy) { p.GraceSeconds = 600 }))
 	game = GameNotAnswering
 	s.Check(ctx, state("running", "unhealthy"), 70_000)
 	if len(events.events) != 1 || changes != 2 {
