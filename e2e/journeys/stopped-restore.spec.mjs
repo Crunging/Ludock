@@ -90,7 +90,12 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
   // Caught in one of the loop's brief runs, it still reads as the loop, and
   // Stop doesn't offer to warn players nobody can join.
+  await fake("/fake/crashloop", { container: server.container });
+  await expect(page.locator(".detail-header__identity")).toContainText("Keeps restarting");
   await fake("/fake/crashloop", { container: server.container, run: "1" });
+  // Past the two seconds pages reuse discovery for, so the page sees the run.
+  await page.waitForTimeout(2_500);
+  await openServer(page, server.name);
   await expect(page.locator(".detail-header__identity")).toContainText("Keeps restarting");
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Restart" })).toHaveCount(0);
   await page.locator(".detail-actions").getByRole("button", { name: "Stop" }).click();

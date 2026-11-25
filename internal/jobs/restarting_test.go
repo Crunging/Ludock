@@ -124,8 +124,8 @@ func (s *serverTrace) lines() []string {
 // as it was, under its restart policy, which Activity says goes on
 // restarting it unless the work fixed the cause. Docker keeps the game's
 // last exit, a kill here, which isn't taken for a forced stop. Work that
-// starts during one of the loop's brief runs, before the game has answered,
-// is the same. A running server is warned and saved first, as the first row
+// starts during one of the loop's brief runs, once Ludock has seen it
+// restarting and before the game has answered, is the same. A running server is warned and saved first, as the first row
 // shows.
 func TestWorkOnARestartingServer(t *testing.T) {
 	warned := map[string]any{WarnInput: true}
@@ -174,6 +174,9 @@ func TestWorkOnARestartingServer(t *testing.T) {
 				f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.ExitCode = 137 })
 			}
 			if c.brief {
+				if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
+					t.Fatal(err)
+				}
 				f.engine.CrashLoop(f.game, true)
 			}
 			trace.start()

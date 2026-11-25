@@ -222,7 +222,6 @@ func (j *Jobs) current(ctx context.Context, server *servers.Context) (*servers.C
 	}
 	current := *server
 	current.Container, current.Observation = observed.Container, observed.Observation
-	j.Servers.Present(ctx, server.Logical.ID, &current.Container)
 	return &current, nil
 }
 

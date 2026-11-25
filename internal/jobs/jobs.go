@@ -487,7 +487,7 @@ func record(job *ops.Context, phase string, change func(*ops.Recovery)) error {
 // saveWorld sends the game's save command, best effort. Revoked authority
 // still stops the job.
 func (j *Jobs) saveWorld(ctx context.Context, job *ops.Context, server *servers.Context, assertAccess func() error) error {
-	if server.Container.State == "restarting" {
+	if j.Servers.Restarting(ctx, server.Logical.ID, server.Container) {
 		return record(job, "save_skipped", func(r *ops.Recovery) { r.SaveStatus, r.SaveReason = "skipped", "restarting" })
 	}
 	expected := games.ResolveAdapter(server.Container.GameType, map[string]string{})

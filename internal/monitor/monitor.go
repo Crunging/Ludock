@@ -605,7 +605,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 				game = s.Game(server.ID, container)
 				up = game != GameNotAnswering && !((game == GameUnknown || game == GameWaiting) && r.lastState.String == NotAnswering)
 			}
-			up = up && !loopRun(container, game, policy.GraceSeconds, now)
+			up = up && !(r.lastState.String == "restarting" && earlyRun(container, s.answered(server.ID, container), policy.GraceSeconds, now))
 			if up {
 				if changed, err := s.recovered(ctx, server, r, now); err != nil {
 					log.Warn("Could not save a server's availability; it will be checked again")
@@ -674,8 +674,9 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			silent = game == GameNotAnswering
 			healthy = healthy && !silent
 		}
-		// A run between restarts keeps its outage, which still alerts.
-		healthy = healthy && !loopRun(container, game, policy.GraceSeconds, now)
+		// A run after restarts, whoever started it, keeps their outage, which
+		// still alerts.
+		healthy = healthy && !(r.lastState.String == "restarting" && earlyRun(container, s.answered(server.ID, container), policy.GraceSeconds, now))
 		// State is saved before any alert: the saved outage start keys each
 		// alert, so an unsaved state could later alert again under a new key.
 		if healthy {
@@ -767,31 +768,35 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 	return nil
 }
 
-// loopRun reports one of a crash loop's brief runs: Docker's restart policy
-// started it, a start by hand resetting that count, and it hasn't stayed up
-// for the grace period nor has the game answered in it.
-func loopRun(container servers.Container, game GameAnswer, graceSeconds int, now int64) bool {
-	return container.State == "running" && container.RestartCount > 0 && game != GameAnswering &&
-		now-container.StateSince < int64(graceSeconds)*1000
+// earlyRun reports a run too short and quiet to show a server that kept
+// restarting is back: the game hasn't answered in it, and it hasn't stayed
+// up for the grace period.
+func earlyRun(container servers.Container, answered bool, graceSeconds int, now int64) bool {
+	return container.State == "running" && !answered && now-container.StateSince < int64(graceSeconds)*1000
 }
 
-// Looping reports a running container in one of a crash loop's brief runs,
-// judged as Check judges its outage.
+// Looping reports whether a run of a server seen restarting is still one of
+// the loop's, as Check judges the loop's outage.
 func (s *Service) Looping(ctx context.Context, serverID string, container servers.Container) bool {
-	if container.State != "running" || container.RestartCount == 0 {
-		return false
-	}
-	game := GameNotChecked
-	if s.Game != nil {
-		game = s.Game(serverID, container)
-	}
 	policy := DefaultPolicy()
 	if r, err := s.row(ctx, serverID); err == nil && r != nil {
 		if saved, err := ParsePolicy([]byte(r.policy)); err == nil {
 			policy = saved
 		}
 	}
-	return loopRun(container, game, policy.GraceSeconds, db.Now())
+	return earlyRun(container, s.answered(serverID, container), policy.GraceSeconds, db.Now())
+}
+
+// answered reports whether the game answered in this container run.
+func (s *Service) answered(serverID string, container servers.Container) bool {
+	if s.LastAnswer != nil && s.LastAnswer(serverID, container) > 0 {
+		return true
+	}
+	if s.Game == nil {
+		return false
+	}
+	game := s.Game(serverID, container)
+	return game == GameAnswering || game == GameNotAnswering
 }
 
 // adopt starts watching servers seen for the first time with the default

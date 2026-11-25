@@ -203,6 +203,24 @@ type Observer struct {
 
 	samplesMu sync.Mutex
 	samples   map[string]*statsSample
+
+	// restarting are the containers last seen restarting, until seen stopped.
+	restarting sync.Map
+}
+
+// note remembers a container seen restarting until it is seen stopped.
+func (o *Observer) note(observed *Observed) {
+	switch observed.Container.State {
+	case "restarting":
+		o.restarting.Store(observed.Container.ID, true)
+	case "exited", "created", "dead":
+		o.restarting.Delete(observed.Container.ID)
+	}
+}
+
+func (o *Observer) sawRestarting(id string) bool {
+	_, ok := o.restarting.Load(id)
+	return ok
 }
 
 // A Docker stats sample takes about a second. Viewers of the same container
@@ -419,6 +437,7 @@ func (o *Observer) observeSummary(ctx context.Context, container docker.Containe
 	if err != nil {
 		return nil, nil, err
 	}
+	o.note(observed)
 	if summary == "" {
 		return observed, nil, nil
 	}
@@ -444,7 +463,11 @@ func (o *Observer) Inspect(ctx context.Context, id string) (*Observed, *docker.C
 	if err != nil {
 		return nil, nil, err
 	}
-	return observe(o.ownLabels(ctx, info), choices, own)
+	observed, inspected, err := observe(o.ownLabels(ctx, info), choices, own)
+	if err == nil {
+		o.note(observed)
+	}
+	return observed, inspected, err
 }
 
 func observe(info *docker.ContainerInspect, choices map[string]identity.Choice, own self.Info) (*Observed, *docker.ContainerInspect, error) {

@@ -561,9 +561,9 @@ check is off or wrong, never counts as not answering. Ludock remembers that a
 game answered, so one that hangs while Ludock itself restarts is still caught;
 the wait starts again when Ludock is back, unless the alert was already sent.
 A server that keeps restarting is one outage, timed from when Ludock first
-sees it restarting, even if it was stopped through Ludock before: a run
-between restarts ends it only once the game answers, or after it has stayed up
-for **Wait before alerting**.
+sees it restarting, even if it was stopped through Ludock before. A run after
+it, even one you start, ends it only once the game answers or the run has
+stayed up for **Wait before alerting**.
 Disks are measured about every 10 minutes while someone has Ludock open and
 every 30 otherwise.
 

@@ -452,8 +452,10 @@ func problem(s *Service, serverID string, now int64) (*Problem, error) {
 // timed from the first check that sees it, even on a server stopped through
 // Ludock before, and alerted once its grace ends even during such a run: a
 // run counts as the server back only once the game answers or it has stayed
-// up for the grace period. A stop through Ludock after the alert keeps the
-// outage owed its recovery alert, sent once the server runs again.
+// up for the grace period, or an answer recorded in it. A stop through Ludock
+// after the alert keeps the outage owed its recovery alert, sent once the
+// server runs again and has shown it is back the same way, even started by
+// hand.
 func TestCrashLoopIsOneOutage(t *testing.T) {
 	const down, back = "Minecraft: the server is down.", "Minecraft: the server is back up."
 	for _, stoppedFirst := range []bool{false, true} {
@@ -480,8 +482,11 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 			t.Fatal(found)
 		}
 		s.Check(ctx, runSince(155_000), 160_000)
-		game = GameAnswering
+		// An answer recorded in this run, though no recent query says.
+		game = GameUnknown
+		s.LastAnswer = func(string, servers.Container) int64 { return 162_000 }
 		s.Check(ctx, runSince(155_000), 165_000)
+		s.LastAnswer = nil
 		if !slices.Equal(events.events, []string{down, back}) {
 			t.Fatal(events.events)
 		}
@@ -500,7 +505,12 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 		if found, _ := problem(s, server.ID, 600_000); found != nil {
 			t.Fatal("a server stopped through Ludock shown down:", found)
 		}
-		s.Check(ctx, state("running", ""), 700_000)
+		startedByHand := map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: 695_000}}
+		s.Check(ctx, startedByHand, 700_000)
+		if len(events.events) != 5 {
+			t.Fatal("back up before the run showed it:", events.events)
+		}
+		s.Check(ctx, startedByHand, 760_000)
 		if !slices.Equal(events.events, []string{down, back, down, back, down, back}) {
 			t.Fatal(events.events)
 		}
