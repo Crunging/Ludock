@@ -46,6 +46,9 @@ const (
 	RestoreRollbackClean = "rollbackClean"
 	RestoreSetAside      = "setAside"
 	RestoreRollbackOld   = "rollbackOld"
+	// RestoreCheckReturn refuses, before the server stops, what rollbackOld
+	// would refuse to set aside, reading only.
+	RestoreCheckReturn = "checkReturn"
 )
 
 // RestoreFailure is the only error text the restore helper prints.
@@ -274,7 +277,12 @@ func (h *restoreHelper) pinStage(root fd, optional bool) (fd, error) {
 // undone. It is owned before anything moves in, so a retry fixes one that
 // an interruption left as the helper made it.
 func (h *restoreHelper) pinAside(root, stage fd) (fd, error) {
-	if err := unix.Mkdirat(int(root), h.request.Aside, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
+	if err := unix.Mkdirat(int(root), h.request.Aside, 0o700); err == nil {
+		// The undo journals that the folder exists only after this.
+		if err := syncAll(root); err != nil {
+			return -1, err
+		}
+	} else if !errors.Is(err, unix.EEXIST) {
 		return -1, err
 	}
 	aside, err := h.t.openAt(root, h.request.Aside, directoryFlags, 0)
@@ -302,20 +310,59 @@ func (h *restoreHelper) asideFor(root, stage, parent, aside fd, rel, name string
 	if h.request.Aside == "" {
 		return -1, errUnsafe
 	}
-	// Held to moveOld's standard for moving live data: no other mount on or
-	// inside it, no special file, and no other restore's stage.
-	if err := ownMount(h.request.Base, h.request.Root+"/"+rel); err != nil {
+	if err := h.clashMovable(parent, rel, name, info); err != nil {
 		return -1, err
-	}
-	if isDir(info) {
-		if err := h.safeToMove(parent, name, 0, true); err != nil {
-			return -1, err
-		}
 	}
 	if aside >= 0 {
 		return aside, nil
 	}
 	return h.pinAside(root, stage)
+}
+
+// clashMovable holds a live entry in an original's way to moveOld's
+// standard for moving live data: no other mount on or inside it, no special
+// file, and no other restore's stage. movable already found it a folder or
+// a file with one name on the root's device.
+func (h *restoreHelper) clashMovable(parent fd, rel, name string, info *unix.Stat_t) error {
+	if err := ownMount(h.request.Base, h.request.Root+"/"+rel); err != nil {
+		return err
+	}
+	if isDir(info) {
+		return h.safeToMove(parent, name, 0, true)
+	}
+	return nil
+}
+
+// checkReturn runs rollbackOld's checks of the live entries in the
+// originals' way without moving anything.
+func (h *restoreHelper) checkReturn(root, stage fd) error {
+	old, err := h.t.openAt(stage, "old", directoryFlags, 0)
+	if err != nil {
+		return err
+	}
+	rootInfo, err := fstat(root)
+	if err != nil {
+		return err
+	}
+	children, err := names(old)
+	if err != nil {
+		return err
+	}
+	for _, name := range children {
+		if Reserved(name) {
+			continue
+		}
+		info, err := movable(root, name, rootInfo.Dev)
+		if err != nil {
+			return err
+		}
+		if info != nil {
+			if err := h.clashMovable(root, name, name, info); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // setAsideEntry moves a live entry into the set-aside folder under a name
@@ -419,6 +466,8 @@ func (h *restoreHelper) run() (any, error) {
 		return ok, h.setAside(root, stage)
 	case RestoreRollbackOld:
 		err = h.rollbackOld(root, stage)
+	case RestoreCheckReturn:
+		return map[string]bool{"ok": true}, h.checkReturn(root, stage)
 	default:
 		return nil, errUnsafe
 	}
@@ -1107,6 +1156,23 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			}
 		}
 		return move(old, "item", parent, name, info)
+	case RestoreCheckReturn:
+		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
+		if err != nil {
+			return err
+		}
+		if info, err := movable(old, "item", rootInfo.Dev); err != nil || info == nil {
+			return err
+		}
+		parent, err := h.itemParent(root, parts)
+		if err != nil {
+			return err
+		}
+		live, err := movable(parent, name, rootInfo.Dev)
+		if err != nil || live == nil {
+			return err
+		}
+		return h.clashMovable(parent, strings.Join(parts, "/"), name, live)
 	}
 	return errUnsafe
 }

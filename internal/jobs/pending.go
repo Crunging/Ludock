@@ -77,35 +77,31 @@ func (j *Jobs) finishPendingRestores(ctx context.Context, server *servers.Contex
 	if err != nil {
 		return err
 	}
-	var notes []string
 	for _, restore := range pending {
-		note, err := j.finishPending(ctx, server, job, restore, stoppedAt)
-		if err != nil {
+		if err := j.finishPending(ctx, server, job, restore, stoppedAt); err != nil {
 			return err
 		}
-		notes = append(notes, note)
 		if job == nil {
 			log.Info("Finished a restore that had stopped partway", logging.F("operation", restore.Job.ID))
 		}
 	}
-	if job == nil || (len(notes) == 0 && !job.Job.Recovery.PendingUndo) {
+	if job == nil || (len(pending) == 0 && !job.Job.Recovery.PendingUndo) {
 		return nil
 	}
-	undone := strings.Join(slices.DeleteFunc(append([]string{job.Job.Recovery.Undone}, notes...), func(note string) bool { return note == "" }), " ")
+	// Each restore's note joined Undone as its journal became final.
 	result := job.Job.Result
-	if undone != "" {
+	if undone := job.Job.Recovery.Undone; undone != "" {
 		result.UndoNote = undone
 	}
-	return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.PendingUndo, r.Undone = false, undone }, &result)
+	return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.PendingUndo = false }, &result)
 }
 
-// finishPending finishes one restore that ended partway and returns what
-// Activity says it did.
-func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, restore *ops.Context, stoppedAt string) (string, error) {
+// finishPending finishes one restore that ended partway.
+func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, restore *ops.Context, stoppedAt string) error {
 	// As recovery does, only the binding the restore stopped is undone.
 	state, err := restoreState(restore)
 	if err != nil || state == nil || !journalMatches(state.Roots, server) || restore.Job.Recovery.Fingerprint != server.Logical.BindingFingerprint {
-		return "", errPendingBlocked
+		return errPendingBlocked
 	}
 	owner := restore
 	if job != nil {
@@ -113,7 +109,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	}
 	data, err := j.Backups.Helpers.NewDataHelper(ctx, server, false, owner.Job.ID)
 	if err != nil {
-		return "", err
+		return err
 	}
 	live, missing := false, false
 	note := func(kept bool) string {
@@ -142,10 +138,11 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		// An earlier attempt may have set copies aside before this one found
 		// a stage gone.
 		if kept && !strings.Contains(note, aside) {
-			note += " Newer copies the game had made of some of the server’s data are kept in the folder " + aside + "."
+			note += " " + keptNote(restore)
 		}
 		return note
 	}
+	finish := &restoreFinish{note: func(final restoreRecovery) string { return note(final.Kept) }, by: job}
 	err = func() error {
 		if job != nil {
 			if err := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID = data.Container }, nil); err != nil {
@@ -177,7 +174,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 			return err
 		}
 		if state.Status == "committed" {
-			return j.cleanupRestore(ctx, server, restore, data)
+			return j.cleanupRestore(ctx, server, restore, data, finish)
 		}
 		// Until live data moves, a failure leaves the server's data as it
 		// was, so the operation that stopped it can start it again.
@@ -186,7 +183,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 				return nil
 			}
 			return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.PendingUndo = true }, nil)
-		}, func(final restoreRecovery) string { return note(final.Kept) })
+		}, finish)
 	}()
 	data.Cleanup()
 	restore.Progress("", func(r *ops.Recovery) { r.DataHelperID = "" }, nil)
@@ -195,17 +192,12 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 			err = clearErr
 		}
 	}
-	if err != nil {
-		return "", err
-	}
-	final, _ := restoreState(restore)
-	done := note(final != nil && final.Kept)
-	if state.Status == "committed" {
-		result := restore.Job.Result
-		result.Guidance = done
-		restore.Progress("", nil, &result)
-	}
-	return done, nil
+	return err
+}
+
+// keptNote says where undoing restore kept newer copies of the data.
+func keptNote(restore *ops.Context) string {
+	return "Newer copies the game had made of some of the server’s data are kept in the folder " + helper.SetAsideName(restore.Job.ID) + "."
 }
 
 // checkUndo marks the journal's roots whose stage folder is gone as having
@@ -233,6 +225,13 @@ func (j *Jobs) checkUndo(ctx context.Context, server *servers.Context, data *bac
 		switch found["exists"] {
 		case true:
 			live = true
+			// Returning originals sets aside what is in their way, which is
+			// refused before anything moves, and before a stop.
+			if entry.Phase == "moving_old" || entry.Phase == "rolling_back" {
+				if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, restore, helper.RestoreCheckReturn, assertAccess); err != nil {
+					return false, false, err
+				}
+			}
 		case false:
 			state.Roots[index].Phase, missing, state.StageMissing = "rolled_back", true, true
 		default:

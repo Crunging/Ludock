@@ -3,9 +3,11 @@ package jobs
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -99,21 +101,69 @@ func journals(job *ops.Context) ([]journal, error) {
 // saveRestore persists the restore journal. Callers stop on an error: the
 // next data change must never run ahead of the journal a restart would read.
 func saveRestore(job *ops.Context, state restoreRecovery, phase string) error {
-	return saveRestoreWith(job, state, phase, nil)
-}
-
-// saveRestoreWith is saveRestore that also saves result in the same write.
-func saveRestoreWith(job *ops.Context, state restoreRecovery, phase string, result *ops.Result) error {
 	if phase == "" {
 		phase = "restore_" + state.Status
 	}
-	encoded, err := json.Marshal(state)
+	change, err := journalChange(state)
 	if err != nil {
 		return err
 	}
-	return job.Progress(phase, func(r *ops.Recovery) {
+	return job.Progress(phase, change, nil)
+}
+
+func journalChange(state restoreRecovery) (func(*ops.Recovery), error) {
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return nil, err
+	}
+	return func(r *ops.Recovery) {
 		r.Restore, r.DataUnsafe = encoded, state.Status == "replacing" || state.Status == "rolling_back"
-	}, result)
+	}, nil
+}
+
+// restoreFinish is what Activity says once a restore's journal is final:
+// note, for the restore, and for by, the operation finishing it, if any.
+type restoreFinish struct {
+	note func(final restoreRecovery) string
+	by   *ops.Context
+}
+
+// saveFinal saves a restore's final journal, with finish's notes in the same
+// transaction, so an interruption can't leave the data's state without
+// them.
+func (j *Jobs) saveFinal(ctx context.Context, job *ops.Context, final restoreRecovery, finish *restoreFinish) error {
+	if finish == nil {
+		return saveRestore(job, final, "")
+	}
+	change, err := journalChange(final)
+	if err != nil {
+		return err
+	}
+	note := finish.note(final)
+	result := job.Job.Result
+	result.Guidance = note
+	var saved []func()
+	err = j.DB.Tx(ctx, func(tx *sql.Tx) error {
+		if finish.by != nil {
+			done, err := finish.by.ProgressIn(tx, finish.by.Job.Phase, func(r *ops.Recovery) {
+				r.Undone = strings.TrimSpace(r.Undone + " " + note)
+			}, nil)
+			if err != nil {
+				return err
+			}
+			saved = append(saved, done)
+		}
+		done, err := job.ProgressIn(tx, "restore_"+final.Status, change, &result)
+		saved = append(saved, done)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	for _, done := range saved {
+		done()
+	}
+	return nil
 }
 
 func persistJournal(job *ops.Context, index int, phase string) error {
@@ -255,10 +305,9 @@ func holdsLive(entry journal) bool { return entry.Phase != "staging" && entry.Ph
 // a stage folder, so a root that holds no live restore data is cleaned up
 // even if the server was started elsewhere; the others wait until it is
 // stopped, and the error says why. beforeLive, when set, runs before the
-// first step that changes live data is sent; guidance, when set, is what
-// Activity says, saved with the final journal.
+// first step that changes live data is sent.
 func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper, beforeLive func() error,
-	guidance func(final restoreRecovery) string) error {
+	finish *restoreFinish) error {
 	state, err := restoreState(job)
 	if err != nil {
 		return err
@@ -344,16 +393,10 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 	if blocked != nil {
 		return blocked
 	}
-	final := restoreRecovery{Status: "rolled_back", StageMissing: missing, PutBack: touched && !missing, Kept: kept}
-	if guidance == nil {
-		return saveRestore(job, final, "")
-	}
-	result := job.Job.Result
-	result.Guidance = guidance(final)
-	return saveRestoreWith(job, final, "", &result)
+	return j.saveFinal(ctx, job, restoreRecovery{Status: "rolled_back", StageMissing: missing, PutBack: touched && !missing, Kept: kept}, finish)
 }
 
-func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper) error {
+func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper, finish *restoreFinish) error {
 	entries, err := journals(job)
 	if err != nil {
 		return err
@@ -367,7 +410,7 @@ func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job 
 			return err
 		}
 	}
-	return saveRestore(job, restoreRecovery{Status: "cleaned"}, "")
+	return j.saveFinal(ctx, job, restoreRecovery{Status: "cleaned"}, finish)
 }
 
 // MovedInput confirms restoring a backup taken when the server's data lived
@@ -520,7 +563,7 @@ func (r *restoreRun) run() (*ops.Result, error) {
 		return nil, err
 	}
 	r.restored = r.result()
-	if err := r.j.cleanupRestore(r.ctx, r.server, r.job, r.data); err != nil {
+	if err := r.j.cleanupRestore(r.ctx, r.server, r.job, r.data, nil); err != nil {
 		return nil, err
 	}
 	return r.restored, nil
@@ -862,7 +905,7 @@ func (j *Jobs) cleanupAfterFailure(ctx context.Context, server *servers.Context,
 	if err := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID = fresh.Container }, nil); err != nil {
 		return err
 	}
-	return j.cleanupRestore(ctx, server, job, fresh)
+	return j.cleanupRestore(ctx, server, job, fresh, nil)
 }
 
 // publicFirst keeps the first public error of a joined error.
@@ -922,7 +965,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 			}
 			state, _ := restoreState(job)
 			if state != nil && state.Status == "committed" {
-				err = j.cleanupRestore(ctx, server, job, data)
+				err = j.cleanupRestore(ctx, server, job, data, nil)
 			} else {
 				err = j.rollbackRestore(ctx, server, job, data, nil, nil)
 			}
@@ -934,6 +977,9 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 		return j.restoreInitialState(ctx, server, job)
 	})
 	result := job.Job.Result
+	if state, _ := restoreState(job); err == nil && state != nil && state.Kept {
+		outcome += " " + keptNote(job)
+	}
 	if err != nil {
 		// The outcome keeps this guidance: a recovery that can't finish, such
 		// as one blocked by a server started elsewhere, is finished later.
