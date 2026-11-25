@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 )
@@ -257,7 +259,7 @@ func RestoreSnapshot(archivePath, dbPath string) (savedAt time.Time, err error) 
 		return savedAt, err
 	}
 	defer source.Close()
-	key, err := extractSnapshot(source, work, base, keyFolder, &savedAt)
+	key, err := extractSnapshot(&recordingReader{r: source}, work, base, keyFolder, &savedAt)
 	defer clear(key)
 	if err != nil {
 		return savedAt, err
@@ -297,9 +299,15 @@ func placeRestored(work, folder, name string) error {
 
 // extractSnapshot writes the archive's database and key into work and
 // returns the key. Any other entry, or a missing one, rejects the archive.
-func extractSnapshot(source io.Reader, work, base, keyFolder string, savedAt *time.Time) ([]byte, error) {
+// A read that failed, rather than an archive that is short or malformed, is
+// worth trying again.
+func extractSnapshot(source *recordingReader, work, base, keyFolder string, savedAt *time.Time) (key []byte, err error) {
+	defer func() {
+		if errors.Is(err, errRestoreArchive) && source.err != nil {
+			err = source.err
+		}
+	}()
 	reader := tar.NewReader(source)
-	var key []byte
 	sawDatabase, sawFolder := false, false
 	if err := os.Mkdir(filepath.Join(work, keyFolder), keyDirectoryMode); err != nil {
 		return nil, err
@@ -362,6 +370,21 @@ func writeRestored(path string, body io.Reader, size int64, mode os.FileMode) er
 	return file.Sync()
 }
 
+// recordingReader keeps the first error reading failed with, but for the
+// end of the file.
+type recordingReader struct {
+	r   io.Reader
+	err error
+}
+
+func (r *recordingReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if err != nil && err != io.EOF && r.err == nil {
+		r.err = err
+	}
+	return n, err
+}
+
 type recordingWriter struct {
 	w   io.Writer
 	err error
@@ -393,24 +416,44 @@ func checkRestored(path string, key []byte) error {
 		return err
 	}
 	defer restored.Close()
-	switch err := AssertCompatible(bg, restored, LatestVersion()); err {
-	case nil:
-	case ErrNewerDatabase:
+	switch err := AssertCompatible(bg, restored, LatestVersion()); {
+	case err == nil:
+	case errors.Is(err, ErrNewerDatabase):
 		return errRestoreNewer
-	case ErrBetaDatabase:
+	case errors.Is(err, ErrBetaDatabase):
 		return errRestoreBeta
-	default:
+	case errors.Is(err, ErrIncompatible):
 		return errRestoreArchive
+	default:
+		return damaged(err)
 	}
 	var result string
-	if err := restored.QueryRowContext(bg, "PRAGMA quick_check").Scan(&result); err != nil || result != "ok" {
+	if err := restored.QueryRowContext(bg, "PRAGMA quick_check").Scan(&result); err != nil {
+		return damaged(err)
+	} else if result != "ok" {
 		return errRestoreArchive
 	}
 	if err := assertKey(restored, key); err != nil {
 		if errors.Is(err, ErrIdentityKey) {
 			return errRestoreArchive
 		}
-		return err
+		return damaged(err)
 	}
 	return nil
+}
+
+// damaged is errRestoreArchive for an error SQLite gives a copy that isn't
+// a whole Ludock database; a failed read, a full disk, or no memory is
+// returned as it is, to be tried again.
+func damaged(err error) error {
+	var failure *sqlite.Error
+	if !errors.As(err, &failure) {
+		return err
+	}
+	switch failure.Code() & 0xff {
+	case sqlite3.SQLITE_IOERR, sqlite3.SQLITE_FULL, sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_NOMEM, sqlite3.SQLITE_BUSY,
+		sqlite3.SQLITE_LOCKED, sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_PROTOCOL:
+		return err
+	}
+	return errRestoreArchive
 }

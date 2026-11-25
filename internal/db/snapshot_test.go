@@ -160,7 +160,8 @@ func TestSnapshotArchiveLayout(t *testing.T) {
 
 // A restore puts the data back into an empty folder, where Ludock opens it
 // with its own key, no saved work left to run, and no restore left to undo. It refuses a folder that already has data, an archive
-// with anything else in it, a key from another installation, and a beta's copy.
+// with anything else in it, a key from another installation, a beta's copy,
+// a damaged database, and a copy it couldn't read.
 func TestRestoreSnapshot(t *testing.T) {
 	d, _ := openTemp(t)
 	if err := d.SetSetting(context.Background(), nil, "restore-check", "kept"); err != nil {
@@ -239,12 +240,22 @@ func TestRestoreSnapshot(t *testing.T) {
 	betaDBBytes, _ := os.ReadFile(betaDB)
 	beta := filepath.Join(t.TempDir(), "beta.tar")
 	writeArchive(t, beta, map[string][]byte{"ludock.db": betaDBBytes, "ludock.db.identity-key/key": entryOf(t, archive, "ludock.db.identity-key/key")})
-	for name, test := range map[string]struct{ archive, code string }{
-		"another key": {mixed, "RESTORE_ARCHIVE"}, "an extra entry": {extra, "RESTORE_ARCHIVE"}, "a beta's copy": {beta, "RESTORE_BETA"},
+	damaged := filepath.Join(t.TempDir(), "damaged.tar")
+	writeArchive(t, damaged, map[string][]byte{"ludock.db": []byte(strings.Repeat("not a database ", 512)),
+		"ludock.db.identity-key/key": entryOf(t, archive, "ludock.db.identity-key/key")})
+	// Exit 3 tells an update's helper to give the copy up; a copy that
+	// couldn't be read, here a folder in its place, is tried again.
+	for name, test := range map[string]struct {
+		archive, code string
+		exit          int
+	}{
+		"another key": {mixed, "RESTORE_ARCHIVE", 3}, "an extra entry": {extra, "RESTORE_ARCHIVE", 3}, "a beta's copy": {beta, "RESTORE_BETA", 3},
+		"a damaged database": {damaged, "RESTORE_ARCHIVE", 3}, "a copy that can't be read": {t.TempDir(), "", 1},
 	} {
 		folder := t.TempDir()
-		if _, err := RestoreSnapshot(test.archive, filepath.Join(folder, "ludock.db")); !apperr.Is(err, test.code) {
-			t.Fatalf("restore accepted %s: %v", name, err)
+		if _, err := RestoreSnapshot(test.archive, filepath.Join(folder, "ludock.db")); err == nil || test.code != "" && !apperr.Is(err, test.code) ||
+			RestoreExitCode(err) != test.exit {
+			t.Fatalf("restore of %s: %v, exit %d", name, err, RestoreExitCode(err))
 		}
 		if entries, _ := os.ReadDir(folder); len(entries) != 0 {
 			t.Fatalf("refused restore of %s left %d files", name, len(entries))
