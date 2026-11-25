@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/history"
+	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/resources"
@@ -196,6 +197,12 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 	}
 	if d.Operation == "" {
 		d.Operation = r.URL.Query().Get("operation")
+	}
+	if d.Admin && d.Row.Server.BindingStatus == identity.StatusMissing {
+		if all, err := s.App.Identity.List(r.Context(), ""); err == nil {
+			from, _ := s.App.Identity.Get(r.Context(), d.Row.Server.ID)
+			d.TakeOver = s.takeOverOffer(r.Context(), from, all)
+		}
 	}
 	page := s.page(r, request, d.Row.Server.DisplayName)
 	page.Path = "/"

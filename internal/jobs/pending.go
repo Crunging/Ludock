@@ -17,14 +17,14 @@ import (
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
-// pendingWhere selects restores that ended without a final journal, such as
+// PendingRestore selects restores that ended without a final journal, such as
 // one stopped by a server started elsewhere. A later operation that stops
 // the server, or startup, finishes them.
-const pendingWhere = `kind='restore' AND status IN ('failed','interrupted') AND json_valid(recovery_json) AND
+const PendingRestore = `kind='restore' AND status IN ('failed','interrupted') AND json_valid(recovery_json) AND
 	json_extract(recovery_json,'$.restore.status') IN ('staging','replacing','rolling_back','committed')`
 
 func (j *Jobs) pendingRestores(ctx context.Context, serverID string) ([]*ops.Context, error) {
-	rows, err := j.DB.QueryContext(ctx, "SELECT id FROM operations WHERE server_id=? AND "+pendingWhere+" ORDER BY created_at DESC, id DESC", serverID)
+	rows, err := j.DB.QueryContext(ctx, "SELECT id FROM operations WHERE server_id=? AND "+PendingRestore+" ORDER BY created_at DESC, id DESC", serverID)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +283,7 @@ func (j *Jobs) assertPendingUndoable(ctx context.Context, server *servers.Contex
 // server that is now stopped is finished then. One that can't be is left
 // for the next operation that stops the server.
 func (j *Jobs) finishStoppedRestores(ctx context.Context) {
-	rows, err := j.DB.QueryContext(ctx, "SELECT DISTINCT server_id FROM operations WHERE "+pendingWhere)
+	rows, err := j.DB.QueryContext(ctx, "SELECT DISTINCT server_id FROM operations WHERE "+PendingRestore)
 	if err != nil {
 		log.Warn("Could not list restores that stopped partway")
 		return

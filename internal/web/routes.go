@@ -30,6 +30,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /fragments/unmanaged", s.admin(s.unmanagedFragment))
 	m.HandleFunc("POST /servers/add", s.admin(s.addServer))
 	m.HandleFunc("POST /servers/{id}/remove", s.admin(s.removeServer))
+	m.HandleFunc("POST /servers/{id}/take-over", s.admin(s.takeOver))
 	m.HandleFunc("POST /servers/{id}/availability", s.admin(s.configureAvailability))
 	m.HandleFunc("POST /servers/{id}/confirm-change", s.admin(s.confirmChange))
 	m.HandleFunc("GET /fragments/servers/{id}/backups", s.admin(s.backupList))

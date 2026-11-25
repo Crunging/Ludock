@@ -154,7 +154,11 @@ func (e *Engine) Recreate(reference string, query url.Values) string {
 	if c == nil {
 		return ""
 	}
-	return e.recreateLocked(c, query.Get("image"), query["env"], query["label"], query["mount"])
+	replacement := e.recreateLocked(c, query.Get("image"), query["env"], query["label"], query["mount"])
+	if name := query.Get("name"); name != "" {
+		e.containers[replacement].Name = "/" + name
+	}
+	return replacement
 }
 
 func (e *Engine) recreateLocked(c *Container, image string, env, labels, mounts []string) string {

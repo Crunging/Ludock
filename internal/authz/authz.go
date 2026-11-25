@@ -321,6 +321,15 @@ func (s *Service) Has(ctx context.Context, actor *db.SessionUser, serverID strin
 	return slices.Contains(capabilities, capability), err
 }
 
+// HasIn is Has through tx, for a read that must agree with what it shows.
+func (s *Service) HasIn(ctx context.Context, tx *sql.Tx, actor *db.SessionUser, serverID string, capability Capability) (bool, error) {
+	if actor == nil {
+		return false, nil
+	}
+	held, _, err := access(tx.QueryRowContext(ctx, accessQuery, actor.ID, serverID), actor.ID)
+	return slices.Contains(held, capability), err
+}
+
 // ErrServerNotFound covers a nonexistent server, a suspended identity, and
 // an unassigned server alike, without disclosing another user's resources.
 var ErrServerNotFound = apperr.New("SERVER_NOT_FOUND", 404, "Server not found")

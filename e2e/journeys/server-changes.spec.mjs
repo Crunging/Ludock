@@ -1,10 +1,11 @@
 import { request } from "node:http";
 import { join } from "node:path";
-import { test, expect, signIn, createUser, serverRow, openServer, shareServer } from "./fixtures.mjs";
+import { test, expect, signIn, createUser, serverRow, openServer, shareServer, expectOperationSucceeded } from "./fixtures.mjs";
 
-/** Recreates a container with changed environment variables and labels, as Portainer or Compose would; a bare KEY removes it. */
-function recreate(container, { env = [], label = [] }) {
+/** Recreates a container with changed environment variables and labels, or a new name, as Portainer or Compose would; a bare KEY removes it. */
+function recreate(container, { env = [], label = [], name }) {
   const query = new URLSearchParams({ container });
+  if (name) query.set("name", name);
   for (const entry of env) query.append("env", entry);
   for (const entry of label) query.append("label", entry);
   return new Promise((resolve, reject) => {
@@ -135,5 +136,52 @@ test("a new game pauses shared access until an administrator confirms it", async
   } finally {
     if (!friendDeleted) await deleteUser(adminPage, "friend");
     await recreate("enshrouded", { label: ["ludock.game"] });
+  }
+});
+
+test("a renamed server takes over its old backups, schedules, and sharing", async ({ session, ownServer }) => {
+  const adminPage = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
+  await createUser(adminPage, "mover", "mover password one");
+  try {
+    await shareServer(adminPage, ownServer.name, "mover", "Can run it");
+    const tabs = adminPage.locator(".section-tabs");
+    await tabs.getByRole("link", { name: "Backups" }).click();
+    await adminPage.getByRole("button", { name: "Create backup" }).click();
+    await adminPage.getByRole("dialog", { name: `Back up ${ownServer.name}?` }).getByRole("button", { name: "Create backup" }).click();
+    await expectOperationSucceeded(adminPage);
+    await tabs.getByRole("link", { name: "Schedules" }).click();
+    await adminPage.locator("#schedule-form").getByRole("button", { name: "Add schedule" }).click();
+    await expect(adminPage.locator("#schedule-list tbody tr")).toHaveCount(1);
+
+    const renamed = `${ownServer.name} world`;
+    await recreate(ownServer.container, { name: `${ownServer.container}-world`, label: [`ludock.name=${renamed}`] });
+    ownServer.container += "-world";
+    const item = adminPage.locator(".needs-attention li", { hasText: ownServer.name });
+    await expect(async () => {
+      await adminPage.goto("/");
+      await expect(item).toContainText(`Looks like it was renamed to ${renamed}`, { timeout: 1_000 });
+    }).toPass({ timeout: 15_000 });
+    await item.getByRole("button", { name: `Move them from ${ownServer.name} to ${renamed}` }).click();
+    const confirm = adminPage.getByRole("dialog", { name: `Move ${ownServer.name} to ${renamed}?` });
+    await expect(confirm).toContainText("Its 1 backup, 1 schedule, and sharing with 1 person move to");
+    await confirm.getByRole("button", { name: `Move to ${renamed}` }).click();
+    const result = adminPage.locator("#action-error");
+    await expect(result).toContainText(`Moved ${ownServer.name} to ${renamed}: 1 backup, 1 schedule, and sharing with 1 person.`);
+    await result.getByRole("link", { name: `Open ${renamed}` }).click();
+    await expect(adminPage.getByRole("heading", { level: 1, name: renamed })).toBeVisible();
+    ownServer.id = adminPage.url().match(/\/servers\/([^/?]+)/)[1];
+    await tabs.getByRole("link", { name: "Backups" }).click();
+    await expect(adminPage.locator("#backup-list tbody tr")).toHaveCount(1);
+    await tabs.getByRole("link", { name: "Schedules" }).click();
+    await expect(adminPage.locator("#schedule-list tbody tr")).toHaveCount(1);
+    await adminPage.goto("/");
+    await expect(serverRow(adminPage, ownServer.name)).toHaveCount(0);
+
+    // The friend has the renamed server, as they had the old one.
+    const friend = await session();
+    await signIn(friend, "mover", "mover password one");
+    await expect(serverRow(friend, renamed)).toBeVisible();
+  } finally {
+    await deleteUser(adminPage, "mover");
   }
 });

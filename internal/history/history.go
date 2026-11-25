@@ -140,6 +140,9 @@ type Operation struct {
 	Result               ops.Result
 }
 
+// testHook, set only by tests, runs once access is decided.
+var testHook func(point string)
+
 type Service struct {
 	DB       *db.DB
 	Authz    *authz.Service
@@ -167,13 +170,23 @@ func (s *Service) Operations(ctx context.Context, actor *db.SessionUser, q Query
 			candidates = append(candidates, server.ID)
 		}
 	}
+	// Access and the rows are read from one snapshot, so a pause or a moved
+	// server committing between them can't show rows the reader may not see.
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, "", err
+	}
+	defer tx.Rollback()
 	var visible []string
 	for _, id := range candidates {
-		if ok, err := s.Authz.Has(ctx, actor, id, authz.ServerView); err != nil {
+		if ok, err := s.Authz.HasIn(ctx, tx, actor, id, authz.ServerView); err != nil {
 			return nil, "", err
 		} else if ok {
 			visible = append(visible, id)
 		}
+	}
+	if testHook != nil {
+		testHook("checked")
 	}
 	if len(visible) == 0 {
 		return nil, "", nil
@@ -195,7 +208,7 @@ func (s *Service) Operations(ctx context.Context, actor *db.SessionUser, q Query
 		values = append(values, q.Actor, q.Actor)
 	}
 	values = append(values, q.Limit+1)
-	rows, err := s.DB.QueryContext(ctx, `SELECT o.id, o.server_id, o.actor_id, u.username,
+	rows, err := tx.QueryContext(ctx, `SELECT o.id, o.server_id, o.actor_id, u.username,
     o.kind, o.status, o.phase, o.created_at, o.updated_at, o.error, o.result_json, c.username
     FROM operations o LEFT JOIN users u ON u.id = o.actor_id
     LEFT JOIN users c ON o.status = 'cancelled' AND json_valid(o.result_json) AND c.id = json_extract(o.result_json, '`+ops.PathCancelledBy+`')

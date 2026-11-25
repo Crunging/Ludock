@@ -196,7 +196,7 @@ func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, tokenHa
 	var heard int64
 	err = s.write(ctx, actor, tokenHash, actor.Role == db.RoleAdmin, state, serverID, []string{actor.ID}, func(tx *sql.Tx) error {
 		now := db.Now()
-		result, err := tx.ExecContext(ctx, "UPDATE schedules SET last_result=?,last_run_at=? WHERE id=? AND revision=? AND last_slot=?"+stillWaitingSQL,
+		result, err := tx.ExecContext(ctx, "UPDATE schedules SET last_result=?,last_run_at=? WHERE id=? AND revision=? AND last_slot=?"+StillWaiting,
 			"Cancelled by "+actor.Username+" while it waited for players to leave", now, r.id, r.revision, slot)
 		if err != nil {
 			return err

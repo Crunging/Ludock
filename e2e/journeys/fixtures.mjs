@@ -208,17 +208,17 @@ export async function withGame(page, game, run) {
  * for Ludock to find it. Returns its name in Ludock, its container's name,
  * its image, which no other server uses, its Ludock ID and data folder, and
  * remove(), which takes it out of Ludock and then Docker, so nothing waits on
- * it as missing.
+ * it as missing. A journey that renames it sets its container and id.
  */
 export async function addServer() {
   const container = "mc-" + randomBytes(4).toString("hex");
   const name = "Realm " + container;
   const data = join(process.env.LUDOCK_E2E_DIR, "docker", "data", container);
   const api = await playwrightRequest.newContext({ baseURL: process.env.LUDOCK_E2E_URL, storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
-  let id;
+  const server = { name, container, image: "itzg/minecraft-server:" + container, id: undefined, data };
   const unmanage = (timeout) => expect.poll(async () => {
     const csrf = (await (await api.get("/")).text()).match(/name="csrf-token" content="([^"]+)"/)?.[1];
-    const response = await api.post(`/servers/${id}/remove`, { headers: { "HX-Request": "true" }, form: { _csrf: csrf } });
+    const response = await api.post(`/servers/${server.id}/remove`, { headers: { "HX-Request": "true" }, form: { _csrf: csrf } });
     return response.headers()["hx-redirect"] === "/";
   }, { message: `Ludock removed ${name}`, timeout }).toBe(true);
   const remove = async () => {
@@ -226,8 +226,8 @@ export async function addServer() {
       // Work still finishing, such as a cancelled restart, holds removal
       // back. Work a failed journey left running ends once its container
       // is gone, so a server never outlives its journey into the next.
-      const removed = !id || await unmanage(30_000).then(() => true, () => false);
-      await fake("/fake/remove", { container });
+      const removed = !server.id || await unmanage(30_000).then(() => true, () => false);
+      await fake("/fake/remove", { container: server.container });
       if (!removed) await unmanage(30_000);
       rmSync(data, { recursive: true, force: true });
     } finally {
@@ -239,14 +239,15 @@ export async function addServer() {
     // Ludock finds it from Docker's events, shortly after.
     await expect.poll(async () => {
       const page = await (await api.get("/")).text();
-      id = page.match(new RegExp(`href="/servers/([^"/?]+)"[^>]*>${name}<`))?.[1];
-      return id;
+      server.id = page.match(new RegExp(`href="/servers/([^"/?]+)"[^>]*>${name}<`))?.[1];
+      return server.id;
     }, { message: `Ludock found ${name}`, timeout: 20_000 }).toBeTruthy();
   } catch (error) {
     await remove();
     throw error;
   }
-  return { name, container, image: "itzg/minecraft-server:" + container, id, data, remove };
+  server.remove = remove;
+  return server;
 }
 
 /**

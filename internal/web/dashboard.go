@@ -206,6 +206,9 @@ func (s *Server) attentionFragment(w http.ResponseWriter, r *http.Request, reque
 			}
 			view.Items = append(view.Items, item)
 		}
+		if view.Admin {
+			view.TakeOvers = s.takeOvers(r.Context(), view.Items)
+		}
 	}
 	html(w)
 	views.NeedsAttention(view).Render(r.Context(), w)

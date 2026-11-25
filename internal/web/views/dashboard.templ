@@ -598,6 +598,8 @@ type AttentionView struct {
 	DockerProblem        string
 	Admin                bool
 	Error                string
+	// TakeOvers are the moves offered for missing servers, by server ID.
+	TakeOvers map[string]*TakeOver
 }
 
 var scheduleReasons = map[string]string{
@@ -650,6 +652,15 @@ func describeAttention(item attention.Item) attentionText {
 		title = "Game not answering"
 	}
 	return attentionText{title, path + "?tab=overview", "Check availability"}
+}
+
+// renamedTo is the move offered for a missing server Ludock found again
+// under another name, or nil.
+func renamedTo(view AttentionView, item attention.Item) *TakeOver {
+	if move := view.TakeOvers[item.ServerID]; item.Kind == "binding" && move != nil && move.Likely != nil && !view.DiscoveryUnavailable {
+		return move
+	}
+	return nil
 }
 
 // attentionSubject is what an item is about: its server, or notifications.
@@ -739,13 +750,26 @@ templ needsAttention(view AttentionView) {
 			<ul class="needs-attention__list" data-collapse-after="10">
 				for _, item := range view.Items {
 					{{ info := describeAttention(item) }}
+					{{ move := renamedTo(view, item) }}
 					<li>
 						<div class="needs-attention__description">
 							<span class="needs-attention__server">{ attentionSubject(item) }</span>
-							<strong>{ info.Title }</strong>
-							@attentionDetail(item)
+							if move != nil {
+								<strong>Looks like it was renamed to { move.Likely.Name }</strong>
+								<span class="muted">Move its backups, schedules, and sharing there?</span>
+							} else {
+								<strong>{ info.Title }</strong>
+								@attentionDetail(item)
+							}
 						</div>
-						if item.CanStart && !view.DiscoveryUnavailable {
+						if move != nil {
+							<form class="needs-attention__actions" hx-post={ "/servers/" + item.ServerID + "/take-over" } hx-target="#action-error" { takeOverConfirm(*move, move.Likely.Name)... }>
+								<input type="hidden" name="to" value={ move.Likely.ID }/>
+								<input type="hidden" name="bindingRevision" value={ int64Text(move.Likely.Revision) }/>
+								<button class="secondary-btn secondary-btn--accent" type="submit" data-busy-label="Moving…" aria-label={ "Move them from " + item.ServerName + " to " + move.Likely.Name }>Move them</button>
+								<a href={ templ.SafeURL(info.Link) } class="text-link" aria-label={ "Details: " + item.ServerName }>Details</a>
+							</form>
+						} else if item.CanStart && !view.DiscoveryUnavailable {
 							<div class="needs-attention__actions">
 								<button class="secondary-btn secondary-btn--accent" type="button" hx-post={ "/servers/" + item.ServerID + "/start" } hx-target="#action-error" data-busy-label="Working…" aria-label={ "Start " + item.ServerName }>Start</button>
 								<a href={ templ.SafeURL(info.Link) } class="text-link" aria-label={ "Details: " + item.ServerName + ", " + info.Title }>Details</a>
