@@ -158,14 +158,19 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   expect(readFileSync(join(ownServer.data, "mods", "shaders", "deep", "three.glsl"), "utf8")).toBe("3");
 
   // The server never replaces a file unasked: one made since the folder was
-  // listed is asked about after it answers, once for all such files, and
-  // declining leaves it.
+  // listed isn't covered by the question about listed ones, is asked about
+  // after the server answers, once for all such files, and declining leaves
+  // it.
   writeFileSync(join(ownServer.data, "mods", "behind.txt"), "game\n");
-  await page.locator("[data-upload-input]").setInputFiles([{ name: "behind.txt", mimeType: "text/plain", buffer: Buffer.from("mine\n") }]);
+  await page.locator("[data-upload-input]").setInputFiles([{ name: "behind.txt", mimeType: "text/plain", buffer: Buffer.from("mine\n") },
+    { name: "mod-2.jar", mimeType: "application/java-archive", buffer: Buffer.from("new mod 2\n") }]);
+  await expect(question.locator("#confirm-dialog-detail")).toContainText("1 name you chose is already in this folder: “mod-2.jar”.");
+  await question.getByRole("button", { name: "Upload and replace" }).click();
   await expect(question.locator("#confirm-dialog-detail")).toHaveText("1 file you chose is already here: “behind.txt”. " +
     "Replacing it can’t be undone; otherwise it stays as it is.");
   await question.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.locator("#file-feedback")).toHaveText("Uploaded 0 of 1 file. “behind.txt” wasn’t uploaded: a file with that name is already here.");
+  await expect(page.locator("#file-feedback")).toHaveText("Uploaded 1 of 2 files. “behind.txt” wasn’t uploaded: a file with that name is already here.");
+  expect(readFileSync(join(ownServer.data, "mods", "mod-2.jar"), "utf8")).toBe("new mod 2\n");
   expect(readFileSync(join(ownServer.data, "mods", "behind.txt"), "utf8")).toBe("game\n");
   mkdirSync(join(ownServer.data, "mods", "late"));
   writeFileSync(join(ownServer.data, "mods", "late", "x.toml"), "game\n");

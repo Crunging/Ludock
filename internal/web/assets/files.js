@@ -150,12 +150,16 @@
   // folder it goes in, "" for the folder itself.
   function label(item) { return item.folder ? item.folder + "/" + item.file.name : item.file.name; }
   function inside(folder, name) { return folder ? folder + "/" + name : name; }
+  // top is the name an item has in the shown folder: its own, or its folder's.
+  function top(item) { return item.folder ? item.folder.split("/")[0] : item.file.name; }
   var collator = new Intl.Collator(undefined, { numeric: true });
-  // Folders go outermost first and each folder's files together, by name, so
-  // a batch is one folder's and its files read in order.
+  // Folders go outermost first and each folder's files together, those to
+  // replace last, by name, so a batch is one folder's and its files read in
+  // order.
   function ordered(items) {
     return items.slice().sort(function (a, b) {
       if (a.folder !== b.folder) return a.folder < b.folder ? -1 : 1;
+      if (!a.replace !== !b.replace) return a.replace ? 1 : -1;
       return collator.compare(a.file.name, b.file.name);
     });
   }
@@ -227,8 +231,7 @@
     }
     var present = new Set(names), clashes = [];
     items.forEach(function (item) {
-      var name = item.folder ? item.folder.split("/")[0] : item.file.name;
-      if (present.has(name) && clashes.indexOf(name) < 0) clashes.push(name);
+      if (present.has(top(item)) && clashes.indexOf(top(item)) < 0) clashes.push(top(item));
     });
     return clashes;
   }
@@ -255,7 +258,8 @@
   function batches(items) {
     var all = [], batch = [], bytes = 0;
     items.forEach(function (item) {
-      if (batch.length > 0 && (batch.length >= batchFiles || bytes + item.file.size > batchBytes || item.folder !== batch[0].folder)) {
+      if (batch.length > 0 && (batch.length >= batchFiles || bytes + item.file.size > batchBytes || item.folder !== batch[0].folder ||
+        item.replace !== batch[0].replace)) {
         all.push(batch);
         batch = [];
         bytes = 0;
@@ -269,15 +273,16 @@
 
   // send uploads one batch, calling progress with the file being sent. A
   // folder not yet made in this upload is sent as into, which the server
-  // creates. fetch can't report upload progress, so this uses XMLHttpRequest.
-  function send(batch, made, replace, progress) {
+  // creates; a batch of items confirmed to replace says so. fetch can't
+  // report upload progress, so this uses XMLHttpRequest.
+  function send(batch, made, progress) {
     return new Promise(function (resolve, reject) {
       var manifest = JSON.stringify({ files: batch.map(function (item) { return { name: item.file.name, size: item.file.size }; }) }) + "\n";
       var head = new Blob([manifest]).size;
       var shown = page.getAttribute("data-files-path"), folder = batch[0].folder;
       var query = new URLSearchParams({ root: page.getAttribute("data-files-root"), path: made.has(folder) ? inside(shown, folder) : shown });
       if (folder && !made.has(folder)) query.set("into", folder);
-      if (replace) query.set("replace", "1");
+      if (batch[0].replace) query.set("replace", "1");
       var request = new XMLHttpRequest();
       request.open("PUT", "/files/" + encodeURIComponent(page.getAttribute("data-files")) + "/upload?" + query);
       request.setRequestHeader("Content-Type", "application/octet-stream");
@@ -344,6 +349,10 @@
       buttons(false);
       return;
     }
+    // Only what the question named may be replaced; the server reports any
+    // other clash.
+    chosen.forEach(function (item) { item.replace = replace && clashes.indexOf(top(item)) >= 0; });
+    chosen = ordered(chosen);
     controller = new AbortController();
     var completed = 0, current = label(chosen[0]), inflight = null, made = new Set();
     // lines has one entry per file that didn't upload; stop says why the
@@ -376,7 +385,7 @@
           if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
           report(0);
           inflight = batch;
-          var response = await send(batch, made, replace, report);
+          var response = await send(batch, made, report);
           inflight = null;
           if (response.status === 401) {
             window.location.assign("/login");
@@ -445,7 +454,7 @@
           quoted(again.map(label)) + (again.length === 1 ? ". Replacing it can’t be undone; otherwise it stays as it is." :
           ". Replacing them can’t be undone; otherwise they stay as they are."))) {
           existing = [];
-          replace = true;
+          again.forEach(function (item) { item.replace = true; });
           if (!(await run(again, again.length, "Replacing"))) return;
         }
       }
