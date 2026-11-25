@@ -94,7 +94,10 @@ type ScheduleForm struct {
 	LeadText        string
 	Actions         []string
 	CanCreateBackup bool
-	CanAnnounce     bool
+	// UndoBlocked: an earlier restore can't be undone yet, which refuses
+	// backups when they run.
+	UndoBlocked bool
+	CanAnnounce bool
 	// CanWait: Ludock can read who is online on the server.
 	CanWait bool
 	Blocked bool
@@ -600,6 +603,11 @@ templ ScheduleEditor(f ScheduleForm) {
 				<input type="checkbox" name="createBackup" value="true" id="schedule-backup" checked?={ input.CreateBackup }/>
 				Back up first
 			</label>
+		}
+		if f.UndoBlocked {
+			<p class="section-note" data-shown-when="action=restart|backup" hidden?={ input.Action != "restart" && input.Action != "backup" }>
+				Until the earlier restore is undone, a scheduled backup, or a restart that backs up first, is refused when it runs, without stopping the server.
+			</p>
 		}
 		<details class="disclosure" id="schedule-more" open?={ f.Error != "" && (input.WaitForEmpty != nil || input.Announcements != nil) }>
 			<summary>More options</summary>
