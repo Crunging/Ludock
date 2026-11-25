@@ -242,11 +242,11 @@ func LeftOutDetail(result ops.Result) string {
 	return ""
 }
 
-// ACLsLostDetail notes a restore whose storage couldn't hold the extra
-// permissions some files gave specific users or groups.
+// ACLsLostDetail notes a restore whose storage couldn't hold some files'
+// ACLs.
 func ACLsLostDetail(result ops.Result) string {
 	if result.ACLsLost {
-		return "Some files gave extra permissions to specific users or groups, which this storage can’t hold, so they were restored without them."
+		return "This storage can’t hold the access control lists (ACLs) some files had, which set permissions for specific users or groups, so those files were restored without them, with permissions that may be stricter."
 	}
 	return ""
 }

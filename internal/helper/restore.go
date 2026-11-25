@@ -1143,6 +1143,13 @@ func (x *extractor) metadata(descriptor fd, uid, gid, mode int64, mtime *float64
 			return err
 		}
 	}
+	// A folder whose ACL was recorded without a default one gets none from
+	// the stage's folders for what is made in it later.
+	if directory && acls.access != nil && acls.def == nil {
+		if err := unix.Fremovexattr(int(descriptor), defaultACL); err != nil && !unsupportedXattr(err) {
+			return err
+		}
+	}
 	if err := unix.Fchmod(int(descriptor), permissions); err != nil {
 		return err
 	}

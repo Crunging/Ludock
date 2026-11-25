@@ -479,11 +479,14 @@ func TestRestoreSteps(t *testing.T) {
 	// The backup's root is 0755 and the live one 0750. Its world folder is
 	// setgid and sticky, and a forged file in it setuid and setgid. The
 	// backup's root also had an ACL the live one hasn't, whose mask must not
-	// become the live root's group bits.
+	// become the live root's group bits. world's ACL had no default ACL, so
+	// it keeps none the stage gave it.
 	os.Chmod(root, 0o750)
+	inherited := mustACL(t, "user::rwx,user:4242:rwx,group::rwx,mask::rwx,other::rwx")
+	acls := unix.Setxattr(filepath.Join(root, stage, "new"), defaultACL, inherited, 0) == nil
 	records := []string{
 		`{"acl":"user::rwx,user:4242:rwx,group::r-x,mask::rwx,other::r-x","name":"","type":"directory","size":0,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":493}`,
-		`{"name":"world","type":"directory","size":0,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":2029,"mtime":1700000000}`,
+		`{"acl":"user::rwx,user:4242:r-x,group::r-x,mask::r-x,other::r-x","name":"world","type":"directory","size":0,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":2029,"mtime":1700000000}`,
 		`{"name":"world/level.dat","type":"file","size":8,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":3492,"mtime":1700000000.5}`,
 	}
 	input := strings.Join(records, "\n") + "\nrestored"
@@ -496,13 +499,16 @@ func TestRestoreSteps(t *testing.T) {
 	if info.Mode()&^os.ModeType != 0o755|os.ModeSetgid|os.ModeSticky || info.ModTime().Unix() != 1700000000 {
 		t.Fatal(info.Mode(), info.ModTime())
 	}
+	if _, err := unix.Getxattr(filepath.Join(root, stage, "new", "world"), defaultACL, nil); acls && !errors.Is(err, unix.ENODATA) {
+		t.Fatal("world kept the stage's default ACL", err)
+	}
 	if info, _ := os.Stat(filepath.Join(root, stage, "new", "world", "level.dat")); info.Mode() != 0o644 {
 		t.Fatal("restored a file as", info.Mode())
 	}
 	// Storage that refuses a file's ACL leaves it the archive's mode, whose
 	// group bits are the owning group's own, without an ACL inherited from
 	// its folder, and the extraction says so.
-	unix.Setxattr(filepath.Join(root, stage, "new"), defaultACL, mustACL(t, "user::rwx,user:4242:rwx,group::rwx,mask::rwx,other::rwx"), 0)
+	unix.Setxattr(filepath.Join(root, stage, "new"), defaultACL, inherited, 0)
 	fsetxattr = func(int, string, []byte, int) error { return unix.EOPNOTSUPP }
 	refused := `{"acl":"user::rw-,user:4242:rw-,group::r--,mask::rw-,other::---","name":"whitelist.json","type":"file","size":2,"uid":` +
 		strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":416}` + "\n[]"
