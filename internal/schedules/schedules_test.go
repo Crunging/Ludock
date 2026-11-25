@@ -161,8 +161,8 @@ func TestRunsOncePerSlotWithoutCatchingUp(t *testing.T) {
 }
 
 // A schedule saved just after its minute does not run for that minute, and a
-// run blocked by another operation on the server is retried instead of
-// skipped while its grace period lasts.
+// run blocked by another operation on the server, or by Ludock updating
+// itself, is retried instead of skipped while its grace period lasts.
 func TestLateRunsRespectSavesAndRetryConflicts(t *testing.T) {
 	f := setup(t)
 	db.Now = func() int64 { return due + 60_000 }
@@ -210,6 +210,27 @@ func TestLateRunsRespectSavesAndRetryConflicts(t *testing.T) {
 	f.s.Run(ctx, due+schedtimeRecurringGrace()-10_000)
 	if result := f.first(t, friend).LastResult; !strings.HasPrefix(result, "Skipped") {
 		t.Fatal(result)
+	}
+	// Due while Ludock updates itself, which records nothing and starts no
+	// work, a run goes ahead once it is back within its grace period.
+	f.s.DB.Exec("DELETE FROM operations")
+	f.s.DB.Exec("UPDATE schedules SET last_slot=NULL,last_result=NULL")
+	reopen, err := f.s.DB.CloseWrites(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updating := errors.New("ludock is updating itself")
+	lift, liftRunner := f.s.Locks.Hold(updating), f.s.Runner.Locks.Hold(updating)
+	f.s.Run(ctx, due)
+	reopen()
+	lift()
+	liftRunner()
+	if saved := f.first(t, friend); saved.LastSlot != "" || saved.LastResult != "" || f.operations(t) != 0 {
+		t.Fatal("a run due during an update was used up", saved.LastResult)
+	}
+	f.s.Run(ctx, due+2*60_000)
+	if f.operations(t) != 1 || f.first(t, friend).LastSlot == "" {
+		t.Fatal("a run due during an update didn't go ahead after it")
 	}
 }
 
