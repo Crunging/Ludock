@@ -469,10 +469,12 @@ Recreate it without `--rm` to manage it fully.
   gets only what it and every user the ACL names may do, and others only what
   every named user and group may do. So a tool that ignores ACLs, or storage
   that can't hold them, restores a file with the same permissions or fewer,
-  never more; only the entries for specific users and groups are lost then. A restore onto such storage says
-  so in its **Activity** entry. A data folder keeps the ACL it has now; only
-  its owner and permissions come back. An ACL of more than 1024 entries stops
-  the backup.
+  never more; only the entries for specific users and groups are lost then. A
+  restore onto such storage says so in its **Activity** entry. An entry
+  without an ACL record had none, and restores without one, whatever the data
+  folder's default ACL would give a new file. A data folder itself keeps the
+  ACL it has now; only its owner and permissions come back. An ACL of more
+  than 1024 entries stops the backup.
 
 ## Ludock itself
 
@@ -608,7 +610,11 @@ sudo tar -xpf backup.tar --acls --numeric-owner -C restored --strip-components=1
 Run these as root so owners stay as they were; `--acls` puts back ACLs. Stop the game, then
 replace the contents of its data folder with those of `restored/$id/`, still
 as root and keeping owners and permissions, such as with
-`sudo cp -a "restored/$id/." <folder>/` after emptying the folder. For a data
+`sudo cp -a "restored/$id/." <folder>/` after emptying the folder. If the
+data folder has a default ACL, `cp -a`, plain `tar`, and bsdtar let a file
+that had no ACL take it; for exactly what Ludock restores, extract with GNU
+tar straight into the emptied folder instead:
+`sudo tar -xpf backup.tar --acls --numeric-owner -C <folder> --strip-components=2 "snapshot/$id"`. For a data
 folder that is a whole named volume, the folder is the one
 `docker volume inspect -f '{{.Mountpoint}}' <volume>` prints; for one inside a
 volume, add the rest of its container path to that.
