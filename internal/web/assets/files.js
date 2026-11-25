@@ -94,10 +94,12 @@
   var csrf = document.querySelector('meta[name="csrf-token"]');
   var maxUpload = Number(page.getAttribute("data-max-upload")) || 0;
   var batchFiles = 100, batchBytes = 16 * 1024 * 1024;
-  var controller = null;
+  // busy holds the uploader from reading what was chosen to the end of the
+  // upload; controller cancels the upload.
+  var busy = false, controller = null;
   if (chooseFolder && folderInput && "webkitdirectory" in folderInput) chooseFolder.hidden = false;
 
-  function disabled() { return zone.getAttribute("aria-disabled") === "true" || controller !== null; }
+  function disabled() { return zone.getAttribute("aria-disabled") === "true" || busy; }
   function buttons(off) {
     [choose, chooseFolder].forEach(function (button) { if (button) button.disabled = off; });
   }
@@ -169,6 +171,10 @@
   async function dropped(entries) {
     var items = [];
     async function walk(entry, folder) {
+      if (entry instanceof File) {
+        items.push({ file: entry, folder: folder });
+        return;
+      }
       try {
         if (entry.isFile) {
           items.push({ file: await promised(function (resolve, reject) { entry.file(resolve, reject); }), folder: folder });
@@ -267,8 +273,8 @@
       var manifest = JSON.stringify({ files: batch.map(function (item) { return { name: item.file.name, size: item.file.size }; }) }) + "\n";
       var head = new Blob([manifest]).size;
       var shown = page.getAttribute("data-files-path"), folder = batch[0].folder;
-      var query = new URLSearchParams({ root: page.getAttribute("data-files-root"), path: made[folder] ? inside(shown, folder) : shown });
-      if (folder && !made[folder]) query.set("into", folder);
+      var query = new URLSearchParams({ root: page.getAttribute("data-files-root"), path: made.has(folder) ? inside(shown, folder) : shown });
+      if (folder && !made.has(folder)) query.set("into", folder);
       var request = new XMLHttpRequest();
       request.open("PUT", "/files/" + encodeURIComponent(page.getAttribute("data-files")) + "/upload?" + query);
       request.setRequestHeader("Content-Type", "application/octet-stream");
@@ -293,7 +299,7 @@
   // cancelled says what a cancelled upload left: the files confirmed, and
   // the batch in flight, any of which the server may have written.
   function cancelled(completed, total, inflight, current) {
-    if (total === 1) {
+    if (total === 1 && inflight) {
       return "Upload cancelled. “" + current + "” may have been written, and cancelling doesn’t undo it. Check the folder before trying again.";
     }
     var message = "Upload cancelled. " + completed + " of " + total + " files are confirmed uploaded";
@@ -308,26 +314,27 @@
     return message + " Cancelling doesn’t undo them; check the folder before trying again.";
   }
 
-  async function upload(source) {
+  // upload takes a function that reads what was chosen, so nothing else
+  // starts while it does.
+  async function upload(read) {
     if (disabled()) return;
-    var chosen;
+    busy = true;
+    var chosen = [], message = "";
     try {
-      chosen = ordered(await source);
+      chosen = ordered(await read());
+      if (chosen.length === 0) message = "Nothing was uploaded: there were no files in what you chose.";
     } catch (error) {
-      showNotice("error", error.message);
-      return;
+      message = error.message;
     }
-    if (chosen.length === 0) {
-      showNotice("error", "Nothing was uploaded: there were no files in what you chose.");
-      return;
-    }
-    if (disabled() || !(await replaceAllowed(chosen))) {
+    if (message || !(await replaceAllowed(chosen))) {
+      if (message) showNotice("error", message);
       if (input) input.value = "";
       if (folderInput) folderInput.value = "";
+      busy = false;
       return;
     }
     controller = new AbortController();
-    var completed = 0, offset = 0, current = label(chosen[0]), inflight = null, made = {};
+    var completed = 0, offset = 0, current = label(chosen[0]), inflight = null, made = new Set();
     // lines has one entry per file that didn't upload; stop says why the
     // files after offset weren't tried.
     var lines = [], stop = "";
@@ -382,11 +389,12 @@
           offset += 1;
           break;
         }
-        for (var folder = batch[0].folder; folder; folder = folder.split("/").slice(0, -1).join("/")) made[folder] = true;
         var answer = JSON.parse(response.body), unsure = false;
         answer.results.forEach(function (result, index) {
           if (result.status === "uploaded") {
             completed += 1;
+            // A file landed, so its folders exist.
+            for (var folder = batch[0].folder; folder; folder = folder.split("/").slice(0, -1).join("/")) made.add(folder);
           } else {
             unsure = unsure || result.status === "unconfirmed";
             lines.push(result.status === "unconfirmed" ? result.message : "Could not upload “" + label(batch[index]) + "”: " + result.message);
@@ -427,6 +435,7 @@
       showNotice(kind, message, lines);
       document.dispatchEvent(new CustomEvent("files-updated"));
       controller = null;
+      busy = false;
       progress.hidden = true;
       zone.setAttribute("aria-disabled", "false");
       buttons(false);
@@ -437,11 +446,11 @@
 
   if (choose && input) {
     choose.addEventListener("click", function () { if (!disabled()) input.click(); });
-    input.addEventListener("change", function () { upload(picked(input.files, false)); });
+    input.addEventListener("change", function () { upload(function () { return picked(input.files, false); }); });
   }
   if (chooseFolder && folderInput) {
     chooseFolder.addEventListener("click", function () { if (!disabled()) folderInput.click(); });
-    folderInput.addEventListener("change", function () { upload(picked(folderInput.files, true)); });
+    folderInput.addEventListener("change", function () { upload(function () { return picked(folderInput.files, true); }); });
   }
   cancel.addEventListener("click", function () {
     if (!controller) return;
@@ -461,14 +470,19 @@
     event.preventDefault();
     zone.classList.remove("file-dropzone--active");
     if (disabled()) return;
-    // Entries can only be taken while the drop event runs.
+    // Entries can only be taken while the drop event runs. An item without
+    // one, such as a file another app offers, goes as its file.
     var transfer = event.dataTransfer, items = Array.from(transfer.items || []);
     if (items.length > 0 && typeof items[0].webkitGetAsEntry === "function") {
-      var entries = items.filter(function (item) { return item.kind === "file"; })
-        .map(function (item) { return item.webkitGetAsEntry(); }).filter(Boolean);
-      upload(dropped(entries));
+      var entries = items.filter(function (item) { return item.kind === "file"; }).map(function (item) {
+        return item.webkitGetAsEntry() || (item.getAsFile && item.getAsFile());
+      });
+      upload(function () {
+        if (entries.some(function (entry) { return !entry; })) throw new Error("Nothing was uploaded: the browser couldn’t read everything you dropped.");
+        return dropped(entries);
+      });
     } else {
-      upload(droppedFiles(transfer.files));
+      upload(function () { return droppedFiles(transfer.files); });
     }
   });
   // Leaving mid-upload would cancel it silently.

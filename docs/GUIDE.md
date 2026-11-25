@@ -387,7 +387,7 @@ such as Valheim's `/opt/valheim`. It shows container paths, never host paths.
 
 - Upload by dropping files or folders on the page, or with **Choose files**
   or **Choose folder**, as many at once as you like, such as a whole mods
-  folder; a folder keeps its folders inside. If anything you chose has the
+  folder; its files keep the folders they are in. If anything you chose has the
   name of something already in the folder, Ludock asks once before
   replacing, since a replaced file can't be brought back. Each file replaces
   the destination only once it is complete, and one that can't be uploaded

@@ -1445,9 +1445,10 @@ func sameAsCreated(t *testing.T, got, reference, want string, mode os.FileMode) 
 
 // Without a default ACL, a new file or folder, uploaded, made, or unpacked,
 // gets what the kernel gives one the game creates there with the umask the
-// folder shows: group write when the folder has it, and no more than the
-// folder gives group and others. A folder without group write keeps the
-// helper's umask, Docker's 0022.
+// folder shows: group write when the folder's owning group has it, and no
+// more than the folder gives group and others. A folder without group write,
+// including one whose ACL mask alone shows it, keeps the helper's umask,
+// Docker's 0022.
 func TestNewEntriesFollowFolderMode(t *testing.T) {
 	root, _ := dataRoot(t)
 	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
@@ -1456,11 +1457,19 @@ func TestNewEntriesFollowFolderMode(t *testing.T) {
 	for _, test := range []struct {
 		folder    uint32
 		gameUmask int
-	}{{0o755, 0o022}, {0o700, 0o022}, {0o775, 0o002}, {0o770, 0o007}, {0o2775, 0o002}} {
-		name := fmt.Sprintf("%o-%o", test.folder, test.gameUmask)
+		acl       string
+	}{{0o755, 0o022, ""}, {0o700, 0o022, ""}, {0o775, 0o002, ""}, {0o770, 0o007, ""}, {0o2775, 0o002, ""},
+		{0o755, 0o022, "user::rwx,user:4242:rwx,group::r-x,mask::rwx,other::r-x"}} {
+		name := fmt.Sprintf("%o-%o%s", test.folder, test.gameUmask, map[bool]string{true: "-acl"}[test.acl != ""])
 		folder := filepath.Join(root, name)
 		os.Mkdir(folder, 0o700)
 		unix.Chmod(folder, test.folder)
+		if test.acl != "" {
+			if err := unix.Setxattr(folder, accessACL, mustACL(t, test.acl), 0); err != nil {
+				t.Log("no ACLs here:", err)
+				continue
+			}
+		}
 		syscall.Umask(test.gameUmask)
 		reference, _ := os.OpenFile(filepath.Join(folder, "game.txt"), os.O_CREATE|os.O_WRONLY, 0o666)
 		reference.Close()
