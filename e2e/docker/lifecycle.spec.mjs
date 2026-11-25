@@ -197,13 +197,18 @@ function diagnose(eventsFile) {
       return String(error.stderr || error);
     }
   };
+  // Ludock writes warnings to stderr.
+  const logs = (id) => {
+    const result = spawnSync("docker", ["logs", "--tail", "100", id], { encoding: "utf8" });
+    return `${result.stdout}${result.stderr}`.trim();
+  };
   const out = ["--- container events", readFileSync(eventsFile, "utf8"),
     "--- containers", run("ps", "--all", "--no-trunc", "--format", "{{.ID}} {{.Names}} {{.Image}} {{.Status}}")];
   const ids = run("ps", "--all", "--quiet", "--filter", "label=ludock.internal").split("\n")
     .concat(run("ps", "--all", "--quiet", "--filter", "label=com.docker.compose.service=ludock").split("\n")).filter(Boolean);
   for (const id of new Set(ids)) {
     out.push(`--- ${id}`, run("inspect", "--format", "{{.Name}} {{.Image}} restarts={{.RestartCount}} {{json .State}} {{json .Config.Labels}} {{json .HostConfig.RestartPolicy}}", id),
-      run("logs", "--tail", "100", id));
+      logs(id));
   }
   console.log(out.join("\n"));
 }
