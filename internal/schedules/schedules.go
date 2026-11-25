@@ -221,8 +221,8 @@ type Schedule struct {
 // pauses, and the run's own end replace it in the same write.
 const WaitingResult = "Waiting for players to leave"
 
-// stillWaitingSQL limits a write that ends a wait to a run still waiting.
-const stillWaitingSQL = " AND last_result='" + WaitingResult + "' AND last_run_at IS NOT NULL AND last_operation_id IS NULL"
+// StillWaiting limits a write that ends a wait to a run still waiting.
+const StillWaiting = " AND last_result='" + WaitingResult + "' AND last_run_at IS NOT NULL AND last_operation_id IS NULL"
 
 func waiting(r *row) bool {
 	return r.lastResult.String == WaitingResult && r.lastRunAt.Valid && !r.lastOpID.Valid
@@ -988,7 +988,7 @@ func (s *Service) recordSkip(ctx context.Context, r *row, now int64, d dueRun, e
 	}
 	stillWaiting := ""
 	if waiting(r) {
-		stillWaiting = stillWaitingSQL
+		stillWaiting = StillWaiting
 	}
 	key := slot
 	if key == "" {
@@ -1047,7 +1047,7 @@ func (s *Service) queue(ctx context.Context, r *row, data Input, state string, u
 	// A run that waited goes ahead only if nobody cancelled the wait.
 	stillWaiting := ""
 	if waiting(r) {
-		stillWaiting = stillWaitingSQL
+		stillWaiting = StillWaiting
 	}
 	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		// The owner's access is as checked above, read on this connection.
@@ -1125,7 +1125,7 @@ func (s *Service) claimAnnouncement(ctx context.Context, r *row, slot string, le
 		query, args := `INSERT OR IGNORE INTO schedule_announcements(schedule_id,slot,lead_minutes)
       SELECT id,?,? FROM schedules WHERE id=? AND revision=?`, []any{slot, lead, r.id, r.revision}
 		if waiting(r) {
-			query, args = query+stillWaitingSQL+" AND last_slot=?", append(args, r.lastSlot.String)
+			query, args = query+StillWaiting+" AND last_slot=?", append(args, r.lastSlot.String)
 		}
 		result, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {

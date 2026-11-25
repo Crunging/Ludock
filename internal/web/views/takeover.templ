@@ -18,7 +18,10 @@ type TakeOver struct {
 	Backups, Schedules, People int
 }
 
-type TakeOverTarget struct{ ID, Name string }
+type TakeOverTarget struct {
+	ID, Name string
+	Revision int64
+}
 
 // TakeOverDone is what moved, and what stayed behind because the new server
 // already had its own.
@@ -85,6 +88,7 @@ templ TakeOverNotice(o TakeOver) {
 			<h3>Looks like it was renamed to { o.Likely.Name }</h3>
 			<p>{ o.Likely.Name } has the same game and data folders as this server. Move this server’s backups, schedules, and sharing there?</p>
 			<input type="hidden" name="to" value={ o.Likely.ID }/>
+			<input type="hidden" name="bindingRevision" value={ int64Text(o.Likely.Revision) }/>
 			<button class="primary-btn" type="submit" data-busy-label="Moving…">Move to { o.Likely.Name }</button>
 		</form>
 	} else {

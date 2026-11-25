@@ -765,6 +765,7 @@ templ needsAttention(view AttentionView) {
 						if move != nil {
 							<form class="needs-attention__actions" hx-post={ "/servers/" + item.ServerID + "/take-over" } hx-target="#action-error" { takeOverConfirm(*move, move.Likely.Name)... }>
 								<input type="hidden" name="to" value={ move.Likely.ID }/>
+								<input type="hidden" name="bindingRevision" value={ int64Text(move.Likely.Revision) }/>
 								<button class="secondary-btn secondary-btn--accent" type="submit" data-busy-label="Moving…" aria-label={ "Move them from " + item.ServerName + " to " + move.Likely.Name }>Move them</button>
 								<a href={ templ.SafeURL(info.Link) } class="text-link" aria-label={ "Details: " + item.ServerName }>Details</a>
 							</form>

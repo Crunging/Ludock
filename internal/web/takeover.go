@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -49,7 +51,7 @@ func (s *Server) takeOverOffer(ctx context.Context, from *identity.Server, all [
 		if server.ID == from.ID || server.HostID != from.HostID || server.Status != identity.StatusActive || server.ContainerID == "" {
 			continue
 		}
-		target := views.TakeOverTarget{ID: server.ID, Name: server.DisplayName}
+		target := views.TakeOverTarget{ID: server.ID, Name: server.DisplayName, Revision: server.BindingRevision}
 		if s.sameData(from, &server) && server.FirstSeenAt > from.FirstSeenAt {
 			likely = append(likely, target)
 		} else if sameGame(from.GameType, server.GameType) {
@@ -96,7 +98,9 @@ func (s *Server) takeOvers(ctx context.Context, items []attention.Item) map[stri
 func (s *Server) takeOver(w http.ResponseWriter, r *http.Request, request *Request) {
 	ctx := r.Context()
 	from, to := r.PathValue("id"), r.PostFormValue("to")
-	if !identity.ValidID(from) || !identity.ValidID(to) {
+	// A suggestion is for the target as the page showed it; a pick has none.
+	revision, err := strconv.ParseInt(cmp.Or(r.PostFormValue("bindingRevision"), "-1"), 10, 64)
+	if err != nil || !identity.ValidID(from) || !identity.ValidID(to) {
 		s.fail(w, r, request, apperr.New("INVALID_REQUEST", 400, "Choose the server it is now."))
 		return
 	}
@@ -111,7 +115,7 @@ func (s *Server) takeOver(w http.ResponseWriter, r *http.Request, request *Reque
 		return
 	}
 	defer release()
-	done, err := s.moveServer(ctx, request, from, to)
+	done, err := s.moveServer(ctx, request, from, to, revision)
 	if err != nil {
 		s.fail(w, r, request, authz.AdminMutationError(err))
 		return
@@ -134,7 +138,7 @@ func scheduleKey(input schedules.Input) string {
 	return fmt.Sprint(input.Action, input.Kind, input.Enabled, input.Time, input.Timezone, input.Date, days, input.Command)
 }
 
-func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID string) (*views.TakeOverDone, error) {
+func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID string, expected int64) (*views.TakeOverDone, error) {
 	admin := request.User().ID
 	var done views.TakeOverDone
 	err := s.App.DB.AdminMutation(ctx, admin, request.Principal.TokenHash, db.Now(), func(tx *sql.Tx) error {
@@ -153,6 +157,8 @@ func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID 
 			return errTakeOver("Ludock can find this server in Docker again, so there is nothing to move.")
 		case to.Status != identity.StatusActive || to.ContainerID == "" || to.HostID != from.HostID:
 			return errTakeOver(to.DisplayName + " isn’t in Docker as one container right now. Check it, then try again.")
+		case expected >= 0 && to.BindingRevision != expected:
+			return errTakeOver(to.DisplayName + " changed in Docker since this page loaded. Reload and check it, then try again.")
 		case from.BindingFingerprint != to.BindingFingerprint && !sameGame(from.GameType, to.GameType):
 			return errTakeOver(to.DisplayName + " runs another game, so this server’s backups can’t move there.")
 		}
@@ -170,15 +176,16 @@ func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID 
 		}
 		done = views.TakeOverDone{FromName: from.DisplayName, ToID: to.ID, ToName: to.DisplayName,
 			SameData: s.sameData(from, to)}
-		// A restore that stopped partway is undone only on the data it
+		// A restore that stopped partway is undone only on the binding it
 		// stopped, so its journal can't move to other folders.
 		var pending int
-		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM operations WHERE server_id=? AND "+jobs.PendingRestore, from.ID).
-			Scan(&pending); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM operations WHERE server_id=? AND "+jobs.PendingRestore+
+			" AND COALESCE(json_extract(recovery_json,'$.fingerprint'),'') <> ?", from.ID, to.BindingFingerprint).Scan(&pending); err != nil {
 			return err
 		}
-		if pending > 0 && !done.SameData {
-			return errTakeOver("A restore of " + from.DisplayName + " stopped partway on its old data folders. Start its old container again so Ludock can finish it, then try again.")
+		if pending > 0 {
+			return errTakeOver("A restore of " + from.DisplayName + " stopped partway, and only its old data folders can finish it. " +
+				"Bring back its old container and undo the restore from Needs attention, then try again.")
 		}
 
 		// A grant someone already has on the new server is theirs to keep.
@@ -262,9 +269,10 @@ func (s *Server) moveServer(ctx context.Context, request *Request, fromID, toID 
 			return errTakeOver(fmt.Sprintf("%s would have more than %d schedules. Delete some, then try again.", to.DisplayName, schedules.MaxPerServer))
 		}
 		// changed_at keeps a run missed while the server was missing from
-		// starting late on the new one.
-		if _, err := tx.ExecContext(ctx, "UPDATE schedules SET server_id=?, binding_revision=?, changed_at=?, revision=revision+1 WHERE server_id=?",
-			to.ID, revision, db.Now(), from.ID); err != nil {
+		// starting late on the new one, and a run waiting for players ends.
+		if _, err := tx.ExecContext(ctx, `UPDATE schedules SET server_id=?, binding_revision=?, changed_at=?, revision=revision+1,
+      last_result=CASE WHEN 1=1`+schedules.StillWaiting+` THEN 'Ended: the server moved while it waited for players to leave' ELSE last_result END
+      WHERE server_id=?`, to.ID, revision, db.Now(), from.ID); err != nil {
 			return err
 		}
 

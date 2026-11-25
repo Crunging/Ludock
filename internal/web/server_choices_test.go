@@ -106,8 +106,8 @@ func TestAddServerRefusesForgedRequests(t *testing.T) {
 // One with other data folders, or two with none, is offered only by name:
 // moved sharing waits for a confirmation that a page opened before the move
 // can't give, and the backups say the data lived elsewhere. Work on
-// either server, a member, or an administrator demoted at the write is
-// refused with nothing changed.
+// either server, a suggestion the new server changed after, a member, or an
+// administrator demoted at the write is refused with nothing changed.
 func TestRenamedServerTakesOver(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -204,6 +204,11 @@ func TestRenamedServerTakesOver(t *testing.T) {
 				p.app.DB.Exec("UPDATE operations SET server_id=?, status='running'", renamed)
 				return p.admin
 			}},
+		{name: "changed since the page", status: http.StatusConflict,
+			before: func(t *testing.T, p *pages, member *auth.Principal, renamed string) *auth.Principal {
+				p.app.DB.Exec("UPDATE logical_servers SET binding_revision=binding_revision+1 WHERE id=?", renamed)
+				return p.admin
+			}},
 		{name: "member", status: http.StatusForbidden,
 			before: func(t *testing.T, p *pages, member *auth.Principal, renamed string) *auth.Principal { return member }},
 		{name: "demoted at the write", status: http.StatusNotFound,
@@ -252,11 +257,13 @@ func TestRenamedServerTakesOver(t *testing.T) {
 				!strings.Contains(page, `value="`+renamed+`"`) {
 				t.Fatal(renamed, page, attention)
 			}
+			var revision string
+			p.app.DB.QueryRow("SELECT binding_revision FROM logical_servers WHERE id=?", renamed).Scan(&revision)
 			who := p.admin
 			if test.before != nil {
 				who = test.before(t, p, member, renamed)
 			}
-			response := p.action("/servers/"+p.server+"/take-over", who, url.Values{"to": {renamed}})
+			response := p.action("/servers/"+p.server+"/take-over", who, url.Values{"to": {renamed}, "bindingRevision": {revision}})
 			body := readBody(t, response)
 			if response.StatusCode != test.status {
 				t.Fatal(response.StatusCode, body)
