@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -190,6 +191,20 @@ func TestRenamedServerTakesOver(t *testing.T) {
 				if !strings.Contains(body, "1 schedule,") || !strings.Contains(body, "1 moved schedule runs at the same time as one of valheim-world’s own") ||
 					strings.Contains(body, "already has the same schedule") || count != 2 || backingUp != 1 {
 					t.Fatal(count, backingUp, body)
+				}
+			}},
+		{name: "a one-time restart at the same time", status: http.StatusOK,
+			before: func(t *testing.T, p *pages, member *auth.Principal, renamed string) *auth.Principal {
+				once := schedules.Input{Kind: "once", Action: "restart", Enabled: true, Time: "04:00", Timezone: "UTC",
+					Date: time.Now().UTC().AddDate(0, 0, 2).Format("2006-01-02")}
+				if _, err := p.app.Schedules.CreateAsAdmin(ctx, &p.admin.User, p.admin.TokenHash, renamed, once); err != nil {
+					t.Fatal(err)
+				}
+				return p.admin
+			},
+			check: func(t *testing.T, p *pages, member *auth.Principal, old, renamed, body string) {
+				if !strings.Contains(body, "1 moved schedule runs at the same time as one of valheim-world’s own") {
+					t.Fatal(body)
 				}
 			}},
 		{name: "other data folders", data: true, status: http.StatusOK, check: func(t *testing.T, p *pages, member *auth.Principal, old, renamed, body string) {

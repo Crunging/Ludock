@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -115,10 +116,27 @@ func adoptRestores(ctx context.Context, tx *sql.Tx, from *identity.Server, targe
 
 func errTakeOver(message string) error { return apperr.New("TAKE_OVER_REFUSED", 409, message) }
 
-// sameTime reports whether two enabled schedules can run at the same moment.
+// sameTime reports whether two enabled schedules can run at the same moment:
+// two one-time schedules on the same date, or otherwise on a shared weekday.
+// A one-time schedule whose date passed more than a day ago can't run again.
 func sameTime(a, b schedules.Input) bool {
-	return a.Enabled && b.Enabled && a.Kind == b.Kind && a.Time == b.Time && a.Timezone == b.Timezone && a.Date == b.Date &&
-		(a.Kind != "recurring" || slices.ContainsFunc(a.Days, func(day int) bool { return slices.Contains(b.Days, day) }))
+	if !a.Enabled || !b.Enabled || a.Time != b.Time || a.Timezone != b.Timezone {
+		return false
+	}
+	days := func(input schedules.Input) []int {
+		if input.Kind == "recurring" {
+			return input.Days
+		}
+		date, err := time.Parse("2006-01-02", input.Date)
+		if err != nil || time.Since(date) > 48*time.Hour {
+			return nil
+		}
+		return []int{int(date.Weekday())}
+	}
+	if a.Kind != "recurring" && b.Kind != "recurring" && a.Date != b.Date {
+		return false
+	}
+	return slices.ContainsFunc(days(a), func(day int) bool { return slices.Contains(days(b), day) })
 }
 
 // TakeOver moves a missing server's backups, schedules, sharing, monitoring

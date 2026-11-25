@@ -425,9 +425,9 @@ func TakeOverResult(d jobs.TakeOver) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var21 string
-				templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinStringErrs(Capitalize(input.Action))
+				templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinStringErrs(ActionLabel(input.Action))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `takeover.templ`, Line: 116, Col: 35}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `takeover.templ`, Line: 116, Col: 36}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var21))
 				if templ_7745c5c3_Err != nil {
@@ -440,7 +440,7 @@ func TakeOverResult(d jobs.TakeOver) templ.Component {
 				var templ_7745c5c3_Var22 string
 				templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(ScheduleWhen(input))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `takeover.templ`, Line: 116, Col: 60}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `takeover.templ`, Line: 116, Col: 61}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 				if templ_7745c5c3_Err != nil {
@@ -506,9 +506,9 @@ func TakeOverResult(d jobs.TakeOver) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var26 string
-				templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(Capitalize(input.Action))
+				templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(ActionLabel(input.Action))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `takeover.templ`, Line: 126, Col: 35}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `takeover.templ`, Line: 126, Col: 36}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 				if templ_7745c5c3_Err != nil {
@@ -521,7 +521,7 @@ func TakeOverResult(d jobs.TakeOver) templ.Component {
 				var templ_7745c5c3_Var27 string
 				templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(ScheduleWhen(input))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `takeover.templ`, Line: 126, Col: 60}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `takeover.templ`, Line: 126, Col: 61}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 				if templ_7745c5c3_Err != nil {
