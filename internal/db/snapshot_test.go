@@ -146,7 +146,7 @@ func TestSnapshotArchiveLayout(t *testing.T) {
 		if got := strings.Join(names, " "); got != want {
 			t.Fatalf("archive holds %q, want %q", got, want)
 		}
-		if _, err := RestoreSnapshot(archive, filepath.Join(t.TempDir(), "data", "ludock.db")); err != nil {
+		if _, err := RestoreSnapshot(archive, filepath.Join(t.TempDir(), "data", "ludock.db"), ""); err != nil {
 			t.Fatal(id, err)
 		}
 	}
