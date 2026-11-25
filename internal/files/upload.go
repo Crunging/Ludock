@@ -189,8 +189,11 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		if cleanupErr != nil {
 			log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
 		}
+		return results, err
 	}
-	return results, err
+	// Every file was answered, such as a large one the helper refused and
+	// then stopped instead of reading past, so later batches can still go.
+	return results, nil
 }
 
 // isRefusal reports a public error that says nothing was written.
