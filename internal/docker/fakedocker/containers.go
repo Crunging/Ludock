@@ -389,16 +389,24 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 		content, ok := c.Files[r.URL.Query().Get("path")]
 		mounts := slices.Clone(c.Mounts)
 		e.mu.Unlock()
-		// Other files are read through the container's bind mounts.
+		// Other files are read through the container's bind mounts, never
+		// outside the mounted folder.
 		for _, mount := range mounts {
 			if ok || mount.Type != "bind" {
 				continue
 			}
-			if relative, err := filepath.Rel(mount.Destination, r.URL.Query().Get("path")); err == nil && !strings.HasPrefix(relative, "..") {
-				if data, err := os.ReadFile(filepath.Join(mount.Source, relative)); err == nil {
-					content, ok = string(data), true
-				}
+			relative, err := filepath.Rel(mount.Destination, r.URL.Query().Get("path"))
+			if err != nil {
+				continue
 			}
+			root, err := os.OpenRoot(mount.Source)
+			if err != nil {
+				continue
+			}
+			if data, err := root.ReadFile(relative); err == nil {
+				content, ok = string(data), true
+			}
+			root.Close()
 		}
 		if !ok {
 			fail(w, 404)
