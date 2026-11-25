@@ -587,6 +587,9 @@ templ OperationSummary(o OperationDetailView) {
 		if detail := LeftOutDetail(operation.Result); detail != "" {
 			<p class="section-note">{ detail }</p>
 		}
+		if detail := ACLsLostDetail(operation.Result); detail != "" {
+			<p class="section-note">{ detail }</p>
+		}
 		if detail := DockerWaitDetail(operation.Result); detail != "" {
 			<p class="section-note">{ detail }</p>
 		}

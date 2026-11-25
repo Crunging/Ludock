@@ -51,17 +51,47 @@ func parseNumber(value string) (float64, error) {
 	return number, nil
 }
 
-// MappedHeader renames an entry with fresh, numeric-only PAX metadata. This
-// keeps large Linux IDs and dates past 2038 without retaining source path or
-// link overrides.
+// EntryACLs returns an entry's access and default ACLs in helper.ACLText's
+// form, or "" for one it hasn't. Only a folder has a default ACL.
+func EntryACLs(header *tarstream.Header) (access, def string, err error) {
+	for record, target := range map[string]*string{helper.ACLAccessRecord: &access, helper.ACLDefaultRecord: &def} {
+		// An empty record is no ACL, as PAX has one override a global record.
+		if text := header.PAX[record]; text != "" {
+			value, parseErr := helper.ParseACLText(text)
+			if parseErr != nil {
+				err = parseErr
+				continue
+			}
+			*target, _ = helper.ACLText(value)
+		}
+	}
+	if err != nil || (def != "" && header.Type != "directory") {
+		return "", "", fail("UNSAFE_ARCHIVE", "The archive contains invalid access control lists (ACLs).")
+	}
+	return access, def, nil
+}
+
+// MappedHeader renames an entry with fresh, numeric-only PAX metadata and
+// its ACLs. This keeps large Linux IDs and dates past 2038 without
+// retaining source path or link overrides.
 func MappedHeader(header *tarstream.Header, name string) (*tarstream.Header, error) {
 	uid, gid, mtime, err := EntryMetadata(header)
 	if err != nil {
 		return nil, err
 	}
+	access, def, err := EntryACLs(header)
+	if err != nil {
+		return nil, err
+	}
+	pax := map[string]string{"uid": tarstream.FormatSeconds(float64(uid)), "gid": tarstream.FormatSeconds(float64(gid)),
+		"mtime": tarstream.FormatSeconds(mtime)}
+	for record, text := range map[string]string{helper.ACLAccessRecord: access, helper.ACLDefaultRecord: def} {
+		if text != "" {
+			pax[record] = text
+		}
+	}
 	return &tarstream.Header{Name: name, Type: header.Type, Size: header.Size, Mode: header.Mode, UID: uid, GID: gid,
-		MtimeSeconds: mtime, PAX: map[string]string{"uid": tarstream.FormatSeconds(float64(uid)),
-			"gid": tarstream.FormatSeconds(float64(gid)), "mtime": tarstream.FormatSeconds(mtime)}}, nil
+		MtimeSeconds: mtime, PAX: pax}, nil
 }
 
 // ValidateEntry accepts only regular files and directories inside the
@@ -70,6 +100,9 @@ func ValidateEntry(header *tarstream.Header, roots []Root) error {
 	name := strings.TrimSuffix(header.Name, "/")
 	parts := strings.Split(name, "/")
 	if _, _, _, err := EntryMetadata(header); err != nil {
+		return err
+	}
+	if _, _, err := EntryACLs(header); err != nil {
 		return err
 	}
 	if strings.Contains(header.Name, "\x00") || strings.Contains(header.Name, "\\") || strings.HasPrefix(header.Name, "/") ||

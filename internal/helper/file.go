@@ -283,23 +283,51 @@ func (h *fileHelper) streamFile(file fd, size int64) error {
 	return nil
 }
 
-// header writes an entry's archive header. Ownership, and folders' setgid
-// and sticky bits, are kept only for backups.
-func (h *fileHelper) header(name string, stat *unix.Stat_t, directory bool) error {
+// header writes the archive header of file. Ownership, ACLs, and folders'
+// setgid and sticky bits, are kept only for backups.
+func (h *fileHelper) header(name string, file fd, stat *unix.Stat_t, directory bool) error {
 	if len(name) > 4096 {
 		return errors.New("an archive path is too long")
 	}
-	entry := tarstream.Header{Name: name, Type: "file", Size: stat.Size, Mode: int64(stat.Mode) & 0o777,
-		MtimeSeconds: float64(max(0, stat.Mtim.Sec))}
+	backup := h.request.Operation == "backup"
+	entry := tarstream.Header{Name: name, Type: "file", Size: stat.Size, MtimeSeconds: float64(max(0, stat.Mtim.Sec)), PAX: map[string]string{}}
+	mode := stat.Mode & 0o777
 	if directory {
 		entry.Type, entry.Size = "directory", 0
-	}
-	if h.request.Operation == "backup" {
-		entry.UID, entry.GID = int64(stat.Uid), int64(stat.Gid)
-		if directory {
-			entry.Mode = int64(stat.Mode) & 0o3777
+		if backup {
+			mode = stat.Mode & 0o3777
 		}
 	}
+	access, err := readACL(file, accessACL)
+	if err != nil {
+		return err
+	}
+	if access != nil {
+		mode = ownGroupMode(mode, access)
+	}
+	if backup {
+		entry.UID, entry.GID = int64(stat.Uid), int64(stat.Gid)
+		var def []aclEntry
+		if directory {
+			if def, err = readACL(file, defaultACL); err != nil {
+				return err
+			}
+		}
+		// bsdtar restores a folder with a default ACL but no access ACL as
+		// mode 0000, so it is given the access ACL its mode is, as GNU tar
+		// does.
+		if def != nil && access == nil {
+			access = []aclEntry{{aclUserObj, uint16(mode >> 6 & 7), aclNoID}, {aclGroupObj, uint16(mode >> 3 & 7), aclNoID},
+				{aclOther, uint16(mode & 7), aclNoID}}
+		}
+		if _, masked := aclPerm(access, aclMask); masked || def != nil {
+			entry.PAX[ACLAccessRecord] = aclText(access)
+		}
+		if def != nil {
+			entry.PAX[ACLDefaultRecord] = aclText(def)
+		}
+	}
+	entry.Mode = int64(mode)
 	header, err := tarstream.EncodeHeader(entry)
 	if err != nil {
 		return err
@@ -331,7 +359,7 @@ func (h *fileHelper) archiveEntry(parent fd, name, relative string, depth int) e
 		}
 	}
 	if isDir(info) {
-		if err := h.header(relative+"/", info, true); err != nil {
+		if err := h.header(relative+"/", file, info, true); err != nil {
 			return err
 		}
 		children, err := names(file)
@@ -350,7 +378,7 @@ func (h *fileHelper) archiveEntry(parent fd, name, relative string, depth int) e
 		if !isRegular(info) || info.Nlink != 1 {
 			return errors.New("archive cannot include symbolic links, hard links, or special files")
 		}
-		if err := h.header(relative, info, false); err != nil {
+		if err := h.header(relative, file, info, false); err != nil {
 			return err
 		}
 		if err := h.streamFile(file, info.Size); err != nil {
@@ -1230,7 +1258,7 @@ func (h *fileHelper) run() error {
 		if err != nil {
 			return err
 		}
-		if err := h.header("source/", info, true); err != nil {
+		if err := h.header("source/", root, info, true); err != nil {
 			return err
 		}
 		children, err := names(root)

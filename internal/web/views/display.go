@@ -242,6 +242,15 @@ func LeftOutDetail(result ops.Result) string {
 	return ""
 }
 
+// ACLsLostDetail notes a restore whose storage couldn't hold the extra
+// permissions some files gave specific users or groups.
+func ACLsLostDetail(result ops.Result) string {
+	if result.ACLsLost {
+		return "Some files gave extra permissions to specific users or groups, which this storage can’t hold, so they were restored without them."
+	}
+	return ""
+}
+
 // DockerWaitDetail notes work that waited for Docker to come back.
 func DockerWaitDetail(result ops.Result) string {
 	if result.WaitedForDocker {

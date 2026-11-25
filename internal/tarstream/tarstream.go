@@ -19,8 +19,10 @@ import (
 var ErrInvalid = errors.New("invalid or truncated backup archive")
 
 const (
-	blockSize        = 512
-	maxMetadataBytes = 16384
+	blockSize = 512
+	// maxMetadataBytes bounds an entry's PAX records: a long path and two
+	// ACLs of helper.MaxACLEntries entries fit.
+	maxMetadataBytes = 65536
 )
 
 var types = map[byte]string{'0': "file", '1': "link", '2': "symlink", '3': "character-device", '4': "block-device",

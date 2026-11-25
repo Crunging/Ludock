@@ -635,8 +635,11 @@ func (r *restoreRun) unpack() error {
 		if err := r.stillSafe(); err != nil {
 			return err
 		}
-		err := r.j.Backups.Helpers.ExtractToStage(r.ctx, r.folder, r.row.ID, r.data.Container, r.targets, stageName(r.job),
+		aclsLost, err := r.j.Backups.Helpers.ExtractToStage(r.ctx, r.folder, r.row.ID, r.data.Container, r.targets, stageName(r.job),
 			r.row.Roots, r.row.Size, r.reserve, r.row.Checksum, r.assertAccess)
+		if err == nil && aclsLost {
+			err = r.job.Progress(r.job.Job.Phase, func(recovery *ops.Recovery) { recovery.ACLsLost = true }, nil)
+		}
 		if err == nil {
 			return r.assertAccess()
 		}
@@ -713,7 +716,7 @@ func (r *restoreRun) replace(index int, root backups.Root) error {
 }
 
 func (r *restoreRun) result() *ops.Result {
-	restored := withSave(r.job, &ops.Result{RestoredBackupID: r.row.ID, DataMoved: r.moved})
+	restored := withSave(r.job, &ops.Result{RestoredBackupID: r.row.ID, DataMoved: r.moved, ACLsLost: r.job.Job.Recovery.ACLsLost})
 	if r.safety != nil {
 		restored.SafetyBackupID = r.safety.ID
 	}
@@ -917,5 +920,6 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 		return nil, err
 	}
 	result.Guidance = outcome
+	result.ACLsLost = finished && job.Job.Recovery.ACLsLost
 	return withServerAfterRecovery(job, &result), nil
 }

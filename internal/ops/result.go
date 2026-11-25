@@ -24,6 +24,8 @@ type Result struct {
 	// LeftOut names the folder holding a restore's stage that a backup left
 	// out.
 	LeftOut string `json:"leftOut,omitempty"`
+	// ACLsLost says files that had ACLs were restored without them.
+	ACLsLost bool `json:"aclsLost,omitempty"`
 
 	// BackupID is the backup a backup, or a restart with one, made.
 	BackupID string `json:"backupId,omitempty"`

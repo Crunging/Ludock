@@ -447,6 +447,15 @@ func restore(t *testing.T, root, stage, operation string) (string, int) {
 	return stdout.String(), code
 }
 
+func mustACL(t *testing.T, text string) []byte {
+	t.Helper()
+	value, err := ParseACLText(text)
+	if err != nil {
+		t.Fatal(text, err)
+	}
+	return value
+}
+
 func TestRestoreSteps(t *testing.T) {
 	root, _ := dataRoot(t)
 	os.Remove(filepath.Join(root, "escape"))
@@ -468,10 +477,12 @@ func TestRestoreSteps(t *testing.T) {
 		t.Fatal("stage")
 	}
 	// The backup's root is 0755 and the live one 0750. Its world folder is
-	// setgid and sticky, and a forged file in it setuid and setgid.
+	// setgid and sticky, and a forged file in it setuid and setgid. The
+	// backup's root also had an ACL the live one hasn't, whose mask must not
+	// become the live root's group bits.
 	os.Chmod(root, 0o750)
 	records := []string{
-		`{"name":"","type":"directory","size":0,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":493}`,
+		`{"acl":"user::rwx,user:4242:rwx,group::r-x,mask::rwx,other::r-x","name":"","type":"directory","size":0,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":493}`,
 		`{"name":"world","type":"directory","size":0,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":2029,"mtime":1700000000}`,
 		`{"name":"world/level.dat","type":"file","size":8,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":3492,"mtime":1700000000.5}`,
 	}
@@ -488,7 +499,30 @@ func TestRestoreSteps(t *testing.T) {
 	if info, _ := os.Stat(filepath.Join(root, stage, "new", "world", "level.dat")); info.Mode() != 0o644 {
 		t.Fatal("restored a file as", info.Mode())
 	}
+	// Storage that refuses a file's ACL leaves it the archive's mode, whose
+	// group bits are the owning group's own, without an ACL inherited from
+	// its folder, and the extraction says so.
+	unix.Setxattr(filepath.Join(root, stage, "new"), defaultACL, mustACL(t, "user::rwx,user:4242:rwx,group::rwx,mask::rwx,other::rwx"), 0)
+	fsetxattr = func(int, string, []byte, int) error { return unix.EOPNOTSUPP }
+	refused := `{"acl":"user::rw-,user:4242:rw-,group::r--,mask::rw-,other::---","name":"whitelist.json","type":"file","size":2,"uid":` +
+		strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":416}` + "\n[]"
+	stdout.Reset()
+	code := RunRestoreExtract(string(argument), strings.NewReader(refused), &stdout, &stderr)
+	fsetxattr = unix.Fsetxattr
+	if code != 0 || stdout.String() != "ok 1 "+ExtractACLsLost {
+		t.Fatal(stdout.String(), stderr.String())
+	}
+	whitelist := filepath.Join(root, stage, "new", "whitelist.json")
+	if _, err := unix.Getxattr(whitelist, accessACL, nil); !errors.Is(err, unix.ENODATA) && !errors.Is(err, unix.ENOTSUP) {
+		t.Fatal("kept an inherited ACL", err)
+	}
+	if info, _ := os.Stat(whitelist); info.Mode() != 0o640 {
+		t.Fatal("restored a refused ACL's file as", info.Mode())
+	}
 	for _, unsafe := range []string{
+		`{"acl":"user::rw-,user:steve:rw-,group::r--,mask::rw-,other::---","name":"named","type":"file","size":0,"uid":0,"gid":0,"mode":420}`,
+		`{"acl":"user::rw-,user:4242:rw-,group::r--,other::---","name":"unmasked","type":"file","size":0,"uid":0,"gid":0,"mode":420}`,
+		`{"defaultAcl":"user::rwx,group::r-x,other::r-x","name":"inherits","type":"file","size":0,"uid":0,"gid":0,"mode":420}`,
 		`{"name":"../x","type":"file","size":0,"uid":0,"gid":0,"mode":420}`,
 		`{"name":".ludock-restore-x/y","type":"file","size":0,"uid":0,"gid":0,"mode":420}`,
 		`{"name":"big","type":"file","size":1000,"uid":0,"gid":0,"mode":420}`,
@@ -507,6 +541,9 @@ func TestRestoreSteps(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "restored" {
 		t.Fatal(string(data))
+	}
+	if info, _ := os.Stat(root); info.Mode().Perm() != 0o755 {
+		t.Fatal("restored the root as", info.Mode())
 	}
 	if _, err := os.Stat(filepath.Join(root, stage, "old", "server.properties")); err != nil {
 		t.Fatal("old data not kept")

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,6 +31,20 @@ import (
 var ctx = context.Background()
 
 const image = "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab"
+
+// aclValue is an ACL in the kernel's form from tag, permissions, and ID
+// triples; an ID of 0 is none, for entries that take none.
+func aclValue(entries ...[3]uint32) []byte {
+	value := []byte{2, 0, 0, 0}
+	for _, entry := range entries {
+		id := entry[2]
+		if entry[0] != 2 && entry[0] != 8 {
+			id = 0xffffffff
+		}
+		value = append(value, byte(entry[0]), byte(entry[0]>>8), byte(entry[1]), 0, byte(id), byte(id>>8), byte(id>>16), byte(id>>24))
+	}
+	return value
+}
 
 // startHelpers runs helper commands in-process.
 func startHelpers(t *testing.T) (*fakedocker.Engine, *docker.Client) {
@@ -103,6 +118,18 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	os.MkdirAll(filepath.Join(data, "world"), 0o755)
 	os.WriteFile(filepath.Join(data, "world", "level.dat"), []byte("level"), 0o644)
 	os.WriteFile(filepath.Join(data, "server.properties"), []byte("motd=hi"), 0o640)
+	// whitelist.json's ACL lets user 4242 write and keeps the owning group
+	// read-only, so its mode shows the mask, 0660. world's default ACL is
+	// what files made in it get.
+	whitelist := filepath.Join(data, "whitelist.json")
+	os.WriteFile(whitelist, []byte("[]"), 0o600)
+	access := aclValue([3]uint32{1, 6}, [3]uint32{2, 6, 4242}, [3]uint32{4, 4}, [3]uint32{16, 6}, [3]uint32{32, 0})
+	def := aclValue([3]uint32{1, 7}, [3]uint32{2, 7, 4242}, [3]uint32{4, 5}, [3]uint32{16, 7}, [3]uint32{32, 5})
+	acls := unix.Setxattr(whitelist, "system.posix_acl_access", access, 0) == nil &&
+		unix.Setxattr(filepath.Join(data, "world"), "system.posix_acl_default", def, 0) == nil
+	if !acls {
+		t.Log("no ACLs here, so they aren't checked")
+	}
 	destination := filepath.Join(base, "backups")
 	os.MkdirAll(destination, 0o755)
 	storage := &Storage{Roots: []string{destination}, Own: self.New(nil, "")}
@@ -144,6 +171,22 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if _, err := storage.Validate(destination, id, roots, 1<<30, checksum, nil); err != nil {
 		t.Fatal(err)
 	}
+	// The archive keeps the ACLs as GNU tar and bsdtar do, and gives a
+	// reader that ignores them the owning group's own rights. A folder with
+	// a default ACL has its access ACL too, as GNU tar writes it: bsdtar
+	// restores one without as mode 0000.
+	if acls {
+		stored := map[string]*tarstream.Header{}
+		archive, _ := os.Open(filepath.Join(destination, id+".tar"))
+		tarstream.Walk(archive, func(header *tarstream.Header, _ io.Reader) error { stored[header.Name] = header; return nil }, nil)
+		archive.Close()
+		file, folder := stored["snapshot/root-0/whitelist.json"], stored["snapshot/root-0/world/"]
+		if file == nil || file.Mode != 0o640 || file.PAX["SCHILY.acl.access"] != "user::rw-,user:4242:rw-,group::r--,mask::rw-,other::---" ||
+			folder == nil || folder.PAX["SCHILY.acl.access"] != "user::rwx,group::r-x,other::r-x" ||
+			folder.PAX["SCHILY.acl.default"] != "user::rwx,user:4242:rwx,group::r-x,mask::rwx,other::r-x" {
+			t.Fatalf("stored %+v %+v", file, folder)
+		}
+	}
 	if _, err := storage.Validate(destination, id, roots, 1<<30, strings.Repeat("0", 64), nil); !apperr.Is(err, "BACKUP_CHECKSUM") {
 		t.Fatal(err)
 	}
@@ -165,8 +208,24 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if _, err := helpers.Exec(ctx, writer.Container, helper.Command("restore", helper.RestoreRequest{Root: rootPath, Stage: stage, Operation: "stage"}), nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, stage, roots, 1<<30, 0, checksum, nil); err != nil {
-		t.Fatal(err)
+	if lost, err := helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, stage, roots, 1<<30, 0, checksum, nil); err != nil || lost {
+		t.Fatal(lost, err)
+	}
+	if acls {
+		staged := filepath.Join(data, stage, "new")
+		for path, want := range map[string]map[string][]byte{"whitelist.json": {"system.posix_acl_access": access},
+			"world": {"system.posix_acl_default": def, "system.posix_acl_access": nil}} {
+			for attribute, value := range want {
+				got := make([]byte, 256)
+				n, err := unix.Getxattr(filepath.Join(staged, path), attribute, got)
+				if (value == nil) != errors.Is(err, unix.ENODATA) || !bytes.Equal(got[:max(n, 0)], value) {
+					t.Errorf("%s %s: %x %v", path, attribute, got[:max(n, 0)], err)
+				}
+			}
+		}
+		if info, _ := os.Stat(filepath.Join(staged, "whitelist.json")); info == nil || info.Mode().Perm() != 0o660 {
+			t.Fatal("whitelist.json staged as", info)
+		}
 	}
 	if data, _ := os.ReadFile(filepath.Join(data, stage, "new", "world", "level.dat")); string(data) != "level" {
 		t.Fatal(string(data))
@@ -174,7 +233,7 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if info, _ := os.Stat(filepath.Join(data, stage, "new", "server.properties")); info == nil || info.Mode().Perm() != 0o640 {
 		t.Fatal("mode not restored")
 	}
-	if err := helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, ".ludock-restore-1f9619ff-8b86-4011-b42d-00c04fc964ff", roots, 1<<30, 0, strings.Repeat("1", 64), nil); err == nil {
+	if _, err := helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, ".ludock-restore-1f9619ff-8b86-4011-b42d-00c04fc964ff", roots, 1<<30, 0, strings.Repeat("1", 64), nil); err == nil {
 		t.Fatal("changed checksum accepted")
 	}
 	// However small the estimate, extraction never writes into the reserve.
@@ -182,7 +241,7 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if _, err := helpers.Exec(ctx, writer.Container, helper.Command("restore", helper.RestoreRequest{Root: rootPath, Stage: full, Operation: "stage"}), nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, full, roots, 1<<30, 1<<52, checksum, nil); !apperr.Is(err, "RESTORE_CAPACITY") {
+	if _, err := helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, full, roots, 1<<30, 1<<52, checksum, nil); !apperr.Is(err, "RESTORE_CAPACITY") {
 		t.Fatal("extracted into the reserve:", err)
 	}
 	if entries, _ := os.ReadDir(filepath.Join(data, full, "new")); len(entries) != 0 {
@@ -219,7 +278,7 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 		exited.Store(true)
 		return status, true
 	})
-	err = helpers.ExtractToStage(ctx, destination, truncated, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, cut, roots, 1<<30, 1<<52, checksum, nil)
+	_, err = helpers.ExtractToStage(ctx, destination, truncated, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, cut, roots, 1<<30, 1<<52, checksum, nil)
 	if !apperr.Is(err, "INVALID_BACKUP") || !exited.Load() || code.Load() != helper.ExtractFullStatus {
 		t.Fatal(err, exited.Load(), code.Load())
 	}
@@ -230,7 +289,7 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	unreachable, checks := errors.New("database unreachable"), 0
-	err = helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, refused, roots, 1<<30, 0, checksum,
+	_, err = helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, refused, roots, 1<<30, 0, checksum,
 		func() error {
 			if checks++; checks > 1 {
 				return unreachable
