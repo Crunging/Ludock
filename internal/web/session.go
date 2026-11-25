@@ -261,7 +261,12 @@ func publicError(err error, fields ...logging.Field) *apperr.Error {
 
 // dockerProblem is why Docker can't be used when the engine answers but shares
 // no API version with Ludock, or "" when it just can't be reached.
+// dockerProblem says why Ludock can't show live state. While it updates
+// itself it records nothing, discovery included, which isn't Docker's fault.
 func (s *Server) dockerProblem() string {
+	if s.App.SelfUpdate != nil && s.App.SelfUpdate.Updating() {
+		return "Ludock is updating itself and comes back by itself in about a minute."
+	}
 	if err := s.App.Docker.Incompatible(); err != nil {
 		return err.Error()
 	}

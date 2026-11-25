@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -108,7 +109,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	own := self.New(client, cfg.SelfContainer)
 	observer := &servers.Observer{Docker: client, Choices: store, Own: own}
 	serverService := &servers.Service{DB: database, Identity: store, Authz: authorization, Observer: observer}
-	notifications := &notify.Service{DB: database}
+	notifications := &notify.Service{DB: database, Pending: filepath.Join(cfg.DataDir, "notifications-pending.jsonl")}
 	images := launch.NewImages(cfg.HelperImage, own)
 	storage := backups.NewStorage(cfg.BackupRoots, own)
 	storage.DevCopyRoot = cfg.DevCopyRoot
@@ -289,6 +290,7 @@ func (a *App) Start(ctx context.Context) {
 		for delay := time.Second; ; delay = min(2*delay, time.Minute) {
 			err := recoverStartup()
 			if err == nil {
+				a.Notify.Resume()
 				break
 			}
 			fields := logging.Cause(err, docker.StatusCode(err))

@@ -5,16 +5,21 @@
 package notify
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"crypto/tls"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -127,6 +132,12 @@ type Service struct {
 	// RetryDelay is the first wait before queueing an event again; zero is
 	// a second.
 	RetryDelay time.Duration
+
+	// Pending is a file for alerts that couldn't be queued before Ludock
+	// stopped, such as while it updates itself, queued by Resume once it
+	// runs again; "" drops them.
+	Pending   string
+	pendingMu sync.Mutex
 
 	// retries are event notifications waiting to be queued again.
 	retries sync.WaitGroup
@@ -356,7 +367,7 @@ func (s *Service) Notify(alert Alert, key, message string) {
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
-		log.Error("Could not queue a notification; it was dropped")
+		s.keep(alert, key, message)
 		return
 	}
 	if s.quit == nil {
@@ -373,7 +384,7 @@ func (s *Service) Notify(alert Alert, key, message string) {
 			select {
 			case <-time.After(delay):
 			case <-quit:
-				log.Error("Could not queue a notification before shutdown; it was dropped")
+				s.keep(alert, key, message)
 				return
 			}
 			if s.queueEvent(alert, key, message) == nil {
@@ -381,8 +392,114 @@ func (s *Service) Notify(alert Alert, key, message string) {
 			}
 			delay = min(delay*2, time.Minute)
 		}
-		log.Error("Could not queue a notification; it was dropped")
+		s.keep(alert, key, message)
 	}()
+}
+
+type pending struct {
+	Alert   Alert  `json:"alert"`
+	Key     string `json:"key"`
+	Message string `json:"message"`
+}
+
+// keep adds an alert that couldn't be queued to the Pending file.
+func (s *Service) keep(alert Alert, key, message string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	err := errors.New("no file for pending notifications")
+	if s.Pending != "" {
+		err = appendPending(s.Pending, pending{alert, key, message})
+	}
+	if err != nil {
+		log.Error("Could not queue a notification; it was dropped", logging.Cause(err, 0)...)
+		return
+	}
+	log.Warn("Could not queue a notification; it is kept until Ludock can")
+}
+
+func appendPending(path string, entry pending) error {
+	line, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(append(line, '\n')); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+// Resume queues the alerts kept in the Pending file, trying again each
+// minute until all are queued or Stop.
+func (s *Service) Resume() {
+	if s.Pending == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return
+	}
+	if s.quit == nil {
+		s.quit = make(chan struct{})
+	}
+	quit := s.quit
+	s.retries.Add(1)
+	s.mu.Unlock()
+	go func() {
+		defer s.retries.Done()
+		for !s.queuePending() {
+			select {
+			case <-quit:
+				return
+			case <-time.After(time.Minute):
+			}
+		}
+	}()
+}
+
+// queuePending queues what the Pending file holds, keeping what it can't,
+// and reports whether nothing is left.
+func (s *Service) queuePending() bool {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	file, err := os.OpenFile(s.Pending, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	var left []pending
+	scanner := bufio.NewScanner(io.LimitReader(file, 16<<20))
+	scanner.Buffer(nil, 1<<20)
+	for scanner.Scan() {
+		var entry pending
+		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
+			continue
+		}
+		if s.queueEvent(entry.Alert, entry.Key, entry.Message) != nil {
+			left = append(left, entry)
+		}
+	}
+	file.Close()
+	if os.Remove(s.Pending) != nil {
+		return false
+	}
+	for _, entry := range left {
+		if err := appendPending(s.Pending, entry); err != nil {
+			log.Error("Could not keep a notification; it was dropped", logging.Cause(err, 0)...)
+		}
+	}
+	return len(left) == 0
 }
 
 // queueEvent reads the settings in the transaction that queues, so an event
@@ -429,10 +546,10 @@ func (s *Service) Poke() { s.poke() }
 // Stop abandons pending queue retries, before the database closes.
 func (s *Service) Stop() {
 	s.mu.Lock()
-	s.stopped = true
-	if s.quit != nil {
+	if s.quit != nil && !s.stopped {
 		close(s.quit)
 	}
+	s.stopped = true
 	s.mu.Unlock()
 	s.retries.Wait()
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -332,25 +333,43 @@ func TestUnsavedResultIsNotResentEveryTick(t *testing.T) {
 	}
 }
 
+// An event that couldn't be queued is queued again, and one still failing
+// when Ludock stops, as while it updates itself, once Ludock runs again.
 func TestEventsAreQueuedAgainAfterAFailure(t *testing.T) {
 	s := setup(t, func(*http.Request) (*http.Response, error) { return respond(204, "") })
 	s.RetryDelay = 10 * time.Millisecond
+	s.Pending = filepath.Join(t.TempDir(), "notifications-pending.jsonl")
 	t.Cleanup(s.Stop)
-	if _, err := s.DB.Exec(`CREATE TRIGGER busy BEFORE INSERT ON notification_deliveries
+	busy := func() {
+		if _, err := s.DB.Exec(`CREATE TRIGGER busy BEFORE INSERT ON notification_deliveries
 		BEGIN SELECT RAISE(ABORT, 'database is locked'); END`); err != nil {
-		t.Fatal(err)
+			t.Fatal(err)
+		}
 	}
+	queued := func(want int) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if deliveries, _ := s.Deliveries(ctx); len(deliveries) == want {
+				return
+			}
+		}
+		t.Fatal("the event was dropped after a failed queue")
+	}
+	busy()
 	s.Notify(ServerProblems, "outage:server:1", "Survival is unavailable.")
 	time.Sleep(50 * time.Millisecond)
 	s.DB.Exec("DROP TRIGGER busy")
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if deliveries, _ := s.Deliveries(ctx); len(deliveries) == 1 {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("the event was dropped after a failed queue")
+	queued(1)
+
+	busy()
+	s.Notify(ServerProblems, "outage:server:2", "Creative is unavailable.")
+	time.Sleep(30 * time.Millisecond)
+	s.Stop()
+	s.DB.Exec("DROP TRIGGER busy")
+	again := &Service{DB: s.DB, Client: s.Client, Pending: s.Pending}
+	t.Cleanup(again.Stop)
+	again.Resume()
+	queued(2)
 }
 
 func TestDeliveryAndProviderDetailsStayOut(t *testing.T) {

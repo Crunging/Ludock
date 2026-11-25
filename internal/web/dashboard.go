@@ -197,7 +197,7 @@ func (s *Server) attentionFragment(w http.ResponseWriter, r *http.Request, reque
 	} else {
 		view.DiscoveryUnavailable = result.DiscoveryUnavailable
 		if view.DiscoveryUnavailable {
-			view.DockerProblem = s.dockerProblem()
+			view.DockerProblem, view.SelfUpdating = s.dockerProblem(), s.App.SelfUpdate != nil && s.App.SelfUpdate.Updating()
 		}
 		for _, item := range result.Items {
 			// Role ceilings stay applied to administrator-only workflows.

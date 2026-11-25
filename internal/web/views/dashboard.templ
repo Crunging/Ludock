@@ -596,8 +596,11 @@ type AttentionView struct {
 	Items                []attention.Item
 	DiscoveryUnavailable bool
 	DockerProblem        string
-	Admin                bool
-	Error                string
+	// SelfUpdating: Ludock is updating itself, which is why discovery is
+	// unavailable, so there is no connection to check.
+	SelfUpdating bool
+	Admin        bool
+	Error        string
 	// TakeOvers are the moves offered for missing servers, by server ID.
 	TakeOvers map[string]*TakeOver
 }
@@ -750,7 +753,7 @@ templ needsAttention(view AttentionView) {
 				} else {
 					Ludock can’t reach Docker, so these come from the last known state.
 				}
-				if view.Admin {
+				if view.Admin && !view.SelfUpdating {
 					<a href="/settings/system" class="text-link">Check the connection</a>
 				}
 			</p>
