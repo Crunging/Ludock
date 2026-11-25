@@ -126,8 +126,12 @@ func (p *pages) post(target string, principal *auth.Principal, csrf string) *htt
 	return p.do("POST", target, principal, strings.NewReader(url.Values{"_csrf": {csrf}}.Encode()), map[string]string{"HX-Request": "true"})
 }
 
-func (p *pages) running() bool {
-	return p.engine.Container(p.docker).State.Running
+// started reports whether a start of the server was queued; these tests
+// don't run the queue.
+func (p *pages) started() bool {
+	var count int
+	p.app.DB.QueryRow("SELECT COUNT(*) FROM operations WHERE kind='start'").Scan(&count)
+	return count > 0
 }
 
 func TestPagesRequireASession(t *testing.T) {
@@ -138,8 +142,8 @@ func TestPagesRequireASession(t *testing.T) {
 		t.Fatal(response.Code, response.Header())
 	}
 	response = p.post("/servers/"+p.server+"/start", nil, "")
-	if response.Code != http.StatusUnauthorized || p.running() {
-		t.Fatal(response.Code, p.running())
+	if response.Code != http.StatusUnauthorized || p.started() {
+		t.Fatal(response.Code, p.started())
 	}
 }
 
@@ -152,14 +156,14 @@ func TestActionsRequireTheSessionCSRFToken(t *testing.T) {
 	}
 	other := p.user("u-other", "other", db.RoleAdmin)
 	for _, csrf := range []string{"", "not-a-token", CSRFToken(other.Token)} {
-		if response := p.post("/servers/"+p.server+"/start", admin, csrf); response.Code != http.StatusForbidden || p.running() {
-			t.Fatalf("csrf %q: %d running=%v", csrf, response.Code, p.running())
+		if response := p.post("/servers/"+p.server+"/start", admin, csrf); response.Code != http.StatusForbidden || p.started() {
+			t.Fatalf("csrf %q: %d started=%v", csrf, response.Code, p.started())
 		}
 	}
 	// The header form is accepted as well as the field.
 	response := p.do("POST", "/servers/"+p.server+"/start", admin, strings.NewReader(""),
 		map[string]string{"HX-Request": "true", "X-CSRF-Token": CSRFToken(admin.Token)})
-	if response.Code != http.StatusOK || response.Header().Get("HX-Trigger") != "servers-changed" || !p.running() {
+	if response.Code != http.StatusOK || response.Header().Get("HX-Trigger") != "servers-changed" || !p.started() {
 		t.Fatal(response.Code, response.Header(), response.Body.String())
 	}
 }
@@ -190,10 +194,10 @@ func TestCSRFTokenMaskedPerPage(t *testing.T) {
 	if first == second || first == CSRFToken(p.admin.Token) {
 		t.Fatal("pages share a token", first, second)
 	}
-	if response := p.post("/servers/"+p.server+"/start", p.admin, pageToken(other)); response.Code != http.StatusForbidden || p.running() {
-		t.Fatal("another session's masked token", response.Code, p.running())
+	if response := p.post("/servers/"+p.server+"/start", p.admin, pageToken(other)); response.Code != http.StatusForbidden || p.started() {
+		t.Fatal("another session's masked token", response.Code, p.started())
 	}
-	if response := p.post("/servers/"+p.server+"/start", p.admin, second); response.Code != http.StatusOK || !p.running() {
+	if response := p.post("/servers/"+p.server+"/start", p.admin, second); response.Code != http.StatusOK || !p.started() {
 		t.Fatal(response.Code, response.Body.String())
 	}
 }
@@ -208,8 +212,8 @@ func TestFormsRejectMultipartBodies(t *testing.T) {
 	body := "--x\r\nContent-Disposition: form-data; name=\"_csrf\"\r\n\r\n" + CSRFToken(admin.Token) + "\r\n--x--\r\n"
 	for _, target := range []string{"/login", "/servers/" + p.server + "/start"} {
 		response := p.do("POST", target, admin, strings.NewReader(body), map[string]string{"Content-Type": "multipart/form-data; boundary=x"})
-		if response.Code != http.StatusUnsupportedMediaType || p.running() {
-			t.Fatalf("%s: %d running=%v", target, response.Code, p.running())
+		if response.Code != http.StatusUnsupportedMediaType || p.started() {
+			t.Fatalf("%s: %d started=%v", target, response.Code, p.started())
 		}
 	}
 }
@@ -250,7 +254,7 @@ func TestDiscoveryIsNotPermission(t *testing.T) {
 	// An unknown server and an ungranted one look the same.
 	missing := p.post("/servers/srv_missing/start", viewer, CSRFToken(viewer.Token))
 	hidden := p.post("/servers/"+p.server+"/start", viewer, CSRFToken(viewer.Token))
-	if hidden.Code != http.StatusNotFound || missing.Code != hidden.Code || missing.Body.String() != hidden.Body.String() || p.running() {
+	if hidden.Code != http.StatusNotFound || missing.Code != hidden.Code || missing.Body.String() != hidden.Body.String() || p.started() {
 		t.Fatal(hidden.Code, hidden.Body.String(), missing.Body.String())
 	}
 
@@ -260,11 +264,11 @@ func TestDiscoveryIsNotPermission(t *testing.T) {
 	if !strings.Contains(page.Body.String(), "valheim") || strings.Contains(page.Body.String(), "/servers/"+p.server+"/start") {
 		t.Fatal(page.Body.String())
 	}
-	if response := p.post("/servers/"+p.server+"/start", operator, CSRFToken(operator.Token)); response.Code != http.StatusForbidden || p.running() {
+	if response := p.post("/servers/"+p.server+"/start", operator, CSRFToken(operator.Token)); response.Code != http.StatusForbidden || p.started() {
 		t.Fatal(response.Code, response.Body.String())
 	}
 	p.grant(operator, authz.ServerView, authz.ServerStart)
-	if response := p.post("/servers/"+p.server+"/start", operator, CSRFToken(operator.Token)); response.Code != http.StatusOK || !p.running() {
+	if response := p.post("/servers/"+p.server+"/start", operator, CSRFToken(operator.Token)); response.Code != http.StatusOK || !p.started() {
 		t.Fatal(response.Code, response.Body.String())
 	}
 }
@@ -297,7 +301,7 @@ func TestSessionRevokedDuringBody(t *testing.T) {
 		}
 	}}
 	response := p.do("POST", "/servers/"+p.server+"/start", admin, body, map[string]string{"HX-Request": "true"})
-	if response.Code != http.StatusUnauthorized || p.running() {
-		t.Fatal(response.Code, p.running())
+	if response.Code != http.StatusUnauthorized || p.started() {
+		t.Fatal(response.Code, p.started())
 	}
 }

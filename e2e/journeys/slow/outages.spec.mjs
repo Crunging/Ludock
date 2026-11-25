@@ -31,6 +31,8 @@ async function startWatched(page, seconds) {
   }
   await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
+  // Start, like Stop, shows its progress in Activity.
+  await page.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
 }
 
 test.describe("a game that hangs while Ludock restarts", () => {

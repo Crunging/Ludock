@@ -12,6 +12,8 @@ import (
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
+// Activity lists work, a start pressed in the panel included, only on
+// servers the viewer can see.
 func TestActivityFollowsSharing(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
@@ -42,6 +44,16 @@ func TestActivityFollowsSharing(t *testing.T) {
 	}
 	if bad := p.do("GET", "/activity?from=9&to=1", viewer, nil, nil).Body.String(); !strings.Contains(bad, "The start date must be before the end date.") {
 		t.Fatal(bad)
+	}
+	// A start pressed in the panel is listed like a restart.
+	p.app.DB.Exec("UPDATE operations SET status=? WHERE id=?", ops.Succeeded, job.ID)
+	if response := p.post("/servers/"+p.server+"/start", p.admin, CSRFToken(p.admin.Token)); response.Code != http.StatusOK {
+		t.Fatal(response.Code)
+	}
+	var started string
+	p.app.DB.QueryRow("SELECT id FROM operations WHERE kind='start'").Scan(&started)
+	if list = p.do("GET", "/activity", viewer, nil, nil).Body.String(); started == "" || !strings.Contains(list, "/activity/"+started) {
+		t.Fatal("start not in Activity", started)
 	}
 }
 

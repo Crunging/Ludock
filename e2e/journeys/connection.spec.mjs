@@ -107,15 +107,18 @@ test("a refresh queued behind another is checked against what that one showed", 
   await page.unroute(/\/fragments\/servers(\?|$)/);
 });
 
-test("an action Docker fails to carry out says Ludock can't reach it", async ({ page }) => {
+test("an action Docker fails to carry out says so in Needs attention and its Activity", async ({ page }) => {
   await page.goto("/");
   const valheim = serverRow(page, "valheim");
   await fake("/fake/fault", { match: "^POST .*/containers/[^/]+/start$", status: "500", count: "1" });
   try {
     await valheim.getByRole("button", { name: "Start" }).click();
-    await expect(page.getByText("Ludock can’t reach Docker right now. Try again once it can.")).toBeVisible();
+    const attention = page.locator("#attention");
+    await expect(attention).toContainText("Start failed");
+    await expect(valheim).toContainText("Stopped");
+    await attention.getByRole("link", { name: "Review activity: valheim, Start failed" }).click();
+    await expect(page.locator("#selected-operation")).toContainText("Docker reported an error, so this stopped.");
   } finally {
     await fake("/fake/fault", { clear: "1" });
   }
-  await expect(valheim).toContainText("Stopped");
 });

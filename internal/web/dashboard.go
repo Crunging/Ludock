@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -14,9 +13,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/db"
-	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/events"
-	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/jobs"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/ops"
@@ -219,41 +216,6 @@ func changed(w http.ResponseWriter) {
 	w.Header().Set("HX-Trigger", "servers-changed")
 	html(w)
 	w.WriteHeader(http.StatusOK)
-}
-
-func (s *Server) startServer(w http.ResponseWriter, r *http.Request, request *Request) {
-	action, err := s.startAction(r, request, r.PathValue("id"), authz.ServerStart)
-	if err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	defer action.Done()
-	app := s.App
-	// Pause outage tracking before acting, or the start could alert, and
-	// only for a request that may still start the server.
-	if err := app.Monitor.Suppress(action.Ctx, action.Logical.ID, func(tx *sql.Tx) error {
-		return app.Authz.AssertIn(action.Ctx, tx, request.User().ID, request.Principal.TokenHash, action.Logical.ID, authz.ServerStart)
-	}); err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	err = app.Observer.ChangeState(action.Ctx, action.Container.ID, servers.Start, func(observation identity.Observation, _ *docker.ContainerInspect) error {
-		return action.AssertObserved(observation)
-	})
-	if err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	if err := app.Monitor.SetIntentionalStop(action.Ctx, action.Logical.ID, false); err != nil {
-		log.Warn("Could not save a server's monitoring state; an outage alert may follow")
-	}
-	s.audit(r, request, "server.start", action.Logical.ID, nil)
-	if fromDetail(r) {
-		w.Header().Set("HX-Trigger", "servers-changed")
-		render(w, r, http.StatusOK, views.Alert("success", "Server started."))
-		return
-	}
-	changed(w)
 }
 
 func fromDetail(r *http.Request) bool { return htmxTarget(r) == "detail-status" }
