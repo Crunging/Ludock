@@ -257,9 +257,14 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 			err:  "Ludock wasn’t running when the server was due to restart for a backup, so it didn’t. Players had been told it would.",
 			data: backedUp, containers: []string{"/mc running unless-stopped 0000"}, sameRun: true},
 		// A restart whose stop was sent and done but not confirmed: recovery
-		// only confirms the stop.
-		{name: "restart-stop-unconfirmed", status: ops.Interrupted, err: check, data: backedUp, containers: []string{"/mc exited unless-stopped 0000"},
-			stopConfirmed: true},
+		// confirms the stop and starts the server, as the restart would have.
+		{name: "restart-stop-unconfirmed", status: ops.Interrupted, guidance: "Ludock started the server again.", data: backedUp,
+			containers: []string{"/mc running unless-stopped 0000"}, stopConfirmed: true},
+		// That restart's recovery killed in turn, its start saved and taken
+		// but not confirmed: it isn't sent again, and with only a request
+		// saved, Activity doesn't credit Ludock with the run.
+		{name: "restart-recovery-start-sent", status: ops.Interrupted, guidance: "The server was running again, so Ludock left it as it was.",
+			data: backedUp, containers: []string{"/mc running unless-stopped 0000"}, sameRun: true},
 		// A restart with a backup, its archive written but not published:
 		// the partial archive goes and the server runs again.
 		{name: "restart-backup-copying", status: ops.Interrupted,

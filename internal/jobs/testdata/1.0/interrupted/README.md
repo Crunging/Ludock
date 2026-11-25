@@ -12,12 +12,17 @@ Each folder is a 1.0 install killed partway through one operation, as
 - `docker.json`: the fake daemon's containers, as `fakedocker.Container`,
   without Ludock's own.
 
-They were made on 2026-11-25 from 7d004c0, the last three on review, by a throwaway test, not
-committed. It ran each install in this package's harness against
+They were made on 2026-11-25 from 7d004c0 (`restart-backup-copying`,
+`restore-failed-pending` and `update-replaced` on review) by a throwaway test,
+not committed. It ran each install in this package's harness against
 `fakedocker`, with the server `mc` running and, for restores, one backup taken
 and the data changed since. At the crash point (a helper step about to run or
 just run, a Docker request, or, for the warning, its wait) it copied the
 database with `VACUUM INTO`, the host's folder, and the daemon's containers.
+`restart-recovery-start-sent` was made from 3486aee4, the first commit whose
+recovery starts an interrupted restart's server: a second install on the
+same data recovered a restart killed as in `restart-stop-unconfirmed`, and
+was killed in turn.
 
 | Folder | Killed |
 | --- | --- |
@@ -36,6 +41,7 @@ database with `VACUUM INTO`, the host's folder, and the daemon's containers.
 | `backup-start-sent` | backup recorded, start sent and done |
 | `backup-warning` | players warned, waiting |
 | `restart-stop-unconfirmed` | a restart's stop sent and done, not yet confirmed |
+| `restart-recovery-start-sent` | that restart's recovery (from 3486aee4), its stop confirmed and its start saved and taken, not yet confirmed |
 | `restart-backup-copying` | a restart with a backup, its archive written, not published |
 | `restore-failed-pending` | nothing running: a restore that failed when the server was started elsewhere, new data in place, the server stopped since |
 | `update-created` | replacement created under its temporary name, its ID not saved |
