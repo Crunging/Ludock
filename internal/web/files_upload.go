@@ -62,10 +62,7 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 	// The list is read only for someone who may write here; startAction
 	// rechecks it, with the locks, once the list is in.
 	if err == nil {
-		var allowed bool
-		if allowed, err = s.App.Authz.Has(r.Context(), request.User(), r.PathValue("id"), authz.FilesWrite); err == nil && !allowed {
-			err = apperr.New("FORBIDDEN", 403, "You can’t do that on this server")
-		}
+		_, err = s.App.Authz.Assert(r.Context(), request.User(), r.PathValue("id"), authz.FilesWrite)
 	}
 	// The list must arrive within one uploadStall in all.
 	body := &progressBody{body: r.Body, controller: http.NewResponseController(w), until: time.Now().Add(uploadStall)}
@@ -184,6 +181,9 @@ func decodeManifest(line []byte) ([]manifestFile, error) {
 	}
 	if err := errors.Join(expect(json.Delim(']')), expect(json.Delim('}'))); err != nil {
 		return nil, err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, errors.New("unexpected upload list")
 	}
 	return list, nil
 }

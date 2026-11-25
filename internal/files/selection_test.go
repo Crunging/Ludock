@@ -2,14 +2,16 @@ package files
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 )
 
 // Forged selections name entries outside their folder, repeat one, or are
-// too large; forged moves target the same folder or a selected folder.
-// Each is refused before any helper starts.
+// too large; forged moves target the same folder or a selected folder;
+// forged new folders sit in a parent that leaves and re-enters its folder,
+// or is longer than any path. Each is refused before any helper starts.
 func TestSelectionRefusesForgedRequests(t *testing.T) {
 	target := Target{Roots: []Root{{ID: RootID("/data"), Name: "data", Path: "/data"}}}
 	root := target.Roots[0].ID
@@ -42,6 +44,11 @@ func TestSelectionRefusesForgedRequests(t *testing.T) {
 		"logs/old/deeper": "MOVE_INTO_ITSELF", "/etc": "INVALID_PATH", "../x": "INVALID_PATH"} {
 		if err := service.Move(ctx, target, root, "logs", []string{"old"}, destination, nil); !apperr.Is(err, code) {
 			t.Errorf("%s: %v", destination, err)
+		}
+	}
+	for _, parent := range []string{"logs/..", strings.Repeat("a/", MaxPath)} {
+		if err := service.Mkdir(ctx, target, root, parent, "x", nil); !apperr.Is(err, "INVALID_PATH") {
+			t.Errorf("%.20s: %v", parent, err)
 		}
 	}
 }

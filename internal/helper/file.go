@@ -680,21 +680,6 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 			return err
 		}
 	}
-	// Set permissions while the helper still owns the new inode; CHOWN is
-	// enough to restore game ownership without granting FOWNER.
-	mode := uint32(0o666 &^ currentUmask())
-	if original != nil {
-		mode = original.Mode & 0o777
-	}
-	if err := unix.Fchmod(int(file), mode); err != nil {
-		return err
-	}
-	if err := unix.Fchown(int(file), int(owner.Uid), int(owner.Gid)); err != nil {
-		return err
-	}
-	if err := unix.Fsync(int(file)); err != nil {
-		return err
-	}
 	current, err := uploadTarget(parent, name)
 	if err != nil {
 		return err
@@ -710,8 +695,8 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	}
 	// The folder, found again from the root by its path, must still be the one
 	// written into: a rename while the file arrived could have moved it out of
-	// the root. A move between this check and the publish below can't be
-	// caught from here.
+	// the root. A move in the moment between this check and the publish below
+	// can't be caught from here.
 	if err := h.sameFolder(parent); err != nil {
 		return err
 	}
@@ -719,6 +704,22 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// written.
 	if staged, err := lstatAt(parent, temporary); err != nil || staged.Dev != written.Dev || staged.Ino != written.Ino {
 		return errors.New("the staged file changed")
+	}
+	// Only now may the game read it. Set permissions while the helper still
+	// owns the new inode; CHOWN is enough to restore game ownership without
+	// granting FOWNER.
+	mode := uint32(0o666 &^ currentUmask())
+	if original != nil {
+		mode = original.Mode & 0o777
+	}
+	if err := unix.Fchmod(int(file), mode); err != nil {
+		return err
+	}
+	if err := unix.Fchown(int(file), int(owner.Uid), int(owner.Gid)); err != nil {
+		return err
+	}
+	if err := unix.Fsync(int(file)); err != nil {
+		return err
 	}
 	if h.uploadAborted() {
 		return errors.New("upload interrupted")
@@ -1114,6 +1115,8 @@ func (h *fileHelper) run() error {
 		return h.selection(root, operation)
 	case "upload-files":
 		h.folder = relative
+		return h.uploadFiles(relative)
+	case "upload-prepare":
 		folder, err := h.pinDirectory(root, relative)
 		if err != nil {
 			return err
@@ -1121,7 +1124,11 @@ func (h *fileHelper) run() error {
 		if err := h.sweepStaging(folder); err != nil {
 			return err
 		}
-		return h.uploadFiles(relative)
+		var stat unix.Statfs_t
+		if err := unix.Fstatfs(int(folder), &stat); err != nil {
+			return err
+		}
+		return h.json(Space(&stat))
 	case "upload-files-cleanup":
 		folder, err := h.pinDirectory(root, relative)
 		if err != nil {

@@ -97,7 +97,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		// disk is refused before anything is written; the helper checks each
 		// file again as the batch fills the disk.
 		var space *helper.FileSpace
-		if space, err = access.space(ctx, root, normalized); err != nil {
+		if space, err = access.prepareUpload(ctx, root, normalized); err != nil {
 			access.Cleanup(false)
 		} else {
 			// The rest may fit once earlier files replace larger ones.
@@ -174,6 +174,8 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		}
 	}
 	removeStaged := func(access *Access) error {
+		// It runs even once the uploader's access is gone.
+		access = &Access{service: s, container: access.container, blocked: access.blocked}
 		_, err := access.request(context.WithoutCancel(ctx), helper.FileRequest{Operation: "upload-files-cleanup", Root: root.Path,
 			Path: normalized, Files: staged}, nil, nil)
 		if err != nil {
@@ -367,8 +369,10 @@ func uploadNoSpace(space helper.FileSpace, size int64) error {
 		datasize.Format(size), datasize.Format(max(space.Available, 0)), datasize.Format(helper.UploadSpare(space.Total))))
 }
 
-func (a *Access) space(ctx context.Context, root Root, folder string) (*helper.FileSpace, error) {
-	out, err := a.request(ctx, helper.FileRequest{Operation: "space", Root: root.Path, Path: folder}, nil, nil)
+// prepareUpload removes the staging files cut-off uploads left in folder,
+// which may be what fills the disk, then measures its free space.
+func (a *Access) prepareUpload(ctx context.Context, root Root, folder string) (*helper.FileSpace, error) {
+	out, err := a.request(ctx, helper.FileRequest{Operation: "upload-prepare", Root: root.Path, Path: folder}, nil, nil)
 	if err != nil {
 		return nil, err
 	}

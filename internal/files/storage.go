@@ -526,7 +526,12 @@ func (s *Service) Mkdir(ctx context.Context, target Target, rootID, parent, name
 	if err := ValidateName(name); err != nil {
 		return err
 	}
-	root, normalized, err := resolve(target, rootID, joinRelative(parent, name))
+	// Joining would clean away a parent's ".." before it is checked.
+	folder, err := NormalizeRelativePath(parent)
+	if err != nil {
+		return err
+	}
+	root, normalized, err := resolve(target, rootID, joinRelative(folder, name))
 	if err != nil {
 		return err
 	}
