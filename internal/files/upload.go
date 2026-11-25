@@ -21,11 +21,14 @@ import (
 )
 
 // UploadEntry is one file of a batch upload; its Size bytes follow the
-// previous entry's in the body. Err, when set, refuses it unread.
+// previous entry's in the body. Name is its path below the batch's folder.
+// Without Replace, a name that is taken is refused with launch.ErrNameTaken.
+// Err, when set, refuses it unread.
 type UploadEntry struct {
-	Name string
-	Size int64
-	Err  error
+	Name    string
+	Size    int64
+	Replace bool
+	Err     error
 }
 
 // ErrUploadUnconfirmed is a file whose upload stopped after it may have
@@ -51,15 +54,13 @@ func BatchFits(sizes []int64) bool {
 	return len(sizes) <= helper.UploadBatchFiles && (len(sizes) == 1 || total <= helper.UploadBatchBytes)
 }
 
-// UploadFiles writes entries into one folder through one helper command:
-// folder, or its subfolder into, whose missing folders it first creates as
-// New folder does. Without replace, an entry whose name is taken is refused
-// with launch.ErrNameTaken. Each file commits only after its trailer, which
-// is sent after its whole body and an access check. It returns each entry's
-// result, and the error that stopped the batch, after which later entries
-// were not written.
-func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder, into string, replace bool, entries []UploadEntry,
-	body io.Reader, assertAccess func() error) ([]error, error) {
+// UploadFiles writes entries below one folder through one helper command,
+// which makes the folders they need as New folder does. Each file commits
+// only after its trailer, which is sent after its whole body and an access
+// check. It returns each entry's result, and the error that stopped the
+// batch, after which later entries were not written.
+func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder string, entries []UploadEntry, body io.Reader,
+	assertAccess func() error) ([]error, error) {
 	results := make([]error, len(entries))
 	// Every result left nil by a failure is that failure.
 	fail := func(err error) ([]error, error) {
@@ -72,18 +73,14 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	}
 	for index, entry := range entries {
 		if entry.Err == nil {
-			entry.Err = ValidateName(entry.Name)
+			entry.Err = validateUploadName(entry.Name)
 		}
 		if entry.Err == nil && (entry.Size < 0 || entry.Size > 1<<53-1) {
 			entry.Err = Error("INVALID_UPLOAD_SIZE", 400)
 		}
 		results[index] = entry.Err
 	}
-	root, normalized, err := resolve(target, rootID, joinRelative(folder, into))
-	var made []string
-	if err == nil && into != "" {
-		made, err = folders(folder, into)
-	}
+	root, normalized, err := resolve(target, rootID, folder)
 	for index, entry := range entries {
 		if results[index] == nil && err == nil {
 			_, results[index] = joinChecked(normalized, entry.Name)
@@ -108,18 +105,14 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		// Uploads have no size limit by default, so a file that would fill the
 		// disk is refused before anything is written; the helper checks each
 		// file again as the batch fills the disk.
-		var space *helper.FileSpace
-		for _, path := range made {
-			if _, err = access.request(ctx, helper.FileRequest{Operation: "mkdir", Root: root.Path, Path: path}, nil, nil); errors.Is(err, launch.ErrNameTaken) {
-				err = nil
-			} else if err != nil {
-				break
+		var names []string
+		for index, entry := range entries {
+			if results[index] == nil {
+				names = append(names, entry.Name)
 			}
 		}
-		if err == nil {
-			space, err = access.prepareUpload(ctx, target, root, normalized)
-		}
-		if err != nil {
+		var space *helper.FileSpace
+		if space, err = access.prepareUpload(ctx, target, root, normalized, names); err != nil {
 			// Its sweep may still be removing files.
 			access.Cleanup(true)
 		} else {
@@ -137,7 +130,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	for index, entry := range entries {
 		if results[index] == nil {
 			input.ids[index] = identity.NewUUID()
-			files = append(files, helper.UploadFile{Name: entry.Name, Size: entry.Size, UploadID: input.ids[index]})
+			files = append(files, helper.UploadFile{Name: entry.Name, Size: entry.Size, UploadID: input.ids[index], Replace: entry.Replace})
 			accepted = append(accepted, index)
 		}
 	}
@@ -165,7 +158,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	input.trailer = append(input.trailer, list...)
 	acks := &uploadAcks{limit: len(files), ready: make(chan struct{}, len(files))}
 	input.ready = acks.ready
-	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized, Replace: replace},
+	_, err = access.exec(ctx, helper.FileRequest{Operation: "upload-files", Root: root.Path, Path: normalized},
 		launch.ExecOptions{Input: input, Stdout: acks})
 	// Exec can return while its input is still being read; once stopped, no
 	// further trailer is handed on, so sent covers every file that may be
@@ -193,7 +186,7 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	var staged []helper.UploadFile
 	for position, file := range files {
 		if position >= len(acks.results) || acks.results[position].Leftover {
-			staged = append(staged, helper.UploadFile{UploadID: file.UploadID})
+			staged = append(staged, helper.UploadFile{Name: file.Name, UploadID: file.UploadID})
 		}
 	}
 	removeStaged := func(access *Access) error {
@@ -233,22 +226,15 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	return results, nil
 }
 
-// folders lists the path of each folder of into below folder, outermost
-// first.
-func folders(folder, into string) ([]string, error) {
-	normalized, err := NormalizeRelativePath(into)
-	if err != nil {
-		return nil, err
-	}
-	var paths []string
-	for _, name := range strings.Split(normalized, "/") {
-		if err := ValidateName(name); err != nil {
-			return nil, err
+// validateUploadName checks a path below an upload's folder: each name in it
+// as a new name would be.
+func validateUploadName(name string) error {
+	for _, part := range strings.Split(name, "/") {
+		if err := ValidateName(part); err != nil {
+			return err
 		}
-		folder = joinRelative(folder, name)
-		paths = append(paths, folder)
 	}
-	return paths, nil
+	return nil
 }
 
 // isRefusal reports a public error that says nothing was written.
@@ -410,10 +396,15 @@ func uploadNoSpace(space helper.FileSpace, size int64) error {
 		datasize.Format(size), datasize.Format(max(space.Available, 0)), datasize.Format(helper.UploadSpare(space.Total))))
 }
 
-// prepareUpload removes the staging files cut-off uploads left in folder,
-// which may be what fills the disk, then measures its free space.
-func (a *Access) prepareUpload(ctx context.Context, target Target, root Root, folder string) (*helper.FileSpace, error) {
-	out, err := a.request(ctx, helper.FileRequest{Operation: "upload-prepare", Root: root.Path, Path: folder}, nil, nil)
+// prepareUpload removes the staging files cut-off uploads left in folder and
+// the folders below it that entries go in, which may be what fills the disk,
+// then measures its free space.
+func (a *Access) prepareUpload(ctx context.Context, target Target, root Root, folder string, names []string) (*helper.FileSpace, error) {
+	var files []helper.UploadFile
+	for _, name := range names {
+		files = append(files, helper.UploadFile{Name: name})
+	}
+	out, err := a.request(ctx, helper.FileRequest{Operation: "upload-prepare", Root: root.Path, Path: folder, Files: files}, nil, nil)
 	if err != nil {
 		return nil, err
 	}

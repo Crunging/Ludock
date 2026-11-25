@@ -339,7 +339,7 @@ func TestUploadStallReleasesEverything(t *testing.T) {
 	}{
 		{`{"name":"big.bin","size":100000}`, 100000, false, `"status":"failed"`},
 		{`{"name":".ludock-mine","size":1099511627776},{"name":"a.txt","size":5}`, 1099511627781, true, "Upload at most 100 files"},
-		{`{"name":"world","size":67108864}`, 64 << 20, true, `"status":"failed","message":"The path changed, is unsafe, or cannot be accessed"}],"stop":false`},
+		{`{"name":"world","size":67108864}`, 64 << 20, true, `"status":"failed","message":"A folder has this name, so the file wasn’t uploaded."}],"stop":false`},
 	} {
 		conn, err := net.Dial("tcp", server.Listener.Addr().String())
 		if err != nil {

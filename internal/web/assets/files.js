@@ -1,7 +1,7 @@
 // File uploads: raw PUTs of up to 100 files or 16 MiB each, one after
-// another, into the folder shown or, for a chosen or dropped folder, its
-// subfolders; a larger file goes alone. The server checks the size limit,
-// each name, and access while it writes.
+// another, into the folder shown and, for a chosen or dropped folder, the
+// folders below it, which the server makes; a larger file goes alone. The
+// server checks the size limit, each name, and access while it writes.
 "use strict";
 // The file editor saves raw text with a PUT, since form bodies are capped
 // far below the preview limit; the response replaces the dialog's content.
@@ -153,13 +153,13 @@
   // top is the name an item has in the shown folder: its own, or its folder's.
   function top(item) { return item.folder ? item.folder.split("/")[0] : item.file.name; }
   var collator = new Intl.Collator(undefined, { numeric: true });
-  // Folders go outermost first and each folder's files together, those to
-  // replace first, since they can free space, by name, so a batch is one
-  // folder's and its files read in order.
+  // Files to replace go first, since they can free space, then folders
+  // outermost first with each folder's files together, by name, so the files
+  // read in order.
   function ordered(items) {
     return items.slice().sort(function (a, b) {
-      if (a.folder !== b.folder) return a.folder < b.folder ? -1 : 1;
       if (!a.replace !== !b.replace) return a.replace ? -1 : 1;
+      if (a.folder !== b.folder) return a.folder < b.folder ? -1 : 1;
       return collator.compare(a.file.name, b.file.name);
     });
   }
@@ -258,8 +258,7 @@
   function batches(items) {
     var all = [], batch = [], bytes = 0;
     items.forEach(function (item) {
-      if (batch.length > 0 && (batch.length >= batchFiles || bytes + item.file.size > batchBytes || item.folder !== batch[0].folder ||
-        item.replace !== batch[0].replace)) {
+      if (batch.length > 0 && (batch.length >= batchFiles || bytes + item.file.size > batchBytes)) {
         all.push(batch);
         batch = [];
         bytes = 0;
@@ -271,18 +270,17 @@
     return all;
   }
 
-  // send uploads one batch, calling progress with the file being sent. A
-  // folder not yet made in this upload is sent as into, which the server
-  // creates; a batch of items confirmed to replace says so. fetch can't
-  // report upload progress, so this uses XMLHttpRequest.
-  function send(batch, made, progress) {
+  // send uploads one batch, calling progress with the file being sent. Each
+  // file is named by its path below the shown folder and says whether it was
+  // confirmed to replace one. fetch can't report upload progress, so this
+  // uses XMLHttpRequest.
+  function send(batch, progress) {
     return new Promise(function (resolve, reject) {
-      var manifest = JSON.stringify({ files: batch.map(function (item) { return { name: item.file.name, size: item.file.size }; }) }) + "\n";
+      var manifest = JSON.stringify({ files: batch.map(function (item) {
+        return { name: label(item), size: item.file.size, replace: !!item.replace };
+      }) }) + "\n";
       var head = new Blob([manifest]).size;
-      var shown = page.getAttribute("data-files-path"), folder = batch[0].folder;
-      var query = new URLSearchParams({ root: page.getAttribute("data-files-root"), path: made.has(folder) ? inside(shown, folder) : shown });
-      if (folder && !made.has(folder)) query.set("into", folder);
-      if (batch[0].replace) query.set("replace", "1");
+      var query = new URLSearchParams({ root: page.getAttribute("data-files-root"), path: page.getAttribute("data-files-path") });
       var request = new XMLHttpRequest();
       request.open("PUT", "/files/" + encodeURIComponent(page.getAttribute("data-files")) + "/upload?" + query);
       request.setRequestHeader("Content-Type", "application/octet-stream");
@@ -354,7 +352,7 @@
     chosen.forEach(function (item) { item.replace = replace && clashes.indexOf(top(item)) >= 0; });
     chosen = ordered(chosen);
     controller = new AbortController();
-    var completed = 0, current = label(chosen[0]), inflight = null, made = new Set();
+    var completed = 0, current = label(chosen[0]), inflight = null;
     // lines has one entry per file that didn't upload; stop says why the
     // last pass's files after its first left untried weren't tried, and left
     // counts those. existing are files the server didn't replace unasked.
@@ -385,7 +383,7 @@
           if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
           report(0);
           inflight = batch;
-          var response = await send(batch, made, report);
+          var response = await send(batch, report);
           inflight = null;
           if (response.status === 401) {
             window.location.assign("/login");
@@ -419,8 +417,6 @@
           answer.results.forEach(function (result, index) {
             if (result.status === "uploaded") {
               completed += 1;
-              // A file landed, so its folders exist.
-              for (var folder = batch[0].folder; folder; folder = folder.split("/").slice(0, -1).join("/")) made.add(folder);
             } else if (result.status === "exists") {
               existing.push(batch[index]);
             } else {

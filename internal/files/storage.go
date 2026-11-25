@@ -652,7 +652,7 @@ func (s *Service) write(ctx context.Context, target Target, root Root, normalize
 	if folder == "." {
 		folder = ""
 	}
-	if _, err := access.prepareUpload(ctx, target, root, folder); err != nil {
+	if _, err := access.prepareUpload(ctx, target, root, folder, nil); err != nil {
 		// Its sweep may still be removing files.
 		access.Cleanup(true)
 		return err

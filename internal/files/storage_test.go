@@ -429,7 +429,7 @@ func TestFailedChangeRemovesHelper(t *testing.T) {
 			return f.service.Rename(ctx, f.target, f.root, "missing.txt", "other.txt", nil)
 		},
 		"upload": func() error {
-			_, err := f.service.UploadFiles(ctx, f.target, f.root, "", "", false, []UploadEntry{{Name: "short.txt", Size: 10}}, strings.NewReader("short"), nil)
+			_, err := f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "short.txt", Size: 10}}, strings.NewReader("short"), nil)
 			return err
 		},
 	} {
@@ -481,7 +481,7 @@ func TestUploadNeedsFreeSpace(t *testing.T) {
 	// Within the free space, but not with the spare kept; the margin covers
 	// other writers freeing space meanwhile.
 	size := space.Available - helper.UploadSpare(space.Total) + 256<<20
-	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", "", false, []UploadEntry{{Name: "huge.bin", Size: size}}, zeroFree{}, nil)
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "huge.bin", Size: size}}, zeroFree{}, nil)
 	if public, ok := apperr.As(results[0]); err != nil || !ok || public.Code != "NOT_ENOUGH_SPACE" || public.Status != 507 {
 		t.Fatal(results, err)
 	}
@@ -587,12 +587,12 @@ func TestDownloadBlamesDockerForItsFailures(t *testing.T) {
 	f.helpersLeft(t)
 }
 
-// raceReader creates path with "game" once the first n bytes are read, as a
-// game saving a file while its upload streams.
+// raceReader runs at once the first n bytes are read, as a game changing
+// the folder while an upload streams.
 type raceReader struct {
 	body string
 	n    int
-	path string
+	at   func()
 }
 
 func (r *raceReader) Read(p []byte) (int, error) {
@@ -601,9 +601,9 @@ func (r *raceReader) Read(p []byte) (int, error) {
 	}
 	count := copy(p, r.body[:min(len(r.body), max(r.n, 1))])
 	r.body, r.n = r.body[count:], r.n-count
-	if r.n <= 0 && r.path != "" {
-		os.WriteFile(r.path, []byte("game"), 0o644)
-		r.path = ""
+	if r.n <= 0 && r.at != nil {
+		r.at()
+		r.at = nil
 	}
 	return count, nil
 }
@@ -615,8 +615,8 @@ func TestUploadReplacesOnlyWhenConfirmed(t *testing.T) {
 	f := setup(t)
 	os.WriteFile(filepath.Join(f.data, "taken.txt"), []byte("old"), 0o644)
 	entries := []UploadEntry{{Name: "taken.txt", Size: 3}, {Name: "new.txt", Size: 3}, {Name: "raced.txt", Size: 3}}
-	body := &raceReader{body: "abcdefghi", n: 7, path: filepath.Join(f.data, "raced.txt")}
-	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", "", false, entries, body, nil)
+	body := &raceReader{body: "abcdefghi", n: 7, at: func() { os.WriteFile(filepath.Join(f.data, "raced.txt"), []byte("game"), 0o644) }}
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", entries, body, nil)
 	if err != nil || !errors.Is(results[0], launch.ErrNameTaken) || results[1] != nil || !errors.Is(results[2], launch.ErrNameTaken) {
 		t.Fatal(results, err)
 	}
@@ -625,8 +625,59 @@ func TestUploadReplacesOnlyWhenConfirmed(t *testing.T) {
 			t.Errorf("%s: %q", name, data)
 		}
 	}
-	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", "", true, entries[:1], strings.NewReader("abc"), nil)
+	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "taken.txt", Size: 3, Replace: true}}, strings.NewReader("abc"), nil)
 	if data, _ := os.ReadFile(filepath.Join(f.data, "taken.txt")); err != nil || results[0] != nil || string(data) != "abc" {
 		t.Fatal(results, err, string(data))
+	}
+}
+
+// One batch writes files in several folders below its own through one
+// helper, making the missing ones. Each file finds its folders again without
+// following links: a folder swapped for a link to elsewhere while the batch
+// streams refuses its files there and writes nothing through the link, and a
+// file where a folder is needed, or a folder where a file is, refuses only
+// that file.
+func TestUploadNestedBatch(t *testing.T) {
+	f := setup(t)
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(f.data, "blocker"), []byte("file"), 0o644)
+	os.MkdirAll(filepath.Join(f.data, "mods", "taken"), 0o755)
+	os.MkdirAll(filepath.Join(f.data, "mods", "swapped"), 0o755)
+	entries := []UploadEntry{{Name: "mods/a.jar", Size: 3}, {Name: "mods/swapped/b.jar", Size: 3}, {Name: "mods/swapped/c.jar", Size: 3},
+		{Name: "config/x/y/z.toml", Size: 3}, {Name: "blocker/d.txt", Size: 3}, {Name: "mods/taken", Size: 3}, {Name: "config/x/w.toml", Size: 3}}
+	creates := func() (count int) {
+		for _, call := range f.engine.Requests {
+			if strings.HasSuffix(call, "/containers/create") {
+				count++
+			}
+		}
+		return count
+	}
+	before := creates()
+	// Once mods/swapped/b.jar's body is in, the folder becomes a link out.
+	swapped := filepath.Join(f.data, "mods", "swapped")
+	body := &raceReader{body: "aaabbbcccddddddeeefff", n: 4, at: func() {
+		os.Rename(swapped, filepath.Join(outside, "moved"))
+		os.Symlink(outside, swapped)
+	}}
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", entries, body, nil)
+	if err != nil || results[0] != nil || results[1] == nil || results[2] == nil || results[3] != nil ||
+		!apperr.Is(results[4], "NOT_A_FOLDER") || !apperr.Is(results[5], "IS_A_FOLDER") || results[6] != nil {
+		t.Fatal(results, err)
+	}
+	for name, want := range map[string]string{"mods/a.jar": "aaa", "config/x/y/z.toml": "ddd", "config/x/w.toml": "fff", "blocker": "file"} {
+		if data, _ := os.ReadFile(filepath.Join(f.data, name)); string(data) != want {
+			t.Errorf("%s: %q", name, data)
+		}
+	}
+	if listed, _ := os.ReadDir(outside); len(listed) != 1 {
+		t.Fatal("wrote through the link:", listed)
+	}
+	if moved, _ := os.ReadDir(filepath.Join(outside, "moved")); len(moved) != 0 {
+		t.Fatal("published in the moved folder:", moved)
+	}
+	// The helper and the validator that proved its mount.
+	if started := creates() - before; started != 2 {
+		t.Fatal(started, "containers started for one batch")
 	}
 }
