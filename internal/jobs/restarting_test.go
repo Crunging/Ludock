@@ -137,15 +137,18 @@ func TestWorkOnARestartingServer(t *testing.T) {
 		name, kind string
 		input      func(*testing.T, *fixture) map[string]any
 		// running: a server that runs normally; brief: one caught in a run
-		// between restarts.
-		running, brief bool
-		trace          []string
+		// between restarts; stale: one whose restart Ludock last saw long
+		// before that run, which counts as running normally.
+		running, brief, stale bool
+		trace                 []string
 	}{
 		{name: "running backup", kind: ops.KindBackup, running: true, trace: []string{"console say", "console save-all", "stop", "work", "start"}},
 		{name: "stop", kind: ops.KindStop, trace: []string{"stop"}},
 		{name: "backup", kind: ops.KindBackup, trace: []string{"stop", "work", "start"}},
 		{name: "backup in a brief run", kind: ops.KindBackup, brief: true, trace: []string{"stop", "work", "start"}},
 		{name: "stop in a brief run", kind: ops.KindStop, brief: true, trace: []string{"stop"}},
+		{name: "backup in a run long after a restart was seen", kind: ops.KindBackup, brief: true, stale: true,
+			trace: []string{"console say", "console save-all", "stop", "work", "start"}},
 		{name: "restart with a backup", kind: ops.KindRestart, input: func(*testing.T, *fixture) map[string]any {
 			return withWarning(map[string]any{"createBackup": true})
 		}, trace: []string{"stop", "work", "start"}},
@@ -174,9 +177,13 @@ func TestWorkOnARestartingServer(t *testing.T) {
 				f.engine.Update(f.game, func(c *fakedocker.Container) { c.State.ExitCode = 137 })
 			}
 			if c.brief {
+				if c.stale {
+					f.jobs.Servers.Observer.Now = func() time.Time { return time.Now().Add(-time.Hour) }
+				}
 				if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
 					t.Fatal(err)
 				}
+				f.jobs.Servers.Observer.Now = nil
 				f.engine.CrashLoop(f.game, true)
 			}
 			trace.start()
@@ -188,7 +195,7 @@ func TestWorkOnARestartingServer(t *testing.T) {
 			if job.Status != ops.Succeeded || result.ForceStopped || result.WarnFailedNote != "" {
 				t.Fatalf("%s %q %+v", job.Status, job.Error, result)
 			}
-			if c.running {
+			if c.running || c.stale {
 				return
 			}
 			if job.Recovery.WarnUntil != 0 || !result.WarnSkipped || result.SaveStatus != "skipped" || result.SaveReason != "restarting" {

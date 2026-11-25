@@ -542,14 +542,14 @@ func (s *Service) verify(ctx context.Context, id string, expectedRevision int64,
 }
 
 // Restarting reports a server Docker keeps restarting: restarting now, or in
-// a run its restart policy started after Ludock saw it restarting, until the
-// run shows it is back.
+// a run its restart policy started just after Ludock saw it restarting,
+// until the run shows it is back.
 func (s *Service) Restarting(ctx context.Context, serverID string, container Container) bool {
 	if container.State == "restarting" {
 		return true
 	}
 	return s.Looping != nil && container.State == "running" && container.RestartCount > 0 &&
-		s.Observer.sawRestarting(container.ID) && s.Looping(ctx, serverID, container)
+		s.Observer.sawRestarting(container.ID, container.StateSince) && s.Looping(ctx, serverID, container)
 }
 
 // present shows a run between a crash loop's restarts as restarting, so a

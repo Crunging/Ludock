@@ -204,23 +204,31 @@ type Observer struct {
 	samplesMu sync.Mutex
 	samples   map[string]*statsSample
 
-	// restarting are the containers last seen restarting, until seen stopped.
+	// restarting is when each container was last seen restarting (Unix ms),
+	// until it is seen stopped.
 	restarting sync.Map
 }
 
-// note remembers a container seen restarting until it is seen stopped.
+// restartEvidence is how soon after Ludock saw a container restarting a run
+// counts as one of that loop's: Docker waits at most a minute between them.
+const restartEvidence = 2 * time.Minute
+
+// note remembers when a container was seen restarting, until it is seen
+// stopped.
 func (o *Observer) note(observed *Observed) {
 	switch observed.Container.State {
 	case "restarting":
-		o.restarting.Store(observed.Container.ID, true)
+		o.restarting.Store(observed.Container.ID, o.now().UnixMilli())
 	case "exited", "created", "dead":
 		o.restarting.Delete(observed.Container.ID)
 	}
 }
 
-func (o *Observer) sawRestarting(id string) bool {
-	_, ok := o.restarting.Load(id)
-	return ok
+// sawRestarting reports a run that began soon after Ludock saw its container
+// restarting.
+func (o *Observer) sawRestarting(id string, started int64) bool {
+	seen, ok := o.restarting.Load(id)
+	return ok && started >= seen.(int64) && started-seen.(int64) <= restartEvidence.Milliseconds()
 }
 
 // A Docker stats sample takes about a second. Viewers of the same container
