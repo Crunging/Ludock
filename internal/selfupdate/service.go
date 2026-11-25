@@ -107,6 +107,9 @@ type Service struct {
 	DevSelfProof bool
 	Version      string
 	Poll         time.Duration
+	// Handover bounds each Docker call that starts the helper; a minute
+	// when zero.
+	Handover time.Duration
 
 	// admit serializes starting an update with settling one, whose cleanup
 	// prunes data saves.
@@ -542,7 +545,7 @@ func (s *Service) run(ctx context.Context, record Record, plan *update.Plan, tok
 		failed(errSave)
 		return
 	}
-	if step, err := s.startHelper(ctx, record); err != nil {
+	if step, err := s.startHelper(ctx, record); err != nil && !errors.Is(err, errUncertain) {
 		log.Warn("Ludock's update helper didn't get going, so nothing was changed",
 			append(logging.Cause(err, docker.StatusCode(err)), logging.F("step", step), logging.F("docker", docker.Said(err)))...)
 		failed(errHelper)
@@ -671,20 +674,34 @@ func (s *Service) startHelper(ctx context.Context, record Record) (step string, 
 			"CapAdd": host.CapAdd, "SecurityOpt": []string{"no-new-privileges:true"}, "GroupAdd": host.GroupAdd,
 			"RestartPolicy": map[string]any{"Name": "always"},
 			"Mounts":        []map[string]any{{"Type": "bind", "Source": socket.Source, "Target": socket.Destination, "ReadOnly": !socket.RW}}}}
-	id, err := s.Docker.Create(ctx, HelperName(record.ID), "", body)
+	// Writes are closed until this settles, so neither call may wait for
+	// ever; an answer that never came, or was lost, is settled by watch from
+	// what Docker shows.
+	create, cancel := context.WithTimeout(ctx, s.handover())
+	id, err := s.Docker.Create(create, HelperName(record.ID), "", body)
+	cancel()
+	if err != nil && docker.StatusCode(err) == 0 {
+		return "create", errUncertain
+	}
 	if err != nil {
-		// A create whose answer was lost may have made it; it never started.
-		if spec, inspectErr := s.Docker.InspectSpec(ctx, HelperName(record.ID)); inspectErr == nil && ours(spec, helperKind, record.ID) {
-			s.Docker.Remove(context.WithoutCancel(ctx), spec.ID, true, true)
-		}
 		return "create", err
 	}
-	if err := s.Docker.Start(ctx, id); err != nil && !docker.Unavailable(err) {
+	start, cancel := context.WithTimeout(ctx, s.handover())
+	err = s.Docker.Start(start, id)
+	cancel()
+	if err != nil && !docker.Unavailable(err) {
 		// It never ran, so nothing changed.
 		s.Docker.Remove(context.WithoutCancel(ctx), id, true, true)
 		return "start", err
 	}
 	return "", nil
+}
+
+// errUncertain: Docker didn't answer whether it made the helper.
+var errUncertain = errors.New("docker didn't answer whether it made the helper")
+
+func (s *Service) handover() time.Duration {
+	return cmp.Or(s.Handover, time.Minute)
 }
 
 func ours(spec *docker.ContainerSpec, kind, operation string) bool {
@@ -920,7 +937,7 @@ func (s *Service) judge(ctx context.Context, record Record) error {
 		}
 	}
 	log.Warn("Ludock's update helper was removed before the update finished; starting it again to finish it")
-	if step, err := s.startHelper(ctx, record); err != nil {
+	if step, err := s.startHelper(ctx, record); err != nil && !errors.Is(err, errUncertain) {
 		log.Warn("Ludock's update helper couldn't be started again; retrying",
 			append(logging.Cause(err, docker.StatusCode(err)), logging.F("step", step), logging.F("docker", docker.Said(err)))...)
 		return err

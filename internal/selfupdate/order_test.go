@@ -287,7 +287,7 @@ func (g *rig) boot(container, image, name string, run ...string) *process {
 	}
 	p := &process{d: d, cancel: cancel, svc: &selfupdate.Service{DB: d, Docker: g.client, Own: self.New(g.client, own),
 		Updates: &update.Service{Docker: g.client}, Locks: locks.New(), DataDir: g.dataDir, Socket: socket, MountID: mountID,
-		Version: version, Poll: 5 * time.Millisecond,
+		Version: version, Poll: 5 * time.Millisecond, Handover: 100 * time.Millisecond,
 		Snapshot: func(ctx context.Context) (*db.Snapshot, error) {
 			g.add("save")
 			return d.Snapshot(ctx)
@@ -700,6 +700,10 @@ func TestSelfUpdateOrder(t *testing.T) {
 					t.Error(err)
 				}
 			}},
+		{name: "a helper create Docker never answers is settled by what Docker shows", before: func(g *rig, p *process) {
+			g.engine.HangCreates = 1
+		}, trace: []string{"pull", "save", "create helper", "stop helper", "remove helper"}, image: oldImage,
+			state: selfupdate.StateFailed, reason: "Docker couldn’t start the helper that replaces Ludock, so nothing was changed. Try again in a moment."},
 		{name: "a tag moved back to an older version is refused", arrange: func(g *rig) {
 			g.engine.SetImageConfig(newImage, map[string]any{"Labels": map[string]any{"org.opencontainers.image.version": "0.9.0"}})
 		}, trace: []string{"pull"}, image: oldImage, state: selfupdate.StateFailed, to: "0.9.0",
