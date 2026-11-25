@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -17,13 +18,21 @@ import (
 )
 
 // Ludock is killed while a backup, or a restart that backs up first, is
-// copying the stopped server. Recovery starts the server, which was running,
-// without taking the backup again, says the backup didn't finish and that
-// the server was started again, without asking to check it, alerts once,
-// as a failed backup would, and logs what it did without the server's paths.
+// copying the stopped server, or once its backup was recorded. Recovery
+// starts the server, which was running, without taking the backup again,
+// and logs what it did without the server's paths. Unfinished, the work
+// says the backup didn't finish and that the server was started again,
+// without asking to check it, and alerts once, as a failed backup would.
+// Finished, it ends as succeeded and alerts no one.
 func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
-	for kind, input := range map[string]map[string]any{"restart": {"createBackup": true}, "backup": nil} {
-		t.Run(kind, func(t *testing.T) {
+	for _, c := range []struct {
+		kind     string
+		input    map[string]any
+		complete bool
+	}{{"restart", map[string]any{"createBackup": true}, false}, {"backup", nil, false},
+		{"restart", map[string]any{"createBackup": true}, true}, {"backup", nil, true}} {
+		kind, input := c.kind, c.input
+		t.Run(fmt.Sprint(kind, " complete ", c.complete), func(t *testing.T) {
 			f := setup(t)
 			logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
 			f.runner.Stop()
@@ -39,7 +48,8 @@ func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 			running := true
 			recovery, _ := json.Marshal(ops.Recovery{ContainerID: logical.ContainerID, Fingerprint: logical.BindingFingerprint,
 				LockKeys: []string{locks.ServerKey(f.serverID)}, InitialRunning: &running, StopStarted: true, StopSettled: true,
-				StoppedStartedAt: stopped.State.StartedAt, BackupID: "11111111-1111-4111-8111-111111111111", BackupDestination: f.backupTo})
+				StoppedStartedAt: stopped.State.StartedAt, BackupID: "11111111-1111-4111-8111-111111111111", BackupDestination: f.backupTo,
+				BackupComplete: c.complete})
 			if _, err := f.jobs.DB.Exec("UPDATE operations SET status='running',phase='backing_up',recovery_json=? WHERE id=?", string(recovery), job.ID); err != nil {
 				t.Fatal(err)
 			}
@@ -51,18 +61,24 @@ func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 			}
 			recovered, _ := f.runner.Get(ctx, job.ID)
 			guidance := recovered.Result.Guidance
-			if recovered.Status != ops.Interrupted || recovered.Error != "Ludock restarted while this ran." || !strings.HasSuffix(guidance, map[string]string{"restart": "The server was started again.", "backup": "Ludock started the server again."}[kind]) ||
-				!strings.Contains(guidance, "no new backup") || !f.running() {
+			status, message, alerts, outcome := ops.Interrupted, "Ludock restarted while this ran.", []string{"mc: " + backupInterrupted}, "ended as interrupted"
+			ok := strings.HasSuffix(guidance, map[string]string{"restart": "The server was started again.", "backup": "Ludock started the server again."}[kind]) &&
+				strings.Contains(guidance, "no new backup")
+			if c.complete {
+				status, message, alerts, outcome = ops.Succeeded, "", nil, "finished"
+				ok = guidance == "Ludock restarted while this ran, after the backup had finished. Ludock started the server again."
+			}
+			if recovered.Status != status || recovered.Error != message || !ok || !f.running() {
 				t.Fatalf("%+v", recovered)
 			}
 			if line := logged.String(); !strings.Contains(line, job.ID) || !strings.Contains(line, `"kind":"`+kind+`"`) ||
-				!strings.Contains(line, "server started again") || strings.Contains(line, f.backupTo) || strings.Contains(line, f.data) {
+				!strings.Contains(line, outcome+", server started again") || strings.Contains(line, f.backupTo) || strings.Contains(line, f.data) {
 				t.Fatal(line)
 			}
 			if backups, _ := f.jobs.Backups.List(ctx, f.serverID); len(backups) != 0 {
 				t.Fatal("backup taken again:", backups)
 			}
-			if want := []string{"mc: " + backupInterrupted}; !slices.Equal(f.alerts, want) {
+			if !slices.Equal(f.alerts, alerts) {
 				t.Fatal("alerts:", f.alerts)
 			}
 		})
@@ -71,8 +87,8 @@ func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 
 // Ludock is killed while a restart that backs up first waits for the world
 // to save, before anything stopped, after its check of the data left a
-// helper. Recovery leaves the server running, removes the helper, and alerts
-// once that there's no new backup.
+// helper. Recovery leaves the server running, removes the helper, says
+// there's no new backup without asking to check the server, and alerts once.
 func TestBackupRestartInterruptedBeforeStop(t *testing.T) {
 	f := setup(t)
 	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
@@ -91,7 +107,9 @@ func TestBackupRestartInterruptedBeforeStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	recovered, _ := f.runner.Get(ctx, job.ID)
-	if want := []string{"mc: " + backupInterrupted}; recovered.Status != ops.Interrupted || !f.running() || !slices.Equal(f.alerts, want) {
+	if want := []string{"mc: " + backupInterrupted}; recovered.Status != ops.Interrupted || recovered.Error != "Ludock restarted while this ran." ||
+		recovered.Result.Guidance != "Ludock restarted before this stopped the server, so there’s no new backup." ||
+		!f.running() || !slices.Equal(f.alerts, want) {
 		t.Fatalf("%+v, alerts %v", recovered, f.alerts)
 	}
 	if f.engine.Container(left) != nil {

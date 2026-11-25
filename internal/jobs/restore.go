@@ -1091,7 +1091,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 	if state, _ := restoreState(job); state != nil {
 		switch state.Status {
 		case "committed", "cleaned":
-			outcome, finished = "The restore had finished: what it restored is in place.", true
+			outcome, finished = restartedAfter+"the restore had finished: what it restored is in place.", true
 		case "replacing", "rolling_back", "rolled_back":
 			outcome = restoreUndone
 		}
@@ -1166,7 +1166,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 		}
 		return nil, err
 	}
-	result.Guidance = outcome
+	result.Guidance, result.Finished = outcome, finished
 	result.ACLsLost = finished && job.Job.Recovery.ACLsLost
 	return withServerAfterRecovery(job, &result), nil
 }

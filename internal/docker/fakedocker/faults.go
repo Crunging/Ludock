@@ -1,6 +1,8 @@
 package fakedocker
 
 import (
+	"net"
+	"net/http"
 	"os"
 	"regexp"
 	"slices"
@@ -102,10 +104,21 @@ func (e *Engine) Disconnect(duration time.Duration) error {
 func (e *Engine) Refuse(duration time.Duration) {
 	e.mu.Lock()
 	listener, server := e.listener, e.server
+	// A client may hold a connection it opened but hasn't sent on yet,
+	// which the server doesn't count as idle; it closes too.
+	var waiting []net.Conn
+	for conn, state := range e.conns {
+		if state != http.StateActive {
+			waiting = append(waiting, conn)
+		}
+	}
 	e.mu.Unlock()
 	server.SetKeepAlivesEnabled(false)
 	listener.Close()
 	os.Remove(e.Socket)
+	for _, conn := range waiting {
+		conn.Close()
+	}
 	go func() {
 		time.Sleep(duration)
 		e.listen()

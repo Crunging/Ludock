@@ -332,6 +332,10 @@ func (j *Jobs) settleInterruptedStop(ctx context.Context, server *servers.Contex
 
 func settleStop(r *ops.Recovery) { r.StopSettled = true }
 
+// restartedAfter begins what recovery says of work that had done its part
+// before Ludock restarted.
+const restartedAfter = "Ludock restarted while this ran, after "
+
 // withServerAfterRecovery adds to result's guidance what recovery did with
 // the server the operation stopped.
 func withServerAfterRecovery(job *ops.Context, result *ops.Result) *ops.Result {

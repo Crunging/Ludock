@@ -44,6 +44,10 @@ type Result struct {
 	Running       bool   `json:"running,omitempty"`
 	Verification  string `json:"verification,omitempty"`
 
+	// Finished, never saved: recovery finished what the work was for, so it
+	// ends as succeeded.
+	Finished bool `json:"-"`
+
 	Sent bool `json:"sent,omitempty"`
 	// Reply is a command's redacted reply, console output.
 	Reply string `json:"reply,omitempty"`

@@ -3,6 +3,7 @@ package jobs
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -90,25 +91,48 @@ func TestUpdateStopWaitsForDocker(t *testing.T) {
 	}
 }
 
-// Docker stays away past the time Ludock waits, so an update's or a
-// restart's stop never reaches it. The work fails at once instead of
-// holding the server for the five minutes a stop that did arrive may take,
-// the server keeps running, and no stop is left saved for recovery to wait
-// for or finish.
+// Docker goes away while an update or a restart stops the server, and
+// stays away past the time Ludock waits. Gone before the stop was written,
+// the stop never reached Docker: the work fails at once instead of holding
+// the server for the five minutes a stop may take, the server keeps
+// running, and no stop is left saved for recovery to wait for or finish.
+// Gone once a restart's stop was written, before the answer, Docker may have
+// it, so the stop stays saved; an update would wait it out.
 func TestStopThatNeverArrived(t *testing.T) {
-	for kind, c := range map[string]struct {
+	for _, c := range []struct {
+		kind  string
 		input map[string]any
 		// phases are those of the last inspection before the stop.
-		phases string
-	}{"update": {skipBackup, "'save_skipped','waiting_for_save'"}, "restart": {nil, "'stopping'"}} {
-		t.Run(kind, func(t *testing.T) {
+		phases  string
+		written bool
+	}{
+		{"update", skipBackup, "'save_skipped','waiting_for_save'", false},
+		{"restart", nil, "'stopping'", false},
+		{"restart", nil, "", true},
+	} {
+		t.Run(fmt.Sprint(c.kind, " written ", c.written), func(t *testing.T) {
 			f := setup(t)
 			f.jobs.Docker.OutageLimit = 500 * time.Millisecond
-			f.refuseAfter(2*time.Second, "/containers/"+f.game+"/json", c.phases, "%")
+			if c.written {
+				var once sync.Once
+				f.engine.Hang = func(request string) bool {
+					if !strings.HasPrefix(request, "POST ") || !strings.HasSuffix(request, "/containers/"+f.game+"/stop") {
+						return false
+					}
+					hang := false
+					once.Do(func() {
+						hang = true
+						go f.engine.Disconnect(2 * time.Second)
+					})
+					return hang
+				}
+			} else {
+				f.refuseAfter(2*time.Second, "/containers/"+f.game+"/json", c.phases, "%")
+			}
 			started := time.Now()
-			job := f.run(t, kind, c.input)
+			job := f.run(t, c.kind, c.input)
 			if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") || time.Since(started) > 15*time.Second ||
-				job.Recovery.StopStarted {
+				job.Recovery.StopStarted != c.written {
 				t.Fatalf("after %v: %+v", time.Since(started), job)
 			}
 			time.Sleep(2 * time.Second)

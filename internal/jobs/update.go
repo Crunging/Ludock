@@ -149,16 +149,23 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (*ops
 	// Cut before the stop, such as while the world saved: nothing changed,
 	// but a check before the stop may have left its helper.
 	if job.Job.Recovery.InitialRunning == nil {
-		return nil, j.removeOperationHelpers(ctx, job)
+		return &ops.Result{Guidance: "Ludock restarted before this stopped the server, so there’s no new backup."},
+			j.removeOperationHelpers(ctx, job)
 	}
 	if err := j.recoverBackup(ctx, job); err != nil {
 		return nil, err
 	}
-	result := &ops.Result{}
 	running := wasRunning(job)
+	// The restart is done once the server is back as it was.
+	result := &ops.Result{Finished: completed && (!running || job.Job.Recovery.StateRestored)}
 	switch {
-	case completed && !running:
-		result.Guidance = stoppedElsewhere
+	case completed && running && !job.Job.Recovery.StateRestored:
+		result.Guidance = restartedAfter + "the backup had finished, but Ludock couldn’t confirm the server is running again. Check it."
+	case completed && running:
+		result.Guidance = restartedAfter + "the backup had finished."
+		withServerAfterRecovery(job, result)
+	case completed:
+		result.Guidance = restartedAfter + "the backup had finished. " + stoppedElsewhere
 	case !completed && running:
 		result.Guidance = "Ludock restarted before the backup finished, so there’s no new backup. The server was started again."
 	case !completed:
@@ -253,7 +260,7 @@ func (j *Jobs) finishedUpdate(ctx context.Context, job *ops.Context, started err
 		// A server that was stopped stays stopped on purpose, as when the
 		// update finishes without a restart.
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, !wasRunning(job)))
-		return &ops.Result{Guidance: finished}
+		return &ops.Result{Guidance: finished, Finished: true}
 	case apperr.Is(started, errReplacementNotStarted.Code):
 		j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, job.Job.ServerID, true))
 		alert("the server’s new container is stopped and couldn’t be started. Check it, then start it.")

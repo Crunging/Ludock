@@ -144,12 +144,9 @@ func TestUpdateRecoveryUndoesUncheckedReplacement(t *testing.T) {
 			}
 			swap.Stage = c.stage
 		})
-		// Only a server Ludock didn't start again needs checking.
-		want := "Ludock restarted while this ran."
-		if ran {
-			want += " Check the server before trying again."
-		}
-		if job.Status != ops.Interrupted || job.Error != want || job.Result.Guidance != c.guidance {
+		// The guidance says what the server was left as, so the entry doesn't
+		// ask to check it.
+		if job.Status != ops.Interrupted || job.Error != "Ludock restarted while this ran." || job.Result.Guidance != c.guidance {
 			t.Fatalf("%+v", job)
 		}
 		if c.stage == "" {
@@ -261,7 +258,13 @@ func TestUpdateRecoveryFinishesReplacement(t *testing.T) {
 				f.engine.RemoveContainer(replacement)
 			}
 		})
-		if job.Status != ops.Interrupted || job.Result.Guidance != c.guidance {
+		// Only an update that finished with its server as it should be ends
+		// as succeeded.
+		status := ops.Interrupted
+		if c.guidance == finished {
+			status = ops.Succeeded
+		}
+		if job.Status != status || job.Result.Guidance != c.guidance {
 			t.Fatalf("%s: %+v", c.name, job)
 		}
 		down := c.fails || c.exits || (c.restored && c.stopped) || c.removed

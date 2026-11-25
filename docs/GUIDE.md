@@ -641,5 +641,7 @@ A failed or interrupted restore goes once a backup, restore, or update
 succeeds, but one that stopped partway stays until it is undone or finished,
 and one whose undo couldn't find the server's previous data stays until a
 restore succeeds. A force-stop and a failure that asks for an administrator
-stay listed.
+stay listed. Work Ludock finished when it started again after a restart of
+its own, such as a restart it started the server for, counts as succeeded
+and isn't listed.
 **Activity** keeps everything.
