@@ -124,6 +124,7 @@ func setup(t *testing.T) *fixture {
 		f.alerts = append(f.alerts, message)
 		f.mu.Unlock()
 	}
+	service.Looping = f.jobs.Monitor.Looping
 	f.jobs.Register(f.runner)
 	f.adminSession = dbtest.Session(t, d, f.admin.ID)
 	views, err := service.List(ctx, f.admin)

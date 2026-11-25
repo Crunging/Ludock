@@ -26,6 +26,9 @@ type Service struct {
 	Observer *Observer
 	// Now returns the current time; tests replace it.
 	Now func() time.Time
+	// Looping reports whether a run of a server seen restarting is still
+	// one of the loop's. It may be nil.
+	Looping func(ctx context.Context, serverID string, container Container) bool
 
 	mu      sync.Mutex
 	running *refresh
@@ -292,6 +295,7 @@ func (s *Service) view(ctx context.Context, d *details, logical identity.Server,
 		SharingPaused: d.admin && logical.SharingPaused}
 	if container != nil {
 		view.Container = *container
+		s.present(ctx, logical.ID, &view.Container)
 	} else {
 		view.Container = Container{Name: logical.DisplayName, DisplayName: logical.DisplayName, State: string(logical.Status),
 			Status: strings.ReplaceAll(string(logical.Status), "_", " "), GameType: logical.GameType,
@@ -535,6 +539,25 @@ func (s *Service) verify(ctx context.Context, id string, expectedRevision int64,
 	}
 	return &Context{Logical: logical, Container: observed.Container, Observation: observed.Observation,
 		LockKeys: LockKeys(id, observed.Observation)}, nil
+}
+
+// Restarting reports a server Docker keeps restarting: restarting now, or in
+// a run its restart policy started just after Ludock saw it restarting,
+// until the run shows it is back.
+func (s *Service) Restarting(ctx context.Context, serverID string, container Container) bool {
+	if container.State == "restarting" {
+		return true
+	}
+	return s.Looping != nil && container.State == "running" && container.RestartCount > 0 &&
+		s.Observer.sawRestarting(container.ID, container.StateSince) && s.Looping(ctx, serverID, container)
+}
+
+// present shows a run between a crash loop's restarts as restarting, so a
+// page reads the same whenever it looks.
+func (s *Service) present(ctx context.Context, serverID string, container *Container) {
+	if container.State == "running" && s.Restarting(ctx, serverID, *container) {
+		container.State, container.Health, container.StateSince = "restarting", "", 0
+	}
 }
 
 // Observe confirms a saved server against its own container for background

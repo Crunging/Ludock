@@ -62,9 +62,14 @@ type Container struct {
 	Status      string
 	Health      string // "", starting, healthy, unhealthy
 	StateSince  int64  // 0 when unknown
-	Exit        *Exit
-	GameType    string
-	GameName    string
+	// RestartCount counts the restart policy's starts since the last start
+	// by hand.
+	RestartCount int
+	// exited is when a restarting container's game last exited, or 0.
+	exited   int64
+	Exit     *Exit
+	GameType string
+	GameName string
 	// AddressLabel is the owner's ludock.address, which replaces port
 	// detection when valid.
 	AddressLabel *games.Address
@@ -200,6 +205,36 @@ type Observer struct {
 
 	samplesMu sync.Mutex
 	samples   map[string]*statsSample
+
+	// restarting is when each container seen restarting last exited (Unix
+	// ms, Docker's clock), until it is seen stopped.
+	restarting sync.Map
+}
+
+// restartEvidence is how soon after a restarting container's exit a run
+// counts as one of that loop's: Docker waits at most a minute between them.
+const restartEvidence = 2 * time.Minute
+
+// note remembers when a container seen restarting last exited, until it is
+// seen stopped.
+func (o *Observer) note(observed *Observed) {
+	switch observed.Container.State {
+	case "restarting":
+		exited := observed.Container.exited
+		if exited == 0 {
+			exited = o.now().UnixMilli()
+		}
+		o.restarting.Store(observed.Container.ID, exited)
+	case "exited", "created", "dead":
+		o.restarting.Delete(observed.Container.ID)
+	}
+}
+
+// sawRestarting reports a run that began soon after the exit Ludock saw its
+// container restarting from.
+func (o *Observer) sawRestarting(id string, started int64) bool {
+	seen, ok := o.restarting.Load(id)
+	return ok && started >= seen.(int64) && started-seen.(int64) <= restartEvidence.Milliseconds()
 }
 
 // A Docker stats sample takes about a second. Viewers of the same container
@@ -416,6 +451,7 @@ func (o *Observer) observeSummary(ctx context.Context, container docker.Containe
 	if err != nil {
 		return nil, nil, err
 	}
+	o.note(observed)
 	if summary == "" {
 		return observed, nil, nil
 	}
@@ -441,7 +477,11 @@ func (o *Observer) Inspect(ctx context.Context, id string) (*Observed, *docker.C
 	if err != nil {
 		return nil, nil, err
 	}
-	return observe(o.ownLabels(ctx, info), choices, own)
+	observed, inspected, err := observe(o.ownLabels(ctx, info), choices, own)
+	if err == nil {
+		o.note(observed)
+	}
+	return observed, inspected, err
 }
 
 func observe(info *docker.ContainerInspect, choices map[string]identity.Choice, own self.Info) (*Observed, *docker.ContainerInspect, error) {
@@ -543,9 +583,12 @@ func toContainer(info *docker.ContainerInspect, own self.Info) (*Container, erro
 	if info.State.Health != nil {
 		container.Status += " (" + info.State.Health.Status + ")"
 	}
+	container.RestartCount = info.RestartCount
 	switch info.State.Status {
 	case "running":
 		container.StateSince = dockerTime(info.State.StartedAt)
+	case "restarting":
+		container.exited = dockerTime(info.State.FinishedAt)
 	case "exited", "dead":
 		container.StateSince = dockerTime(info.State.FinishedAt)
 		container.Exit = &Exit{Code: info.State.ExitCode, OOMKilled: info.State.OOMKilled, Started: dockerTime(info.State.StartedAt)}

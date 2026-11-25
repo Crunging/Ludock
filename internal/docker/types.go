@@ -84,12 +84,15 @@ type NetworkSettings struct {
 
 // ContainerInspect is /containers/{id}/json.
 type ContainerInspect struct {
-	ID              string          `json:"Id"`
-	Image           string          `json:"Image"`
-	Name            string          `json:"Name"`
-	Created         string          `json:"Created"`
-	Config          ContainerConfig `json:"Config"`
-	State           ContainerState  `json:"State"`
+	ID      string          `json:"Id"`
+	Image   string          `json:"Image"`
+	Name    string          `json:"Name"`
+	Created string          `json:"Created"`
+	Config  ContainerConfig `json:"Config"`
+	State   ContainerState  `json:"State"`
+	// RestartCount counts the restart policy's starts since the last start
+	// by hand.
+	RestartCount    int             `json:"RestartCount"`
 	Mounts          []MountPoint    `json:"Mounts"`
 	NetworkSettings NetworkSettings `json:"NetworkSettings"`
 	Host            struct {

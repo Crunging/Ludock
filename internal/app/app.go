@@ -107,6 +107,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 		Helpers: &backups.Helpers{Docker: client, Images: images, Storage: storage}}
 	runner := &ops.Runner{DB: database, Locks: table, Queue: notifications.QueueIn, Alerted: notifications.Poke}
 	monitoring := &monitor.Service{DB: database, Locks: table, Runner: runner, Queue: notifications.QueueIn, Alerted: notifications.Poke, Store: store}
+	serverService.Looping = monitoring.Looping
 	runtime := &console.Runtime{Docker: client, Images: images}
 	files.SetSensitivePaths(cfg.SensitivePaths)
 	updates := &update.Service{Docker: client, DockerConfig: cfg.DockerConfig}

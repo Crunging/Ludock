@@ -129,7 +129,8 @@ func (e *Engine) control(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/fake/crashloop":
 		// Leaves a container restarting, as Docker shows a game that keeps
-		// exiting, until it is stopped: POST /fake/crashloop?container=NAME.
+		// exiting, until it is stopped: POST /fake/crashloop?container=NAME;
+		// &run=1 shows it running in one of the loop's brief runs.
 		e.mu.Lock()
 		c := e.find(r.URL.Query().Get("container"))
 		e.mu.Unlock()
@@ -137,7 +138,7 @@ func (e *Engine) control(w http.ResponseWriter, r *http.Request) {
 			fail(w, 404)
 			return
 		}
-		e.CrashLoop(c.ID)
+		e.CrashLoop(c.ID, r.URL.Query().Get("run") != "")
 		w.WriteHeader(204)
 		return
 	case "/fake/remove":

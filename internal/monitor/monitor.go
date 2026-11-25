@@ -351,13 +351,14 @@ func ensureRow(ctx context.Context, q interface {
 // again.
 const keepAlerted = "outage_started_at=CASE WHEN notified=1 THEN outage_started_at END"
 
-// SetIntentionalStop records that a stop was requested, which ends any
-// outage, or cleared.
+// SetIntentionalStop records that a stop was requested, which ends an
+// outage not yet alerted, or cleared. An alerted one stays owed its recovery
+// alert, sent once the server is back.
 func (s *Service) SetIntentionalStop(ctx context.Context, serverID string, stopped bool) error {
 	if err := ensureRow(ctx, s.DB, serverID); err != nil {
 		return err
 	}
-	set := "intentionally_stopped=1,outage_started_at=NULL,notified=0"
+	set := "intentionally_stopped=1," + keepAlerted
 	if !stopped {
 		set = "intentionally_stopped=0," + keepAlerted
 	}
@@ -604,7 +605,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 				game = s.Game(server.ID, container)
 				up = game != GameNotAnswering && !((game == GameUnknown || game == GameWaiting) && r.lastState.String == NotAnswering)
 			}
-			up = up && !briefRun(r, container, game, policy, now)
+			up = up && !(r.lastState.String == "restarting" && earlyRun(container, s.answered(server.ID, container), policy.GraceSeconds, now))
 			if up {
 				if changed, err := s.recovered(ctx, server, r, now); err != nil {
 					log.Warn("Could not save a server's availability; it will be checked again")
@@ -638,8 +639,10 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			testHook("read")
 		}
 		// The flag is cleared only if no stop was recorded since the row was
-		// read; a newer stop is kept and the server is checked next tick.
-		if running && r.intentional == 1 {
+		// read; a newer stop is kept and the server is checked next tick. A
+		// server Docker is restarting was started since, however briefly.
+		restarting := server.Status == identity.StatusActive && found && server.ContainerID != "" && container.State == "restarting"
+		if (running || restarting) && r.intentional == 1 {
 			changed, err := s.transition(ctx, server.ID, r, nil, "intentionally_stopped=0")
 			if err != nil {
 				log.Warn("Could not save a server's availability; it will be checked again")
@@ -671,8 +674,9 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			silent = game == GameNotAnswering
 			healthy = healthy && !silent
 		}
-		// A run between restarts keeps its outage, which still alerts.
-		healthy = healthy && !briefRun(r, container, game, policy, now)
+		// A run after restarts, whoever started it, keeps their outage, which
+		// still alerts.
+		healthy = healthy && !(r.lastState.String == "restarting" && earlyRun(container, s.answered(server.ID, container), policy.GraceSeconds, now))
 		// State is saved before any alert: the saved outage start keys each
 		// alert, so an unsaved state could later alert again under a new key.
 		if healthy {
@@ -703,9 +707,12 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			notified = 1
 		}
 		lastState := string(server.Status)
-		// A silent game keeps its state while Docker is unreachable, since
-		// only the game answering ends that outage.
-		if unavailable && r.lastState.String != NotAnswering {
+		// A silent game, or one that kept restarting, keeps its state while
+		// Docker is unreachable, since only the game answering, or a run
+		// that lasts, ends that outage.
+		if unavailable && r.lastState.String == "restarting" {
+			lastState = r.lastState.String
+		} else if unavailable && r.lastState.String != NotAnswering {
 			lastState = DockerUnavailable
 		} else if unavailable || silent {
 			lastState = NotAnswering
@@ -764,11 +771,35 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 	return nil
 }
 
-// briefRun reports a run too short to end an outage Docker saw as
-// restarting: a game that keeps exiting runs for moments between restarts.
-// The game answering, or a run as long as the grace period, ends it.
-func briefRun(r *row, container servers.Container, game GameAnswer, policy Policy, now int64) bool {
-	return r.lastState.String == "restarting" && game != GameAnswering && now-container.StateSince < int64(policy.GraceSeconds)*1000
+// earlyRun reports a run too short and quiet to show a server that kept
+// restarting is back: the game hasn't answered in it, and it hasn't stayed
+// up for the grace period.
+func earlyRun(container servers.Container, answered bool, graceSeconds int, now int64) bool {
+	return container.State == "running" && !answered && now-container.StateSince < int64(graceSeconds)*1000
+}
+
+// Looping reports whether a run of a server seen restarting is still one of
+// the loop's, as Check judges the loop's outage.
+func (s *Service) Looping(ctx context.Context, serverID string, container servers.Container) bool {
+	policy := DefaultPolicy()
+	if r, err := s.row(ctx, serverID); err == nil && r != nil {
+		if saved, err := ParsePolicy([]byte(r.policy)); err == nil {
+			policy = saved
+		}
+	}
+	return earlyRun(container, s.answered(serverID, container), policy.GraceSeconds, db.Now())
+}
+
+// answered reports whether the game answered in this container run.
+func (s *Service) answered(serverID string, container servers.Container) bool {
+	if s.LastAnswer != nil && s.LastAnswer(serverID, container) > 0 {
+		return true
+	}
+	if s.Game == nil {
+		return false
+	}
+	game := s.Game(serverID, container)
+	return game == GameAnswering || game == GameNotAnswering
 }
 
 // adopt starts watching servers seen for the first time with the default

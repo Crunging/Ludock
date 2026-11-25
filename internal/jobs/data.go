@@ -64,7 +64,7 @@ func withSave(job *ops.Context, result *ops.Result) *ops.Result {
 	if recovery := job.Job.Recovery; recovery.SaveStatus != "" {
 		result.SaveStatus, result.SaveReason = recovery.SaveStatus, recovery.SaveReason
 	}
-	if job.Job.Recovery.Restarting && wasRunning(job) {
+	if job.Job.Recovery.SaveReason == "restarting" && wasRunning(job) {
 		result.Guidance = strings.TrimSpace(result.Guidance + " " + restartingGuidance)
 	}
 	if undone := job.Job.Recovery.Undone; undone != "" {

@@ -97,12 +97,25 @@ func (e *Engine) Exit(id string, code int) {
 
 // CrashLoop shows a container as Docker does between the restarts of a
 // game that keeps exiting under its restart policy, until it is stopped:
-// still running to the Engine API, with the last run's start time.
-func (e *Engine) CrashLoop(id string) {
+// still running to the Engine API, with the last run's start time. run
+// shows it during one of the loop's brief runs instead.
+func (e *Engine) CrashLoop(id string, run bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if c := e.containers[id]; c != nil {
+		c.RestartCount++
+		if run {
+			c.State.Status, c.State.Running, c.State.Restarting = "running", true, false
+			c.State.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			// Docker checks a new run's health afresh.
+			if c.State.Health != nil {
+				c.State.Health = &docker.HealthState{Status: "starting"}
+			}
+			e.emitLocked("start", c.ID)
+			return
+		}
 		c.State.Status, c.State.Running, c.State.Restarting, c.State.ExitCode = "restarting", true, true, 1
+		c.State.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		e.emitLocked("die", c.ID)
 	}
 }
