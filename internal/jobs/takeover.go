@@ -30,7 +30,10 @@ type TakeOver struct {
 	SameData                   bool
 	Monitoring, KeptMonitoring bool
 	LeftSchedules              []schedules.Input
-	KeptPeople                 []string
+	// SameTime are moved schedules that run when one of the new server's own
+	// does something else; both are kept.
+	SameTime   []schedules.Input
+	KeptPeople []string
 	// Paused: the moved sharing waits for an administrator to confirm.
 	Paused bool
 }
@@ -112,12 +115,10 @@ func adoptRestores(ctx context.Context, tx *sql.Tx, from *identity.Server, targe
 
 func errTakeOver(message string) error { return apperr.New("TAKE_OVER_REFUSED", 409, message) }
 
-// scheduleKey is what makes two schedules the same: one of them is left
-// behind rather than both running.
-func scheduleKey(input schedules.Input) string {
-	days := slices.Clone(input.Days)
-	slices.Sort(days)
-	return fmt.Sprint(input.Action, input.Kind, input.Enabled, input.Time, input.Timezone, input.Date, days, input.Command)
+// sameTime reports whether two enabled schedules can run at the same moment.
+func sameTime(a, b schedules.Input) bool {
+	return a.Enabled && b.Enabled && a.Kind == b.Kind && a.Time == b.Time && a.Timezone == b.Timezone && a.Date == b.Date &&
+		(a.Kind != "recurring" || slices.ContainsFunc(a.Days, func(day int) bool { return slices.Contains(b.Days, day) }))
 }
 
 // TakeOver moves a missing server's backups, schedules, sharing, monitoring
@@ -223,36 +224,43 @@ func (j *Jobs) TakeOver(ctx context.Context, actor *db.SessionUser, tokenHash, f
 			}
 		}
 
+		// Only a schedule that does exactly what one already there does is
+		// left behind. A saved schedule that doesn't parse is never compared.
 		taken := map[string]bool{}
 		type entry struct {
 			id    string
 			input schedules.Input
+			valid bool
 		}
-		var list []entry
+		var list, theirs []entry
 		rows, err = tx.QueryContext(ctx, "SELECT id, server_id, input_json FROM schedules WHERE server_id IN (?,?) ORDER BY created_at, id", from.ID, to.ID)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
 			var id, server, raw string
-			var input schedules.Input
 			if err := rows.Scan(&id, &server, &raw); err != nil {
 				rows.Close()
 				return err
 			}
-			json.Unmarshal([]byte(raw), &input)
+			input, err := schedules.ParseSaved(raw)
 			if server == to.ID {
-				taken[scheduleKey(input)] = true
+				theirs = append(theirs, entry{id, input, err == nil})
 			} else {
-				list = append(list, entry{id, input})
+				list = append(list, entry{id, input, err == nil})
 			}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			return err
 		}
+		for _, schedule := range theirs {
+			if schedule.valid {
+				taken[schedule.input.Key()] = true
+			}
+		}
 		for _, schedule := range list {
-			if taken[scheduleKey(schedule.input)] {
+			if schedule.valid && taken[schedule.input.Key()] {
 				done.LeftSchedules = append(done.LeftSchedules, schedule.input)
 				if _, err := tx.ExecContext(ctx, "DELETE FROM schedules WHERE id=?", schedule.id); err != nil {
 					return err
@@ -260,7 +268,13 @@ func (j *Jobs) TakeOver(ctx context.Context, actor *db.SessionUser, tokenHash, f
 				continue
 			}
 			done.Schedules++
-			taken[scheduleKey(schedule.input)] = true
+			if !schedule.valid {
+				continue
+			}
+			taken[schedule.input.Key()] = true
+			if slices.ContainsFunc(theirs, func(their entry) bool { return their.valid && sameTime(their.input, schedule.input) }) {
+				done.SameTime = append(done.SameTime, schedule.input)
+			}
 		}
 		if existing+done.Schedules > schedules.MaxPerServer {
 			return errTakeOver(fmt.Sprintf("%s would have more than %d schedules. Delete some, then try again.", to.DisplayName, schedules.MaxPerServer))
@@ -331,7 +345,8 @@ func (j *Jobs) TakeOver(ctx context.Context, actor *db.SessionUser, tokenHash, f
 		}
 		return j.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: admin, Action: "server.taken-over", TargetType: "server", TargetID: to.ID,
 			IPAddress: ip, Details: map[string]any{"from": from.DisplayName, "to": to.DisplayName, "backups": done.Backups,
-				"schedules": done.Schedules, "people": done.People, "schedulesLeft": len(done.LeftSchedules), "peopleKept": len(done.KeptPeople),
+				"schedules": done.Schedules, "people": done.People, "schedulesLeft": len(done.LeftSchedules), "schedulesAtSameTime": len(done.SameTime),
+				"peopleKept":    len(done.KeptPeople),
 				"sharingPaused": done.Paused}})
 	})
 	if err != nil {

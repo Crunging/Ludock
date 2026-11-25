@@ -102,7 +102,9 @@ func TestAddServerRefusesForgedRequests(t *testing.T) {
 // work. Its page and Needs attention suggest the new server when it has the
 // same game and data folders; the move gives it everything, the old server
 // leaves Ludock, and its work shows in the new server's Activity. A new
-// server with its own schedule or grant for the same person keeps its own.
+// server with its own schedule or grant for the same person keeps its own;
+// one whose schedule at the same time also backs up first keeps both, and
+// the result says so.
 // One with other data folders, or two with none, is offered only by name:
 // moved sharing waits for a confirmation that a page opened before the move
 // can't give, and the backups say the data lived elsewhere. Work on
@@ -171,6 +173,24 @@ func TestRenamedServerTakesOver(t *testing.T) {
 				p.app.DB.QueryRow("SELECT COUNT(*) FROM schedules").Scan(&count)
 				if can, _ := p.app.Authz.Has(ctx, &member.User, renamed, authz.ServerRestart); can || count != 1 {
 					t.Fatal(can, count)
+				}
+			}},
+		{name: "new server backs up at the same time", status: http.StatusOK,
+			before: func(t *testing.T, p *pages, member *auth.Principal, renamed string) *auth.Principal {
+				first := restart
+				first.CreateBackup = true
+				if _, err := p.app.Schedules.CreateAsAdmin(ctx, &p.admin.User, p.admin.TokenHash, renamed, first); err != nil {
+					t.Fatal(err)
+				}
+				return p.admin
+			},
+			check: func(t *testing.T, p *pages, member *auth.Principal, old, renamed, body string) {
+				var count, backingUp int
+				p.app.DB.QueryRow("SELECT COUNT(*), COUNT(*) FILTER (WHERE input_json->>'createBackup') FROM schedules WHERE server_id=?", renamed).
+					Scan(&count, &backingUp)
+				if !strings.Contains(body, "1 schedule,") || !strings.Contains(body, "1 moved schedule runs at the same time as one of valheim-world’s own") ||
+					strings.Contains(body, "already has the same schedule") || count != 2 || backingUp != 1 {
+					t.Fatal(count, backingUp, body)
 				}
 			}},
 		{name: "other data folders", data: true, status: http.StatusOK, check: func(t *testing.T, p *pages, member *auth.Principal, old, renamed, body string) {

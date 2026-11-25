@@ -717,7 +717,9 @@ sharing, monitoring settings, and activity there, keeping whatever the new
 server already has of its own, such as the same schedule or someone's access;
 otherwise its page lets an administrator pick another server of the same game,
 and access moved to other data folders waits for **Confirm and restore
-access**. Until they move, its backups stay on its Backups tab for
+access**. A moved schedule that runs at the same time as a different one of
+the new server's is kept beside it, and the move's result lists it to check.
+Until they move, its backups stay on its Backups tab for
 administrators to download or delete; Ludock never removes them on its own,
 and it can't be removed from Ludock while it has any. Servers removed from
 Ludock that still have backups are listed in **Settings → Backups**, with a

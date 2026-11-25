@@ -740,7 +740,7 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, tokenHash, 
 			}
 		}
 		result = r
-		if previous.key() == data.key() && adopter == nil {
+		if previous.Key() == data.Key() && adopter == nil {
 			return nil
 		}
 		changed = true

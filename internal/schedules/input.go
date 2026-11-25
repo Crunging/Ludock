@@ -266,8 +266,9 @@ func (i Input) EditCapabilities() []authz.Capability {
 	return result
 }
 
-// key compares settings, treating days as a set.
-func (i Input) key() string {
+// Key compares settings, treating days as a set: schedules with equal keys
+// do exactly the same thing.
+func (i Input) Key() string {
 	days := slices.Clone(i.Days)
 	slices.Sort(days)
 	days = slices.Compact(days)
