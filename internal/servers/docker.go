@@ -38,6 +38,8 @@ type Port struct {
 type Exit struct {
 	Code      int
 	OOMKilled bool
+	// Started is when the run that exited began, 0 when unknown.
+	Started int64
 }
 
 type Console struct {
@@ -546,7 +548,7 @@ func toContainer(info *docker.ContainerInspect, own self.Info) (*Container, erro
 		container.StateSince = dockerTime(info.State.StartedAt)
 	case "exited", "dead":
 		container.StateSince = dockerTime(info.State.FinishedAt)
-		container.Exit = &Exit{Code: info.State.ExitCode, OOMKilled: info.State.OOMKilled}
+		container.Exit = &Exit{Code: info.State.ExitCode, OOMKilled: info.State.OOMKilled, Started: dockerTime(info.State.StartedAt)}
 	}
 	// Host addresses stay internal; only ports are shown.
 	for _, b := range bindings {

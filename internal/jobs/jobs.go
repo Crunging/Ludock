@@ -611,7 +611,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			}
 			if err := record(job, "verifying_stop", func(r *ops.Recovery) {
 				r.StopSettled = true
-				r.ForceStopped = r.StopStarted && !r.Restarting && server.Container.Exit != nil && server.Container.Exit.Code == 137
+				r.ForceStopped = r.StopStarted && forcedExit(r, server.Container.Exit)
 			}); err != nil {
 				return nil, err
 			}
@@ -706,6 +706,14 @@ func forcedStop(r *ops.Recovery, stopped *docker.ContainerInspect) bool {
 	return !r.Restarting || r.StopInitialStartedAt == nil || err != nil || started.UnixMilli() != *r.StopInitialStartedAt
 }
 
+// forcedExit is forcedStop for the exit a stop or restart resolved.
+func forcedExit(r *ops.Recovery, exit *servers.Exit) bool {
+	if exit == nil || exit.Code != 137 {
+		return false
+	}
+	return !r.Restarting || r.StopInitialStartedAt == nil || exit.Started != *r.StopInitialStartedAt
+}
+
 // recoverLifecycle only observes: Docker may still be handling the
 // original stop, so the lock is kept until it settles, without starting or
 // stopping again.
@@ -784,7 +792,7 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (*ops.Res
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, job.Job.Kind == ops.KindStop))
 			if err := record(job, "reconciling", func(r *ops.Recovery) {
 				r.StopSettled = true
-				r.ForceStopped = r.ForceStopped || (!r.Restarting && server.Container.Exit.Code == 137)
+				r.ForceStopped = r.ForceStopped || forcedExit(r, server.Container.Exit)
 			}); err != nil {
 				return nil, err
 			}
