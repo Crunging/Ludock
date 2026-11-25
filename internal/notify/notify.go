@@ -13,9 +13,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -479,7 +479,7 @@ func (s *Service) queuePending() bool {
 		return false
 	}
 	var left []pending
-	scanner := bufio.NewScanner(io.LimitReader(file, 16<<20))
+	scanner := bufio.NewScanner(file)
 	scanner.Buffer(nil, 1<<20)
 	for scanner.Scan() {
 		var entry pending
@@ -491,15 +491,34 @@ func (s *Service) queuePending() bool {
 		}
 	}
 	file.Close()
-	if os.Remove(s.Pending) != nil {
+	// Unread alerts stay; queued ones are queued once whatever happens,
+	// since each event key is.
+	if scanner.Err() != nil {
 		return false
 	}
+	if len(left) == 0 {
+		return os.Remove(s.Pending) == nil
+	}
+	// What is left replaces the file whole, or not at all.
+	partial := s.Pending + ".partial"
+	os.Remove(partial)
 	for _, entry := range left {
-		if err := appendPending(s.Pending, entry); err != nil {
-			log.Error("Could not keep a notification; it was dropped", logging.Cause(err, 0)...)
+		if err := appendPending(partial, entry); err != nil {
+			return false
 		}
 	}
-	return len(left) == 0
+	if os.Rename(partial, s.Pending) != nil {
+		return false
+	}
+	syncDir(filepath.Dir(s.Pending))
+	return false
+}
+
+func syncDir(path string) {
+	if dir, err := os.Open(path); err == nil {
+		dir.Sync()
+		dir.Close()
+	}
 }
 
 // queueEvent reads the settings in the transaction that queues, so an event

@@ -468,6 +468,12 @@ func TestSelfUpdateOrder(t *testing.T) {
 							mounts[0].BindOptions == nil || !mounts[0].BindOptions.NonRecursive {
 							t.Errorf("data step mounts %+v", mounts)
 						}
+						// Go reads the first entry, so there is one.
+						if dirs := slices.DeleteFunc(slices.Clone(create.Env), func(entry string) bool {
+							return !strings.HasPrefix(entry, "LUDOCK_DATA_DIR=")
+						}); !slices.Equal(dirs, []string{"LUDOCK_DATA_DIR=" + g.dataDir}) {
+							t.Errorf("data step data folders %q", dirs)
+						}
 					}
 				}
 			}},
@@ -496,7 +502,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 				}
 			}
 		}, trace: join(begin, swap, []string{"start new"}, swap, forward, forwardDone), image: newImage, state: selfupdate.StateSucceeded},
-		{name: "a helper removed by hand before the new version passed is started again, never taken for success", arrange: func(g *rig) {
+		{name: "a helper removed by hand before the new version passed is created again and started, never taken for success", arrange: func(g *rig) {
 			g.onStart = func(c *fakedocker.Container) {
 				if !isNew(c) {
 					return
@@ -508,6 +514,11 @@ func TestSelfUpdateOrder(t *testing.T) {
 					g.mu.Unlock()
 					run.cancel()
 					<-run.done
+					// The helper created again doesn't start at first, as if
+					// the Ludock creating it stopped.
+					g.mu.Lock()
+					g.fail["start helper"] = 500
+					g.mu.Unlock()
 					if err := g.client.Remove(ctx, g.helper().ID, true, true); err != nil {
 						t.Error(err)
 					}
@@ -518,7 +529,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 					health(g, c, "healthy")
 				}()
 			}
-		}, trace: join(begin, swap, []string{"start new", "remove helper", "create helper", "start helper"}, forward, forwardDone),
+		}, trace: join(begin, swap, []string{"start new", "remove helper", "create helper", "start helper", "start helper"}, forward, forwardDone),
 			image: newImage, state: selfupdate.StateSucceeded},
 		{name: "the helper dies after stopping the old container", arrange: func(g *rig) {
 			once := sync.Once{}
@@ -721,6 +732,16 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 		}, trace: []string{"pull", "save"}, image: oldImage, state: selfupdate.StateFailed,
 			reason: "The administrator who asked for the update signed out or isn’t one any more, so nothing was changed."},
+		{name: "a stored record that doesn't decode is removed, and writes open", arrange: func(g *rig) {
+			d, err := db.Open(filepath.Join(g.dataDir, "ludock.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			if err := d.SetSetting(ctx, nil, db.UpdateSetting, map[string]any{"id": 7, "state": "handed_over"}); err != nil {
+				t.Fatal(err)
+			}
+		}, trace: join(begin, swap, []string{"start new"}, forward, forwardDone), image: newImage, state: selfupdate.StateSucceeded},
 		{name: "a tag moved back to an older version is refused", arrange: func(g *rig) {
 			g.engine.SetImageConfig(newImage, map[string]any{"Labels": map[string]any{"org.opencontainers.image.version": "0.9.0"}})
 		}, trace: []string{"pull"}, image: oldImage, state: selfupdate.StateFailed, to: "0.9.0",
@@ -747,6 +768,11 @@ func TestSelfUpdateOrder(t *testing.T) {
 		{name: "a host port range, from which Docker picks", arrange: func(g *rig) {
 			g.engine.Update(g.old, func(c *fakedocker.Container) {
 				c.HostConfig["PortBindings"] = map[string]any{"3000/tcp": []any{map[string]any{"HostIp": "", "HostPort": "3000-3005"}}}
+			})
+		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
+		{name: "a data folder relabelled for Ludock's container alone", arrange: func(g *rig) {
+			g.engine.Update(g.old, func(c *fakedocker.Container) {
+				c.HostConfig["Binds"] = []string{g.engine.Socket + ":" + socket + ":ro", g.dataDir + ":" + g.dataDir + ":Z"}
 			})
 		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
 		{name: "a data folder with another mount inside it, such as the key folder", arrange: func(g *rig) {

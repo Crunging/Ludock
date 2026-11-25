@@ -188,12 +188,12 @@ func (s *Service) poll() time.Duration {
 var errUnusable = errors.New("the stored update record is unusable")
 
 func (s *Service) last(ctx context.Context) (*Record, error) {
-	var record Record
-	found, err := s.DB.Setting(ctx, recordSetting, &record)
+	raw, found, err := db.RawSetting(ctx, s.DB, recordSetting)
 	if err != nil || !found {
 		return nil, err
 	}
-	if !identity.ValidID(record.ID) || !slices.Contains([]string{StatePreparing, StateHandedOver, StateSucceeded, StatePutBack,
+	var record Record
+	if json.Unmarshal([]byte(raw), &record) != nil || !identity.ValidID(record.ID) || !slices.Contains([]string{StatePreparing, StateHandedOver, StateSucceeded, StatePutBack,
 		StateFailed, StateCurrent}, record.State) {
 		return nil, errUnusable
 	}
@@ -781,8 +781,9 @@ func (s *Service) watch(ctx context.Context, record Record, uncertain bool) {
 			marked, known := s.marker(ctx, stateName(record.ID), stateKind, record.ID)
 			switch {
 			case !known:
-			case spec.State.Status == "exited" && marked != nil:
-				// Stopped by abandon as it recorded its marker, it goes on.
+			case (spec.State.Status == "exited" || spec.State.Status == "created") && marked != nil:
+				// Stopped by abandon as it recorded its marker, or created
+				// again by a Ludock that stopped before starting it: it goes on.
 				s.Docker.Start(ctx, spec.ID)
 			case marked == nil && (spec.State.Status == "created" || spec.State.Status == "exited" || time.Since(began) >= handshake):
 				if s.abandon(ctx, record, spec) {
@@ -853,6 +854,11 @@ func (s *Service) abandon(ctx context.Context, record Record, spec *docker.Conta
 	}
 	s.describe(ctx, spec)
 	if err := s.Docker.Remove(ctx, helper, true, true); err != nil && !docker.IsNotFound(err) {
+		return false
+	}
+	// A start that Docker ran late may have let it record its marker before
+	// it was removed; judge then starts it again.
+	if marked, known := s.marker(ctx, stateName(record.ID), stateKind, record.ID); marked != nil || !known {
 		return false
 	}
 	return s.conclude(ctx, record, StateFailed, errHelper.Message) == nil

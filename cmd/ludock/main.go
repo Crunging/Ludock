@@ -252,6 +252,12 @@ func recoverAccount(args []string) int {
 	if !ok {
 		return 2
 	}
+	// Opening a database that isn't there creates one, which would take
+	// the place of data an update's rollback has moved aside for a moment.
+	if _, err := os.Lstat(cfg.DBPath()); errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintln(os.Stderr, "Ludock has no data here yet, or is putting its data back after an update. Start Ludock, wait until it answers, then try again.")
+		return 1
+	}
 	database, err := db.Open(cfg.DBPath())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, startupError(err, "Could not open the database. Check that LUDOCK_DATA_DIR exists and is writable."))

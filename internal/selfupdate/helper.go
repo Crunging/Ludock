@@ -697,12 +697,15 @@ func dataDirOf(old *docker.ContainerSpec) string {
 		WorkingDir string
 	}
 	json.Unmarshal(encode(old.Config), &config)
-	dir := "data"
+	// The first entry, as Ludock's os.Getenv reads it.
+	dir := ""
 	for _, entry := range config.Env {
-		if value, ok := strings.CutPrefix(entry, "LUDOCK_DATA_DIR="); ok && value != "" {
+		if value, ok := strings.CutPrefix(entry, "LUDOCK_DATA_DIR="); ok {
 			dir = value
+			break
 		}
 	}
+	dir = cmp.Or(dir, "data")
 	if !path.IsAbs(dir) {
 		dir = path.Join("/", config.WorkingDir, dir)
 	}
@@ -731,6 +734,14 @@ func DataMount(info *docker.ContainerInspect, dataDir string) (map[string]any, e
 	}
 	for _, mount := range mounts {
 		if path.Clean(mount.Destination) != path.Clean(found.Destination) && helper.Within(mount.Destination, dataDir) {
+			return nil, errDataMount
+		}
+	}
+	// A bind relabelled for one container alone (-v …:Z) can't be reached by
+	// another, and mount settings can't relabel it.
+	for _, bind := range info.Host.Binds {
+		parts := strings.Split(bind, ":")
+		if len(parts) == 3 && path.Clean(parts[1]) == path.Clean(found.Destination) && slices.Contains(strings.Split(parts[2], ","), "Z") {
 			return nil, errDataMount
 		}
 	}
@@ -784,8 +795,11 @@ func (h *Helper) runData(ctx context.Context, old *docker.ContainerSpec, image s
 	json.Unmarshal(encode(old.HostConfig), &host)
 	stepLabels := launch.HelperLabels(dataKind)
 	stepLabels[operationLabel] = h.Operation
+	// The step runs in another working directory, so the data folder is
+	// given absolute, in place of the original's entry.
+	env := slices.DeleteFunc(slices.Clone(config.Env), func(entry string) bool { return strings.HasPrefix(entry, "LUDOCK_DATA_DIR=") })
 	body := map[string]any{"Image": image, "Entrypoint": []string{helper.Binary}, "Cmd": cmd, "User": config.User,
-		"Env": append(config.Env, "LUDOCK_DATA_DIR="+dataDir), "Labels": stepLabels, "Healthcheck": map[string]any{"Test": []string{"NONE"}},
+		"Env": append(env, "LUDOCK_DATA_DIR="+dataDir), "Labels": stepLabels, "Healthcheck": map[string]any{"Test": []string{"NONE"}},
 		"HostConfig": map[string]any{"NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": []string{"ALL"}, "CapAdd": host.CapAdd,
 			"GroupAdd": host.GroupAdd, "SecurityOpt": []string{"no-new-privileges:true"}, "Mounts": []map[string]any{mount}}}
 	id, err := h.Docker.Create(ctx, name, "", body)

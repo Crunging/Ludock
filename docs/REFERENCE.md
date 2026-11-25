@@ -506,7 +506,8 @@ From the moment Ludock saves its data until the update ends, it accepts no
 change: forms, sign-ins and sign-outs, and its own background work wait,
 and are refused with "Ludock is updating itself", since putting the old
 version back would undo them. That holds for every process that opens
-Ludock's data, so `ludock recover` waits too. Pages show the last known
+Ludock's data, so `ludock recover` waits too; it also refuses to run while
+the data is moved aside for a moment to be put back. Pages show the last known
 state and say Ludock is updating itself. A scheduled action that comes due
 meanwhile runs once Ludock is back, if that is within its grace period (15
 minutes for a repeating schedule, 5 for a one-time one), and an alert
@@ -537,7 +538,8 @@ itself: outside a container it can prove is its own, started with `--rm`,
 with its health check turned off, reaching Docker other than through a
 mounted socket, with its data outside a volume or mounted folder a helper can
 mount the same way, with another mount inside its data folder (such as the
-database or its key mounted on their own), with a host port Docker picks at
+database or its key mounted on their own) or its data folder relabelled for
+it alone (`:Z`), with a host port Docker picks at
 each start (a blank port, `0`, or a range), or sharing a network or
 processes with another container. In the folder with its
 `compose.yaml`:

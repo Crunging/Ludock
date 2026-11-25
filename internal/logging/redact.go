@@ -13,8 +13,9 @@ var (
 	cookiePattern    = regexp.MustCompile(`(?i)\b(ludock_session)=([^;\s]+)`)
 	sensitiveQuery   = regexp.MustCompile(`(?i)([?&](?:` + SensitiveKeySource + `)=)[^&#\s]+`)
 	// An absolute path not inside a URL or a word, such as a bind source,
-	// without the colon that ends a clause.
-	pathPattern         = regexp.MustCompile(`(^|[^\w.:/-])/(?:[^\s"'(),;\[\]:]|:[^\s"'(),;\[\]])*`)
+	// up to the colon that ends Docker's clause, a quote, or the end: a path
+	// may hold spaces.
+	pathPattern         = regexp.MustCompile(`(^|[^\w.:/-])/[^"'\n]*?(:\s|:$|["']|\n|$)`)
 	quotedSecretPattern = regexp.MustCompile(`(?i)(` + SensitiveKeySource + `)(["']?\s*[=:]\s*)("(?:\\[\s\S]|[^"\\])*(?:"|\\?$)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?$))`)
 )
 
@@ -37,7 +38,7 @@ func Redact(value string) string {
 // Scrub redacts credentials and absolute paths from Docker's own words, which
 // can name host paths, and bounds them for a log line.
 func Scrub(value string) string {
-	value = pathPattern.ReplaceAllString(Redact(value), "${1}[path]")
+	value = pathPattern.ReplaceAllString(Redact(value), "${1}[path]${2}")
 	if cut, truncated := truncate(value, maxContextValue); truncated {
 		return cut + "…"
 	}

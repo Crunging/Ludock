@@ -100,9 +100,11 @@ func Run(engine *fakedocker.Engine, options Options) {
 func data(c *fakedocker.Container) int {
 	cmd := c.CreateRequest.Cmd
 	dataDir := ""
+	// The first entry, as Go's os.Getenv reads it.
 	for _, entry := range c.CreateRequest.Env {
 		if value, ok := strings.CutPrefix(entry, "LUDOCK_DATA_DIR="); ok {
 			dataDir = value
+			break
 		}
 	}
 	dataDir = host(c, dataDir)
