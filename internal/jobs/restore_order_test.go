@@ -193,11 +193,15 @@ func (f *fixture) replaceElsewhere() {
 // stalledStart leaves the first move's exec start unanswered, as a stalled
 // Docker can, and starts the server elsewhere once it is sent.
 func stalledStart(t *testing.T, f *fixture) afterHook {
+	var mu sync.Mutex
 	extracted := 0
 	return func(_ *fakedocker.Container, operation, _ string, code int) int {
 		if operation != "extract" {
 			return code
 		}
+		mu.Lock()
+		defer mu.Unlock()
+		// The extracts run at once.
 		if extracted++; extracted == 2 {
 			arrived := f.engine.HangRequests(fakedocker.ExecStart)
 			go func() {
