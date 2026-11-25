@@ -234,10 +234,12 @@ func (j *Jobs) assertStopped(ctx context.Context, server *servers.Context, job *
 	return j.Backups.AssertNoOtherWriters(ctx, server, job.Job.Recovery.DataHelperID)
 }
 
+var errServerChanged = fail("EXTERNAL_SERVER_CHANGE", "Something outside Ludock started or changed the server meanwhile. Check it before trying again.")
+
 // assertStillStopped confirms the server is still the instance this
 // operation stopped, under the same binding.
 func (j *Jobs) assertStillStopped(ctx context.Context, server *servers.Context, job *ops.Context) error {
-	changed := fail("EXTERNAL_SERVER_CHANGE", "Something outside Ludock started or changed the server meanwhile. Check it before trying again.")
+	changed := errServerChanged
 	observed, info, err := j.Servers.Observer.Inspect(ctx, server.Container.ID)
 	if docker.IsNotFound(err) {
 		// Compose and the like replace a container to change it.
