@@ -126,8 +126,14 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	os.WriteFile(whitelist, []byte("[]"), 0o600)
 	access := aclValue([3]uint32{1, 6}, [3]uint32{2, 4, 4242}, [3]uint32{4, 6}, [3]uint32{8, 0, 4343}, [3]uint32{16, 4}, [3]uint32{32, 4})
 	def := aclValue([3]uint32{1, 7}, [3]uint32{2, 7, 4242}, [3]uint32{4, 5}, [3]uint32{16, 7}, [3]uint32{32, 5})
-	acls := unix.Setxattr(whitelist, "system.posix_acl_access", access, 0) == nil &&
-		unix.Setxattr(filepath.Join(data, "world"), "system.posix_acl_default", def, 0) == nil
+	err := unix.Setxattr(whitelist, "system.posix_acl_access", access, 0)
+	if err == nil {
+		err = unix.Setxattr(filepath.Join(data, "world"), "system.posix_acl_default", def, 0)
+	}
+	if err != nil && !errors.Is(err, unix.ENOTSUP) {
+		t.Fatal(err)
+	}
+	acls := err == nil
 	if !acls {
 		t.Log("no ACLs here, so they aren't checked")
 	}

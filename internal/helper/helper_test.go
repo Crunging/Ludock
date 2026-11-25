@@ -483,7 +483,11 @@ func TestRestoreSteps(t *testing.T) {
 	// it keeps none the stage gave it.
 	os.Chmod(root, 0o750)
 	inherited := mustACL(t, "user::rwx,user:4242:rwx,group::rwx,mask::rwx,other::rwx")
-	acls := unix.Setxattr(filepath.Join(root, stage, "new"), defaultACL, inherited, 0) == nil
+	err := unix.Setxattr(filepath.Join(root, stage, "new"), defaultACL, inherited, 0)
+	if err != nil && !errors.Is(err, unix.ENOTSUP) {
+		t.Fatal(err)
+	}
+	acls := err == nil
 	records := []string{
 		`{"acl":"user::rwx,user:4242:rwx,group::r-x,mask::rwx,other::r-x","name":"","type":"directory","size":0,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":493}`,
 		`{"acl":"user::rwx,user:4242:r-x,group::r-x,mask::r-x,other::r-x","name":"world","type":"directory","size":0,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":2029,"mtime":1700000000}`,
