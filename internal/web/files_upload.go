@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"path"
 	"sync"
 	"time"
 
@@ -40,7 +41,8 @@ type uploadResult struct {
 	Message string `json:"message,omitempty"`
 }
 
-// fileUpload stores a batch of files in one folder. The body
+// fileUpload stores a batch of files in one folder, path or its subfolder
+// into, which it creates as needed. The body
 // (application/octet-stream) is a JSON line listing each file's name and
 // size, then each file's bytes in that order, with the exact
 // Content-Length; the CSRF token comes in the X-CSRF-Token header. It
@@ -56,6 +58,10 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 	query := r.URL.Query()
 	root := query.Get("root")
 	folder, err := files.NormalizeRelativePath(query.Get("path"))
+	var into string
+	if err == nil {
+		into, err = files.NormalizeRelativePath(query.Get("into"))
+	}
 	if err == nil && root == "" {
 		err = invalid
 	}
@@ -126,14 +132,14 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 		return
 	}
 	defer action.Done()
-	results, err := s.App.Files.UploadFiles(action.Ctx, fileTarget(action), root, folder, entries, reader, action.Assert)
+	results, err := s.App.Files.UploadFiles(action.Ctx, fileTarget(action), root, folder, into, entries, reader, action.Assert)
 	answer := struct {
 		Results []uploadResult `json:"results"`
 		Stop    bool           `json:"stop"`
 	}{Results: make([]uploadResult, len(entries)), Stop: err != nil}
 	for index, entry := range entries {
 		result := uploadResult{Name: entry.Name, Status: "uploaded"}
-		details := map[string]any{"root": root, "path": folder, "name": entry.Name, "size": entry.Size}
+		details := map[string]any{"root": root, "path": path.Join(folder, into), "name": entry.Name, "size": entry.Size}
 		switch failure := results[index]; {
 		case errors.Is(failure, files.ErrUploadUnconfirmed):
 			result.Status, result.Message = "unconfirmed", "The result for “"+entry.Name+"” could not be confirmed. The upload may have completed. Review the folder before uploading again."

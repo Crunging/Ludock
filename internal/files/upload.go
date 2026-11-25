@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -50,12 +51,13 @@ func BatchFits(sizes []int64) bool {
 	return len(sizes) <= helper.UploadBatchFiles && (len(sizes) == 1 || total <= helper.UploadBatchBytes)
 }
 
-// UploadFiles writes entries into one folder through one helper command.
-// Each file commits
-// only after its trailer, which is sent after its whole body and an access
-// check. It returns each entry's result, and the error that stopped the
-// batch, after which later entries were not written.
-func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder string, entries []UploadEntry, body io.Reader,
+// UploadFiles writes entries into one folder through one helper command:
+// folder, or its subfolder into, whose missing folders it first creates as
+// New folder does. Each file commits only after its trailer, which is sent
+// after its whole body and an access check. It returns each entry's result,
+// and the error that stopped the batch, after which later entries were not
+// written.
+func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder, into string, entries []UploadEntry, body io.Reader,
 	assertAccess func() error) ([]error, error) {
 	results := make([]error, len(entries))
 	// Every result left nil by a failure is that failure.
@@ -76,7 +78,11 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		}
 		results[index] = entry.Err
 	}
-	root, normalized, err := resolve(target, rootID, folder)
+	root, normalized, err := resolve(target, rootID, joinRelative(folder, into))
+	var made []string
+	if err == nil && into != "" {
+		made, err = folders(folder, into)
+	}
 	for index, entry := range entries {
 		if results[index] == nil && err == nil {
 			_, results[index] = joinChecked(normalized, entry.Name)
@@ -102,7 +108,17 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 		// disk is refused before anything is written; the helper checks each
 		// file again as the batch fills the disk.
 		var space *helper.FileSpace
-		if space, err = access.prepareUpload(ctx, target, root, normalized); err != nil {
+		for _, path := range made {
+			if _, err = access.request(ctx, helper.FileRequest{Operation: "mkdir", Root: root.Path, Path: path}, nil, nil); errors.Is(err, launch.ErrNameTaken) {
+				err = nil
+			} else if err != nil {
+				break
+			}
+		}
+		if err == nil {
+			space, err = access.prepareUpload(ctx, target, root, normalized)
+		}
+		if err != nil {
 			// Its sweep may still be removing files.
 			access.Cleanup(true)
 		} else {
@@ -214,6 +230,24 @@ func (s *Service) UploadFiles(ctx context.Context, target Target, rootID, folder
 	// Every file was answered, such as a large one the helper refused and
 	// then stopped instead of reading past, so later batches can still go.
 	return results, nil
+}
+
+// folders lists the path of each folder of into below folder, outermost
+// first.
+func folders(folder, into string) ([]string, error) {
+	normalized, err := NormalizeRelativePath(into)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, name := range strings.Split(normalized, "/") {
+		if err := ValidateName(name); err != nil {
+			return nil, err
+		}
+		folder = joinRelative(folder, name)
+		paths = append(paths, folder)
+	}
+	return paths, nil
 }
 
 // isRefusal reports a public error that says nothing was written.

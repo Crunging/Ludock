@@ -980,6 +980,7 @@ td > .cancel-form { display: block; margin-top: 6px; }
   padding: 14px 18px; border: 2px dashed var(--edge); border-radius: var(--radius-lg);
   color: var(--ink-2); font-size: 15px; transition: background-color 0.12s, border-color 0.12s;
 }
+.file-dropzone__actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .file-dropzone--active { border-color: var(--busy); background: color-mix(in srgb, var(--busy) 16%, var(--block)); color: var(--ink); }
 .file-dropzone[aria-disabled=true] { opacity: 0.6; }
 .file-upload-progress {

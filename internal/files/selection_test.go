@@ -67,7 +67,7 @@ func TestSelectionRefusesForgedRequests(t *testing.T) {
 		}},
 		{"move", func(name string) error { return service.Move(ctx, target, root, "logs", []string{name}, folder, nil) }},
 		{"upload", func(name string) error {
-			results, err := service.UploadFiles(ctx, target, root, folder, []UploadEntry{{Name: name}}, strings.NewReader(""), nil)
+			results, err := service.UploadFiles(ctx, target, root, folder, "", []UploadEntry{{Name: name}}, strings.NewReader(""), nil)
 			return errors.Join(err, results[0])
 		}},
 	} {

@@ -776,7 +776,7 @@ func (h *fileHelper) upload(parent fd, name string, size int64, id string, expec
 	// other bits, so when it will change, neither may grant more than the
 	// owner bits will: a mode that does, such as 0460, is narrowed to the
 	// owner's.
-	mode := uint32(0o666 &^ currentUmask())
+	mode := followMode(owner, 0o666, currentUmask())
 	if original != nil {
 		mode = original.Mode & 0o777
 	}
@@ -1206,6 +1206,38 @@ func (h *fileHelper) expectVersion(parent fd, name string, original *unix.Stat_t
 	return nil
 }
 
+// followMode is the mode a create with mode gets, without a default ACL, in
+// a folder whose mode is like's. A group-writable folder is the evidence of
+// a game whose umask leaves group write, such as 0002, so the entry gets
+// group write and no more for group and others than the folder has; any
+// other folder keeps the helper's umask.
+func followMode(like *unix.Stat_t, mode uint32, umask int) uint32 {
+	created := mode &^ uint32(umask)
+	if like.Mode&0o020 == 0 {
+		return created
+	}
+	return (created | mode&0o020) & (0o700 | like.Mode&0o077)
+}
+
+// makeFolder creates name in folder as a new folder there would be made:
+// with folder's default ACL if it has one, and otherwise with followMode of
+// like. The mode is set at creation, since a later chmod by a helper outside
+// the folder's group drops the setgid bit the kernel passed on.
+func makeFolder(folder fd, like *unix.Stat_t, name string) error {
+	inherited, err := readACL(folder, defaultACL)
+	if err != nil {
+		return err
+	}
+	if inherited != nil {
+		return unix.Mkdirat(int(folder), name, 0o777)
+	}
+	// The helper does one operation at a time, so nothing else creates an
+	// entry while the umask is cleared.
+	umask := syscall.Umask(0)
+	defer syscall.Umask(umask)
+	return unix.Mkdirat(int(folder), name, followMode(like, 0o777, umask))
+}
+
 func currentUmask() int {
 	old := syscall.Umask(0)
 	syscall.Umask(old)
@@ -1388,7 +1420,7 @@ func (h *fileHelper) run() error {
 		if err != nil {
 			return err
 		}
-		if err := unix.Mkdirat(int(parent), name, 0o777); err != nil {
+		if err := makeFolder(parent, owner, name); err != nil {
 			return nameTaken(err)
 		}
 		directory, err := h.t.openAt(parent, name, directoryFlags, 0)

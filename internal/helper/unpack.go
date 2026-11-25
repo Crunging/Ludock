@@ -146,8 +146,12 @@ func (u *unpacker) directory(parts []string) (fd, error) {
 	for _, part := range parts {
 		next, err := u.h.t.openAt(current, part, directoryFlags, 0)
 		if isNotExist(err) {
+			var like *unix.Stat_t
 			if err = u.count(); err == nil {
-				err = unix.Mkdirat(int(current), part, 0o777)
+				like, err = fstat(current)
+			}
+			if err == nil {
+				err = makeFolder(current, like, part)
 			}
 			if err == nil {
 				if next, err = u.h.t.openAt(current, part, directoryFlags, 0); err == nil {
@@ -283,7 +287,11 @@ func createMode(entry, folder fd, mode uint32, umask int) error {
 	if err := unix.Fremovexattr(int(entry), accessACL); err != nil && !unsupportedXattr(err) {
 		return err
 	}
-	return unix.Fchmod(int(entry), mode&^uint32(umask))
+	like, err := fstat(folder)
+	if err != nil {
+		return err
+	}
+	return unix.Fchmod(int(entry), followMode(like, mode, umask))
 }
 
 // preader reads a tracked descriptor by offset. An *os.File would close
@@ -476,7 +484,7 @@ func (h *fileHelper) unpack(parent fd, name string) error {
 	// the kernel gives it what a new folder beside the archive gets, its
 	// folder's default ACL and setgid included, and no one reaches it before
 	// it has its owner.
-	if err := unix.Mkdirat(int(stage), unpackedName, 0o777); err != nil {
+	if err := makeFolder(stage, owner, unpackedName); err != nil {
 		return err
 	}
 	unpacked, err := h.t.openAt(stage, unpackedName, directoryFlags, 0)

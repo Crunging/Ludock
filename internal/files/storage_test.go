@@ -429,7 +429,7 @@ func TestFailedChangeRemovesHelper(t *testing.T) {
 			return f.service.Rename(ctx, f.target, f.root, "missing.txt", "other.txt", nil)
 		},
 		"upload": func() error {
-			_, err := f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "short.txt", Size: 10}}, strings.NewReader("short"), nil)
+			_, err := f.service.UploadFiles(ctx, f.target, f.root, "", "", []UploadEntry{{Name: "short.txt", Size: 10}}, strings.NewReader("short"), nil)
 			return err
 		},
 	} {
@@ -481,7 +481,7 @@ func TestUploadNeedsFreeSpace(t *testing.T) {
 	// Within the free space, but not with the spare kept; the margin covers
 	// other writers freeing space meanwhile.
 	size := space.Available - helper.UploadSpare(space.Total) + 256<<20
-	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "huge.bin", Size: size}}, zeroFree{}, nil)
+	results, err := f.service.UploadFiles(ctx, f.target, f.root, "", "", []UploadEntry{{Name: "huge.bin", Size: size}}, zeroFree{}, nil)
 	if public, ok := apperr.As(results[0]); err != nil || !ok || public.Code != "NOT_ENOUGH_SPACE" || public.Status != 507 {
 		t.Fatal(results, err)
 	}
