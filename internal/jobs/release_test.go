@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -180,18 +182,22 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 	undone := "The restore was undone: the server’s data is as it was. Ludock started the server again."
 	finishedUndo := "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. " +
 		"Anything Ludock moved out of its way went to the folder {aside} beside it."
+	interrupted := "Ludock restarted while this ran. Check the server before trying again."
 	for _, c := range []struct {
 		name string
-		// status and guidance are the interrupted operation's outcome.
-		status, guidance string
+		// status, err, and guidance are the interrupted operation's outcome,
+		// or, with none, the restore's; err defaults to interrupted.
+		status, err, guidance string
 		// pending, for an undo, is what the restore it finished says.
 		pending string
 		data    map[string]string
 		// containers are each one's name, state, restart policy, and image.
 		containers []string
-		// sameRun: the server runs the run it had, not one started again.
+		// sameRun: the server runs the run it had, and no start was sent.
 		sameRun bool
-		alerts  []string
+		// stopConfirmed: recovery saw the stop it had sent end.
+		stopConfirmed bool
+		alerts        []string
 	}{
 		// Staging: only the stage folder changed, which is removed.
 		{name: "restore-staging", status: ops.Interrupted, guidance: "Nothing was restored: the server’s data is as it was. Ludock started the server again.",
@@ -239,15 +245,30 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		// The stop sent and done, but not yet confirmed.
 		{name: "backup-stop-unconfirmed", status: ops.Interrupted,
 			guidance: "Ludock restarted before the backup finished, so there’s no new backup. Ludock started the server again.",
-			data:     backedUp, containers: []string{"/mc running unless-stopped 0000"}, alerts: []string{backupAlert}},
+			data:     backedUp, containers: []string{"/mc running unless-stopped 0000"}, stopConfirmed: true, alerts: []string{backupAlert}},
 		// The backup recorded and the start sent: it isn't sent again.
 		{name: "backup-start-sent", status: ops.Interrupted, guidance: "The backup had finished. Ludock started the server again.",
 			data: backedUp, containers: []string{"/mc running unless-stopped 0000"}, sameRun: true},
-		// Players warned, the backup waiting: it resumes and runs.
-		{name: "backup-warning", status: ops.Succeeded, data: backedUp, containers: []string{"/mc running unless-stopped 0000"}},
+		// Players warned, the backup waiting: it resumes, long past the time
+		// players were given, so it doesn't run.
+		{name: "backup-warning", status: ops.Failed,
+			err:  "Ludock wasn’t running when the server was due to restart for a backup, so it didn’t. Players had been told it would.",
+			data: backedUp, containers: []string{"/mc running unless-stopped 0000"}},
 		// A restart whose stop was sent and done but not confirmed: recovery
 		// only confirms the stop.
-		{name: "restart-stop-unconfirmed", status: ops.Interrupted, data: backedUp, containers: []string{"/mc exited unless-stopped 0000"}},
+		{name: "restart-stop-unconfirmed", status: ops.Interrupted, data: backedUp, containers: []string{"/mc exited unless-stopped 0000"},
+			stopConfirmed: true},
+		// A restart with a backup, its archive written but not published:
+		// the partial archive goes and the server runs again.
+		{name: "restart-backup-copying", status: ops.Interrupted,
+			guidance: "Ludock restarted before the backup finished, so there’s no new backup. The server was started again.",
+			data:     backedUp, containers: []string{"/mc running unless-stopped 0000"}, alerts: []string{backupAlert}},
+		// A restore that failed because the server was started elsewhere,
+		// with its new data in place, and the server stopped since: startup
+		// undoes it, setting aside what the game wrote.
+		{name: "restore-failed-pending", status: ops.Failed,
+			err:      "Something outside Ludock started or changed the server meanwhile. Check it before trying again.",
+			guidance: finishedUndo, data: merged(now, setAside), containers: []string{"/mc exited unless-stopped 0000"}},
 		// The replacement created under its temporary name, its ID not yet
 		// saved: found by its name and label, removed.
 		{name: "update-created", status: ops.Interrupted,
@@ -266,52 +287,74 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		{name: "update-original-removed", status: ops.Interrupted,
 			guidance: "Ludock restarted while the updated container replaced the previous one, so it finished the update.",
 			data:     backedUp, containers: []string{"/mc running unless-stopped 1111"}, sameRun: true},
+		// The replacement renamed and given the original's policy, the swap
+		// saved as replaced, the server's state not yet confirmed.
+		{name: "update-replaced", status: ops.Interrupted,
+			guidance: "Ludock restarted while the updated container replaced the previous one, so it finished the update.",
+			data:     backedUp, containers: []string{"/mc running unless-stopped 1111"}, sameRun: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			i := interrupted10(t, c.name)
-			job := finished(t, i.runner, i.interrupted)
 			var restore string
-			if c.pending != "" {
-				if err := i.jobs.DB.QueryRow("SELECT id FROM operations WHERE kind='restore'").Scan(&restore); err != nil {
-					t.Fatal(err)
-				}
+			if err := i.jobs.DB.QueryRow("SELECT id FROM operations WHERE kind='restore'").Scan(&restore); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				t.Fatal(err)
 			}
+			id := i.interrupted
+			if id == "" {
+				id = restore
+			}
+			job := finished(t, i.runner, id)
 			named := strings.NewReplacer("{aside}", helper.SetAsideName(restore))
-			if job.Status != c.status || job.Result.Guidance != c.guidance || job.Result.UndoNote != named.Replace(c.pending) {
-				t.Fatalf("%s %q, undo %q\nwant %s %q, undo %q", job.Status, job.Result.Guidance, job.Result.UndoNote, c.status, c.guidance, named.Replace(c.pending))
+			want := c.err
+			if want == "" && c.status == ops.Interrupted {
+				want = interrupted
+			}
+			if job.Status != c.status || job.Error != want || job.Result.Guidance != named.Replace(c.guidance) || job.Result.UndoNote != named.Replace(c.pending) {
+				t.Fatalf("%s %q %q, undo %q\nwant %s %q %q, undo %q", job.Status, job.Error, job.Result.Guidance, job.Result.UndoNote,
+					c.status, want, named.Replace(c.guidance), named.Replace(c.pending))
+			}
+			if c.stopConfirmed && (!job.Recovery.StopSettled || job.Recovery.StopRecoveryTimedOut) {
+				t.Fatalf("stop not confirmed: %+v", job.Recovery)
 			}
 			if c.pending != "" {
 				if pending, err := i.runner.Get(ctx, restore); err != nil || pending.Result.Guidance != named.Replace(c.pending) {
 					t.Fatalf("restore %+v %v", pending, err)
 				}
 			}
-			want := map[string]string{}
+			data := map[string]string{}
 			for name, content := range c.data {
-				want[named.Replace(name)] = content
+				data[named.Replace(name)] = content
 			}
-			if data := tree(t, i.host+i.install+"/data/mc"); !maps.Equal(data, want) {
-				t.Fatalf("data %v\nwant %v", data, want)
+			if found := tree(t, i.host+i.install+"/data/mc"); !maps.Equal(found, data) {
+				t.Fatalf("data %v\nwant %v", found, data)
 			}
 			if containers := i.containers(); !slices.Equal(containers, c.containers) {
 				t.Fatalf("containers %v, want %v", containers, c.containers)
 			}
-			if c.sameRun && i.started() != i.savedStart(t) {
+			if c.sameRun && (i.started() != i.savedStart(t) || i.startSent()) {
 				t.Fatal("the server was started again")
 			}
-			// Only recorded backups remain, each whole.
-			records, err := i.jobs.DB.Query("SELECT id FROM backups WHERE state='complete'")
+			// The backups 1.0 had stay as they were, recorded; an unpublished
+			// one is gone, and none is new.
+			archives := map[string]string{}
+			for name, content := range tree(t, i.host+i.install+"/backups") {
+				sum := sha256.Sum256([]byte(content))
+				archives[name] = hex.EncodeToString(sum[:])
+			}
+			var records []string
+			rows, err := i.jobs.DB.Query("SELECT id FROM backups WHERE state='complete' ORDER BY id")
 			if err != nil {
 				t.Fatal(err)
 			}
-			archives := []string{}
-			for records.Next() {
+			for rows.Next() {
 				var id string
-				records.Scan(&id)
-				archives = append(archives, id+".tar")
+				rows.Scan(&id)
+				records = append(records, id+".tar")
 			}
-			records.Close()
-			if found := slices.Sorted(maps.Keys(tree(t, i.host+i.install+"/backups"))); !slices.Equal(found, slices.Sorted(slices.Values(archives))) {
-				t.Fatalf("backup folder holds %v, records %v", found, archives)
+			rows.Close()
+			if !maps.Equal(archives, i.archives) || !slices.Equal(records, slices.Sorted(maps.Keys(i.archives))) ||
+				len(tree(t, i.host+i.install+"/backups-now")) != 0 {
+				t.Fatalf("backups %v, recorded %v\nwant %v", archives, records, i.archives)
 			}
 			i.mu.Lock()
 			defer i.mu.Unlock()
@@ -337,10 +380,14 @@ type installed10 struct {
 	runner *ops.Runner
 	// host is the host's root: what the install kept at a path p is at host+p.
 	host, install string
-	// interrupted is the operation that was running when it was killed.
+	// interrupted is the operation that was running when it was killed, if
+	// any.
 	interrupted string
-	mu          sync.Mutex
-	alerts      []string
+	// archives are the backup folder's archives as it was killed, by name,
+	// with their content's SHA-256.
+	archives map[string]string
+	mu       sync.Mutex
+	alerts   []string
 }
 
 // interrupted10 is the install as it starts again, once recovery ran.
@@ -356,14 +403,26 @@ func interrupted10(t *testing.T, name string) *installed10 {
 		t.Fatal("open:", err)
 	}
 	t.Cleanup(func() { d.Close() })
+	i.archives = map[string]string{}
+	for name, content := range tree(t, i.host+i.install+"/backups") {
+		if strings.HasSuffix(name, ".tar") {
+			sum := sha256.Sum256([]byte(content))
+			i.archives[name] = hex.EncodeToString(sum[:])
+		}
+	}
 	// Ludock opens its own backup folder itself, so it moves with the host.
-	backupTo := i.install + "/backups"
-	for _, statement := range []string{
-		`UPDATE settings SET value_json=replace(value_json,'"'||?1||'"','"'||?2||'"')`,
-		`UPDATE backups SET destination=?2 WHERE destination=?1`,
-		`UPDATE operations SET recovery_json=replace(recovery_json,'"'||?1||'"','"'||?2||'"')`,
+	// Its owner has since chosen another, so recovery must use the folder
+	// each operation saved.
+	backupTo, chosen := i.host+i.install+"/backups", i.host+i.install+"/backups-now"
+	if err := os.Mkdir(chosen, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for statement, to := range map[string]string{
+		`UPDATE settings SET value_json=replace(value_json,'"'||?1||'"','"'||?2||'"')`:         chosen,
+		`UPDATE backups SET destination=?2 WHERE destination=?1`:                               backupTo,
+		`UPDATE operations SET recovery_json=replace(recovery_json,'"'||?1||'"','"'||?2||'"')`: backupTo,
 	} {
-		if _, err := d.Exec(statement, backupTo, i.host+backupTo); err != nil {
+		if _, err := d.Exec(statement, i.install+"/backups", to); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -406,15 +465,16 @@ func interrupted10(t *testing.T, name string) *installed10 {
 		i.engine.Update(container.ID, func(c *fakedocker.Container) { *c = container })
 	}
 	i.engine.AddContainer(fakedocker.GameOptions{ID: "ludock", Name: "ludock", Image: image, Running: true,
-		Mounts: []docker.MountPoint{{Type: "bind", Source: i.host + backupTo, Destination: i.host + backupTo, RW: true}}})
+		Mounts: []docker.MountPoint{{Type: "bind", Source: backupTo, Destination: backupTo, RW: true},
+			{Type: "bind", Source: chosen, Destination: chosen, RW: true}}})
 
-	i.jobs = wire(i.engine, d, i.host+backupTo)
+	i.jobs = wire(i.engine, d, backupTo, chosen)
 	i.jobs.Notify = func(_ notify.Alert, _, message string) {
 		i.mu.Lock()
 		i.alerts = append(i.alerts, message)
 		i.mu.Unlock()
 	}
-	if err := d.QueryRow("SELECT id FROM operations WHERE status='running'").Scan(&i.interrupted); err != nil {
+	if err := d.QueryRow("SELECT id FROM operations WHERE status='running'").Scan(&i.interrupted); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		t.Fatal(err)
 	}
 	i.runner = &ops.Runner{DB: d, Locks: i.jobs.Locks}
@@ -524,6 +584,16 @@ func (i *installed10) started() string {
 		}
 	}
 	return ""
+}
+
+// startSent reports whether a start was sent to the container now named mc.
+func (i *installed10) startSent() bool {
+	for _, id := range i.engine.SortedIDs() {
+		if c := i.engine.Container(id); c.Name == "/mc" {
+			return slices.ContainsFunc(i.engine.Requests, func(request string) bool { return strings.HasSuffix(request, "/containers/"+id+"/start") })
+		}
+	}
+	return false
 }
 
 // savedStart is when the container now named mc started, as 1.0 saw it.

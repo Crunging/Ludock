@@ -135,8 +135,8 @@ func setup(t *testing.T) *fixture {
 }
 
 // wire builds Ludock's services on engine and d, as Ludock does, with
-// backupTo its backup folder and short waits.
-func wire(engine *fakedocker.Engine, d *db.DB, backupTo string) *Jobs {
+// backupRoots its approved backup folders and short waits.
+func wire(engine *fakedocker.Engine, d *db.DB, backupRoots ...string) *Jobs {
 	client := docker.New(engine.Socket)
 	client.OutageLimit = 6 * time.Second
 	table := locks.New()
@@ -145,7 +145,7 @@ func wire(engine *fakedocker.Engine, d *db.DB, backupTo string) *Jobs {
 	observer := &servers.Observer{Docker: client, Own: self.New(nil, "")}
 	service := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: observer}
 	images := &launch.Images{Configured: image}
-	storage := &backups.Storage{Roots: []string{backupTo}, Own: self.New(client, "ludock")}
+	storage := &backups.Storage{Roots: backupRoots, Own: self.New(client, "ludock")}
 	backupService := &backups.Service{DB: d, Storage: storage, Docker: client, Observer: observer, Locks: table,
 		Helpers: &backups.Helpers{Docker: client, Images: images, Storage: storage}}
 	return &Jobs{DB: d, Authz: authorization, Identity: store, Servers: service, Docker: client, Locks: table,

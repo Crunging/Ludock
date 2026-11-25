@@ -12,7 +12,7 @@ Each folder is a 1.0 install killed partway through one operation, as
 - `docker.json`: the fake daemon's containers, as `fakedocker.Container`,
   without Ludock's own.
 
-They were made on 2026-11-25 from 7d004c0 by a throwaway test, not
+They were made on 2026-11-25 from 7d004c0, the last three on review, by a throwaway test, not
 committed. It ran each install in this package's harness against
 `fakedocker`, with the server `mc` running and, for restores, one backup taken
 and the data changed since. At the crash point (a helper step about to run or
@@ -36,14 +36,18 @@ database with `VACUUM INTO`, the host's folder, and the daemon's containers.
 | `backup-start-sent` | backup recorded, start sent and done |
 | `backup-warning` | players warned, waiting |
 | `restart-stop-unconfirmed` | a restart's stop sent and done, not yet confirmed |
+| `restart-backup-copying` | a restart with a backup, its archive written, not published |
+| `restore-failed-pending` | nothing running: a restore that failed when the server was started elsewhere, new data in place, the server stopped since |
 | `update-created` | replacement created under its temporary name, its ID not saved |
 | `update-started` | replacement started, not yet verified |
 | `update-original-removed` | original removed, replacement still under its temporary name |
+| `update-replaced` | replacement renamed and given the original's policy, swap saved as `replaced` |
 
 The test keeps the host's files below a temporary folder and maps the paths
 helpers see onto it. Ludock opens its backup folder itself, so the test moves
-that one path, in the settings, backup rows, and saved operations, to the
-temporary folder.
+that one path, in the backup rows and saved operations, to the temporary
+folder, and points the settings at another folder there, as an owner who
+chose a new one meanwhile would.
 
 Never regenerate these to make a test pass. A failure means the change
 breaks recovery of a 1.0 install upgraded partway through work.
