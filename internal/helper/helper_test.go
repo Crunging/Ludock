@@ -726,16 +726,20 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(root, "ops.json")); string(data) != "game made" {
 		t.Fatal("set aside before refusing:", string(data))
 	}
-	// Nor is one that gains a second name while what is in its way moves.
-	linked := false
-	renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
-		err := original(fromFD, from, toFD, to, flags)
-		if err == nil && !linked {
-			linked = true
-			os.Link(staging, filepath.Join(root, "alias"))
+	// Nor is one that gains a second name once what is in its way moved.
+	linkOnceAside := func(staged string) {
+		linked := false
+		renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
+			err := original(fromFD, from, toFD, to, flags)
+			folder, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(toFD))
+			if err == nil && !linked && Within(folder, filepath.Join(root, asideName)) {
+				linked = true
+				os.Link(staged, filepath.Join(root, "alias"))
+			}
+			return err
 		}
-		return err
 	}
+	linkOnceAside(staging)
 	if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
 		t.Fatal("returned an original that gained a second name")
 	}
@@ -894,10 +898,16 @@ func TestRenamesNeverClobber(t *testing.T) {
 			os.WriteFile(theirs, []byte("theirs"), 0o644)
 			return err
 		}
-		RunRestore(string(argument), io.Discard, io.Discard)
+		code := RunRestore(string(argument), io.Discard, io.Discard)
 		renameat2 = original
+		if (code == 0) != (when == "after success") {
+			t.Fatalf("%s: the undo said %d", when, code)
+		}
 		if data, _ := os.ReadFile(theirs); string(data) != "theirs" {
 			t.Fatalf("%s: the probe removed a file it didn't make", when)
+		}
+		if entries, _ := os.ReadDir(filepath.Dir(theirs)); len(entries) != 1 {
+			t.Fatalf("%s: the probe left its own folder: %v", when, entries)
 		}
 		os.Remove(theirs)
 		os.Remove(filepath.Dir(theirs))
@@ -936,11 +946,24 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if RunRestore(string(argument), io.Discard, io.Discard) != 0 || staged() != 0 {
 		t.Fatal("didn't return the rest")
 	}
-	// The mount table is read once for all of them.
+	// The mount table is read once for all of them, and one read that
+	// fails fails the step.
 	for index := range 20 {
 		os.Rename(filepath.Join(root, "file"+strconv.Itoa(index)), filepath.Join(root, stage, "old", "file"+strconv.Itoa(index)))
 	}
 	reads := 0
+	mountinfo.Table = func() ([]byte, error) { reads++; return nil, unix.EIO }
+	if code := RunRestore(string(check), io.Discard, io.Discard); code == 0 || reads != 1 {
+		t.Fatalf("check said %d on %d failed reads of the mount table", code, reads)
+	}
+	// A request whose paths the table can't be checked against is refused
+	// without reading it.
+	reads = 0
+	elsewhere, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreCheckReturn, Base: dir + "/elsewhere"})
+	if code := RunRestore(string(elsewhere), io.Discard, io.Discard); code == 0 || reads != 0 {
+		t.Fatalf("check said %d on %d reads of the mount table", code, reads)
+	}
+	reads = 0
 	mountinfo.Table = func() ([]byte, error) { reads++; return previousTable() }
 	if RunRestore(string(argument), io.Discard, io.Discard) != 0 || staged() != 0 || reads != 1 {
 		t.Fatalf("returned %d of 20 on %d reads of the mount table", 20-staged(), reads)
@@ -999,6 +1022,16 @@ func TestRenamesNeverClobber(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(root, asideName)); !os.IsNotExist(err) {
 		t.Fatal("made the set-aside folder for a refused clash")
+	}
+	// Nor is it returned once it gains a second name as the clash moves.
+	linkOnceAside(filepath.Join(root, stage, "old", "item"))
+	if RunRestore(string(item), io.Discard, io.Discard) == 0 {
+		t.Fatal("returned one item that gained a second name")
+	}
+	renameat2 = original
+	os.Remove(filepath.Join(root, "alias"))
+	if data, _ := os.ReadFile(filepath.Join(root, stage, "old", "item")); string(data) != "original" {
+		t.Fatal("moved the original:", string(data))
 	}
 	// The read that follows a retry makes the set-aside folder durable
 	// before saying it holds a copy, though nothing is left in the way.

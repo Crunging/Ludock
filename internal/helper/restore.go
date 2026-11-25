@@ -119,9 +119,10 @@ type restoreHelper struct {
 	// noReplace is what this run found the root's filesystem does with
 	// RENAME_NOREPLACE: unknown until the run's first flagged rename.
 	noReplace noReplaceMode
-	// mounts is the mount table, read once per step for its staged
-	// originals however many there are.
+	// mounts is the mount table, or the error reading it, read once per
+	// step for its staged originals however many there are.
 	mounts     []mountinfo.Mount
+	mountsErr  error
 	mountsRead bool
 }
 
@@ -522,13 +523,15 @@ func (h *restoreHelper) stagedEntry(old fd, name string) (*unix.Stat_t, error) {
 	if isRegular(info) && info.Nlink != 1 {
 		return nil, errUnsafe
 	}
+	return info, mountFree(h.mountTable, h.request.Base, h.request.Root+"/"+h.request.Stage+"/old/"+name)
+}
+
+func (h *restoreHelper) mountTable() ([]mountinfo.Mount, error) {
 	if !h.mountsRead {
-		if h.mounts, err = mountinfo.Read(); err != nil {
-			return nil, err
-		}
+		h.mounts, h.mountsErr = mountinfo.Read()
 		h.mountsRead = true
 	}
-	return info, mountFree(h.mounts, h.request.Base, h.request.Root+"/"+h.request.Stage+"/old/"+name)
+	return h.mounts, h.mountsErr
 }
 
 // checkEntry checks one staged original and, if something is in its way,
@@ -1464,6 +1467,10 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 					return err
 				}
 				h.movedAside++
+				// It may have gained a second name while that moved.
+				if info, err = h.stagedEntry(old, "item"); err != nil {
+					return err
+				}
 			}
 		}
 		return move(old, "item", parent, name, info)
