@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
@@ -159,8 +160,10 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 		name, kind, phase string
 		// settled: the stop's end was saved before Ludock restarted;
 		// requested: so was an earlier recovery's start, unconfirmed;
-		// wasStopped: the server was stopped when the stop was sent.
-		settled, requested, wasStopped bool
+		// wasStopped: the server was stopped when the stop was sent;
+		// loopRun: Docker started a newer run just before the stop, which
+		// the confirmed stop saved.
+		settled, requested, wasStopped, loopRun bool
 		// meanwhile is what happened while Ludock was down; run is the start
 		// time of the run the work stopped.
 		meanwhile func(f *fixture, run string)
@@ -184,6 +187,15 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 			running: true, done: true, guidance: runningAgain},
 		{name: "restart, recovery's start unconfirmed, then started elsewhere", kind: "restart", phase: "starting", settled: true, requested: true,
 			meanwhile: startedElsewhere, running: true, done: true, guidance: runningAgain},
+		{name: "restart, the stop ended a run Docker began just before it", kind: "restart", phase: "starting", settled: true, loopRun: true,
+			meanwhile: func(f *fixture, _ string) {}, sent: []string{"start mc"}, running: true, done: true, guidance: started},
+		{name: "restart, its start taken and the game exiting again", kind: "restart", phase: "starting", settled: true, requested: true,
+			meanwhile: func(f *fixture, _ string) {
+				f.engine.Update(f.game, func(c *fakedocker.Container) {
+					c.State.Status, c.State.Running, c.State.Restarting, c.State.StartedAt = "restarting", true, true, later()
+				})
+			}, running: true, done: true,
+			guidance: "Ludock restarted while this ran. The server was started again, and its game keeps exiting, so Docker keeps restarting it."},
 		{name: "restart, run elsewhere and stopped", kind: "restart", phase: "verifying_stop", settled: true,
 			meanwhile: func(f *fixture, _ string) { stopped(f, later()) },
 			guidance:  "The server ran again and had stopped when Ludock checked it, so Ludock left it stopped."},
@@ -224,6 +236,12 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 				recovery.StopRecoveryDeadlineAt = time.Now().UnixMilli()
 			}
 			recovery.StopSettled, recovery.StartRequested = c.settled, c.requested
+			if c.loopRun {
+				newer := later()
+				stopped(f, newer)
+				run, _ := time.Parse(time.RFC3339Nano, newer)
+				recovery.StoppedRun = run.UnixMilli()
+			}
 			if c.meanwhile != nil {
 				c.meanwhile(f, run)
 			}
@@ -288,5 +306,67 @@ func TestLifecycleRecoveryAfterItsStop(t *testing.T) {
 				t.Fatalf("monitoring %+v", state)
 			}
 		})
+	}
+}
+
+// A restart of a crash-looping server: Docker starts the loop's next run
+// between Ludock's last look and its stop, which ends that newer run, and
+// Ludock restarts just as it sends the start. Recovery knows the run the
+// confirmed stop ended and starts the server once, as the restart would.
+func TestRestartRecoveryAfterItStoppedANewerRun(t *testing.T) {
+	f := setup(t)
+	f.engine.CrashLoop(f.game, false)
+	var stopped docker.ContainerState
+	onStop := f.engine.OnStop
+	f.engine.OnStop = func(c *fakedocker.Container) {
+		if onStop != nil {
+			onStop(c)
+		}
+		if c.ID == f.game {
+			f.engine.Update(c.ID, func(c *fakedocker.Container) {
+				c.State.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
+				stopped = c.State
+			})
+		}
+	}
+	// What was saved as the start was sent.
+	var saved, phase string
+	onStart := f.engine.OnStart
+	f.engine.OnStart = func(c *fakedocker.Container) {
+		if onStart != nil {
+			onStart(c)
+		}
+		if c.ID == f.game && saved == "" {
+			if err := f.jobs.DB.QueryRow("SELECT recovery_json,phase FROM operations WHERE kind='restart' AND status='running'").Scan(&saved, &phase); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	job := f.run(t, ops.KindRestart, nil)
+	if job.Status != ops.Succeeded || saved == "" {
+		t.Fatalf("%+v", job)
+	}
+	f.runner.Stop()
+	f.engine.OnStart = onStart
+	f.engine.Update(f.game, func(c *fakedocker.Container) { c.State = stopped })
+	if _, err := f.jobs.DB.Exec("UPDATE operations SET status='running',phase=?,recovery_json=?,result_json=NULL WHERE id=?", phase, saved, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := len(f.engine.Requests)
+	runner := &ops.Runner{DB: f.jobs.DB, Locks: f.jobs.Locks}
+	f.jobs.Register(runner)
+	if err := runner.Start(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(runner.Stop)
+	recovered, _ := runner.Get(ctx, job.ID)
+	starts := 0
+	for _, request := range f.engine.Requests[before:] {
+		if strings.HasSuffix(request, "/containers/"+f.game+"/start") {
+			starts++
+		}
+	}
+	if recovered.Status != ops.Succeeded || !f.running() || starts != 1 {
+		t.Fatalf("%s %q, running %v, %d starts", recovered.Status, recovered.Result.Guidance, f.running(), starts)
 	}
 }

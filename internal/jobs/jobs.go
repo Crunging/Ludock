@@ -423,12 +423,17 @@ var errRestartTakenOver = errors.New("the server changed before its restart's st
 // left as it is. A stop whose answer was lost can't be told apart from
 // another manager's stop of the same run. It says what it did, or "".
 func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission authz.Capability) (string, error) {
-	const started, runningAgain = "Ludock restarted while this ran, and started the server again.",
+	const started, runningAgainNote = "Ludock restarted while this ran, and started the server again.",
 		"Ludock restarted while this ran. The server was running again, so Ludock left it as it was."
 	recovery := job.Job.Recovery
-	stopped := recovery.StopInitialStartedAt
-	if recovery.StopRecoveryTimedOut || stopped == nil {
+	if recovery.StopRecoveryTimedOut || recovery.StopInitialStartedAt == nil {
 		return "", nil
+	}
+	// The run the stop ended, which a confirmed stop saved; without it, the
+	// one seen before the stop.
+	stopped := *recovery.StopInitialStartedAt
+	if recovery.StoppedRun != 0 {
+		stopped = recovery.StoppedRun
 	}
 	// Only a start this recovery saw take is saved with both; a newer run
 	// after a start that was only requested may be anyone's.
@@ -436,7 +441,7 @@ func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission a
 		if recovery.StartRequested {
 			return started, nil
 		}
-		return runningAgain, nil
+		return runningAgainNote, nil
 	}
 	server, err := j.resolve(ctx, job, permission, true)
 	if err != nil {
@@ -446,13 +451,28 @@ func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission a
 		return "", nil
 	}
 	restored := func(r *ops.Recovery) { r.StateRestored = true }
-	if server.Container.State == "running" && server.Container.StateSince != *stopped {
-		return runningAgain, record(job, "state_restored", func(r *ops.Recovery) { r.StateRestored, r.StartRequested = true, false })
+	runningAgain := func(said string) (string, error) {
+		return said, record(job, "state_restored", func(r *ops.Recovery) { r.StateRestored, r.StartRequested = true, false })
+	}
+	if server.Container.State == "running" && server.Container.StateSince != stopped {
+		return runningAgain(runningAgainNote)
+	}
+	// A newer run whose game exited again is in Docker's restart backoff,
+	// which no start ends.
+	if server.Container.State == "restarting" {
+		info, err := j.Docker.Inspect(ctx, server.Container.ID)
+		if err != nil {
+			return "", err
+		}
+		if run, err := time.Parse(time.RFC3339Nano, info.State.StartedAt); err == nil && run.UnixMilli() != stopped {
+			return runningAgain("Ludock restarted while this ran. The server was started again, and its game keeps exiting, so Docker keeps restarting it.")
+		}
+		return "", nil
 	}
 	if server.Container.Exit == nil {
 		return "", nil
 	}
-	if server.Container.Exit.Started != *stopped {
+	if server.Container.Exit.Started != stopped {
 		return "The server ran again and had stopped when Ludock checked it, so Ludock left it stopped.", nil
 	}
 	if err := j.suppressFor(job)(ctx, server.Logical.ID, func(tx *sql.Tx) error { return j.allowedIn(ctx, tx, job, permission) }); err != nil {
@@ -470,7 +490,7 @@ func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission a
 			return err
 		}
 		run, err := time.Parse(time.RFC3339Nano, info.State.StartedAt)
-		if servers.IsRunning(info) || err != nil || run.UnixMilli() != *stopped {
+		if servers.IsRunning(info) || err != nil || run.UnixMilli() != stopped {
 			return errRestartTakenOver
 		}
 		return nil
@@ -706,6 +726,9 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			if err := record(job, "verifying_stop", func(r *ops.Recovery) {
 				r.StopSettled = true
 				r.ForceStopped = r.StopStarted && forcedExit(r, server.Container.Exit)
+				if server.Container.Exit != nil {
+					r.StoppedRun = server.Container.Exit.Started
+				}
 			}); err != nil {
 				return nil, err
 			}
@@ -887,6 +910,7 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (*ops.Res
 			if err := record(job, "reconciling", func(r *ops.Recovery) {
 				r.StopSettled = true
 				r.ForceStopped = r.ForceStopped || forcedExit(r, server.Container.Exit)
+				r.StoppedRun = server.Container.Exit.Started
 			}); err != nil {
 				return nil, err
 			}
