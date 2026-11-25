@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -118,8 +119,8 @@ func errTakeOver(message string) error { return apperr.New("TAKE_OVER_REFUSED", 
 
 // sameTime reports whether two enabled schedules run at the same instant,
 // whatever time zones they name: a one-time schedule's run against the
-// other's, or two recurring ones on any of the next runs of the first, which
-// reach every weekday they share.
+// other's, or two recurring ones on any of the next runs of the first, now
+// and half a year on, which reach every weekday they share in both seasons.
 func sameTime(a, b schedules.Input, now int64) bool {
 	if !a.Enabled || !b.Enabled {
 		return false
@@ -134,15 +135,18 @@ func sameTime(a, b schedules.Input, now int64) bool {
 			return ok && runsAt(pair[1], at)
 		}
 	}
-	for at, n := now, 0; n < 8; n++ {
-		next, ok := schedtime.NextRun(a.Clock(), at, "")
-		if !ok {
-			return false
+	// Zones that agree in one half of the year can differ in the other.
+	for _, from := range []int64{now, now + 26*7*24*time.Hour.Milliseconds()} {
+		for at, n := from, 0; n < 8; n++ {
+			next, ok := schedtime.NextRun(a.Clock(), at, "")
+			if !ok {
+				break
+			}
+			if runsAt(b, next) {
+				return true
+			}
+			at = next + 60_000
 		}
-		if runsAt(b, next) {
-			return true
-		}
-		at = next + 60_000
 	}
 	return false
 }
