@@ -126,7 +126,16 @@ func recoveryConfirm(count int) templ.Attributes {
 templ Checklist(v ChecklistView) {
 	if len(v.Items) > 0 || v.Notice != "" || v.Error != "" {
 		<section class="checklist" aria-labelledby="checklist-title">
-			<h2 id="checklist-title" class="checklist__title">Finish setting up</h2>
+			<div class="checklist__head">
+				<h2 id="checklist-title" class="checklist__title">Finish setting up</h2>
+				// On a phone the list folds to this line, so the servers come first.
+				if len(v.Items) > 0 {
+					<button type="button" class="secondary-btn checklist__toggle" aria-expanded="false" aria-controls="checklist-items" data-expands="checklist">
+						{ intText(len(v.Items)) } left
+						<svg class="chevron" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2.5 4.5 6 8l3.5-3.5"></path></svg>
+					</button>
+				}
+			</div>
 			if v.Notice != "" {
 				@Alert("success", v.Notice)
 			}
@@ -134,7 +143,7 @@ templ Checklist(v ChecklistView) {
 				@Alert("error", v.Error)
 			}
 			if len(v.Items) > 0 {
-				<ul class="checklist__list">
+				<ul class="checklist__list" id="checklist-items">
 					for _, item := range v.Items {
 						<li class={ "checklist__item", templ.KV("checklist__item--quiet", item.Key == ChecklistTwoFactor) }>
 							<div class="checklist__text">

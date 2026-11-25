@@ -136,6 +136,8 @@ test("a new install lists what's left to set up, and does it in a click", async 
       style.textContent = "* { overflow-anchor: none !important; }";
       document.head.append(style);
     }));
+    // On a phone the list is one line until opened.
+    await checklist.getByRole("button", { name: "2 left" }).click();
     await item(page, "Add the servers Ludock didn’t find").getByRole("link", { name: "Review containers" }).click();
     const add = page.locator("#add-servers");
     await expect(add.getByRole("button", { name: "Add satisfactory" })).toBeVisible();
@@ -143,6 +145,7 @@ test("a new install lists what's left to set up, and does it in a click", async 
     await add.getByRole("button", { name: "Add satisfactory" }).click();
     await expect(add.locator(".alert--success")).toContainText("Added satisfactory.");
     await expect(checklist.locator("li strong")).toHaveText(["Protect your sign-in"]);
+    await checklist.getByRole("button", { name: "1 left" }).click();
     await item(page, "Protect your sign-in").getByRole("button", { name: "Dismiss" }).click();
     await expect(page.locator("#checklist")).toBeEmpty();
     await page.reload();

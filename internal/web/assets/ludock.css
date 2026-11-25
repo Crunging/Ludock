@@ -527,8 +527,16 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 .checklist__item--quiet strong { font-weight: 400; }
 .checklist__actions { display: flex; align-items: center; gap: 14px; flex: none; }
 .checklist__dismiss { font-size: 14px; }
+.checklist__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.checklist__head .checklist__title { margin-bottom: 0; }
+.checklist .checklist__toggle { display: none; min-height: 32px; padding: 4px 12px; font-size: 14px; }
+.checklist__toggle[aria-expanded=true] .chevron { transform: rotate(180deg); }
 @media (max-width: 640px) {
   .checklist__item { flex-direction: column; align-items: flex-start; }
+  .checklist .checklist__toggle { display: inline-flex; }
+  #checklist:not([data-expanded]) .checklist__list { display: none; }
+  #checklist:not([data-expanded]) .checklist__head { margin-bottom: 0; }
+  #checklist:not([data-expanded]) .checklist .alert { margin: 10px 0 0; }
 }
 
 .list-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
