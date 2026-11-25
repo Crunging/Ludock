@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
 	"github.com/Crunging/Ludock/internal/docker"
@@ -415,8 +416,8 @@ func join(parts ...[]string) []string { return slices.Concat(parts...) }
 // the helper to wait with Ludock unable to say it opened its data.
 func TestSelfUpdateOrder(t *testing.T) {
 	ctx := context.Background()
-	var probe error
 	var logged bytes.Buffer
+	var writes []error
 	cases := []struct {
 		name    string
 		arrange func(g *rig)
@@ -467,6 +468,47 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 		}, trace: join(begin, swap, []string{"start new"}, putBack, backDone), image: oldImage, state: selfupdate.StatePutBack,
 			reason: "the new version didn’t report healthy within 3 minutes"},
+		{name: "the old container started from outside during the health wait is stopped again before the new one is marked healthy", arrange: func(g *rig) {
+			g.onStart = func(c *fakedocker.Container) {
+				if isNew(c) {
+					health(g, c, "starting")
+					go func() {
+						time.Sleep(20 * time.Millisecond)
+						g.engine.Update(g.old, func(c *fakedocker.Container) { c.State.Running, c.State.Status = true, "running" })
+						health(g, c, "healthy")
+					}()
+				}
+			}
+			g.at["create healthy"] = func(*http.Request) {
+				if g.engine.Container(g.old).State.Running {
+					t.Error("the old container ran when the new one was marked healthy")
+				}
+			}
+		}, trace: join(begin, swap, []string{"start new"}, swap, forward, forwardDone), image: newImage, state: selfupdate.StateSucceeded},
+		{name: "a helper removed by hand before the new version passed is started again, never taken for success", arrange: func(g *rig) {
+			g.onStart = func(c *fakedocker.Container) {
+				if !isNew(c) {
+					return
+				}
+				health(g, c, "starting")
+				go func() {
+					g.mu.Lock()
+					run := g.helpers[0]
+					g.mu.Unlock()
+					run.cancel()
+					<-run.done
+					if err := g.client.Remove(ctx, g.helper().ID, true, true); err != nil {
+						t.Error(err)
+					}
+					time.Sleep(50 * time.Millisecond)
+					if g.engine.Container(c.ID) != nil && g.byName("ludock") != nil && g.byName("ludock").ID != g.old {
+						t.Error("the new version took the name before it passed")
+					}
+					health(g, c, "healthy")
+				}()
+			}
+		}, trace: join(begin, swap, []string{"start new", "remove helper", "create helper", "start helper"}, forward, forwardDone),
+			image: newImage, state: selfupdate.StateSucceeded},
 		{name: "the helper dies after stopping the old container", arrange: func(g *rig) {
 			once := sync.Once{}
 			g.onStop = func(c *fakedocker.Container) {
@@ -492,13 +534,23 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 		}, trace: join(begin, swap, []string{"start new"}, putBack, backDone), image: oldImage, state: selfupdate.StatePutBack,
 			reason: "the new version reported itself unhealthy"},
-		{name: "a write after the data save is refused, so putting it back loses nothing", arrange: func(g *rig) {
+		{name: "a write after the data save is refused, in this process or another, so putting it back loses nothing", arrange: func(g *rig) {
 			g.fail["start new"] = 500
 			g.at["create helper"] = func(*http.Request) {
 				g.mu.Lock()
 				old := g.processes[g.old]
 				g.mu.Unlock()
-				probe = old.d.SetSetting(ctx, nil, "probe", "after")
+				writes = append(writes, old.d.SetSetting(ctx, nil, "probe", "after"))
+				// Another process, such as a password reset from the console.
+				other, err := db.Open(filepath.Join(g.dataDir, "ludock.db"))
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer other.Close()
+				writes = append(writes, other.SetSetting(ctx, nil, "probe", "other"))
+				_, err = auth.RecoverPassword(ctx, other, "admin", "a new password for the admin")
+				writes = append(writes, err)
 			}
 		}, before: func(g *rig, p *process) {
 			if err := p.d.SetSetting(ctx, nil, "probe", "before"); err != nil {
@@ -508,8 +560,14 @@ func TestSelfUpdateOrder(t *testing.T) {
 			reason: "Docker couldn’t start the new container, for example because its port was still in use",
 			check: func(t *testing.T, g *rig, after *process) {
 				var value string
-				if _, err := after.d.Setting(ctx, "probe", &value); err != nil || value != "before" || !errors.Is(probe, db.ErrUpdating) {
-					t.Errorf("probe %q %v, write %v", value, err, probe)
+				_, err := after.d.Setting(ctx, "probe", &value)
+				if err != nil || value != "before" || len(writes) != 3 {
+					t.Errorf("probe %q %v, writes %v", value, err, writes)
+				}
+				for _, write := range writes {
+					if !errors.Is(write, db.ErrUpdating) {
+						t.Errorf("a write wasn't refused: %v", write)
+					}
 				}
 			}},
 		{name: "a failed restore is tried again", arrange: func(g *rig) {
@@ -524,6 +582,22 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 		}, trace: join(begin, swap, []string{"start new", "create undo", "remove new", "settled", "policy old", "stop old", "aside", "restore"},
 			[]string{"settled", "policy old", "stop old", "aside", "restore", "mark restored", "policy old", "start old", "remove helper"}, backDone),
+			image: oldImage, state: selfupdate.StatePutBack, reason: "Docker couldn’t start the new container, for example because its port was still in use"},
+		{name: "a settled entry the data step didn't write isn't taken for a settled restore", arrange: func(g *rig) {
+			g.fail["start new"] = 500
+			calls := 0
+			g.step = func(cmd []string) (int, bool) {
+				if cmd[0] == "self-update-data" && cmd[1] == "settled" {
+					entry := filepath.Join(g.dataDir, ".ludock-update-"+cmd[2], "settled")
+					if calls++; calls == 1 {
+						os.MkdirAll(entry, 0o700)
+					} else {
+						os.Remove(entry)
+					}
+				}
+				return 0, false
+			}
+		}, trace: join(begin, swap, []string{"start new"}, putBack[:6], putBack[2:], backDone),
 			image: oldImage, state: selfupdate.StatePutBack, reason: "Docker couldn’t start the new container, for example because its port was still in use"},
 		{name: "the Ludock put back dies before it opens its data, and is started again", arrange: func(g *rig) {
 			g.fail["start new"] = 500
@@ -565,10 +639,10 @@ func TestSelfUpdateOrder(t *testing.T) {
 			g.onStart = func(c *fakedocker.Container) {
 				if isNew(c) {
 					health(g, c, "unhealthy")
-					go g.engine.RemoveContainer(g.old)
 				}
 			}
-		}, trace: join(begin, swap, []string{"start new", "create undo"}), stays: true},
+			g.at["start new"] = func(*http.Request) { g.engine.RemoveContainer(g.old) }
+		}, trace: join(begin, swap, []string{"start new"}), stays: true},
 		{name: "the tag moves after the pull", arrange: func(g *rig) {
 			g.at["create helper"] = func(*http.Request) {
 				g.engine.SetImageConfig(movedImage, map[string]any{})
@@ -600,6 +674,25 @@ func TestSelfUpdateOrder(t *testing.T) {
 				logging.SetOutput(os.Stdout, os.Stderr)
 				if !strings.Contains(logged.String(), `"why":"it never started","status":"created"`) {
 					t.Errorf("logged %s", logged.String())
+				}
+			}},
+		{name: "a malformed stored record is removed, touching nothing outside the data folder", arrange: func(g *rig) {
+			victim := filepath.Join(filepath.Dir(g.dataDir), "victim")
+			if err := os.MkdirAll(victim, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			d, err := db.Open(filepath.Join(g.dataDir, "ludock.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			if err := d.SetSetting(ctx, nil, db.UpdateSetting, selfupdate.Record{ID: "a/../../victim", State: selfupdate.StateFailed}); err != nil {
+				t.Fatal(err)
+			}
+		}, trace: join(begin, swap, []string{"start new"}, forward, forwardDone), image: newImage, state: selfupdate.StateSucceeded,
+			check: func(t *testing.T, g *rig, _ *process) {
+				if _, err := os.Stat(filepath.Join(filepath.Dir(g.dataDir), "victim")); err != nil {
+					t.Error(err)
 				}
 			}},
 		{name: "a tag moved back to an older version is refused", arrange: func(g *rig) {

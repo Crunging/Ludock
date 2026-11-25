@@ -38,21 +38,31 @@ func DataMain(args []string, dataDir string, stderr io.Writer) int {
 		return 2
 	}
 	aside := filepath.Join(dataDir, asideName(args[1]))
+	// Only a settled entry this step wrote counts; anything else under its
+	// name is refused rather than taken for settled.
+	settled := func() (bool, error) {
+		switch readSettled(dataDir, args[1]) {
+		case "restored", "kept":
+			return true, nil
+		}
+		if _, err := os.Lstat(filepath.Join(aside, "settled")); !errors.Is(err, os.ErrNotExist) {
+			return false, errors.New("the settled entry is unreadable")
+		}
+		return false, nil
+	}
 	var err error
 	switch {
-	case args[0] == "aside" && len(args) == 2:
-		if _, statErr := os.Lstat(filepath.Join(aside, "settled")); statErr == nil {
+	case (args[0] == "aside" || args[0] == "settled") && len(args) == 2:
+		done, settledErr := settled()
+		if done {
 			return dataSettled
 		}
-		err = moveAside(dataDir, aside)
-	case args[0] == "settled" && len(args) == 2:
-		if _, statErr := os.Lstat(filepath.Join(aside, "settled")); statErr == nil {
-			return dataSettled
+		if err = settledErr; err == nil && args[0] == "aside" {
+			err = moveAside(dataDir, aside)
 		}
-		return 0
 	case args[0] == "back" && len(args) == 2:
 		err = moveBack(dataDir, aside)
-	case args[0] == "mark" && len(args) == 3:
+	case args[0] == "mark" && len(args) == 3 && (args[2] == "restored" || args[2] == "kept"):
 		err = writeFile(filepath.Join(aside, "settled"), []byte(args[2]+"\n"))
 	default:
 		fmt.Fprintln(stderr, "Usage: ludock self-update-data aside|back|mark <operation> [outcome]")

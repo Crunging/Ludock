@@ -6,6 +6,7 @@ import (
 	"errors"
 	"maps"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -43,9 +44,11 @@ type Helper struct {
 var (
 	errBothGone     = errors.New("both Ludock containers are gone")
 	errOriginalGone = errors.New("the previous container was removed outside Ludock while it was being put back")
-	errUnconfirmed  = errors.New("the previous container was removed outside Ludock before the new one was confirmed, and the new one doesn't work")
-	errNameTaken    = errors.New("another container has taken Ludock's name")
-	errNotReady     = errors.New("waiting for Ludock to report that it opened its data")
+	// Only one Ludock may run on the data: the next pass stops it again.
+	errOriginalRunning = errors.New("the previous container was started again outside Ludock")
+	errUnconfirmed     = errors.New("the previous container was removed outside Ludock before the new one was confirmed, and the new one doesn't work")
+	errNameTaken       = errors.New("another container has taken Ludock's name")
+	errNotReady        = errors.New("waiting for Ludock to report that it opened its data")
 )
 
 // Run settles the update, then removes the helper's own container. It
@@ -136,7 +139,7 @@ func (h *Helper) pass(ctx context.Context) error {
 					return err
 				}
 			}
-			reason, err := h.awaitHealthy(ctx, replacement.ID)
+			reason, err := h.awaitHealthy(ctx, replacement.ID, "")
 			if err != nil {
 				return err
 			}
@@ -185,12 +188,15 @@ func (h *Helper) pass(ctx context.Context) error {
 				return err
 			}
 		}
-		reason, err := h.awaitHealthy(ctx, replacement.ID)
+		reason, err := h.awaitHealthy(ctx, replacement.ID, old.ID)
 		if err != nil {
 			return err
 		}
 		if reason != "" {
 			return h.decide(ctx, reason, true)
+		}
+		if err := h.stillStopped(ctx, old.ID); err != nil {
+			return err
 		}
 		// From here the swap only goes forward.
 		if err := h.markHealthy(ctx, replacement.ID); err != nil {
@@ -239,7 +245,9 @@ func (h *Helper) marker(ctx context.Context) (marker, error) {
 		}
 		if spec != nil {
 			found := labels(spec)
-			if found[nameLabel] == "" {
+			var policy struct{ Name string }
+			if found[nameLabel] == "" || json.Unmarshal([]byte(found[policyLabel]), &policy) != nil ||
+				!slices.Contains([]string{"", "no", "always", "unless-stopped", "on-failure"}, policy.Name) {
 				return marker{}, errors.New("the update's marker is unreadable")
 			}
 			return marker{name: found[nameLabel], policy: json.RawMessage(found[policyLabel])}, nil
@@ -282,8 +290,18 @@ func (h *Helper) undo(ctx context.Context) (*undo, error) {
 	if err != nil || spec == nil {
 		return nil, err
 	}
-	found := labels(spec)
-	return &undo{reason: found[ReasonLabel], restore: found[restoreLabel] == "true"}, nil
+	restore, valid := restoreFlag(spec)
+	if !valid {
+		return nil, errors.New("the update's undo marker is unreadable")
+	}
+	return &undo{reason: labels(spec)[ReasonLabel], restore: restore}, nil
+}
+
+// restoreFlag is whether an undo marker restores the data, and whether it
+// says so at all.
+func restoreFlag(spec *docker.ContainerSpec) (restore, valid bool) {
+	restore, err := strconv.ParseBool(labels(spec)[restoreLabel])
+	return restore, err == nil && (labels(spec)[restoreLabel] == "true" || labels(spec)[restoreLabel] == "false")
 }
 
 // healthy is the replacement recorded as having passed, or "".
@@ -410,16 +428,37 @@ func (h *Helper) stopOriginal(ctx context.Context, id string) error {
 	return nil
 }
 
+// stillStopped confirms the original, stopped for the swap, wasn't started
+// again from outside, as Docker allows.
+func (h *Helper) stillStopped(ctx context.Context, original string) error {
+	spec, err := h.inspect(ctx, original)
+	switch {
+	case err != nil:
+		return err
+	case spec == nil:
+		return errors.New("the previous container disappeared")
+	case spec.State.Running || spec.State.Restarting:
+		return errOriginalRunning
+	}
+	return nil
+}
+
 // awaitHealthy waits for the replacement's own health check and for it to
 // report it opened its data, timed from its start so a helper run again
-// keeps the deadline. It returns why it failed, or "".
-func (h *Helper) awaitHealthy(ctx context.Context, id string) (string, error) {
+// keeps the deadline, while original, when set, stays stopped. It returns
+// why it failed, or "".
+func (h *Helper) awaitHealthy(ctx context.Context, id, original string) (string, error) {
 	wait := h.HealthWait
 	if wait == 0 {
 		wait = HealthWait
 	}
 	run := ""
 	for {
+		if original != "" {
+			if err := h.stillStopped(ctx, original); err != nil {
+				return "", err
+			}
+		}
 		spec, err := h.inspect(ctx, id)
 		if err != nil {
 			return "", err

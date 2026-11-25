@@ -2,6 +2,7 @@ package selfupdate
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -39,7 +40,7 @@ import (
 // recordSetting holds the latest update. It is saved before anything runs
 // and read by whichever Ludock comes up, so a Ludock reads every form an
 // older one wrote.
-const recordSetting = "ludock.update"
+const recordSetting = db.UpdateSetting
 
 // States of a Record.
 const (
@@ -178,18 +179,29 @@ func (s *Service) poll() time.Duration {
 	return s.Poll
 }
 
+// errUnusable is a stored record that names no update this version knows,
+// such as one edited or imported by hand: nothing is done with its fields.
+var errUnusable = errors.New("the stored update record is unusable")
+
 func (s *Service) last(ctx context.Context) (*Record, error) {
 	var record Record
 	found, err := s.DB.Setting(ctx, recordSetting, &record)
 	if err != nil || !found {
 		return nil, err
 	}
+	if !identity.ValidID(record.ID) || !slices.Contains([]string{StatePreparing, StateHandedOver, StateSucceeded, StatePutBack,
+		StateFailed, StateCurrent}, record.State) {
+		return nil, errUnusable
+	}
 	return &record, nil
 }
 
 // Last is the latest update, or nil.
 func (s *Service) Last(ctx context.Context) *Record {
-	record, _ := s.last(ctx)
+	record, err := s.last(ctx)
+	if err != nil {
+		return nil
+	}
 	return record
 }
 
@@ -631,6 +643,13 @@ func (s *Service) save(ctx context.Context, operation string) error {
 // stopped through Docker meanwhile; it removes itself.
 func (s *Service) startHelper(ctx context.Context, record Record) (step string, err error) {
 	spec, err := s.Docker.InspectSpec(ctx, record.Container)
+	if docker.IsNotFound(err) {
+		// Resumed once the original is gone: the replacement has its
+		// definition.
+		if own, ownErr := s.current(ctx); ownErr == nil {
+			spec, err = s.Docker.InspectSpec(ctx, own.ID)
+		}
+	}
 	if err != nil {
 		return "inspect Ludock", err
 	}
@@ -821,8 +840,15 @@ func (s *Service) describe(ctx context.Context, spec *docker.ContainerSpec) {
 	log.Warn("Ludock's update helper didn't get going, so nothing was changed", fields...)
 }
 
-// judge records an update whose helper is gone, by whether this Ludock runs
-// the pulled image, and removes what the helper left.
+// errResumed: the update's helper was gone with nothing showing how the
+// update ended, so it was started again to finish it.
+var errResumed = errors.New("the update's helper was started again")
+
+// judge records an update whose helper is gone, and removes what the helper
+// left, only once Docker shows how it ended: the new container passed and
+// took the name and policy, or the original runs again as before with its
+// data settled. Anything else, such as a helper removed by hand mid-way,
+// starts the helper again, which carries on from its markers.
 func (s *Service) judge(ctx context.Context, record Record) error {
 	own, err := s.current(ctx)
 	if err != nil && err != errNotHere {
@@ -835,34 +861,85 @@ func (s *Service) judge(ctx context.Context, record Record) error {
 	if !known {
 		return errors.New("docker couldn't say whether the helper began")
 	}
-	state, reason := StateSucceeded, ""
-	switch {
-	case own.Image != record.Target && marked == nil:
+	if marked == nil {
+		if own.Image == record.Target {
+			// Only a marker removed by hand gets here: nothing says what
+			// the original's name and policy were.
+			log.Warn("Ludock's update can't tell how it ended because a container it left was removed; Ludock stays read-only. Run docker compose up -d in the folder with its compose.yaml")
+			return errors.New("the update's marker is gone")
+		}
 		// The helper records its marker before it changes anything.
 		log.Warn("Ludock's update helper was gone before it recorded that it began, so nothing was changed")
-		state, reason = StateFailed, errHelper.Message
-	case own.Image != record.Target:
-		state, reason = StatePutBack, "the update stopped before the new version started"
-		undone, known := s.marker(ctx, undoName(record.ID), undoKind, record.ID)
-		if !known {
-			return errors.New("docker couldn't say why the update was undone")
+		return s.conclude(ctx, record, StateFailed, errHelper.Message)
+	}
+	found := labels(marked)
+	named := false
+	if own.ID != "" {
+		spec, err := s.Docker.InspectSpec(ctx, own.ID)
+		if err != nil {
+			return err
 		}
-		if undone != nil {
+		named = own.Name == "/"+found[nameLabel] && samePolicy(spec.HostConfig["RestartPolicy"], json.RawMessage(found[policyLabel]))
+	}
+	healthy, known := s.marker(ctx, healthyName(record.ID), healthyKind, record.ID)
+	if !known {
+		return errors.New("docker couldn't say whether the new version passed")
+	}
+	if own.Image == record.Target && named && healthy != nil && labels(healthy)[containerLabel] == own.ID {
+		if _, err := s.Docker.InspectSpec(ctx, record.Container); docker.IsNotFound(err) {
+			record.To = s.Version
+			// Its name, which Ludock may find itself by, is the new container's.
+			s.Own.Forget()
+			return s.conclude(ctx, record, StateSucceeded, "")
+		} else if err != nil {
+			return err
+		}
+	}
+	undone, known := s.marker(ctx, undoName(record.ID), undoKind, record.ID)
+	if !known {
+		return errors.New("docker couldn't say why the update was undone")
+	}
+	if own.ID == record.Container && named && undone != nil {
+		settled := readSettled(s.DataDir, record.ID)
+		restore, valid := restoreFlag(undone)
+		_, err := s.Docker.InspectSpec(ctx, servers.ReplacementName(found[nameLabel], record.ID))
+		if err != nil && !docker.IsNotFound(err) {
+			return err
+		}
+		if valid && (!restore || settled == "restored" || settled == "kept") && docker.IsNotFound(err) {
 			record.Code = labels(undone)[ReasonLabel]
-			if reason = reasons[record.Code]; reason == "" {
+			reason := reasons[record.Code]
+			if reason == "" {
 				reason = "the new version didn’t come up"
 			}
+			if restore && settled == "kept" {
+				reason += ", and Ludock couldn’t put its data back as it was saved, so it kept the newer data; the save " + SaveName(record.ID) +
+					" is beside it"
+			}
+			return s.conclude(ctx, record, StatePutBack, reason)
 		}
-		if readSettled(s.DataDir, record.ID) == "kept" {
-			reason += ", and Ludock couldn’t put its data back as it was saved, so it kept the newer data; the save " + SaveName(record.ID) +
-				" is beside it"
-		}
-	default:
-		record.To = s.Version
-		// Its name, which Ludock may find itself by, is the new container's.
-		s.Own.Forget()
 	}
-	return s.conclude(ctx, record, state, reason)
+	log.Warn("Ludock's update helper was removed before the update finished; starting it again to finish it")
+	if step, err := s.startHelper(ctx, record); err != nil {
+		log.Warn("Ludock's update helper couldn't be started again; retrying",
+			append(logging.Cause(err, docker.StatusCode(err)), logging.F("step", step), logging.F("docker", docker.Said(err)))...)
+		return err
+	}
+	return errResumed
+}
+
+// samePolicy reports whether two restart policies, as Docker reports them,
+// are the same.
+func samePolicy(a, b json.RawMessage) bool {
+	type restart struct {
+		Name              string
+		MaximumRetryCount int
+	}
+	var left, right restart
+	if json.Unmarshal(a, &left) != nil || json.Unmarshal(b, &right) != nil {
+		return false
+	}
+	return cmp.Or(left.Name, "no") == cmp.Or(right.Name, "no") && left.MaximumRetryCount == right.MaximumRetryCount
 }
 
 // conclude records the outcome, then removes the update's markers and
@@ -912,11 +989,20 @@ func readSettled(dataDir, operation string) string {
 
 // removeLeftovers removes the newer data a put-back moved aside and every
 // partial save, and, once this update wrote its save, every other.
+// Every removal stays inside the data folder, following no link.
 func (s *Service) removeLeftovers(operation string) {
-	if err := os.RemoveAll(filepath.Join(s.DataDir, asideName(operation))); err != nil {
+	if !identity.ValidID(operation) {
+		return
+	}
+	root, err := os.OpenRoot(s.DataDir)
+	if err != nil {
+		return
+	}
+	defer root.Close()
+	if err := root.RemoveAll(asideName(operation)); err != nil {
 		log.Warn("Could not remove the newer data an update moved aside")
 	}
-	info, err := os.Lstat(filepath.Join(s.DataDir, SaveName(operation)))
+	info, err := root.Lstat(SaveName(operation))
 	complete := err == nil && info.Mode().IsRegular()
 	entries, err := os.ReadDir(s.DataDir)
 	if err != nil {
@@ -933,7 +1019,7 @@ func (s *Service) removeLeftovers(operation string) {
 			continue
 		}
 		if partial || complete {
-			os.Remove(filepath.Join(s.DataDir, name))
+			root.Remove(name)
 		}
 	}
 }
@@ -1127,6 +1213,11 @@ func (s *Service) Recover(ctx, base context.Context) error {
 	s.base = base
 	s.mu.Unlock()
 	record, err := s.last(ctx)
+	if errors.Is(err, errUnusable) {
+		// Its state may still close writes in the database, so it goes.
+		log.Warn("Ludock's stored update record is unusable, so it was removed; nothing of an update was cleaned up")
+		err = s.DB.DeleteSetting(db.Maintenance(ctx), recordSetting)
+	}
 	if err != nil {
 		s.admit.Unlock()
 		return err
@@ -1178,9 +1269,10 @@ func (s *Service) Recover(ctx, base context.Context) error {
 	}
 	spec, err := s.Docker.InspectSpec(ctx, HelperName(record.ID))
 	if docker.IsNotFound(err) || (err == nil && !ours(spec, helperKind, record.ID)) {
-		return retry(s.judge(ctx, *record))
-	}
-	if err != nil {
+		if err = s.judge(ctx, *record); !errors.Is(err, errResumed) {
+			return retry(err)
+		}
+	} else if err != nil {
 		return retry(err)
 	}
 	go s.watch(base, *record)
