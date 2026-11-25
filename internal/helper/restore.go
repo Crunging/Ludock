@@ -163,12 +163,7 @@ func (h *restoreHelper) moveContents(source, destination fd, omitted ...string) 
 		} else if !isNotExist(err) {
 			return err
 		}
-		// A game started meanwhile may make the name after the check above.
-		err = renameat2(int(source), name, int(destination), name, unix.RENAME_NOREPLACE)
-		if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) {
-			err = renameat(int(source), name, int(destination), name)
-		}
-		if err != nil {
+		if err := renameChecked(source, name, destination, name); err != nil {
 			return err
 		}
 		moved, err := lstatAt(destination, name)
@@ -183,6 +178,17 @@ func (h *restoreHelper) moveContents(source, destination fd, omitted ...string) 
 		}
 	}
 	return nil
+}
+
+// renameChecked renames to a name the caller found free. A game started
+// meanwhile may make it after that check, which RENAME_NOREPLACE refuses; a
+// filesystem without it gets the plain rename whole restores always used.
+func renameChecked(from fd, name string, to fd, target string) error {
+	err := renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE)
+	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) {
+		err = renameat(int(from), name, int(to), target)
+	}
+	return err
 }
 
 func (h *restoreHelper) removeEntry(parent fd, name string, depth int) error {
@@ -292,8 +298,10 @@ func (h *restoreHelper) asideFor(root, stage, parent, aside fd, name string, inf
 	if h.request.Aside == "" {
 		return -1, errUnsafe
 	}
+	// Held to moveOld's standard for moving live data: no other mount or
+	// special file inside, and no other restore's stage.
 	if isDir(info) {
-		if err := h.safeToMove(parent, name, 0, false); err != nil {
+		if err := h.safeToMove(parent, name, 0, true); err != nil {
 			return -1, err
 		}
 	}
@@ -329,7 +337,17 @@ func setAsideEntry(parent fd, name string, aside fd, info *unix.Stat_t) error {
 		}
 		target = base + suffix
 	}
-	return move(parent, name, aside, target, info)
+	if err := renameChecked(parent, name, aside, target); err != nil {
+		return err
+	}
+	moved, err := lstatAt(aside, target)
+	if err != nil {
+		return err
+	}
+	if !sameInode(info, moved) {
+		return errUnsafe
+	}
+	return syncAll(parent, aside)
 }
 
 func (h *restoreHelper) run() (any, error) {

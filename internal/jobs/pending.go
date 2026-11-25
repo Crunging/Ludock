@@ -118,6 +118,7 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	live, missing := false, false
 	note := func(kept bool) string {
 		var note string
+		aside := helper.SetAsideName(restore.Job.ID)
 		switch {
 		case state.Status == "committed":
 			note = "Ludock removed the folder " + stageName(restore) + " that a finished restore left, which held the data it replaced."
@@ -126,10 +127,10 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 				" that held the server’s previous data is no longer there, so its data was left as it is."
 		case state.SetAside && live:
 			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place, and what the game wrote meanwhile is kept in the folder " +
-				helper.SetAsideName(restore.Job.ID) + " beside it."
+				aside + " beside it."
 		case kept:
 			note = "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. The game had since made newer copies of some of it, which are kept in the folder " +
-				helper.SetAsideName(restore.Job.ID) + " beside it."
+				aside + " beside it."
 		case !live:
 			note = "Ludock removed the backup’s unpacked copy that a stopped restore left in " + stageName(restore) + "."
 		default:
@@ -137,6 +138,11 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		}
 		if missing && live {
 			note += " One of its data folders had nothing to put back: its folder " + stageName(restore) + " is no longer there."
+		}
+		// An earlier attempt may have set copies aside before this one found
+		// a stage gone.
+		if kept && !strings.Contains(note, aside) {
+			note += " Newer copies the game had made of some of the server’s data are kept in the folder " + aside + "."
 		}
 		return note
 	}

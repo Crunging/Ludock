@@ -669,6 +669,21 @@ func TestRenameWithoutNoReplaceNeverClobbers(t *testing.T) {
 	if err := renameNoReplace(parent, "folder", parent, "moved", stat("folder")); err == nil {
 		t.Fatal("renamed a folder without an atomic no-replace rename")
 	}
+	// Undoing a restore moves live data as whole restores always have there,
+	// setting aside under a free name.
+	os.Mkdir(filepath.Join(dir, "aside"), 0o700)
+	os.Mkdir(filepath.Join(dir, "aside", "folder"), 0o700)
+	aside, err := unix.Open(filepath.Join(dir, "aside"), unix.O_DIRECTORY|unix.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(aside)
+	if err := setAsideEntry(parent, "folder", fd(aside), stat("folder")); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "aside", "folder (2)")); err != nil || !info.IsDir() {
+		t.Fatal("not set aside under a free name", err)
+	}
 }
 
 func TestFreeBytesCountsFundamentalBlocks(t *testing.T) {
