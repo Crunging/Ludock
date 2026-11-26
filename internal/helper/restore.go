@@ -592,7 +592,7 @@ func setAsideAs(parent fd, name string, aside fd, kept string, info *unix.Stat_t
 		}
 		target = base + suffix
 	}
-	if err := rename(parent, name, aside, target, target != name); err != nil {
+	if err := rename(parent, name, aside, target, target != kept); err != nil {
 		return err
 	}
 	moved, err := lstatAt(aside, target)
