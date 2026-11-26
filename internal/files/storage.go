@@ -89,9 +89,6 @@ type Service struct {
 	// listers are idle read-only helpers kept for the next listing of the
 	// same root, by container and root path.
 	listers map[string]*lister
-	// uploadImages are configured helper images that speak this backend's
-	// batch uploads.
-	uploadImages map[string]bool
 }
 
 const listerIdle = 30 * time.Second
@@ -655,7 +652,10 @@ func (s *Service) write(ctx context.Context, target Target, root Root, normalize
 	if folder == "." {
 		folder = ""
 	}
-	if _, err := access.prepareUpload(ctx, target, root, folder, nil); err != nil {
+	if err = s.speaksUploads(ctx, access, root); err == nil {
+		_, err = access.prepareUpload(ctx, target, root, folder, nil)
+	}
+	if err != nil {
 		// Its sweep may still be removing files.
 		access.Cleanup(true)
 		return err

@@ -766,7 +766,7 @@ Advanced**; a value set here wins, and the panel shows it as fixed.
 | `LUDOCK_SETUP_CODE` | Printed at start | Your own setup code, 32 to 128 characters; remove it after setup |
 | `LUDOCK_DOCKER_CONFIG` | None | A folder with a Docker `config.json` for [private registries](#private-registries) |
 | `LUDOCK_SENSITIVE_PATHS` | None | More container or host paths to block in file access, separated by `:`; `/` blocks every folder |
-| `LUDOCK_HELPER_IMAGE` | Ludock's own image | Another image for file and backup helpers, pinned by digest |
+| `LUDOCK_HELPER_IMAGE` | Ludock's own image | Another image for file and backup helpers, pinned by digest; it must be [this Ludock's version](#helpers) |
 | `LUDOCK_DOCKER_SOCKET` | `/var/run/docker.sock` | The Docker socket's path inside Ludock |
 | `LUDOCK_LISTEN` | `:3000` | The address inside the container; change the published port in `compose.yaml` instead |
 | `LUDOCK_DATA_DIR` | `/data` | The folder for Ludock's database and identity key |
@@ -831,6 +831,13 @@ Ludock runs short-lived helper containers from its own image:
 - **Console, player, and status-check helpers** share the game container's
   network and connect on `127.0.0.1`, so console and query ports needn't be
   published. A console password reaches its helper over standard input.
+
+A helper image set with `LUDOCK_HELPER_IMAGE` must be the same Ludock version.
+Before one first uploads, backs up, or restores, Ludock asks which helper
+version it is. An older one is refused with a message saying so, before the
+server stops or anything is written, since it could leave out of a backup, or
+a restore, what this version keeps, such as ACLs. Remove the variable, or set
+it to this version's image.
 
 ### Ludock's folders in server data
 

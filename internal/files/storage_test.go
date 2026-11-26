@@ -781,18 +781,30 @@ func TestUploadFolderLimits(t *testing.T) {
 	f.service.Images.Configured = "ghcr.io/crunging/ludock@sha256:" + strings.Repeat("c", 64)
 	f.engine.AddImage(f.service.Images.Configured)
 	f.engine.RunHelpers(func(_ *fakedocker.Container, _, args []string, _ *bufio.Reader, _, stderr func([]byte)) (int, bool) {
-		if len(args) > 1 && strings.Contains(args[1], `"operation":"upload-version"`) {
+		if len(args) > 1 && strings.Contains(args[1], `"operation":"version"`) {
 			stderr([]byte(helper.FileFailure))
 			return 1, true
 		}
 		return 0, false
 	})
 	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "late/x.txt", Size: 1}}, strings.NewReader("x"), nil)
-	if !errors.Is(err, ErrHelperOutdated) || !errors.Is(results[0], ErrHelperOutdated) {
+	if !errors.Is(err, launch.ErrHelperOutdated) || !errors.Is(results[0], launch.ErrHelperOutdated) {
 		t.Fatal(results, err)
 	}
 	if _, err := os.Stat(filepath.Join(f.data, "late")); !os.IsNotExist(err) {
 		t.Fatal("an older helper made a folder", err)
+	}
+	// Nor does it replace a file saved in the editor.
+	os.WriteFile(filepath.Join(f.data, "eula.txt"), []byte("eula=false\n"), 0o644)
+	preview, err := f.service.Preview(ctx, f.target, f.root, "eula.txt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.Save(ctx, f.target, f.root, "eula.txt", []byte("eula=true\n"), preview.Version, nil); !errors.Is(err, launch.ErrHelperOutdated) {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(f.data, "eula.txt")); string(data) != "eula=false\n" {
+		t.Fatal("an older helper saved a file:", string(data))
 	}
 }
 

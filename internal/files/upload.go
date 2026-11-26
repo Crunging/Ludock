@@ -47,11 +47,6 @@ var ErrBatchTooLarge = apperr.New("UPLOAD_BATCH_TOO_LARGE", 413, fmt.Sprintf("Up
 var errTooDeep = apperr.New("UPLOAD_TOO_DEEP", 400, fmt.Sprintf("This file is more than %d folders below the folder you upload into, so it wasn’t uploaded.",
 	helper.UploadDepth))
 
-// ErrHelperOutdated is a helper image that predates this backend's uploads,
-// which only LUDOCK_HELPER_IMAGE can choose.
-var ErrHelperOutdated = apperr.New("HELPER_IMAGE_OUTDATED", 503,
-	"Ludock’s helper image is older than Ludock, so uploads can’t run. Remove LUDOCK_HELPER_IMAGE, or set it to the image Ludock runs.")
-
 // BatchFolders counts the folders below an upload's folder that files with
 // these paths are in, each folder on the way once. A path refused on its own
 // counts none, and counting stops once past UploadBatchFolders.
@@ -284,35 +279,14 @@ func validateUploadName(name string) error {
 	return nil
 }
 
-// speaksUploads confirms the helper speaks this backend's batch upload
-// protocol. Only LUDOCK_HELPER_IMAGE can choose another build than
-// Ludock's own, which is asked once per image; one too old to know the
-// question fails it as an unknown operation.
+// speaksUploads confirms the helper speaks this backend's protocol.
 func (s *Service) speaksUploads(ctx context.Context, access *Access, root Root) error {
-	if s.Images == nil || s.Images.Configured == "" {
+	if s.Images == nil {
 		return nil
 	}
-	s.mu.Lock()
-	known := s.uploadImages[s.Images.Configured]
-	s.mu.Unlock()
-	if known {
-		return nil
-	}
-	out, err := access.request(ctx, helper.FileRequest{Operation: "upload-version", Root: root.Path}, nil, nil)
-	var answer struct{ Version int }
-	if errors.Is(err, launch.ErrUnsafe) || (err == nil && (json.Unmarshal(out, &answer) != nil || answer.Version != helper.UploadVersion)) {
-		return ErrHelperOutdated
-	}
-	if err != nil {
-		return err
-	}
-	s.mu.Lock()
-	if s.uploadImages == nil {
-		s.uploadImages = map[string]bool{}
-	}
-	s.uploadImages[s.Images.Configured] = true
-	s.mu.Unlock()
-	return nil
+	return s.Images.Speaks(func() ([]byte, error) {
+		return access.request(ctx, helper.FileRequest{Operation: "version", Root: root.Path}, nil, nil)
+	})
 }
 
 // fileList is a list of files as the helper reads it from stdin: its length,
