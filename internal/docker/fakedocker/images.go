@@ -34,6 +34,27 @@ func (e *Engine) SetVariantConfig(id string, platform docker.Platform, config ma
 	e.mu.Unlock()
 }
 
+// SetIndex stores image ID id as an index of platform manifests, by manifest
+// ID, as the containerd image store keeps a multi-platform image or one
+// with attestations: inspection lists them, a platform-qualified one answers
+// with the manifest's ID, and no container is created from that ID.
+func (e *Engine) SetIndex(id string, manifests map[string]docker.Platform) {
+	e.mu.Lock()
+	e.indexes[id] = manifests
+	e.mu.Unlock()
+}
+
+// manifestLocked reports whether reference is a platform manifest's ID
+// rather than an image's.
+func (e *Engine) manifestLocked(reference string) bool {
+	for _, manifests := range e.indexes {
+		if _, ok := manifests[reference]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // ManifestDigest is the registry digest the fake gives image ID id.
 func ManifestDigest(id string) string {
 	sum := sha256.Sum256([]byte("manifest " + id))

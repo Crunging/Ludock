@@ -16,6 +16,7 @@ func main() {
 	directory := flag.String("dir", "", "directory for the socket and server data")
 	self := flag.String("self", "ludock-dev", "name of the fake Ludock container (LUDOCK_SELF_CONTAINER)")
 	backups := flag.String("backups", "", "backup roots mounted into the fake Ludock container, ':'-separated")
+	data := flag.String("data", "", "Ludock's data folder, mounted into the fake Ludock container (LUDOCK_DATA_DIR)")
 	demo := flag.Bool("demo", false, "seed the servers shown in the README screenshots")
 	extra := flag.Int("extra", 0, "add this many more Minecraft servers, each with its own console and data folder")
 	socket := flag.String("socket", "", "socket path, if not DIR/docker.sock (unix socket paths are limited to about 100 bytes)")
@@ -35,7 +36,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	seed(engine, *directory, *self, *backups, *demo)
+	seed(engine, *directory, *self, *backups, *data, *demo)
 	for index := 1; index <= *extra; index++ {
 		seedExtra(engine, *directory, index)
 	}

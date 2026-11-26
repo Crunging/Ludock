@@ -43,6 +43,30 @@ type Snapshot struct {
 // processIDs are the user and group IDs a save records.
 var processIDs = func() (int, int) { return os.Getuid(), os.Getgid() }
 
+// CopyBeside writes one consistent copy of the database beside it, named
+// name, replacing an earlier one only once the new copy is whole on disk.
+func (d *DB) CopyBeside(ctx context.Context, name string) error {
+	folder := filepath.Dir(d.path)
+	partial := filepath.Join(folder, name+".partial")
+	os.Remove(partial)
+	if _, err := d.ExecContext(ctx, "VACUUM INTO ?", partial); err != nil {
+		os.Remove(partial)
+		return err
+	}
+	file, err := os.OpenFile(partial, os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err == nil {
+		err = errors.Join(file.Chmod(0o600), file.Sync(), file.Close())
+	}
+	if err == nil {
+		err = os.Rename(partial, filepath.Join(folder, name))
+	}
+	if err != nil {
+		os.Remove(partial)
+		return err
+	}
+	return syncPath(folder)
+}
+
 // Snapshot copies the database through SQLite's VACUUM INTO, which reads one
 // transaction's view while writers carry on, and archives it with the key.
 func (d *DB) Snapshot(ctx context.Context) (*Snapshot, error) {

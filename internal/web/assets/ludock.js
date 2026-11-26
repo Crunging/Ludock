@@ -945,9 +945,31 @@
     });
   }
 
+  // data-await-restart: Ludock is replacing itself. The page reloads, from
+  // whichever version then serves it, once the update has ended, which the
+  // polled notice shows by dropping the attribute, or once the health check
+  // answers again after it stopped answering during the restart.
+  var awaiting = false;
+  function awaitRestart() {
+    if (awaiting || !document.querySelector("[data-await-restart]")) return;
+    awaiting = true;
+    var dropped = false;
+    setInterval(function () {
+      if (!document.querySelector("[data-await-restart]")) {
+        window.location.reload();
+        return;
+      }
+      fetch("/api/v1/health", { cache: "no-store" }).then(function (response) {
+        if (!response.ok) dropped = true;
+        else if (dropped) window.location.reload();
+      }, function () { dropped = true; });
+    }, 2000);
+  }
+
   // htmx processes each element it adds or morphs.
   document.addEventListener("htmx:after:process", function (event) {
     var root = event.target;
+    awaitRestart();
     collapseLists(root);
     confirmations(root);
     timezones(root);
@@ -955,6 +977,7 @@
   });
 
   onReady(function () {
+    awaitRestart();
     formatTimes();
     collapseLists();
     confirmations();

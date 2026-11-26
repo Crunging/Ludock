@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -56,6 +57,10 @@ func (e *Engine) create(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 	e.mu.Lock()
 	imageID, known := e.images[body.Image]
+	// Docker creates from any local image by its ID.
+	if !known && strings.HasPrefix(body.Image, "sha256:") && !e.manifestLocked(body.Image) {
+		imageID, known = body.Image, true
+	}
 	defaults := e.imageConfigs[imageID]
 	taken := name != "" && e.find(name) != nil
 	e.Creates = append(e.Creates, body)
@@ -90,6 +95,7 @@ func (e *Engine) create(w http.ResponseWriter, r *http.Request) {
 		c.CreateRequest, c.ExtraConfig, c.HostConfig, c.Networks = body, config, host, networking.EndpointsConfig
 		c.Platform = r.URL.Query().Get("platform")
 		c.Mounts = append(c.Mounts, mounts...)
+		c.State.Status, c.State.StartedAt = "created", "0001-01-01T00:00:00Z"
 	})
 	e.mu.Lock()
 	hang := e.HangCreates > 0
@@ -188,12 +194,13 @@ func (c *Container) inspection() map[string]any {
 		}
 		host = map[string]any{"NetworkMode": "bridge", "Binds": binds}
 	}
+	// Answered after the lock is released, so it must not share the map a
+	// later update writes.
+	host = maps.Clone(host)
 	if c.Host.Memory > 0 {
-		host = maps.Clone(host)
 		host["Memory"] = c.Host.Memory
 	}
 	if c.Host.Privileged {
-		host = maps.Clone(host)
 		host["Privileged"] = true
 	}
 	result["HostConfig"] = host
@@ -263,8 +270,11 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 			}
 		}
 		e.emitLocked("start", id)
-		hook := e.OnStart
+		hook, run := e.OnStart, e.Starts[c.CreateRequest.Labels["ludock.internal"]]
 		e.mu.Unlock()
+		if run != nil {
+			run(c)
+		}
 		if hook != nil {
 			hook(c)
 		}
@@ -389,7 +399,27 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 		writeJSON(w, 201, map[string]string{"Id": execID})
 	case action == "/archive" && r.Method == "GET":
 		content, ok := c.Files[r.URL.Query().Get("path")]
+		mounts := slices.Clone(c.Mounts)
 		e.mu.Unlock()
+		// Other files are read through the container's bind mounts, never
+		// outside the mounted folder.
+		for _, mount := range mounts {
+			if ok || mount.Type != "bind" {
+				continue
+			}
+			relative, err := filepath.Rel(mount.Destination, r.URL.Query().Get("path"))
+			if err != nil {
+				continue
+			}
+			root, err := os.OpenRoot(mount.Source)
+			if err != nil {
+				continue
+			}
+			if data, err := root.ReadFile(relative); err == nil {
+				content, ok = string(data), true
+			}
+			root.Close()
+		}
 		if !ok {
 			fail(w, 404)
 			return

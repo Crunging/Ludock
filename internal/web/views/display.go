@@ -1,6 +1,7 @@
 package views
 
 import (
+	"encoding/json"
 	"net"
 	"slices"
 	"strconv"
@@ -13,7 +14,9 @@ import (
 	"github.com/Crunging/Ludock/internal/jobs"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/servers"
+	"github.com/Crunging/Ludock/internal/update"
 )
 
 type Status struct{ Label, Tone string }
@@ -367,4 +370,35 @@ func BrowserName(userAgent string) string {
 		return "A browser on " + system
 	}
 	return "Unknown browser"
+}
+
+// updatedSince reports an update of Ludock that succeeded since the last
+// check of its image.
+func updatedSince(last *selfupdate.Record, check *update.CheckStatus) bool {
+	return last != nil && (last.State == selfupdate.StateSucceeded || last.State == selfupdate.StateCurrent) &&
+		(check == nil || check.CheckedAt < last.FinishedAt)
+}
+
+func ludockUpdated(record selfupdate.Record) string {
+	return "Ludock was updated to version " + record.To + "."
+}
+
+// ludockFailed says how a failed update ended, in plain words.
+func ludockFailed(record selfupdate.Record) string {
+	reason := strings.TrimSuffix(record.Reason, ".")
+	switch {
+	case record.State == selfupdate.StatePutBack && record.Data == selfupdate.DataKept:
+		return "Ludock’s update didn’t finish: " + reason + ". Ludock put version " + record.From +
+			" back, but found no copy of its data to put back with it, so it kept the newer data."
+	case record.State == selfupdate.StatePutBack:
+		return "Ludock’s update didn’t finish: " + reason + ". Ludock put version " + record.From + " back, with its data as it was."
+	case record.State == selfupdate.StateInterrupted:
+		return "Ludock’s update didn’t finish: it stopped partway, so Ludock may be on either version. Finish it from a terminal with the commands below."
+	}
+	return "Ludock couldn’t update itself: " + reason + ". It is still on version " + record.From + "."
+}
+
+func dismissValues(id string) string {
+	encoded, _ := json.Marshal(map[string]string{"id": id})
+	return string(encoded)
 }

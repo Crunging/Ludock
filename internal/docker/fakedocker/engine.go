@@ -50,6 +50,9 @@ type Engine struct {
 	images     map[string]string
 	// imageConfigs are the container defaults of each image ID.
 	imageConfigs map[string]map[string]any
+	// indexes are the platform manifests, by ID, of each image ID stored
+	// as an index.
+	indexes map[string]map[string]docker.Platform
 	// registry is the image ID each published tag points to; registryFail
 	// is the status its registry lookups fail with.
 	registry     map[string]string
@@ -68,6 +71,9 @@ type Engine struct {
 	// the logs a helper process would print; OnStop when one stops.
 	OnStart func(c *Container)
 	OnStop  func(c *Container)
+	// Starts runs a helper container's process when it starts, by its
+	// ludock.internal label, under no lock and before OnStart.
+	Starts map[string]func(c *Container)
 	// OnPull runs, under no lock, before an image pull answers.
 	OnPull func(reference string)
 	// AddGame adds a fake game server for POST /fake/game, or reports false
@@ -100,6 +106,9 @@ type Engine struct {
 	Hang func(request string) bool
 	// Requests records "METHOD path" for each request.
 	Requests []string
+	// Intercept sees each Engine API request before it is served, under no
+	// lock, and fails it with a status other than 0.
+	Intercept func(r *http.Request) int
 	// Creates records each container create body.
 	Creates []docker.ContainerCreate
 	// RegistryAuth records the X-Registry-Auth header of each registry lookup.
@@ -124,7 +133,7 @@ func Start(dir string) (*Engine, error) {
 // StartSocket serves on the unix socket at path, which must not exist.
 func StartSocket(socket string) (*Engine, error) {
 	engine := &Engine{containers: map[string]*Container{}, volumes: map[string]docker.VolumeInspect{},
-		images: map[string]string{}, imageConfigs: map[string]map[string]any{},
+		images: map[string]string{}, imageConfigs: map[string]map[string]any{}, indexes: map[string]map[string]docker.Platform{},
 		registry: map[string]string{}, registryFail: map[string]int{}, disks: map[string]string{}, execs: map[string]*exec{}, APIVersion: "1.47", Socket: socket}
 	if err := engine.listen(); err != nil {
 		return nil, err

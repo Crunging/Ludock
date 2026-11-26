@@ -2,9 +2,12 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/selfupdate"
 	"net"
 	"net/http"
 	"os"
@@ -48,13 +51,27 @@ func main() {
 		code = healthcheck()
 	case "helper":
 		code = helper.Main(args, os.Stdin, os.Stdout, os.Stderr)
+	case "self-update":
+		code = selfUpdate(args)
 	case "version", "--version":
 		fmt.Println(version)
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: ludock [serve|recover <username>|restore-data <file>|healthcheck|helper …|version]\n")
+		fmt.Fprintf(os.Stderr, "Usage: ludock [serve|recover <username>|restore-data <file>|healthcheck|helper …|self-update …|version]\n")
 		code = 2
 	}
 	os.Exit(code)
+}
+
+// selfUpdate runs the helper that replaces Ludock's container with one of
+// the pulled image, from a container of Ludock's own image, and exits with
+// how it ended.
+func selfUpdate(args []string) int {
+	if len(args) != 3 || !identity.ValidID(args[2]) {
+		log.Error("Ludock's update helper got arguments it can't read")
+		return 2
+	}
+	socket := cmp.Or(os.Getenv("LUDOCK_DOCKER_SOCKET"), config.DefaultDockerSocket)
+	return (&selfupdate.Helper{Docker: docker.New(socket), Container: args[0], Image: args[1], Operation: args[2]}).Run(context.Background())
 }
 
 // loadConfig reads the environment, reporting every invalid setting.
@@ -79,6 +96,9 @@ func serve() int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// An update's helper that put this container back left the data copy
+	// for it to restore before it opens the database.
+	putBack := selfupdate.BeforeOpen(ctx, docker.New(cfg.DockerSocket), cfg.MountID, cfg.DataDir, time.Minute)
 	database, err := db.Open(cfg.DBPath())
 	if apperr.Is(err, "DATABASE_INCOMPATIBLE") {
 		return refuse(ctx, cfg.Listen, startupError(err, ""))
@@ -98,6 +118,7 @@ func serve() int {
 		log.Error(startupError(err, "Could not start Ludock's services."))
 		return 1
 	}
+	services.SelfUpdate.Version, services.SelfUpdate.PutBack = version, putBack
 	accounts := services.Auth
 	server := &web.Server{App: services, DB: database, Auth: accounts, ClientIP: services.ClientIP, Docker: services.Docker.Ping, Version: version}
 

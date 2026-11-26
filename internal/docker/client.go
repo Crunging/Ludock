@@ -751,26 +751,35 @@ func (c *Client) Events(ctx context.Context, filters Filters) (io.ReadCloser, er
 // registryAuth is an X-Registry-Auth value, or "" for anonymous access;
 // platform selects an image variant, or "" for the daemon's own.
 func (c *Client) Pull(ctx context.Context, image, registryAuth, platform string) error {
+	_, err := c.PullDigest(ctx, image, registryAuth, platform)
+	return err
+}
+
+// PullDigest is Pull that returns the manifest digest Docker reports it
+// pulled the tag as, or "" if it reported none.
+func (c *Client) PullDigest(ctx context.Context, image, registryAuth, platform string) (string, error) {
 	// Pulling again only fetches what is still missing. Registry errors,
 	// which Docker reports as 5xx or in the body, are not retried.
 	wait := c.newOutage()
 	for {
-		err := c.pull(ctx, image, registryAuth, platform)
+		digest, err := c.pull(ctx, image, registryAuth, platform)
 		cut := errors.Is(err, ErrRequestFailed) || errors.Is(err, ErrIncompleteStream)
 		if err == nil || !cut || !wait.retry(ctx, err) {
-			return err
+			return digest, err
 		}
 	}
 }
 
-func (c *Client) pull(ctx context.Context, image, registryAuth, platform string) error {
+var pulledDigest = regexp.MustCompile(`^Digest: (sha256:[0-9a-f]{64})$`)
+
+func (c *Client) pull(ctx context.Context, image, registryAuth, platform string) (string, error) {
 	query := url.Values{"fromImage": {image}}
 	if platform != "" {
 		query.Set("platform", platform)
 	}
 	full, err := c.path(ctx, "/images/create", query)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var header http.Header
 	if registryAuth != "" {
@@ -778,10 +787,11 @@ func (c *Client) pull(ctx context.Context, image, registryAuth, platform string)
 	}
 	response, err := c.request(ctx, http.MethodPost, full, nil, header)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer response.Body.Close()
 	records := 0
+	digest := ""
 	var failure error
 	decodeErr := DecodeJSONLines(response.Body, 1<<20, false, func(raw json.RawMessage) error {
 		var record map[string]json.RawMessage
@@ -795,19 +805,25 @@ func (c *Client) pull(ctx context.Context, image, registryAuth, platform string)
 			return failure
 		}
 		records++
+		var status string
+		if json.Unmarshal(record["status"], &status) == nil {
+			if match := pulledDigest.FindStringSubmatch(status); match != nil {
+				digest = match[1]
+			}
+		}
 		return nil
 	})
 	if failure != nil {
-		return failure
+		return "", failure
 	}
 	if decodeErr != nil && !errors.Is(decodeErr, ErrJSONLineTooLong) && !errors.Is(decodeErr, ErrInvalidJSONLine) && !errors.Is(decodeErr, errPullProgress) {
 		// The stream was cut before Docker finished.
-		return ErrIncompleteStream
+		return "", ErrIncompleteStream
 	}
 	if decodeErr != nil || records == 0 {
-		return errors.New("docker returned invalid or oversized pull progress")
+		return "", errors.New("docker returned invalid or oversized pull progress")
 	}
-	return nil
+	return digest, nil
 }
 
 var errPullProgress = errors.New("docker returned invalid pull progress")

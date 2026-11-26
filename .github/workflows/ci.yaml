@@ -169,6 +169,8 @@ jobs:
     timeout-minutes: 20
     env:
       LUDOCK_TEST_IMAGE: ludock:ci
+      LUDOCK_TEST_NEXT_IMAGE: ludock:ci-next
+      LUDOCK_TEST_UNHEALTHY_IMAGE: ludock:ci-unhealthy
       LUDOCK_DOCKER_E2E: disposable-daemon
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -201,6 +203,30 @@ jobs:
           # Layers from main's latest run, such as the compiled dependencies.
           cache-from: type=gha,scope=container-${{ matrix.platform }}
           cache-to: ${{ github.event_name == 'push' && matrix.part == 'container' && format('type=gha,mode=max,scope=container-{0}', matrix.platform) || '' }}
+      # Ludock updating itself needs a build that reports another version.
+      # Only its last layers differ, so it reuses the build above.
+      - name: Build a second image
+        if: matrix.part == 'lifecycle'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: .
+          load: true
+          build-args: VERSION=e2e-next
+          tags: ${{ env.LUDOCK_TEST_NEXT_IMAGE }}
+          cache-from: type=gha,scope=container-${{ matrix.platform }}
+      # And one whose health check never passes. The default builder sees
+      # the image just loaded into Docker.
+      - name: Build a second image that never reports healthy
+        if: matrix.part == 'lifecycle'
+        run: |
+          docker buildx build --builder default --load --build-arg BASE="$LUDOCK_TEST_NEXT_IMAGE" --tag "$LUDOCK_TEST_UNHEALTHY_IMAGE" - <<'EOF'
+          ARG BASE
+          FROM ${BASE}
+          HEALTHCHECK --interval=1s --timeout=2s --retries=1 CMD ["/bin/false"]
+          EOF
       - name: Run container journeys
         if: matrix.part != 'scan'
         working-directory: e2e

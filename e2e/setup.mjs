@@ -87,7 +87,7 @@ async function startStack(bin, dir, port, { found = false, children = [] } = {})
   // for second copies.
   const backups = join(dir, "backups") + ":" + join(dir, "copies");
   const mounted = found ? backups + ":" + join(dir, "found") : backups;
-  const fake = start(join(bin, "fakedocker"), ["-dir", dockerDir, "-backups", mounted], {}, "fakedocker");
+  const fake = start(join(bin, "fakedocker"), ["-dir", dockerDir, "-backups", mounted, "-data", join(dir, "data")], {}, "fakedocker");
   children.push(fake);
   const socket = join(dockerDir, "docker.sock");
   await waitFor(() => existsSync(socket), "the fake Docker socket", fake);
@@ -99,6 +99,8 @@ async function startStack(bin, dir, port, { found = false, children = [] } = {})
       LUDOCK_DOCKER_SOCKET: socket,
       LUDOCK_SETUP_CODE: setupCode,
       LUDOCK_SELF_CONTAINER: "ludock-dev",
+      // Outside the fake container it stands for, Ludock proves it by its data.
+      LUDOCK_DEV_SELF_PROOF: "1",
       LUDOCK_BACKUP_ROOTS: backups,
       LUDOCK_HELPER_IMAGE: "ghcr.io/crunging/ludock@sha256:" + "ab".repeat(32),
       // Its default level logs the address it listens on, which this reads.
