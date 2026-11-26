@@ -576,6 +576,7 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "restarting", DownSince: 790_000}}, 910_000)
 		since(910_000)
 		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: 912_000}}, 975_000)
+		s.Check(ctx, nil, 978_000)
 		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "exited", DownSince: 974_000}}, 980_000)
 		since(974_000)
 		if !slices.Equal(events.events, []string{down, back, down, back, down, back, down, back}) {

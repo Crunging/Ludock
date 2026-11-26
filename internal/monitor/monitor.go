@@ -588,7 +588,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 	s.since.CompareAndSwap(0, now)
 	since := s.since.Load()
 	s.lookMu.Lock()
-	previous, previousDown := maps.Clone(s.looked), maps.Clone(s.down)
+	previous, previousDown, ended := maps.Clone(s.looked), maps.Clone(s.down), maps.Clone(s.ended)
 	s.lookMu.Unlock()
 	// judged are the servers this check doesn't skip; shown, those with an
 	// outage kept across a pause, which pages show again once it is saved.
@@ -635,7 +635,11 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 				(container.State == "running" && container.DownSince != 0 && !earlyRun(container, s.answered(server.ID, container), policy.GraceSeconds, now)) {
 				container.DownSince = 0
 			}
-			if kept := previousDown[server.ID]; r.outage.Valid && kept != 0 && (container.DownSince == 0 || kept < container.DownSince) {
+			// The earliest stop since the latest recovery's run began.
+			if container.DownSince <= ended[server.ID] {
+				container.DownSince = 0
+			}
+			if kept := previousDown[server.ID]; r.outage.Valid && kept > ended[server.ID] && (container.DownSince == 0 || kept < container.DownSince) {
 				container.DownSince = kept
 			}
 			downs[server.ID] = container.DownSince
