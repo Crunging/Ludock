@@ -2,6 +2,7 @@ package attention
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"testing"
 
@@ -55,6 +56,51 @@ func TestAServerRevokedWhileListingIsLeftOut(t *testing.T) {
 	}
 	if len(result.Items) != 0 {
 		t.Fatalf("showed a revoked server's items: %+v", result.Items)
+	}
+}
+
+// A server that is down is listed as down. Once its container is gone it is
+// listed once, as missing in Docker, not as down too.
+func TestAMissingServerIsListedOnce(t *testing.T) {
+	d := dbtest.Open(t)
+	admin := &db.SessionUser{ID: "11111111-1111-4111-8111-111111111111", Username: "owner", Role: db.RoleAdmin}
+	if err := d.CreateUser(ctx, db.UserRecord{User: db.User{ID: admin.ID, Username: admin.Username, Role: admin.Role, CreatedAt: 1},
+		PasswordHash: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	store := &identity.Store{DB: d}
+	seen := []identity.Observation{{ContainerID: "mc", Name: "mc", DisplayName: "Minecraft", GameType: "minecraft"}}
+	list, err := store.Reconcile(ctx, seen, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, _ := json.Marshal(monitor.DefaultPolicy())
+	if _, err := d.Exec(`INSERT INTO availability(server_id,policy_json,outage_started_at,notified,last_state,updated_at) VALUES(?,?,1,1,'exited',1)`,
+		list[0].ID, string(policy)); err != nil {
+		t.Fatal(err)
+	}
+	authorization := &authz.Service{DB: d, Servers: store}
+	s := &Service{DB: d, Authz: authorization, Identity: store, Monitor: &monitor.Service{DB: d, Store: store},
+		Schedules: &schedules.Service{DB: d, Authz: authorization, Identity: store}}
+	kinds := func() []string {
+		result, err := s.List(ctx, admin, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var kinds []string
+		for _, item := range result.Items {
+			kinds = append(kinds, item.Kind)
+		}
+		return kinds
+	}
+	if got := kinds(); !slices.Equal(got, []string{"availability"}) {
+		t.Fatalf("a server that is down listed %v", got)
+	}
+	if _, err := store.Reconcile(ctx, nil, "", 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := kinds(); !slices.Equal(got, []string{"binding"}) {
+		t.Fatalf("a server missing in Docker listed %v", got)
 	}
 }
 

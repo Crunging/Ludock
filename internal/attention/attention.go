@@ -138,11 +138,11 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 			item.ID, item.Kind = "sharing:"+server.ID, "sharing"
 			result.Items = append(result.Items, item)
 		}
-		if problem := problems[server.ID]; problem != nil {
+		// A server Docker doesn't have is listed once, as that.
+		if problem := problems[server.ID]; problem != nil && server.Status == identity.StatusActive {
 			item := base
 			item.ID, item.Kind, item.State, item.OutageStartedAt = "availability:"+server.ID, "availability", problem.State, problem.Since
-			item.CanStart = server.Status == identity.StatusActive && slices.Contains(permissions, authz.ServerStart) &&
-				(problem.State == "exited" || problem.State == "created")
+			item.CanStart = slices.Contains(permissions, authz.ServerStart) && (problem.State == "exited" || problem.State == "created")
 			result.Items = append(result.Items, item)
 		}
 		if server.Status == identity.StatusActive {
