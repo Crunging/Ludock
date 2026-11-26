@@ -94,6 +94,9 @@ type ServerList struct {
 	DockerProblem string
 	// AddOpen opens "Missing a server?", as the setup list's link asks.
 	AddOpen bool
+	// Paused says, for each server shared with a member that a change
+	// paused, that it is.
+	Paused []string
 }
 
 // Pip is a small state marker for a tone: ok, idle, active, attention, or
@@ -395,6 +398,9 @@ templ ServerListFragment(list ServerList) {
 			}
 		</div>
 	}
+	for _, paused := range list.Paused {
+		<p class="section-note server-paused" role="status">{ paused }</p>
+	}
 	if list.Total > 0 {
 		<section class={ "server-list", templ.KV("server-list--backups", list.ShowBackup), templ.KV("server-list--players", list.ShowPlayers), templ.KV("server-list--filterable", list.filterable()) } aria-label="Game servers">
 			<div class="server-list__header">
@@ -419,7 +425,7 @@ templ ServerListFragment(list ServerList) {
 				</div>
 			}
 		</section>
-	} else if !list.DiscoveryUnavailable {
+	} else if !list.DiscoveryUnavailable && len(list.Paused) == 0 {
 		<div class="empty-state">
 			if list.Admin {
 				<h2 class="empty-state__title">No game servers found</h2>

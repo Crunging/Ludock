@@ -164,7 +164,8 @@ func TestStaleActorsAreRechecked(t *testing.T) {
 }
 
 // A material change hides a shared server from its operator, not from an
-// administrator, until an administrator confirms it.
+// administrator, until an administrator confirms it. The operator is told
+// it is paused; someone it was never shared with still isn't told it exists.
 func TestMaterialChangeSuspendsGrants(t *testing.T) {
 	s, servers := setup(t)
 	first := servers[slices.IndexFunc(servers, func(server identity.Server) bool { return server.GameType == "minecraft" })]
@@ -186,9 +187,20 @@ func TestMaterialChangeSuspendsGrants(t *testing.T) {
 	if got := effective(t, s, admin, first.ID); !slices.Equal(got, All) {
 		t.Fatal("administrator lost the paused server:", got)
 	}
-	if _, err := s.Assert(ctx, operator, first.ID, ServerStop); !apperr.Is(err, "SERVER_NOT_FOUND") {
+	if _, err := s.Assert(ctx, operator, first.ID, ServerStop); !apperr.Is(err, "SERVER_PAUSED") ||
+		err.Error() != PausedMessage(first.DisplayName) {
 		t.Fatal(err)
 	}
+	if _, err := s.Assert(ctx, viewer, first.ID, ServerView); !apperr.Is(err, "SERVER_NOT_FOUND") {
+		t.Fatal(err)
+	}
+	// Still paused while its container is gone, as between a compose down
+	// and up.
+	s.DB.Exec("UPDATE logical_servers SET status = 'missing' WHERE id = ?", first.ID)
+	if _, err := s.Assert(ctx, operator, first.ID, ServerView); !apperr.Is(err, "SERVER_PAUSED") {
+		t.Fatal(err)
+	}
+	s.DB.Exec("UPDATE logical_servers SET status = 'active' WHERE id = ?", first.ID)
 	if grants, _ := s.UserGrants(ctx, operator.ID); len(grants) != 1 {
 		t.Fatal("grant deleted")
 	}
@@ -200,10 +212,31 @@ func TestMaterialChangeSuspendsGrants(t *testing.T) {
 	}
 }
 
-// Assert distinguishes hidden from forbidden and audits.
+// Assert distinguishes hidden from forbidden and audits. A member whose
+// access was removed is told it ended, even once the server is missing and
+// the grant's audit entry is pruned;
+// another member, never given it but "removed" from it, that the server
+// isn't found.
 func TestAssertHiddenVersusForbidden(t *testing.T) {
 	s, servers := setup(t)
 	setGrant(t, s, viewer.ID, servers[0].ID, ServerView)
+	if _, err := s.Assert(ctx, viewer, servers[1].ID, ServerView); !apperr.Is(err, "SERVER_NOT_FOUND") {
+		t.Fatal(err)
+	}
+	for _, capabilities := range [][]Capability{{ServerView}, nil} {
+		if err := s.Share(ctx, admin, adminSession, operator.ID, servers[1].ID, capabilities); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Share(ctx, admin, adminSession, viewer.ID, servers[1].ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	s.DB.Exec("UPDATE logical_servers SET status = 'missing', container_id = NULL WHERE id = ?", servers[1].ID)
+	// The removal alone says so once the grant's own entry is pruned.
+	s.DB.Exec("DELETE FROM audit_log WHERE action = 'server.sharing.updated' AND json_array_length(details_json, '$.capabilities') > 0")
+	if _, err := s.Assert(ctx, operator, servers[1].ID, ServerView); !apperr.Is(err, "ACCESS_ENDED") {
+		t.Fatal(err)
+	}
 	if _, err := s.Assert(ctx, viewer, servers[1].ID, ServerView); !apperr.Is(err, "SERVER_NOT_FOUND") {
 		t.Fatal(err)
 	}

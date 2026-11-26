@@ -73,7 +73,7 @@ func TestMonitoringSettingsNeedAdmin(t *testing.T) {
 }
 
 // A server whose game changed is paused for the operator it was shared with:
-// a forged start or confirmation from them fails, a confirmation for an
+// a forged start, which says it is paused, or confirmation from them fails, a confirmation for an
 // older state of the server fails, and the administrator's confirmation
 // restores the operator's access.
 func TestConfirmChangeRestoresSharing(t *testing.T) {
@@ -91,8 +91,9 @@ func TestConfirmChangeRestoresSharing(t *testing.T) {
 	if !paused.SharingPaused {
 		t.Fatalf("%+v", paused)
 	}
-	if response := p.post("/servers/"+p.server+"/start", operator, CSRFToken(operator.Token)); response.Code != http.StatusNotFound {
-		t.Fatal("paused operator started the server:", response.Code)
+	if response := p.post("/servers/"+p.server+"/start", operator, CSRFToken(operator.Token)); response.Code != http.StatusConflict ||
+		!strings.Contains(response.Body.String(), "is paused until an administrator confirms a change to it") {
+		t.Fatal("paused operator started the server:", response.Code, response.Body.String())
 	}
 	confirm := func(principal *auth.Principal, revision int64) *httptest.ResponseRecorder {
 		form := url.Values{"_csrf": {CSRFToken(principal.Token)}, "bindingRevision": {strconv.FormatInt(revision, 10)}}

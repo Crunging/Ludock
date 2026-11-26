@@ -232,8 +232,12 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, request *Request, 
 		views.Alert("error", public.Message).Render(r.Context(), w)
 		return
 	}
+	title := "Something went wrong"
+	if public.Code == "SERVER_PAUSED" {
+		title = "Server paused"
+	}
 	w.WriteHeader(public.Status)
-	views.ErrorPage(s.page(r, request, "Error"), "Something went wrong", public.Message).Render(r.Context(), w)
+	views.ErrorPage(s.page(r, request, "Error"), title, public.Message).Render(r.Context(), w)
 }
 
 func render(w http.ResponseWriter, r *http.Request, status int, components ...templ.Component) {

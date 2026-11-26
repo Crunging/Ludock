@@ -181,7 +181,7 @@ func (s *Server) backupPreflight(w http.ResponseWriter, r *http.Request, request
 		}
 	}
 	if err != nil {
-		if public, ok := apperr.As(err); ok && (public.Status == http.StatusUnauthorized || public.Status == http.StatusNotFound) {
+		if public, ok := apperr.As(err); ok && (public.Status == http.StatusUnauthorized || authz.Hidden(err)) {
 			s.fail(w, r, request, err)
 			return
 		}
@@ -469,7 +469,7 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 		}
 	}
 	if err != nil {
-		if public, ok := apperr.As(err); ok && (public.Status == http.StatusUnauthorized || public.Status == http.StatusNotFound) {
+		if public, ok := apperr.As(err); ok && (public.Status == http.StatusUnauthorized || authz.Hidden(err)) {
 			s.fail(w, r, request, err)
 			return
 		}

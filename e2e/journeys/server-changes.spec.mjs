@@ -91,11 +91,17 @@ test("a new game pauses shared access until an administrator confirms it", async
     await adminPage.locator(".section-tabs").getByRole("link", { name: "Schedules" }).click();
     await expect(adminPage.locator("#schedule-list")).toContainText("The server’s game or data folders changed.");
 
-    // The friend loses the server until then.
+    // The friend can't use the server until then, and is told it is
+    // paused, with nothing about what changed.
+    const paused = "enshrouded is paused until an administrator confirms a change to it";
     await friend.goto(serverURL);
-    await expect(friend.getByText("Server not found")).toBeVisible();
+    await expect(friend.getByRole("heading", { level: 1, name: "Server paused" })).toBeVisible();
+    await expect(friend.getByText(paused)).toBeVisible();
+    await expect(friend.getByRole("button")).toHaveText(["Sign out"]);
     await friend.goto("/");
-    await expect(friend.getByText("No servers shared with you yet")).toBeVisible();
+    await expect(friend.getByText(paused + ".")).toBeVisible();
+    await expect(friend.getByText("No servers shared with you yet")).toHaveCount(0);
+    await expect(friend.getByText(/valheim|folder/i)).toHaveCount(0);
 
     await adminPage.locator(".section-tabs").getByRole("link", { name: "Overview" }).click();
     await notice.getByRole("button", { name: "Confirm and restore access" }).click();
