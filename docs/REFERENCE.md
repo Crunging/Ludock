@@ -1013,8 +1013,9 @@ On most local Linux filesystems, restoring and undoing never overwrite a file
 a game creates at the same moment. On storage that can't rename without
 replacing, such as NFS, Ludock checks that each name is free and then moves
 data there with a plain rename, so a file created just then can be replaced.
-On shared storage that includes a file made from another machine, which this
-one can take a while to see. Ludock stops the server for these moves and
+On shared storage this machine can take a while to see a file made from
+another one, so a file made there up to some seconds earlier can be replaced
+too. Ludock stops the server for these moves and
 watches for it or another container starting, but not for a program already
 running on the host or elsewhere: stop anything else that writes to the
 server's data before a restore or an undo.
