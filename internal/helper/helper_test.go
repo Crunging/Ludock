@@ -922,36 +922,12 @@ func TestRenamesNeverClobber(t *testing.T) {
 		t.Fatal("fell back to a plain rename on a filesystem with RENAME_NOREPLACE")
 	}
 	renameat2, renameat = original, plainRename
-	// What the folder holds is read apart from any step, and only a folder
-	// on the root's own mount that holds something counts.
-	kept := func(root string, sync bool) string {
-		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreKept, Aside: asideName, Sync: sync, Base: root})
-		var out bytes.Buffer
-		RunRestore(string(request), &out, io.Discard)
-		return out.String()
-	}
+	// Something else at the set-aside folder's name doesn't stop a return
+	// with nothing in the way.
 	os.WriteFile(filepath.Join(root, asideName), nil, 0o644)
-	if RunRestore(string(argument), io.Discard, io.Discard) != 0 || kept(root, false) != `{"kept":false}` {
-		t.Fatal("returned nothing past a file at the set-aside name:", kept(root, false))
+	if RunRestore(string(argument), io.Discard, io.Discard) != 0 {
+		t.Fatal("returned nothing past a file at the set-aside name")
 	}
-	os.Remove(filepath.Join(root, asideName))
-	os.Mkdir(filepath.Join(root, asideName), 0o700)
-	if kept(root, false) != `{"kept":false}` {
-		t.Fatal("an empty folder kept something")
-	}
-	os.WriteFile(filepath.Join(root, asideName, "theirs"), nil, 0o644)
-	asidePath := filepath.Join(root, asideName)
-	mountOf = func(descriptor fd) (uint64, error) {
-		if path, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(int(descriptor))); path == asidePath {
-			return 999, nil
-		}
-		return mountID(descriptor)
-	}
-	if said := kept(root, false); said != `{}` {
-		t.Fatal("reported a mounted folder's contents as kept:", said)
-	}
-	mountOf = mountID
-	os.Remove(filepath.Join(root, asideName, "theirs"))
 	os.Remove(filepath.Join(root, asideName))
 	// Files at the stage's top that Ludock didn't make, such as one named
 	// like its scratch folder, survive an undo it refuses.
@@ -1130,11 +1106,8 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(root, stage, "old", "item")); string(data) != "original" {
 		t.Fatal("moved the original:", string(data))
 	}
-	// The read that follows a retry makes the set-aside folder durable
-	// before saying it holds a copy, though nothing is left in the way.
-	if RunRestore(string(item), io.Discard, io.Discard) != 0 {
-		t.Fatal("returned nothing")
-	}
+	// A retry makes the set-aside folder durable, though nothing is left in
+	// the way: the attempt before may have been cut before its sync.
 	var synced []string
 	fsync = func(descriptor int) error {
 		path, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(descriptor))
@@ -1142,13 +1115,8 @@ func TestRenamesNeverClobber(t *testing.T) {
 		return unix.Fsync(descriptor)
 	}
 	t.Cleanup(func() { fsync = unix.Fsync })
-	if said := kept(root, true); said != `{"kept":true}` || !slices.Contains(synced, filepath.Join(root, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"))) {
-		t.Fatalf("read said %s, synced %q", said, synced)
-	}
-	// One whose sync fails is not reported kept, and fails no step.
-	fsync = func(int) error { return unix.EIO }
-	if said := kept(root, true); said != `{}` {
-		t.Fatalf("read said %s of a folder it couldn't sync", said)
+	if RunRestore(string(item), io.Discard, io.Discard) != 0 || !slices.Contains(synced, filepath.Join(root, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"))) {
+		t.Fatalf("returned nothing, or synced only %q", synced)
 	}
 }
 
