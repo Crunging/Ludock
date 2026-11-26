@@ -405,13 +405,7 @@ func (h *restoreHelper) pinStage(root fd, optional bool) (fd, error) {
 // undone. It is owned before anything moves in, so a retry fixes one that
 // an interruption left as the helper made it.
 func (h *restoreHelper) pinAside(root, stage fd) (fd, error) {
-	err := mkdirat(int(root), h.request.Aside, 0o700)
-	// On a disk too full for a folder, the stage's folder for the backup's
-	// data, emptied by its move or not, becomes it.
-	if errors.Is(err, unix.ENOSPC) || errors.Is(err, unix.EDQUOT) {
-		err = renameStrict(stage, "new", root, h.request.Aside)
-	}
-	if err != nil && !errors.Is(err, unix.EEXIST) {
+	if err := unix.Mkdirat(int(root), h.request.Aside, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
 		return -1, err
 	}
 	// The undo journals that the folder exists only after this, also when

@@ -1240,9 +1240,7 @@ func TestExtractExitOnFullDisk(t *testing.T) {
 // Undoing a restore whose old data had all moved out sets aside whatever is
 // live, as another program may have written it: a link, a file with a second
 // name, and a named pipe move as they are. A folder with a mount inside it
-// is refused with nothing moved, as its mount would move with it. On a disk
-// too full to make the set-aside folder, the stage's emptied folder for the
-// backup's data becomes it.
+// is refused with nothing moved, as its mount would move with it.
 func TestRestoreSetAsideKeepsAnything(t *testing.T) {
 	const id = "0f9619ff-8b86-4011-b42d-00c04fc964ff"
 	stage, aside := StageName(id), SetAsideName(id)
@@ -1297,19 +1295,6 @@ func TestRestoreSetAsideKeepsAnything(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(root, "maps", "tiles")); err != nil {
 			t.Fatal("moved the mount")
-		}
-	})
-	t.Run("full disk", func(t *testing.T) {
-		root := live(t)
-		previous := mkdirat
-		mkdirat = func(int, string, uint32) error { return unix.ENOSPC }
-		t.Cleanup(func() { mkdirat = previous })
-		if setAside(root) != 0 {
-			t.Fatal("refused")
-		}
-		kept(t, root, aside)
-		if _, err := os.Lstat(filepath.Join(root, stage, "new")); !os.IsNotExist(err) {
-			t.Fatal("didn't use the stage's emptied folder")
 		}
 	})
 }
