@@ -309,9 +309,12 @@ test("finding a newer Ludock and updating it", async ({ page }) => {
     await expect(entry).toContainText("Updated Ludock from version dev to version dev");
     await expect(entry).toContainText("Succeeded");
     await expect(entry).toContainText(admin.username);
-    // The outcome shows until the next check.
-    await checkLudock("Ludock runs the newest image its tag points to.");
-    await expect(notice).toBeEmpty();
+    // The outcome shows until the next check, which a check that began
+    // before the update ended isn't.
+    await expect(async () => {
+      await checkLudock("Ludock runs the newest image its tag points to.");
+      await expect(notice).toBeEmpty({ timeout: 2_000 });
+    }).toPass({ timeout: 60_000 });
 
     // A version whose health check fails is put back, said where the update
     // was offered and in Needs attention until dismissed.
