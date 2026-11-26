@@ -183,13 +183,13 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 	// An undo of a restore whose live data had moved names the set-aside
 	// folder, which holds anything in the previous data's way, such as the
 	// backup's copy.
-	undone := "The restore was undone: the server’s data is as it was. Anything Ludock had to move out of the way of the server’s previous data " +
-		"is in the folder {aside} in its data. Ludock asked Docker to start the server, and it is running."
+	undone := "The restore was undone: the server’s data is as it was. Anything Ludock moved out of the way of the server’s previous data " +
+		"went to the folder {aside} in its data. Ludock asked Docker to start the server, and it is running."
 	backupAside := map[string]string{"{aside}/": "", "{aside}/server.properties": "motd=as backed up\n", "{aside}/world/": "",
 		"{aside}/world/level.dat": "the world as backed up"}
 	itemAside := map[string]string{"{aside}/": "", "{aside}/world/": "", "{aside}/world/level.dat": "the world as backed up"}
 	finishedUndo := "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. " +
-		"Anything Ludock had to move out of the way of the server’s previous data is in the folder {aside} in its data."
+		"Anything Ludock moved out of the way of the server’s previous data went to the folder {aside} in its data."
 	undoFinished := "Ludock restarted while this ran, and finished it. The server was stopped before this began, so Ludock didn’t start it."
 	// Each interrupted outcome says what the server was left as, so none
 	// asks the owner to check it.

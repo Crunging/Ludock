@@ -1115,8 +1115,31 @@ func TestRenamesNeverClobber(t *testing.T) {
 		return unix.Fsync(descriptor)
 	}
 	t.Cleanup(func() { fsync = unix.Fsync })
-	if RunRestore(string(item), io.Discard, io.Discard) != 0 || !slices.Contains(synced, filepath.Join(root, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"))) {
+	itemAside := filepath.Join(root, SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"))
+	if RunRestore(string(item), io.Discard, io.Discard) != 0 || !slices.Contains(synced, itemAside) {
 		t.Fatalf("returned nothing, or synced only %q", synced)
+	}
+	// So does the cleanup that follows, whose earlier attempt may have moved
+	// a 1.0 undo's returned copy there.
+	synced = nil
+	cleanup, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreCleanup, Item: "world/level.dat",
+		Aside: SetAsideName("6f9619ff-8b86-4011-b42d-00c04fc964ff"), Base: root})
+	if RunRestore(string(cleanup), io.Discard, io.Discard) != 0 || !slices.Contains(synced, itemAside) {
+		t.Fatalf("cleaned up nothing, or synced only %q", synced)
+	}
+	// A folder the owner mounted there holds nothing Ludock moved, so it
+	// isn't synced and doesn't fail the step.
+	os.MkdirAll(filepath.Join(root, stage, "old"), 0o700)
+	mountOf = func(descriptor fd) (uint64, error) {
+		if path, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(int(descriptor))); path == itemAside {
+			return 999, nil
+		}
+		return mountID(descriptor)
+	}
+	t.Cleanup(func() { mountOf = mountID })
+	synced = nil
+	if RunRestore(string(item), io.Discard, io.Discard) != 0 || slices.Contains(synced, itemAside) {
+		t.Fatalf("refused, or synced a mounted folder: %q", synced)
 	}
 }
 

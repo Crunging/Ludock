@@ -191,11 +191,11 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 	return err
 }
 
-// asideNote says where undoing restore moves what is in the way of the
-// previous data, which stays true whether anything was or the owner moved it
-// since.
+// asideNote says where undoing restore moved what was in the way of the
+// previous data, which stays true whether anything was or the owner has
+// moved it since.
 func asideNote(restore *ops.Context) string {
-	return "Anything Ludock had to move out of the way of the server’s previous data is in the folder " + helper.SetAsideName(restore.Job.ID) + " in its data."
+	return "Anything Ludock moved out of the way of the server’s previous data went to the folder " + helper.SetAsideName(restore.Job.ID) + " in its data."
 }
 
 // sayEnded has a failed attempt at a restore whose live data had moved say

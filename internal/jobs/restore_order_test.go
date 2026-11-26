@@ -592,7 +592,7 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 		// A return under way may have finished unheard.
 		pending = "The restore was stopped partway while its previous data was being put back, so Ludock can’t confirm where all of it is: look in the server’s data and in the folder " + helper.StagePrefix + "%s. An administrator can undo the restore from Needs attention; otherwise Ludock undoes it the next time it stops the server for a backup, a restore or an update."
 		// Where live data had moved, Activity names the set-aside folder.
-		aside = " Anything Ludock had to move out of the way of the server’s previous data is in the folder ludock-set-aside-%s in its data."
+		aside = " Anything Ludock moved out of the way of the server’s previous data went to the folder ludock-set-aside-%s in its data."
 	)
 	unpacked := func(t *testing.T, f *fixture, stage string) {
 		os.MkdirAll(filepath.Join(stage, "new", "world"), 0o700)

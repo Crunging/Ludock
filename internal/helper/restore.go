@@ -413,8 +413,8 @@ func (h *restoreHelper) pinAside(root, stage fd) (fd, error) {
 	if err := unix.Mkdirat(int(root), h.request.Aside, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
 		return -1, err
 	}
-	// The undo journals that the folder exists only after this, also when
-	// an attempt cut before syncing made it.
+	// The folder is durable before anything moves into it, also when an
+	// attempt cut before syncing made it.
 	if err := syncAll(root); err != nil {
 		return -1, err
 	}
@@ -655,7 +655,10 @@ func (h *restoreHelper) step() (any, error) {
 	}
 	if stage < 0 {
 		// An earlier cleanup may have removed the stage and failed to sync.
-		return ok, syncAll(root)
+		if err := syncAll(root); err != nil {
+			return nil, err
+		}
+		return h.done(root)
 	}
 	if item != nil && h.request.Operation != RestoreCleanup {
 		if err := h.runItem(root, stage, item); err != nil {
@@ -665,7 +668,10 @@ func (h *restoreHelper) step() (any, error) {
 	}
 	switch h.request.Operation {
 	case RestoreCleanup:
-		return ok, h.cleanup(root, stage, item)
+		if err := h.cleanup(root, stage, item); err != nil {
+			return nil, err
+		}
+		return h.done(root)
 	case RestoreMoveOld:
 		err = h.moveOld(root, stage)
 	case RestoreMoveNew:
@@ -691,21 +697,25 @@ func (h *restoreHelper) step() (any, error) {
 	return h.done(root)
 }
 
-// done answers a step that ran. setAside and rollbackOld sync the set-aside
-// folder whenever it exists: an attempt cut before its sync may have moved
+// done answers a step that ran. A step given the set-aside folder syncs it
+// whenever it exists: an attempt cut before its sync may have moved
 // something into it.
 func (h *restoreHelper) done(root fd) (any, error) {
-	if (h.request.Operation == RestoreRollbackOld || h.request.Operation == RestoreSetAside) && h.request.Aside != "" {
-		aside, err := h.t.openAt(root, h.request.Aside, directoryFlags, 0)
-		// Something else at its name holds nothing Ludock moved.
-		if err == nil {
-			err = syncAll(aside)
-		} else if isNotExist(err) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) {
-			err = nil
+	if h.request.Aside == "" {
+		return map[string]bool{"ok": true}, nil
+	}
+	aside, err := h.t.openAt(root, h.request.Aside, directoryFlags, 0)
+	// Something else at its name, or a mount there, holds nothing Ludock
+	// moved.
+	if err == nil {
+		if same, mountErr := sameMount(root, aside); mountErr != nil || same {
+			err = errors.Join(mountErr, syncAll(aside))
 		}
-		if err != nil {
-			return nil, err
-		}
+	} else if isNotExist(err) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) {
+		err = nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	return map[string]bool{"ok": true}, nil
 }
