@@ -160,6 +160,9 @@ func (d *DB) ChangeTwoFactor(ctx context.Context, c TwoFactorChange) error {
 		if !valid {
 			return ErrSessionGone
 		}
+		if err := RefuseWhileUpdating(ctx, tx); err != nil {
+			return err
+		}
 		var result sql.Result
 		if c.Pending != "" {
 			result, err = tx.ExecContext(ctx, `UPDATE users SET totp_secret = ?, totp_pending = NULL, totp_step = ?,
