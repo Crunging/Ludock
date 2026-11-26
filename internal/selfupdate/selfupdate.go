@@ -288,14 +288,17 @@ func (s *Service) check(ctx context.Context, dependents bool) (*docker.Container
 		}
 		return own, nil, err
 	}
-	var config struct{ Healthcheck *struct{ Test []string } }
-	if json.Unmarshal(encode(plan.Spec.Config), &config) != nil || config.Healthcheck == nil ||
-		len(config.Healthcheck.Test) == 0 || config.Healthcheck.Test[0] == "NONE" {
+	test := healthTest(plan.Spec.Config)
+	if len(test) == 0 || test[0] == "NONE" {
 		return own, nil, errNoHealthcheck
 	}
-	// Only Ludock's own check fails when it refuses its data; a check of the
-	// port alone passes its refusal page.
-	if !slices.Equal(config.Healthcheck.Test, []string{"CMD", helper.Binary, "healthcheck"}) {
+	// The image's check fails when Ludock refuses its data; one of the
+	// container's own, such as of the port alone, may pass its refusal page.
+	image, err := s.Docker.InspectImageConfig(ctx, own.Image)
+	if err != nil {
+		return own, nil, err
+	}
+	if !slices.Equal(test, healthTest(image.Config)) {
 		return own, nil, errOwnHealthcheck
 	}
 	if s.socket(plan.Spec) == nil {

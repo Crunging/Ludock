@@ -46,8 +46,10 @@ func seed(engine *fakedocker.Engine, dir, self, backups, data string, demo bool)
 	}
 	engine.AddContainer(fakedocker.GameOptions{ID: self, Name: self, Image: image, Running: true, Mounts: selfMounts,
 		Env: []string{"LUDOCK_DATA_DIR=" + data, "LUDOCK_DOCKER_SOCKET=" + engine.Socket}})
+	healthcheck := map[string]any{"Healthcheck": map[string]any{"Test": []any{"CMD", "/usr/local/bin/ludock", "healthcheck"}}}
+	engine.SetImageConfig("sha256:"+strings.Repeat("a", 64), healthcheck)
 	engine.Update(self, func(c *fakedocker.Container) {
-		c.ExtraConfig = map[string]any{"Healthcheck": map[string]any{"Test": []any{"CMD", "/usr/local/bin/ludock", "healthcheck"}}}
+		c.Image, c.ExtraConfig = "sha256:"+strings.Repeat("a", 64), healthcheck
 	})
 	fake.Run(engine, fake.Dev())
 	// Console helpers run for real, so commands reach the fake game consoles

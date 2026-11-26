@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/docker"
-	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
@@ -110,15 +109,10 @@ func (h *Helper) Run(ctx context.Context) int {
 		return ExitUnchanged
 	}
 	// The new container names the tag, which may have moved since the pull,
-	// and must keep Ludock's own health check, which fails when it can't
-	// open the data; one of the image's own might pass its refusal page.
-	var check struct{ Healthcheck *struct{ Test []string } }
+	// and must keep its image's health check, as the original did.
 	created, err := h.Docker.InspectSpec(ctx, id)
-	if err == nil {
-		json.Unmarshal(encode(created.Config), &check)
-	}
-	if err != nil || created.Image != h.Image || check.Healthcheck == nil || !slices.Equal(check.Healthcheck.Test, []string{"CMD", helper.Binary, "healthcheck"}) {
-		log.Error("Ludock's new container isn't the pulled image with Ludock's health check, so nothing was changed")
+	if err != nil || created.Image != h.Image || !slices.Equal(healthTest(created.Config), healthTest(image.Config)) {
+		log.Error("Ludock's new container isn't the pulled image with its own health check, so nothing was changed")
 		h.Docker.Remove(ctx, id, true, true)
 		return ExitUnchanged
 	}
@@ -226,6 +220,13 @@ func relabelled(info *docker.ContainerInspect, target string) bool {
 		}
 	}
 	return false
+}
+
+// healthTest is the command of a container's or image's health check.
+func healthTest(config map[string]json.RawMessage) []string {
+	var check struct{ Test []string }
+	json.Unmarshal(config["Healthcheck"], &check)
+	return check.Test
 }
 
 func encode(fields map[string]json.RawMessage) []byte {
