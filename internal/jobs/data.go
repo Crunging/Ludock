@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -400,6 +401,9 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 			}
 			// A newer run means the start took; it isn't sent again.
 			if info.State.StartedAt != job.Job.Recovery.StoppedStartedAt {
+				if info.State.Running && !info.State.Restarting && !info.State.Paused {
+					return job.Progress("state_restored", foundRunning, nil)
+				}
 				job.Job.Recovery.RunSeen = info.State.Status
 				return nil
 			}
@@ -408,13 +412,19 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 		if err := job.Progress("restarting", func(r *ops.Recovery) { r.StartRequested = true }, nil); err != nil {
 			return err
 		}
-		if err := j.Servers.Observer.ChangeState(ctx, server.Container.ID, servers.Start, func(observation identity.Observation, _ *docker.ContainerInspect) error {
+		err := j.Servers.Observer.ChangeStateExact(ctx, server.Container.ID, servers.Start, func(observation identity.Observation, _ *docker.ContainerInspect) error {
 			_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observation, server.Logical.BindingRevision)
 			return err
-		}); err != nil {
+		})
+		// Docker had it running already: someone else's start.
+		restored := func(r *ops.Recovery) { r.StateRestored = true }
+		if errors.Is(err, servers.ErrUnchanged) {
+			restored, err = foundRunning, nil
+		}
+		if err != nil {
 			return err
 		}
-		if err := job.Progress("state_restored", func(r *ops.Recovery) { r.StateRestored = true }, nil); err != nil {
+		if err := job.Progress("state_restored", restored, nil); err != nil {
 			return err
 		}
 		return j.Monitor.Suppress(ctx, server.Logical.ID, nil)

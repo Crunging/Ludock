@@ -465,8 +465,13 @@ func (j *Jobs) finishRestart(ctx context.Context, job *ops.Context, permission a
 			return "", err
 		}
 		// Status and run from the same inspection.
-		if run, err := time.Parse(time.RFC3339Nano, info.State.StartedAt); err == nil && info.State.Restarting && run.UnixMilli() != stopped {
-			return runningAgain(restarted + serverRestarting)
+		if run, err := time.Parse(time.RFC3339Nano, info.State.StartedAt); err == nil && run.UnixMilli() != stopped {
+			switch {
+			case info.State.Restarting:
+				return runningAgain(restarted + serverRestarting)
+			case info.State.Running && !info.State.Paused:
+				return runningAgain(runningAgainNote)
+			}
 		}
 		return "", nil
 	}
