@@ -34,6 +34,8 @@ type SchedulesView struct {
 	// Viewer is the viewer's account ID; Admin views can edit every schedule.
 	Viewer string
 	Admin  bool
+	// SameTime is SameTimeNote for each schedule that has one.
+	SameTime map[string]string
 }
 
 // Editable: only a schedule's owner or an administrator changes it.
@@ -144,6 +146,10 @@ var unavailableGuidance = map[string]string{
 	"unavailable":           "Ludock can’t work out the next run. Refresh this page, then check the schedule’s settings.",
 }
 
+func sameWait(a, b *schedules.WaitForEmpty) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
+}
+
 func sameDays(a, b []int) bool {
 	return len(a) == len(b) && !slices.ContainsFunc(b, func(day int) bool { return !slices.Contains(a, day) })
 }
@@ -162,6 +168,43 @@ func ScheduleWhen(input schedules.Input) string {
 		names = append(names, weekdays[day])
 	}
 	return input.Time + ", " + strings.Join(names, ", ")
+}
+
+// SameTimeNote names another of the server's schedules that runs at the
+// same instant as this one, id, and says what owners usually want instead.
+func SameTimeNote(times *schedules.SameTimes, input schedules.Input, id string, others []schedules.Schedule) string {
+	for _, other := range others {
+		if other.ID == id || other.CompletedAt != 0 || other.NextRunUnavailableReason != "" || !times.Same(input, other.Input) {
+			continue
+		}
+		when := ScheduleWhen(other.Input)
+		if other.Timezone != input.Timezone {
+			when += " (" + other.Timezone + ")"
+		}
+		always := (input.Kind == "once" && other.Kind == "once") ||
+			(input.Kind == "recurring" && other.Kind == "recurring" && input.Timezone == other.Timezone && sameDays(input.Days, other.Days))
+		// Only schedules that always run together, and wait for players
+		// alike, can be one schedule.
+		one := always && sameWait(input.WaitForEmpty, other.WaitForEmpty)
+		note := "Runs at the same time as “" + ActionLabel(other.Action) + ", " + when + "”"
+		if !always {
+			note = "Sometimes runs at the same time as “" + ActionLabel(other.Action) + ", " + when + "”"
+		}
+		restart := input
+		if other.Action == "restart" {
+			restart = other.Input
+		}
+		switch pair := input.Action + "+" + other.Action; {
+		case one && (pair == "restart+backup" || pair == "backup+restart") && restart.CreateBackup:
+			return note + ". The restart already backs up first, so the separate backup only stops the server a second time."
+		case one && (pair == "restart+backup" || pair == "backup+restart"):
+			return note + ". To back up and restart with one stop, use Back up first on the restart instead."
+		case input.Action == "command" || other.Action == "command":
+			return note + ". A command is skipped while other work runs on the server, so give it a minute of its own."
+		}
+		return note + ". One waits for the other to finish, and is skipped if it can’t start in time."
+	}
+	return ""
 }
 
 // ScheduleDate formats a time in the schedule's own zone.
@@ -331,6 +374,9 @@ templ ScheduleList(v SchedulesView) {
 							}
 							if item.Announcements != nil {
 								<small class="table-detail">Warns players { minutesText(item.Announcements.LeadMinutes) } before</small>
+							}
+							if note := v.SameTime[item.ID]; note != "" {
+								<small class="table-detail schedule-same-time">{ note }</small>
 							}
 						</td>
 						<td>
@@ -695,7 +741,7 @@ templ ScheduleEditor(f ScheduleForm) {
 	</form>
 }
 
-templ SchedulePreview(enabled bool, text, players string) {
+templ SchedulePreview(enabled bool, text, players, sameTime string) {
 	<strong>
 		if enabled {
 			Next run:
@@ -706,5 +752,8 @@ templ SchedulePreview(enabled bool, text, players string) {
 	{ text }
 	if players != "" {
 		<span class="schedule-players"><strong>Players:</strong> { players }</span>
+	}
+	if sameTime != "" {
+		<span class="schedule-players schedule-same-time"><strong>Same time:</strong> { sameTime }</span>
 	}
 }

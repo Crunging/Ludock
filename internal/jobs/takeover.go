@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -18,7 +17,6 @@ import (
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/ops"
-	"github.com/Crunging/Ludock/internal/schedtime"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -116,37 +114,6 @@ func adoptRestores(ctx context.Context, tx *sql.Tx, from *identity.Server, targe
 }
 
 func errTakeOver(message string) error { return apperr.New("TAKE_OVER_REFUSED", 409, message) }
-
-// sameTime reports whether two enabled schedules run at the same instant,
-// whatever time zones they name: a one-time schedule's run against the
-// other's, or two recurring ones on any run of the first in the coming year.
-func sameTime(a, b schedules.Input, now int64) bool {
-	if !a.Enabled || !b.Enabled {
-		return false
-	}
-	runsAt := func(input schedules.Input, at int64) bool {
-		next, ok := schedtime.NextRun(input.Clock(), at, "")
-		return ok && next == at
-	}
-	for _, pair := range [][2]schedules.Input{{a, b}, {b, a}} {
-		if pair[0].Kind == "once" {
-			at, ok := schedtime.NextRun(pair[0].Clock(), now, "")
-			return ok && runsAt(pair[1], at)
-		}
-	}
-	// A year of runs covers every weekday the two share and every stretch
-	// in which their time zones line up.
-	for at := now; ; {
-		next, ok := schedtime.NextRun(a.Clock(), at, "")
-		if !ok || next > now+366*24*time.Hour.Milliseconds() {
-			return false
-		}
-		if runsAt(b, next) {
-			return true
-		}
-		at = next + 60_000
-	}
-}
 
 // TakeOver moves a missing server's backups, schedules, sharing, monitoring
 // choices, and history to the server an administrator says it now is, and
@@ -381,9 +348,9 @@ func (j *Jobs) TakeOver(ctx context.Context, actor *db.SessionUser, tokenHash, f
 	if err != nil {
 		return nil, err
 	}
-	now := db.Now()
+	times := &schedules.SameTimes{Now: db.Now()}
 	for _, schedule := range moved {
-		if slices.ContainsFunc(own, func(their schedules.Input) bool { return sameTime(their, schedule, now) }) {
+		if slices.ContainsFunc(own, func(their schedules.Input) bool { return times.Same(their, schedule) }) {
 			done.SameTime = append(done.SameTime, schedule)
 		}
 	}

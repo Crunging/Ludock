@@ -117,9 +117,13 @@ func (s *Service) wait(ctx context.Context, r *row, data Input, now int64) error
 		}
 		return errWaitUnknown
 	}
-	err = s.queue(ctx, r, data, state, user, binding, r.lastSlot.String, now)
+	retryUntil := ends + schedtime.OneTimeGraceMs - lastChance
+	err = s.ready(ctx, r.serverID, data, now < retryUntil)
+	if err == nil {
+		err = s.queue(ctx, r, data, state, user, binding, r.lastSlot.String, now)
+	}
 	// Other work on the server holds the run, which still waits.
-	if apperr.Is(err, "OPERATION_CONFLICT") && now < ends+schedtime.OneTimeGraceMs-lastChance {
+	if apperr.Is(err, "OPERATION_CONFLICT") && now < retryUntil {
 		return errRetryLater
 	}
 	return err

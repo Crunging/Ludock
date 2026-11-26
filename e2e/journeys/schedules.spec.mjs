@@ -120,23 +120,44 @@ test("a new schedule opens on a daily restart that backs up first", async ({ pag
   await moreOptions(form);
   await expect(form.locator("input[name=timezone]")).toHaveValue(zone);
   await expect(form.getByLabel("Wait until no one is online")).toBeChecked();
+  // The summary follows the wait being turned off and on.
+  await form.getByLabel("Wait until no one is online").uncheck();
+  await expect(page.locator("#schedule-preview")).toContainText("Players: Players are warned in the game 5 and 1 minutes before.");
+  await form.getByLabel("Wait until no one is online").check();
+  await expect(page.locator("#schedule-preview")).toContainText("Players: Waits up to 30 minutes for everyone to leave.");
   // A backup offers the same, and the line says what turning one off means.
   await form.getByLabel("Action").selectOption("backup");
   await form.getByLabel("Warn players in the game").uncheck();
   await expect(page.locator("#schedule-preview")).toContainText("then goes ahead without warning anyone still on.");
   await form.getByLabel("Warn players in the game").check();
-  await form.getByLabel("Action").selectOption("restart");
-
   await form.getByRole("button", { name: "Add schedule" }).click();
   await expect(page).toHaveURL(/saved=created/);
-  const row = page.locator("#schedule-list tbody tr", { hasText: "08:00, every day" });
-  await expect(row).toContainText("Backup before restart");
+
+  // A restart at the same time as that backup is pointed at Back up first,
+  // and can still be saved beside it.
+  const preview = page.locator("#schedule-preview");
+  await form.getByRole("button", { name: "Weekends" }).click();
+  await expect(preview).toContainText("Same time: Sometimes runs at the same time as “Backup, 08:00, every day”. One waits for the other to finish");
+  await form.getByRole("button", { name: "Every day" }).click();
+  await expect(preview).toContainText(`Same time: Runs at the same time as “Backup, 08:00, every day”. The restart already backs up first`);
+  await form.getByLabel("Back up first").uncheck();
+  await expect(preview).toContainText("To back up and restart with one stop, use Back up first on the restart instead.");
+  await form.getByLabel("Back up first").check();
+  await form.getByRole("button", { name: "Add schedule" }).click();
+  await expect(page).toHaveURL(/saved=created/);
+  const row = page.locator("#schedule-list tbody tr", { hasText: "Backup before restart" });
+  await expect(row).toContainText("08:00, every day");
   await expect(row).toContainText("Waits up to 30 minutes for everyone to leave, then goes ahead");
   await expect(row).toContainText("Warns players 5 and 1 minutes before");
+  await expect(row).toContainText("Runs at the same time as “Backup, 08:00, every day”. The restart already backs up first");
   await expect(row.locator("td").nth(2)).toHaveText("Enabled");
-  await row.getByRole("button", { name: "Delete" }).click();
-  await page.getByRole("dialog", { name: "Delete this schedule?" }).getByRole("button", { name: "Delete schedule" }).click();
-  await expect(row).toHaveCount(0);
+  const backup = page.locator("#schedule-list tbody tr", { hasText: "08:00, every day" }).filter({ hasNotText: "Backup before restart" });
+  await expect(backup).toContainText("Runs at the same time as “Restart, 08:00, every day”.");
+  for (const each of [row, backup]) {
+    await each.getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("dialog", { name: "Delete this schedule?" }).getByRole("button", { name: "Delete schedule" }).click();
+    await expect(each).toHaveCount(0);
+  }
 });
 
 test("a new schedule starts on an action its owner can use", async ({ page, session, ownServer }) => {

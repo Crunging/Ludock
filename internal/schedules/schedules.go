@@ -952,7 +952,10 @@ func (s *Service) evaluate(ctx context.Context, r *row, now int64, d *dueRun) er
 			return s.startWaiting(ctx, r, d.slot, scheduledAt, now)
 		}
 	}
-	err = s.queue(ctx, r, data, state, user, binding, d.slot, now)
+	err = s.ready(ctx, r.serverID, data, now < retryUntil)
+	if err == nil {
+		err = s.queue(ctx, r, data, state, user, binding, d.slot, now)
+	}
 	// A stopped server busy with other work keeps the run's full wait.
 	if apperr.Is(err, "OPERATION_CONFLICT") && data.WaitForEmpty != nil {
 		return s.startWaiting(ctx, r, d.slot, scheduledAt, now)
@@ -965,6 +968,31 @@ func (s *Service) evaluate(ctx context.Context, r *row, now int64, d *dueRun) er
 		return errRetryLater
 	}
 	return err
+}
+
+var errBusy = apperr.New("OPERATION_CONFLICT", 409, "Other work is running on this server")
+
+// ready holds back a run that stops the server while it can still be
+// retried: busy with other work, as a conflict, or just after other work,
+// such as another schedule at the same time, started it and its game hasn't
+// come up, so a backup can save the world. Busy is checked first, so work
+// that finishes meanwhile isn't taken for a game that is up.
+func (s *Service) ready(ctx context.Context, serverID string, data Input, retry bool) error {
+	if !Disconnects(data.Action) || !retry {
+		return nil
+	}
+	var busy bool
+	if err := s.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM operations WHERE server_id=? AND status IN ('queued','running'))",
+		serverID).Scan(&busy); err != nil {
+		return err
+	}
+	if busy {
+		return errBusy
+	}
+	if s.Servers.StillStarting(ctx, serverID) {
+		return errRetryLater
+	}
+	return nil
 }
 
 // recordSkip records why a run won't happen, and alerts and calls off its

@@ -124,8 +124,12 @@ func (s *Server) schedulesView(r *http.Request, request *Request, d *views.Serve
 	if err != nil {
 		v.Error = publicMessage(err)
 	}
-	v.Schedules = list
+	v.Schedules, v.SameTime = list, map[string]string{}
+	times := &schedules.SameTimes{Now: v.Now}
 	for _, item := range list {
+		if item.CompletedAt == 0 && item.NextRunUnavailableReason == "" {
+			v.SameTime[item.ID] = views.SameTimeNote(times, item.Input, item.ID, list)
+		}
 		v.CanResume[item.ID] = canRunSchedule(view, item.Input)
 		v.CanCancelWait[item.ID] = item.WaitingUntil != 0 && s.App.Schedules.CanCancelWait(r.Context(), request.User(), &item)
 	}
@@ -411,7 +415,8 @@ func (s *Server) previewSchedule(w http.ResponseWriter, r *http.Request, request
 	}
 	input, _, err := parseSchedule(r)
 	input = draftForSave(input)
-	players := ""
+	draft := input
+	players, sameTime := "", ""
 	if err == nil {
 		players = views.PlayersPlan(input)
 	}
@@ -431,22 +436,22 @@ func (s *Server) previewSchedule(w http.ResponseWriter, r *http.Request, request
 		input.WaitForEmpty = nil
 		if input.Validate() == nil {
 			lastSlot := ""
-			if id := r.PostFormValue("scheduleId"); id != "" {
-				list, _ := s.App.Schedules.List(r.Context(), request.User(), serverID)
-				for _, item := range list {
-					if item.ID == id {
-						lastSlot = item.LastSlot
-					}
+			id := r.PostFormValue("scheduleId")
+			list, _ := s.App.Schedules.List(r.Context(), request.User(), serverID)
+			for _, item := range list {
+				if item.ID == id {
+					lastSlot = item.LastSlot
 				}
 			}
 			clock := input.Clock()
 			clock.Enabled = true
 			now := db.Now()
+			sameTime = views.SameTimeNote(&schedules.SameTimes{Now: now}, draft, id, list)
 			minute := now / 60_000 * 60_000
 			if next, ok := schedtime.NextRun(clock, minute, lastSlot); ok && (input.Kind == "recurring" || next >= minute) {
 				text = views.ScheduleRun(next, input.Timezone, now)
 			}
 		}
 	}
-	render(w, r, http.StatusOK, views.SchedulePreview(input.Enabled, text, players))
+	render(w, r, http.StatusOK, views.SchedulePreview(input.Enabled, text, players, sameTime))
 }

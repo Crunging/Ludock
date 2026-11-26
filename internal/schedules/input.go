@@ -275,3 +275,73 @@ func (i Input) Key() string {
 	encoded, _ := json.Marshal([]any{i.Kind, i.Action, i.Command, i.CreateBackup, i.Announcements, i.WaitForEmpty, i.Enabled, i.Time, i.Timezone, days, i.Date})
 	return string(encoded)
 }
+
+// SameTime reports whether two enabled schedules run at the same instant,
+// whatever time zones they name: a one-time schedule's run against the
+// other's, or two recurring ones on any of their runs in the coming year.
+func SameTime(a, b Input, now int64) bool { return (&SameTimes{Now: now}).Same(a, b) }
+
+// SameTimes is SameTime for many schedules, working out each recurring
+// schedule's runs in the coming year only once.
+type SameTimes struct {
+	Now  int64
+	runs map[string][]int64
+}
+
+func (s *SameTimes) Same(a, b Input) bool {
+	if !a.Enabled || !b.Enabled {
+		return false
+	}
+	runsAt := func(input Input, at int64) bool {
+		next, ok := schedtime.NextRun(input.Clock(), at, "")
+		return ok && next == at
+	}
+	for _, pair := range [][2]Input{{a, b}, {b, a}} {
+		if pair[0].Kind == "once" {
+			at, ok := schedtime.NextRun(pair[0].Clock(), s.Now, "")
+			return ok && runsAt(pair[1], at)
+		}
+	}
+	// In one time zone, runs only happen at their own wall-clock minute.
+	if a.Timezone == b.Timezone {
+		return a.Time == b.Time && slices.ContainsFunc(a.Days, func(day int) bool { return slices.Contains(b.Days, day) })
+	}
+	first, second := s.year(a), s.year(b)
+	for i, j := 0, 0; i < len(first) && j < len(second); {
+		switch {
+		case first[i] == second[j]:
+			return true
+		case first[i] < second[j]:
+			i++
+		default:
+			j++
+		}
+	}
+	return false
+}
+
+// year lists a recurring schedule's runs in the coming year, which covers
+// every weekday two schedules share and every stretch in which their time
+// zones line up. A repeated fall-back minute runs once, as the scheduler
+// runs it.
+func (s *SameTimes) year(input Input) []int64 {
+	key := input.Key()
+	if runs, ok := s.runs[key]; ok {
+		return runs
+	}
+	var runs []int64
+	clock, last := input.Clock(), ""
+	for at := s.Now; ; {
+		next, ok := schedtime.NextRun(clock, at, last)
+		if !ok || next > s.Now+366*24*time.Hour.Milliseconds() {
+			break
+		}
+		runs = append(runs, next)
+		last, at = schedtime.Slot(clock, next), next+60_000
+	}
+	if s.runs == nil {
+		s.runs = map[string][]int64{}
+	}
+	s.runs[key] = runs
+	return runs
+}
