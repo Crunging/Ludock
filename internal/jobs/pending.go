@@ -161,13 +161,6 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 				return err
 			}
 		}
-		// A server started since the restore stopped it may have written into
-		// a folder the restore had emptied or filled, so that is kept.
-		if restore.Job.Recovery.StoppedStartedAt != stoppedAt && slices.ContainsFunc(state.Roots, func(entry journal) bool {
-			return entry.Phase == "old_moved" || entry.Phase == "replaced"
-		}) && state.Status != "committed" {
-			state.SetAside = true
-		}
 		encoded, err := json.Marshal(state)
 		if err != nil {
 			return err

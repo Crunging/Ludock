@@ -803,9 +803,12 @@ copy out what you need and delete it on the host. A backup still runs, but
 the previous data kept in that folder isn't in it, and its **Activity** entry
 says which folder it left out.
 
-`ludock-set-aside-<id>`, without the leading dot, holds what a server wrote
-while a stopped restore waited to be undone. It is ordinary data: Files shows
-it, backups include it, and you can delete it once you've kept what you need.
+`ludock-set-aside-<id>`, without the leading dot, holds what undoing a
+restore found in the place of the previous data: the backup's copy, if it was
+already in place, and anything a game or another program wrote there
+meanwhile. No undo removes anything from it. It is ordinary data: Files shows
+it, backups include it, a later restore replaces it with the rest of the data,
+and you can delete it once you've kept what you need.
 
 ### Activity results
 
@@ -884,15 +887,16 @@ started, and stops moving it as soon as it sees that:
 | Where it stopped | What it leaves | How it is finished |
 | --- | --- | --- |
 | Before any data moved (staging, unpacking) | Nothing: the unpacked copy is removed even if the server is running | Nothing to finish |
-| After data moved, with the server stopped | The restore undone | Nothing to finish |
-| After data moved, with the server started elsewhere | The previous data, or the part of it that had moved, in the root's `.ludock-restore-<id>/old`, not in place; the server left running | See below |
+| After data moved, with the server stopped and nothing else writing to its data | The restore undone; anything in the place of the previous data, such as the backup's copy, in `ludock-set-aside-<id>` | Nothing to finish |
+| After data moved, with the server, or another container that can write to its data, started elsewhere | The previous data, or the part of it that had moved, in the root's `.ludock-restore-<id>/old`, not in place; the server left as it is | See below |
 | After the backup's data was in place, cleanup failing | The data it replaced in `.ludock-restore-<id>` | Removed at the next backup, restore, or update |
 
 A restore left with previous data out of place is listed in **Needs
 attention** for administrators. **Undo the restore** stops the server, the one
 case where a data operation stops a server another manager started; it warns
-players first when anyone is online and the game can be messaged. Ludock moves
-whatever is in the data folder now into `ludock-set-aside-<id>` beside it,
+players first when anyone is online and the game can be messaged. It refuses
+while another container that can write to the data runs, so stop that first.
+Ludock moves whatever is in the data folder now into `ludock-set-aside-<id>` beside it,
 returns the previous data, and starts the server again if it was running. A
 restore stopped while it was still moving data out left some of the previous
 data in place, so only what the game made in place of the rest moves there; a
@@ -907,20 +911,16 @@ data, makes that work refuse instead, and a running server it stopped
 for the undo starts again (for a restart with a backup first, once its backup
 is taken) unless the undo had begun moving data.
 
-Restores and undos move data without replacing anything a game makes at the
-same moment, where the filesystem can refuse that as part of the move. Each
-undo step finds out once, from its first such move or, when something is in
-the way, from an empty scratch folder in the restore's folder, whether the data
-folder's filesystem can. It counts as unable when the kernel answers with
-`ENOSYS`, `EINVAL`, `EOPNOTSUPP` or `EPERM`; any other answer stops the
-step, to be tried again. If it can, every move of that step is made that
-way, and something the game made in the way of the previous data moves to
-`ludock-set-aside-<id>`. If it can't, such as on NFS, the undo moves as
-restores always have: it refuses when something is in the way, as does
-restoring or undoing one file or folder, and otherwise uses a plain rename.
-Then, if someone starts the server outside Ludock during an undo, a file the
-game makes in the instant between Ludock checking a name and moving data
-there can be replaced.
+On filesystems that can rename without replacing, as most local Linux
+filesystems can, restoring and undoing never overwrite a file a game creates
+at the same moment, and anything in the way of the previous data during an
+undo moves to `ludock-set-aside-<id>`. On filesystems that can't, such as NFS,
+restoring and undoing the whole data use plain renames: an undo of a restore
+stopped while it was moving data out refuses if something is in the way
+instead of moving it aside, and a file a game creates in the instant between
+Ludock checking a name and moving data there can be replaced. Restoring one
+file or folder doesn't work on such storage: it fails before moving anything,
+the data is left as it was, and there is nothing to undo.
 
 If the server's data folders or game change where it is defined, such as in
 Compose, while such a restore waits to be undone, Ludock can't tell where the

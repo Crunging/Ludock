@@ -882,9 +882,9 @@ func TestRenamesNeverClobber(t *testing.T) {
 		return strings.Join(all, "\n")
 	}
 	// On a filesystem without RENAME_NOREPLACE, in any of the ways it says
-	// so, an undo moves as main does: something in the way is refused with
-	// the disk left exactly as it was, and once the owner clears it the
-	// return uses the plain rename.
+	// so, something in the way of an undo is refused with the disk left
+	// exactly as it was, and once the owner clears it the return uses the
+	// plain rename.
 	for _, errno := range []unix.Errno{unix.EINVAL, unix.ENOSYS, unix.EOPNOTSUPP, unix.EPERM} {
 		renameat2 = func(int, string, int, string, uint) error { return errno }
 		before := tree(root)
@@ -893,7 +893,7 @@ func TestRenamesNeverClobber(t *testing.T) {
 		}
 		os.Rename(filepath.Join(root, "ops.json"), filepath.Join(dir, "cleared"))
 		if RunRestore(string(argument), io.Discard, io.Discard) != 0 {
-			t.Fatalf("%v: refused a return main makes", errno)
+			t.Fatalf("%v: refused a return with nothing in the way", errno)
 		}
 		if data, _ := os.ReadFile(filepath.Join(root, "ops.json")); string(data) != "original" {
 			t.Fatal("didn't return the original:", string(data))
@@ -1070,8 +1070,8 @@ func TestRenamesNeverClobber(t *testing.T) {
 		os.Remove(filepath.Join(root, "file"+strconv.Itoa(index)))
 	}
 	// Finding out about RENAME_NOREPLACE needs a scratch folder only where
-	// something is in the way, which main refuses anyway: on a full disk, a
-	// clear return still finishes, and a clash is refused with nothing made.
+	// something is in the way: on a full disk, a clear return still
+	// finishes, and a clash is refused with nothing made.
 	// A stage it can't write in stands in for the full disk; root writes
 	// anyway.
 	if os.Geteuid() != 0 {
@@ -1086,7 +1086,7 @@ func TestRenamesNeverClobber(t *testing.T) {
 		}
 		os.Remove(filepath.Join(root, "ops.json"))
 		if RunRestore(string(argument), io.Discard, io.Discard) != 0 {
-			t.Fatal("a full disk refused a return main makes")
+			t.Fatal("a full disk refused a return with nothing in the way")
 		}
 		os.Chmod(filepath.Join(root, stage), 0o700)
 	}
@@ -1235,6 +1235,68 @@ func TestExtractExitOnFullDisk(t *testing.T) {
 	if status, _ := extractExit(errUnsafe); status != 1 {
 		t.Error("an unsafe archive reported as a full disk")
 	}
+}
+
+// Undoing a restore whose old data had all moved out sets aside whatever is
+// live, as another program may have written it: a link, a file with a second
+// name, and a named pipe move as they are. A folder with a mount inside it
+// is refused with nothing moved, as its mount would move with it.
+func TestRestoreSetAsideKeepsAnything(t *testing.T) {
+	const id = "0f9619ff-8b86-4011-b42d-00c04fc964ff"
+	stage, aside := StageName(id), SetAsideName(id)
+	setAside := func(root string) int {
+		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreSetAside, Aside: aside, Base: root})
+		return RunRestore(string(request), io.Discard, io.Discard)
+	}
+	live := func(t *testing.T) string {
+		root := t.TempDir()
+		os.MkdirAll(filepath.Join(root, stage, "old"), 0o700)
+		os.MkdirAll(filepath.Join(root, stage, "new"), 0o700)
+		os.WriteFile(filepath.Join(root, "save"), []byte("theirs"), 0o644)
+		os.Link(filepath.Join(root, "save"), filepath.Join(root, "save-link"))
+		os.Symlink("save", filepath.Join(root, "latest"))
+		unix.Mkfifo(filepath.Join(root, "console"), 0o600)
+		os.MkdirAll(filepath.Join(root, "maps", "tiles"), 0o755)
+		return root
+	}
+	kept := func(t *testing.T, root, folder string) {
+		t.Helper()
+		entries, _ := os.ReadDir(filepath.Join(root, folder))
+		var names []string
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		if !slices.Equal(names, []string{"console", "latest", "maps", "save", "save-link"}) {
+			t.Errorf("%s holds %q", folder, names)
+		}
+		if target, _ := os.Readlink(filepath.Join(root, folder, "latest")); target != "save" {
+			t.Error("the link changed:", target)
+		}
+	}
+	t.Run("links and pipes", func(t *testing.T) {
+		root := live(t)
+		if setAside(root) != 0 {
+			t.Fatal("refused")
+		}
+		kept(t, root, aside)
+	})
+	t.Run("mount inside", func(t *testing.T) {
+		root := live(t)
+		previous := mountinfo.Table
+		mountinfo.Table = func() ([]byte, error) {
+			return []byte("40 22 0:45 / " + filepath.Join(root, "maps", "tiles") + " rw - ext4 /dev/sdb rw\n"), nil
+		}
+		t.Cleanup(func() { mountinfo.Table = previous })
+		if setAside(root) == 0 {
+			t.Fatal("moved a folder with a mount inside it")
+		}
+		if _, err := os.Lstat(filepath.Join(root, aside)); !os.IsNotExist(err) {
+			t.Fatal("made the set-aside folder")
+		}
+		if _, err := os.Stat(filepath.Join(root, "maps", "tiles")); err != nil {
+			t.Fatal("moved the mount")
+		}
+	})
 }
 
 // Rolling back a one-item restore whose replacement is still staged keeps a

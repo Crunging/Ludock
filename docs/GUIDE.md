@@ -481,7 +481,9 @@ time limits are in the [reference](REFERENCE.md#limits).
   archives can hold configuration secrets.
 
 If a restore fails, check **Activity**: its entry says what the data was left
-as. Usually the restore was undone and the data is as it was. If something
+as. Usually the restore was undone and the data is as it was. Anything Ludock
+found in its place, such as the backup's copy, is kept in the folder the entry
+names; delete it once you don't need it. If something
 outside Ludock started the server partway, the restore stops and leaves it
 running; when the previous data was already moved out, **Needs attention**
 offers administrators **Undo the restore**, which keeps anything the game wrote

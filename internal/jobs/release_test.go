@@ -180,6 +180,13 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 	restoreAlert := "mc: Ludock restarted during a restore. Its Activity says what the data was left as."
 	backupAlert := "mc: Ludock restarted during a backup, so there’s no new backup. Its Activity says more."
 	undone := "The restore was undone: the server’s data is as it was. Ludock started the server again."
+	// Undoing a restore whose backup's data was in place keeps that data
+	// aside rather than removing it.
+	keptUndone := "The restore was undone: the server’s data is as it was. Anything Ludock moved out of the way of the server’s previous data " +
+		"went to the folder {aside} in its data. Ludock started the server again."
+	backupAside := map[string]string{"{aside}/": "", "{aside}/server.properties": "motd=as backed up\n", "{aside}/world/": "",
+		"{aside}/world/level.dat": "the world as backed up"}
+	itemAside := map[string]string{"{aside}/": "", "{aside}/world/": "", "{aside}/world/level.dat": "the world as backed up"}
 	finishedUndo := "Ludock finished undoing a restore that was stopped partway: the server’s previous data is back in place. " +
 		"Anything Ludock moved out of its way went to the folder {aside} beside it."
 	undoFinished := "Ludock restarted while this ran, and finished it. The server was stopped before this began, so Ludock didn’t start it."
@@ -211,9 +218,9 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		// Old data moved, nothing in its place yet.
 		{name: "restore-old-moved", status: ops.Interrupted, guidance: undone, data: now,
 			containers: []string{"/mc running unless-stopped 0000"}, alerts: []string{restoreAlert}},
-		// The backup's data in place, not committed: it is removed and the
+		// The backup's data in place, not committed: it is set aside and the
 		// old data put back.
-		{name: "restore-replaced", status: ops.Interrupted, guidance: undone, data: now,
+		{name: "restore-replaced", status: ops.Interrupted, guidance: keptUndone, data: merged(now, backupAside),
 			containers: []string{"/mc running unless-stopped 0000"}, alerts: []string{restoreAlert}},
 		// A failed swap rolling back, its new data removed and the old data
 		// still in the stage.
@@ -231,7 +238,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		{name: "item-old-moved", status: ops.Interrupted, guidance: undone, data: now,
 			containers: []string{"/mc running unless-stopped 0000"}, alerts: []string{restoreAlert}},
 		// One folder's restore, the backup's copy in its place.
-		{name: "item-replaced", status: ops.Interrupted, guidance: undone, data: now,
+		{name: "item-replaced", status: ops.Interrupted, guidance: keptUndone, data: merged(now, itemAside),
 			containers: []string{"/mc running unless-stopped 0000"}, alerts: []string{restoreAlert}},
 		// An undo of a restore that failed because the server was started
 		// elsewhere, killed once it set aside what the game wrote meanwhile
