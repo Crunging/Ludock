@@ -83,7 +83,7 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   try {
     await page.goto(files);
     await page.locator("[data-upload-input]").setInputFiles([{ name: "huge.bin", mimeType: "application/octet-stream", buffer: Buffer.alloc(6 * 1024 * 1024) }]);
-    await expect(page.locator("#file-feedback")).toContainText("Could not upload “huge.bin”: File exceeds the upload size limit of 5 MiB");
+    await expect(page.locator("#file-feedback")).toContainText("Could not upload “huge.bin”: File exceeds the upload size limit of 5 MiB.");
   } finally {
     await setUploadLimit(page, "", "Upload limit removed.");
   }

@@ -86,10 +86,15 @@ func LifecycleAction(state string) string {
 }
 
 // StateGuidance explains a broken server, or a state without a lifecycle
-// control.
-func StateGuidance(state string) string {
-	if state == "restarting" {
+// control; one that keeps restarting gets what to do only for a viewer who
+// can stop it.
+func StateGuidance(state string, canStop bool) string {
+	if state == "restarting" && canStop {
 		return "The game keeps stopping and Docker keeps starting it again. Stop it, check its logs, then fix the cause or restore a backup."
+	}
+	// Someone who can't stop it is told what is happening, not what to do.
+	if state == "restarting" {
+		return "The game keeps stopping and Docker keeps starting it again."
 	}
 	if LifecycleAction(state) != "" {
 		return ""

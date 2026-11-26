@@ -15,7 +15,10 @@ import (
 
 // ServerRow is one server in the list, with the controls its viewer may use.
 type ServerRow struct {
-	Server     servers.View
+	Server servers.View
+	// Removed: an administrator removed the server from Ludock, which keeps
+	// it only for its backups.
+	Removed    bool
 	Address    string
 	ShowBackup bool
 	// Controls are off while Docker state is unavailable or work is active.
@@ -43,6 +46,9 @@ type ServerRow struct {
 
 // Status is the row's state, naming a server its alert calls down the same way.
 func (r ServerRow) Status() Status {
+	if r.Removed {
+		return Status{"Removed from Ludock", "idle"}
+	}
 	status := ServerStatus(r.Server.State, r.Server.Health, r.Server.Exit)
 	if r.Down && status.Tone != "failed" {
 		return Status{"Down", "failed"}
@@ -446,7 +452,7 @@ templ ServerCard(row ServerRow) {
 			<a class="server-row__name" id={ "server-" + server.ID } href={ templ.SafeURL("/servers/" + server.ID) }>{ server.DisplayName }</a>
 			<span class="server-row__game">{ server.GameName }</span>
 			// A server without exactly one container has no Docker state of its own.
-			if guidance := StateGuidance(server.State); guidance != "" && BindingNote(string(server.BindingStatus)) == "" {
+			if guidance := StateGuidance(server.State, row.CanStop); guidance != "" && BindingNote(string(server.BindingStatus)) == "" {
 				<p class="server-row__note">{ guidance }</p>
 			}
 			if note := BindingNote(string(server.BindingStatus)); note != "" {

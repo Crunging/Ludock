@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -19,7 +20,8 @@ func (s *Server) consolePage(w http.ResponseWriter, r *http.Request, request *Re
 	view := snapshot.Server
 	c := views.ConsoleView{ServerID: view.ID, ServerName: view.DisplayName, State: view.State, Health: view.Health, Exit: view.Exit,
 		Running: view.State == "running", BindingActive: view.BindingStatus == "active" && !snapshot.DiscoveryUnavailable,
-		CanStart: can(view, authz.ServerStart) && views.LifecycleAction(view.State) == "start"}
+		CanStart: can(view, authz.ServerStart) && views.LifecycleAction(view.State) == "start",
+		CanStop:  can(view, authz.ServerStop) && views.LifecycleAction(view.State) == "stop" && !view.Refuses(ops.KindStop)}
 	if snapshot.DiscoveryUnavailable {
 		c.Unavailable = "Ludock can’t reach this server right now."
 	} else {
