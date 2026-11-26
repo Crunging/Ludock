@@ -617,12 +617,6 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 	}
 	downs := map[string]int64{}
 	for _, server := range logical {
-		if container, found := current[server.ContainerID]; !unavailable {
-			if !found || server.ContainerID == "" || server.Status != identity.StatusActive {
-				container.DownSince = 0
-			}
-			downs[server.ID] = container.DownSince
-		}
 		r := rows[server.ID]
 		if r == nil {
 			continue
@@ -630,6 +624,15 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		policy, err := ParsePolicy([]byte(r.policy))
 		if err != nil {
 			continue
+		}
+		if container, found := current[server.ContainerID]; !unavailable {
+			// A run dates an outage from the loop it was part of only while it
+			// still is one of the loop's.
+			if !found || server.ContainerID == "" || server.Status != identity.StatusActive ||
+				(container.State == "running" && container.DownSince != 0 && !earlyRun(container, s.answered(server.ID, container), policy.GraceSeconds, now)) {
+				container.DownSince = 0
+			}
+			downs[server.ID] = container.DownSince
 		}
 		container, found := current[server.ContainerID]
 		running := server.Status == identity.StatusActive && found && server.ContainerID != "" && container.State == "running"
@@ -809,6 +812,12 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 	}
 	if s.down == nil {
 		s.down = map[string]int64{}
+	}
+	// Pages hear when the time an outage they show began is learned.
+	for serverID, down := range downs {
+		if r := rows[serverID]; down != s.down[serverID] && r != nil && r.outage.Valid {
+			shown = append(shown, serverID)
+		}
 	}
 	maps.Copy(s.down, downs)
 	s.lookMu.Unlock()

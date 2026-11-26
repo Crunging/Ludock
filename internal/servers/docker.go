@@ -230,9 +230,13 @@ func (o *Observer) note(observed *Observed) {
 		if exited == 0 {
 			exited = o.now().UnixMilli()
 		}
-		// An exit long after the last one seen begins another loop.
+		// An exit long after the last one seen begins another loop, dated
+		// only by Docker's own exit time.
 		if last, ok := o.restarting.Load(container.ID); !ok || exited-last.(int64) > restartEvidence.Milliseconds() {
-			o.loops.Store(container.ID, exited)
+			o.loops.Delete(container.ID)
+		}
+		if _, dated := o.loops.Load(container.ID); !dated && container.exited != 0 {
+			o.loops.Store(container.ID, container.exited)
 		}
 		o.restarting.Store(container.ID, exited)
 		container.DownSince = o.loopSince(container.ID)

@@ -66,7 +66,7 @@ func state(value, health string) map[string]servers.Container {
 
 // An outage shows on pages once its grace ends, before the next tick alerts.
 // A server that recovers in between raises no alert, but pages still have to
-// hear that the outage is gone.
+// hear that the outage is gone, and that the time it began was learned.
 func TestClearedOutageUpdatesPagesWithoutAnAlert(t *testing.T) {
 	s, events, server := setup(t)
 	var changes []string
@@ -81,6 +81,15 @@ func TestClearedOutageUpdatesPagesWithoutAnAlert(t *testing.T) {
 	}
 	if len(events.events) != 0 || len(changes) != 1 || changes[0] != server.ID {
 		t.Fatal(events.events, changes)
+	}
+	// An alerted outage whose stop time Docker reports only later, as after
+	// Ludock restarts, tells pages so.
+	s.Check(ctx, state("exited", ""), 100_000)
+	s.Check(ctx, state("exited", ""), 161_000)
+	before := len(changes)
+	s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "exited", DownSince: 90_000}}, 170_000)
+	if found, _ := problem(s, server.ID, 170_000); found == nil || found.Since != 90_000 || len(changes) != before+1 {
+		t.Fatal(found, changes)
 	}
 }
 
@@ -506,6 +515,15 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 		game = GameUnknown
 		s.LastAnswer = func(string, servers.Container) int64 { return 162_000 }
 		s.Check(ctx, runSince(155_000), 165_000)
+		// The same run, no longer the loop's, later fails its health check:
+		// that outage began when Ludock saw it.
+		unhealthy := runSince(155_000)
+		unhealthy["mc"] = servers.Container{ID: "mc", State: "running", Health: "unhealthy", StateSince: 155_000, RestartCount: 3, DownSince: 900}
+		s.Check(ctx, unhealthy, 170_000)
+		if shown, _ := s.Get(ctx, server.ID); shown.State.Since != 170_000 {
+			t.Fatal("an outage after the loop shown since", shown.State.Since)
+		}
+		s.Check(ctx, runSince(155_000), 175_000)
 		s.LastAnswer = nil
 		if !slices.Equal(events.events, []string{down, back}) {
 			t.Fatal(events.events)
