@@ -131,7 +131,9 @@ var (
 	errPortNotFixed = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
 		"Docker picks Ludock’s port each time its container starts, so this page wouldn’t come back at the same address. Publish a fixed port, such as 3000:3000, or use the commands below.")
 	errNoDataMount = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
-		"Ludock keeps its data inside its own container rather than in a volume or mounted folder, so a new container wouldn’t have it. Update it with the commands below.")
+		"Ludock keeps its data inside its own container rather than in a volume or mounted folder, so a new container wouldn’t have it. Before updating with the commands below, save Ludock’s data and mount a volume or folder at its data folder: recreating the container would otherwise lose it.")
+	errCopyLeft = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
+		"The copy of Ludock’s data from an earlier update, "+CopyName+", is still beside its database. Move it somewhere safe, then update again.")
 	errPull = apperr.New("PULL_FAILED", 409,
 		"Docker couldn’t download Ludock’s new image. Check the machine’s internet connection; for a private registry, set LUDOCK_DOCKER_CONFIG.")
 	errSave = apperr.New("LUDOCK_UPDATE_SAVE", 409,
@@ -280,6 +282,10 @@ func (s *Service) check(ctx context.Context, dependents bool) (*docker.Container
 	// folder.
 	if dataDir, err := filepath.Abs(s.DataDir); err != nil || !mounted(own, dataDir) {
 		return own, nil, errNoDataMount
+	}
+	// An update would replace the copy an earlier one kept.
+	if _, err := os.Lstat(filepath.Join(s.DataDir, CopyName)); err == nil {
+		return own, nil, errCopyLeft
 	}
 	if relabelled(own, s.Socket) {
 		return own, nil, errSocketLabel
@@ -623,7 +629,9 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		if spec.State.Status == "exited" {
 			code = spec.State.ExitCode
 		}
-		if err := s.Docker.Remove(ctx, spec.ID, true, true); err != nil && !docker.IsNotFound(err) {
+		// One still created may be starting as a lost start answer lands:
+		// unforced, Docker refuses to remove it once it runs.
+		if err := s.Docker.Remove(ctx, spec.ID, spec.State.Status != "created", true); err != nil && !docker.IsNotFound(err) {
 			return false
 		}
 	}

@@ -369,6 +369,9 @@ func TestSelfUpdateOrder(t *testing.T) {
 				c.Mounts = []docker.MountPoint{{Type: "bind", Source: g.engine.Socket, Destination: socket}}
 			})
 		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
+		{name: "the data copy an earlier update kept is still there", arrange: func(g *rig) {
+			os.WriteFile(filepath.Join(g.dataDir, selfupdate.CopyName), []byte("kept"), 0o600)
+		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
 		{name: "a host port Docker picks", arrange: func(g *rig) {
 			g.engine.Update(g.old, func(c *fakedocker.Container) {
 				c.HostConfig["PortBindings"] = map[string]any{"3000/tcp": []any{map[string]any{"HostIp": "", "HostPort": "3000-3005"}}}

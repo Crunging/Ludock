@@ -101,10 +101,10 @@ func putDataBack(dataDir string) error {
 	if err := os.Rename(copied, filepath.Join(dataDir, "ludock.db")); err != nil {
 		return err
 	}
-	dir, err := os.Open(dataDir)
-	if err != nil {
-		return err
+	// Renamed, the copy is the database, whether or not the folder syncs.
+	if dir, err := os.Open(dataDir); err == nil {
+		dir.Sync()
+		dir.Close()
 	}
-	defer dir.Close()
-	return dir.Sync()
+	return nil
 }

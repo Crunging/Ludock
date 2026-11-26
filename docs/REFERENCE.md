@@ -510,7 +510,11 @@ It isn't offered, and **Settings** shows these commands with the reason,
 when Ludock can't prove which container it runs in, was started with `--rm`,
 has its health check turned off, reaches Docker other than through a mounted
 socket (or one relabelled with `:Z`), has a host port Docker picks at each
-start, or work is queued or running. In the folder with its `compose.yaml`:
+start, keeps its data inside its own container rather than in a volume or
+mounted folder (move it to one first, or recreating the container loses
+it), still has the copy an earlier update kept beside its database (move it
+somewhere safe first), or work is queued or running. In the folder with its
+`compose.yaml`:
 
 ```bash
 docker compose pull ludock
