@@ -89,8 +89,8 @@ func TestAttentionListsAResultWithoutForceStopped(t *testing.T) {
 }
 
 // A failure leaves Needs attention once the same kind of work succeeds on
-// the server later; a force-stop and an error that asks for an
-// administrator stay, even on an undone restore, and so does a failure after
+// the server later; a force-stop and work marked as needing an
+// administrator stay, whatever their error says, even on an undone restore, and so does a failure after
 // the success. A restore whose data is settled leaves once a backup, restore
 // or update succeeds; one stopped partway, one whose end Ludock doesn't
 // know, and one whose undo found a stage folder gone stay.
@@ -107,16 +107,20 @@ func TestAttentionSettlesFailuresByALaterSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	const (
-		undone   = `{"restore":{"status":"rolled_back","putBack":true}}`
-		stranded = `{"restore":{"status":"replacing","roots":[{"phase":"old_moved"}]}}`
+		needsAdmin = `{"needsAdministrator":true}`
+		undone     = `{"restore":{"status":"rolled_back","putBack":true}}`
+		stranded   = `{"restore":{"status":"replacing","roots":[{"phase":"old_moved"}]}}`
 	)
 	operations := []struct {
 		id, kind, status, error, result, recovery string
 	}{
 		{"01", "update", "failed", "The new server stopped right after starting.", "{}", "{}"},
 		{"02", "backup", "failed", "The backup folder is full.", "{}", "{}"},
-		{"03", "restore", "interrupted", "Recovery requires administrator attention. The server has been left stopped where possible.", "{}", undone},
-		{"04", "stop", "interrupted", "Recovery requires administrator attention. The server has been left stopped where possible.", "{}", "{}"},
+		{"03", "restore", "interrupted", "Recovery requires administrator attention. The server has been left stopped where possible.", needsAdmin, undone},
+		{"04", "stop", "interrupted", "Recovery requires administrator attention. The server has been left stopped where possible.", needsAdmin, "{}"},
+		// The mark, not the words, keeps work listed.
+		{"21", "update", "failed", "Saved update state couldn’t be read.", needsAdmin, "{}"},
+		{"22", "backup", "failed", "Only an administrator can do that.", "{}", "{}"},
 		{"05", "restart", "succeeded", "", `{"forceStopped":true}`, "{}"},
 		{"13", "restart", "failed", "The server didn't start again.", `{"forceStopped":true}`, "{}"},
 		{"06", "start", "interrupted", "Ludock restarted while this ran. Check the server before trying again.", "{}", "{}"},
@@ -151,7 +155,7 @@ func TestAttentionSettlesFailuresByALaterSuccess(t *testing.T) {
 	for _, item := range result.Items {
 		listed = append(listed, item.OperationID[len(item.OperationID)-2:])
 	}
-	if want := []string{"15", "20", "18", "19", "16", "12", "13", "05", "04", "03"}; !slices.Equal(listed, want) {
+	if want := []string{"15", "20", "18", "19", "16", "12", "13", "05", "21", "04", "03"}; !slices.Equal(listed, want) {
 		t.Fatalf("listed %v, want %v", listed, want)
 	}
 	if result.Items[0].Kind != "restore" || result.Items[1].Undone || !result.Items[2].Undone || result.Items[3].Undone || result.Items[4].Undone {

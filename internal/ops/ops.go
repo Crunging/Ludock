@@ -130,6 +130,8 @@ type Recovery struct {
 	// Undone says, for Activity, what that left.
 	PendingUndo bool   `json:"pendingUndo,omitempty"`
 	Undone      string `json:"undone,omitempty"`
+	// UndoFinished: this operation finished undoing an earlier restore.
+	UndoFinished bool `json:"undoFinished,omitempty"`
 	// LeftOut names a folder holding a restore's stage folder, which the
 	// backup this operation takes leaves out.
 	LeftOut string `json:"leftOut,omitempty"`
@@ -473,20 +475,28 @@ func (r *Runner) Enqueue(ctx context.Context, tx *sql.Tx, options EnqueueOptions
 	return result.job()
 }
 
+// marks are facts added to a job's saved result as it ends, whatever the
+// result already holds.
+type marks struct {
+	WaitedForDocker    bool `json:"waitedForDocker,omitempty"`
+	NeedsAdministrator bool `json:"needsAdministrator,omitempty"`
+}
+
 // finish records a running job's outcome, reporting false when it was
 // cancelled instead. waited notes in its result that it waited for Docker.
 func (r *Runner) finish(ctx context.Context, job *Job, status string, result *Result, errorText string, waited bool) (bool, error) {
-	return r.finishAlerting(ctx, job, status, result, errorText, waited, nil)
+	return r.finishAlerting(ctx, job, status, result, errorText, marks{WaitedForDocker: waited}, nil)
 }
 
 // finishAlerting is finish for the job of rw, which queues the alert of a
-// failed scheduled job with its outcome.
-func (r *Runner) finishAlerting(ctx context.Context, job *Job, status string, result *Result, errorText string, waited bool,
+// failed scheduled job with its outcome, adding noted to its result.
+func (r *Runner) finishAlerting(ctx context.Context, job *Job, status string, result *Result, errorText string, noted marks,
 	scheduled *row) (bool, error) {
 	var resultJSON, errorValue any
 	if result != nil {
 		resultJSON = encodeResult(result)
 	}
+	patch, _ := json.Marshal(noted)
 	if errorText != "" {
 		errorValue = errorText
 	}
@@ -504,9 +514,9 @@ func (r *Runner) finishAlerting(ctx context.Context, job *Job, status string, re
 	finished, alerted := false, false
 	if err := r.DB.Tx(ctx, func(tx *sql.Tx) error {
 		updated, err := tx.ExecContext(ctx, `UPDATE operations SET status=?1,phase=?1,result_json=CASE
-			WHEN ?2 AND json_valid(COALESCE(?3,result_json,'{}')) THEN json_set(COALESCE(?3,result_json,'{}'),'`+PathWaitedForDocker+`',json('true'))
+			WHEN ?2<>'{}' THEN json_patch(CASE WHEN json_valid(COALESCE(?3,result_json,'{}')) THEN COALESCE(?3,result_json,'{}') ELSE '{}' END,?2)
 			ELSE COALESCE(?3,result_json) END,error=?4,updated_at=?5 WHERE id=?6 AND status='running'`,
-			status, waited, resultJSON, errorValue, db.Now(), job.ID)
+			status, string(patch), resultJSON, errorValue, db.Now(), job.ID)
 		if err != nil {
 			return err
 		}
@@ -821,7 +831,9 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 		}
 		job := &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}
 		r.persist(ctx, "finish", func() error {
-			_, err := r.finishAlerting(ctx, job, Failed, nil, message, waited.Load(), rw)
+			// Saved state Ludock can't read needs an administrator.
+			_, err := r.finishAlerting(ctx, job, Failed, nil, message,
+				marks{WaitedForDocker: waited.Load(), NeedsAdministrator: apperr.Is(err, "INVALID_OPERATION_STATE")}, rw)
 			return err
 		})
 	}
@@ -1011,8 +1023,8 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 			continue
 		}
 		if err != nil {
-			if _, err := r.finish(ctx, &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}, Interrupted, nil,
-				"Recovery requires administrator attention. The server has been left stopped where possible.", false); err != nil {
+			if _, err := r.finishAlerting(ctx, &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}, Interrupted, nil,
+				"Recovery requires administrator attention. The server has been left stopped where possible.", marks{NeedsAdministrator: true}, nil); err != nil {
 				return err
 			}
 			logRecovered(rw, "needs an administrator")

@@ -219,6 +219,8 @@ type Schedule struct {
 // WaitingResult marks a run waiting for an empty server. The run spent its
 // slot, with last_run_at its scheduled minute and no operation yet. Edits,
 // pauses, and the run's own end replace it in the same write.
+// Rows a 1.0 install saved carry this exact text, so it is saved data and
+// never changes; what pages show may be worded apart from it.
 const WaitingResult = "Waiting for players to leave"
 
 // StillWaiting limits a write that ends a wait to a run still waiting.

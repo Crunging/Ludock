@@ -187,18 +187,19 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		// Limit recent work before filtering issues; read summary fields only.
 		// Work that failed is settled once the same kind of work succeeds
 		// later, unless it may have left something only a person can sort
-		// out: a force-stop, or an error asking for an administrator. A
+		// out: a force-stop, or work marked as needing an administrator. A
 		// restore is settled by a later backup, restore or update too, but
 		// only once its journal is final or if it never had one; one whose
 		// undo found a stage folder gone may have left the wrong data, which
 		// only a later restore settles. SQLite may evaluate both sides of AND,
 		// so JSON is read only under CASE.
 		forced := `COALESCE(CASE WHEN json_valid(result_json) THEN json_extract(result_json,'` + ops.PathForceStopped + `') = 1 END, 0)`
+		needsAdministrator := `COALESCE(CASE WHEN json_valid(result_json) THEN json_extract(result_json,'` + ops.PathNeedsAdministrator + `') = 1 END, 0)`
 		rows, err := s.DB.QueryContext(ctx, `SELECT id,kind,status,updated_at,actor_id=?,`+forced+`,
       kind='restore' AND COALESCE(CASE WHEN json_valid(recovery_json) THEN json_extract(recovery_json,'$.restore.status') = 'rolled_back' AND
         json_extract(recovery_json,'$.restore.putBack') = 1 END, 0)
-      FROM (SELECT id,kind,status,updated_at,actor_id,result_json,recovery_json,created_at,error FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100) o
-      WHERE (status IN ('failed','interrupted') AND (instr(COALESCE(error,''),'administrator') > 0 OR `+forced+` OR
+      FROM (SELECT id,kind,status,updated_at,actor_id,result_json,recovery_json,created_at FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100) o
+      WHERE (status IN ('failed','interrupted') AND (`+needsAdministrator+` OR `+forced+` OR
         (kind='restore' AND NOT COALESCE(CASE WHEN json_valid(recovery_json) THEN json_type(recovery_json,'$.restore') IS NULL OR
           json_extract(recovery_json,'$.restore.status') IN ('rolled_back','cleaned') END, 0)) OR
         NOT EXISTS (SELECT 1 FROM operations later WHERE later.server_id=? AND later.status='succeeded' AND

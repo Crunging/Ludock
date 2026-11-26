@@ -153,7 +153,7 @@ func (j *Jobs) saveFinal(ctx context.Context, job *ops.Context, final restoreRec
 			undone := strings.TrimSpace(finish.by.Job.Recovery.Undone + " " + note)
 			byResult := finish.by.Job.Result
 			byResult.UndoNote = undone
-			done, err := finish.by.ProgressIn(tx, finish.by.Job.Phase, func(r *ops.Recovery) { r.Undone = undone }, &byResult)
+			done, err := finish.by.ProgressIn(tx, finish.by.Job.Phase, func(r *ops.Recovery) { r.Undone, r.UndoFinished = undone, true }, &byResult)
 			if err != nil {
 				return err
 			}
