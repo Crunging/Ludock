@@ -770,6 +770,25 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(files, "mods", "world-old", "level.dat")); err != nil {
 		t.Fatal("folder not moved", listTree(t, files))
 	}
+	// Nothing but a folder or a file moves there.
+	os.Symlink("b.txt", filepath.Join(dir, "link"))
+	if err := renameNoReplace(parent, "link", parent, "link2", stat("link")); err == nil {
+		t.Fatal("moved a link by a plain rename")
+	}
+	// A folder with content made at the name after its check takes it, so an
+	// unpack publishes under the next name.
+	plain := renameat
+	renameat = func(fromFD int, from string, toFD int, to string) error {
+		if to == "pack" {
+			os.MkdirAll(filepath.Join(files, "pack", "made meanwhile"), 0o755)
+		}
+		return plain(fromFD, from, toFD, to)
+	}
+	result, code := unpackFile(t, files, "pack.tar", tarArchive(t, []archived{{name: "pack/a.jar", body: "a"}}))
+	renameat = plain
+	if code != 0 || result.Name != "pack (2)" {
+		t.Fatal("unpack onto a name taken meanwhile", result, code, listTree(t, files))
+	}
 	// With RENAME_NOREPLACE, a file made at the name between the check and
 	// the move is kept.
 	renameat2 = original

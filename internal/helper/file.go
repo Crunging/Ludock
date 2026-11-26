@@ -2046,18 +2046,29 @@ var (
 // the destination: game servers write these trees while files are managed.
 // A folder renames as a restore does, where the filesystem lacks
 // RENAME_NOREPLACE by a plain rename to a name just checked free, which can
-// only ever replace an empty folder.
+// only ever replace an empty folder; the trailing slash keeps the source a
+// folder through the rename. What appears at the name meanwhile makes the
+// name taken.
 func renameNoReplace(parent fd, name string, targetParent fd, targetName string, info *unix.Stat_t) error {
-	if !isRegular(info) {
-		return renameChecked(parent, name, targetParent, targetName)
+	if isDir(info) {
+		err := renameChecked(parent, name+"/", targetParent, targetName)
+		if errors.Is(err, unix.ENOTEMPTY) || errors.Is(err, unix.ENOTDIR) {
+			if _, statErr := lstatAt(targetParent, targetName); statErr == nil {
+				return unix.EEXIST
+			}
+		}
+		return err
 	}
 	err := renameat2(int(parent), name, int(targetParent), targetName, unix.RENAME_NOREPLACE)
 	if err == nil || (!errors.Is(err, unix.ENOSYS) && !errors.Is(err, unix.EINVAL)) {
 		return err
 	}
-	// A plain rename of a file would replace one made at the destination
-	// since it was checked, with its content. Linking fails if the
-	// destination exists, so a file moves by link and unlink instead.
+	// A plain rename would replace one made at the destination since it was
+	// checked, with its content. A file moves by link and unlink instead,
+	// since linking fails if the destination exists; nothing else moves.
+	if !isRegular(info) {
+		return errors.New("this filesystem cannot rename this entry without risking an overwrite")
+	}
 	if err := unix.Linkat(int(parent), name, int(targetParent), targetName, 0); err != nil {
 		return err
 	}
