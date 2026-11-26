@@ -809,8 +809,10 @@ says which folder it left out.
 restore found in the place of the previous data: the backup's copy, if it was
 already in place, and anything a game or another program wrote there
 meanwhile. No undo removes anything from it. It is ordinary data: Files shows
-it, backups include it, a later restore replaces it with the rest of the data,
-and you can delete it once you've kept what you need.
+it, backups include it, and you can delete it once you've kept what you need.
+A later restore of the whole data replaces it with the rest, and it stays in
+the safety backup taken first; the restore's confirmation names those it
+finds.
 
 ### Activity results
 
