@@ -211,6 +211,39 @@ func TestLateRunsRespectSavesAndRetryConflicts(t *testing.T) {
 	if result := f.first(t, friend).LastResult; !strings.HasPrefix(result, "Skipped") {
 		t.Fatal(result)
 	}
+
+	// A restart due while the game is still starting, as after another
+	// schedule at the same time, waits until it answers, and goes ahead on
+	// the last check of its grace period if it never does.
+	f.s.DB.Exec("DELETE FROM operations")
+	f.s.DB.Exec("DELETE FROM schedules")
+	f.grant(t, authz.ServerView, authz.ServerRestart, authz.SchedulesManage)
+	restart := base
+	restart.Action = "restart"
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, restart); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Servers.Observer.Docker.Start(ctx, f.obs.ContainerID); err != nil {
+		t.Fatal(err)
+	}
+	starting := true
+	f.s.Servers.Looping = func(context.Context, string, servers.Container) bool { return starting }
+	f.s.Run(ctx, due)
+	if f.operations(t) != 0 || f.first(t, friend).LastSlot != "" {
+		t.Fatal("restarted a game still starting")
+	}
+	starting = false
+	f.s.Run(ctx, due+60_000)
+	if f.operations(t) != 1 {
+		t.Fatal("did not restart once the game answered")
+	}
+	f.s.DB.Exec("DELETE FROM operations")
+	f.s.DB.Exec("UPDATE schedules SET last_slot=NULL,last_result=NULL")
+	starting = true
+	f.s.Run(ctx, due+schedtimeRecurringGrace()-10_000)
+	if f.operations(t) != 1 {
+		t.Fatal("did not go ahead at the end of the grace period")
+	}
 }
 
 func schedtimeRecurringGrace() int64 { return 15 * 60_000 }

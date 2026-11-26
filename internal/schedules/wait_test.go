@@ -12,6 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/servers"
 )
 
 type fakePlayers struct {
@@ -127,8 +128,9 @@ func TestWaitForEmptyWindow(t *testing.T) {
 }
 
 // At the end of a wait, a schedule set to go ahead runs with players
-// online, and one set to skip records an unknown count as a skip that
-// notifies, since it may mean a broken console.
+// online, once a game still starting has answered, and one set to skip
+// records an unknown count as a skip that notifies, since it may mean a
+// broken console.
 func TestWaitForEmptyEnds(t *testing.T) {
 	f := setup(t)
 	f.withPlayers(1, true)
@@ -139,7 +141,17 @@ func TestWaitForEmptyEnds(t *testing.T) {
 	if f.operations(t) != 0 {
 		t.Fatal("went ahead before the end of the wait")
 	}
+	if err := f.s.Servers.Observer.Docker.Start(ctx, f.obs.ContainerID); err != nil {
+		t.Fatal(err)
+	}
+	starting := true
+	f.s.Servers.Looping = func(context.Context, string, servers.Container) bool { return starting }
 	f.s.Run(ctx, due+10*minute)
+	if f.operations(t) != 0 {
+		t.Fatal("went ahead while the game was still starting")
+	}
+	starting = false
+	f.s.Run(ctx, due+11*minute)
 	if f.operations(t) != 1 {
 		t.Fatal("did not go ahead at the end of the wait")
 	}
@@ -175,7 +187,7 @@ func TestWaitingRunRecoversAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.s.Run(ctx, due)
-	restarted := &Service{DB: f.s.DB, Authz: f.s.Authz, Identity: f.s.Identity, Runner: f.s.Runner, Locks: f.s.Locks,
+	restarted := &Service{DB: f.s.DB, Authz: f.s.Authz, Identity: f.s.Identity, Runner: f.s.Runner, Locks: f.s.Locks, Servers: f.s.Servers,
 		Players: &fakePlayers{now: Occupancy{Known: true}, lists: true}}
 	restarted.Run(ctx, due+20*minute)
 	restarted.Run(ctx, due+20*minute+15_000)

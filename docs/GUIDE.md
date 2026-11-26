@@ -505,6 +505,14 @@ has every case.
   repeated one runs once.
 - **Back up first** needs the server running when the schedule runs, and then
   works as in the [Restart dialog](#stopping-and-restarting).
+- The form and the list point out two schedules that run at the same time.
+  One waits for the other to finish, and is skipped if it can't start in
+  time; a command is skipped while other work runs. To back up and restart
+  with one stop, use **Back up first** on the restart instead of a second
+  schedule. A restart, stop, or backup due while the game is still starting,
+  such as just after the other schedule's restart, waits until the game
+  answers or has been up for its **Wait before alerting**, so a backup can
+  save the world first.
 - **Wait until no one is online** works on restarts, stops, and backups on
   servers whose players Ludock can read, and waits 1 to 360 minutes. A player
   count Ludock can't read counts as players online. Warnings need **Go ahead

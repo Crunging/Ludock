@@ -552,6 +552,20 @@ func (s *Service) Restarting(ctx context.Context, serverID string, container Con
 		s.Observer.sawRestarting(container.ID, container.StateSince) && s.Looping(ctx, serverID, container)
 }
 
+// StillStarting reports a server whose game hasn't answered yet in a run
+// that started within its monitoring grace period, judged as Looping does.
+func (s *Service) StillStarting(ctx context.Context, serverID string) bool {
+	if s.Looping == nil {
+		return false
+	}
+	logical, err := s.Identity.ResolveBinding(ctx, serverID, -1)
+	if err != nil {
+		return false
+	}
+	observed, _, err := s.Observer.Inspect(ctx, logical.ContainerID)
+	return err == nil && observed.Container.State == "running" && s.Looping(ctx, serverID, observed.Container)
+}
+
 // present shows a run between a crash loop's restarts as restarting, so a
 // page reads the same whenever it looks.
 func (s *Service) present(ctx context.Context, serverID string, container *Container) {
