@@ -196,10 +196,12 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 
 // warnFailedNote is what Activity says when a warning never went out.
 func warnFailedNote(kind string) string {
-	if kind == ops.KindStop {
-		return "Couldn’t warn players before the shutdown."
+	work := map[string]string{ops.KindStop: "shutdown", ops.KindBackup: "backup", ops.KindRestore: "restore", ops.KindUndoRestore: "undo",
+		ops.KindUpdate: "update"}[kind]
+	if work == "" {
+		work = "restart"
 	}
-	return "Couldn’t warn players before the restart."
+	return "Couldn’t warn players before the " + work + "."
 }
 
 // sendWarning sends the warning, trying again for the warning's own time

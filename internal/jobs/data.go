@@ -418,9 +418,18 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 			_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observation, server.Logical.BindingRevision)
 			return err
 		})
-		// Docker had it running already: someone else's start.
+		// Docker had it running already: someone else's start, whose game
+		// may be exiting again.
 		restored := func(r *ops.Recovery) { r.StateRestored = true }
 		if errors.Is(err, servers.ErrUnchanged) {
+			info, inspectErr := j.Docker.Inspect(ctx, server.Container.ID)
+			if inspectErr != nil {
+				return inspectErr
+			}
+			if info.State.Restarting || !info.State.Running {
+				job.Job.Recovery.RunSeen = info.State.Status
+				return nil
+			}
 			restored, err = foundRunning, nil
 		}
 		if err != nil {

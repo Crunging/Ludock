@@ -462,6 +462,14 @@ func TestRecoverySaysWhatBecameOfTheServer(t *testing.T) {
 				c.State.StartedAt = time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
 			})
 		}, said: serverRestarting, running: true},
+		// Started elsewhere while Ludock was down, its game exiting again:
+		// Docker answers Ludock's start as already done.
+		{name: "started elsewhere, game exiting again", meanwhile: func(f *fixture, _ string) {
+			f.engine.Update(f.game, func(c *fakedocker.Container) {
+				c.State.Status, c.State.Running, c.State.Restarting = "restarting", true, true
+				c.State.StartedAt = time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
+			})
+		}, said: serverRestarting, running: true, starts: 1},
 		// Another manager starts it as Ludock's start is on its way.
 		{name: "started elsewhere as Ludock started it", meanwhile: func(f *fixture, run string) {
 			f.engine.Update(f.game, func(c *fakedocker.Container) {

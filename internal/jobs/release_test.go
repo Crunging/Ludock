@@ -210,6 +210,8 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		stopConfirmed bool
 		// newBackup: the work made one backup, into the folder chosen since.
 		newBackup bool
+		// warnFailed is the note that players couldn't be warned.
+		warnFailed string
 		// waiting: no operation, and a schedule's run waits for players.
 		waiting bool
 		alerts  []string
@@ -293,11 +295,13 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		// not yet sent: it runs again long after, tries to warn once more, and
 		// backs up.
 		{name: "backup-warning-resend", status: ops.Succeeded, data: backedUp, containers: []string{"/mc running unless-stopped 0000"},
-			newBackup: true},
+			newBackup: true, warnFailed: "Couldn’t warn players before the backup."},
 		// A backup whose start took, the game exiting at once, before Ludock
-		// confirmed it: the backup stands and the start isn't sent again.
-		{name: "backup-started-then-exited", status: ops.Succeeded, guidance: "Ludock restarted while this ran, after the backup had finished.",
-			data: backedUp, containers: []string{"/mc exited unless-stopped 0000"}, sameRun: true},
+		// confirmed it: the backup stands, the start isn't sent again, and
+		// Activity says the server stopped.
+		{name: "backup-started-then-exited", status: ops.Succeeded,
+			guidance: "Ludock restarted while this ran, after the backup had finished. " + serverStoppedAgain,
+			data:     backedUp, containers: []string{"/mc exited unless-stopped 0000"}, sameRun: true},
 		// Nothing running: a restore that committed but couldn't remove its
 		// stage folder, the server stopped since. Startup removes it.
 		{name: "restore-committed-pending", status: ops.Failed,
@@ -351,6 +355,9 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 				if job.Status != c.status || job.Error != want || job.Result.Guidance != named.Replace(c.guidance) || job.Result.UndoNote != named.Replace(c.pending) {
 					t.Fatalf("%s %q %q, undo %q\nwant %s %q %q, undo %q", job.Status, job.Error, job.Result.Guidance, job.Result.UndoNote,
 						c.status, want, named.Replace(c.guidance), named.Replace(c.pending))
+				}
+				if job.Result.WarnFailedNote != c.warnFailed {
+					t.Fatalf("warning note %q, want %q", job.Result.WarnFailedNote, c.warnFailed)
 				}
 				if c.stopConfirmed && (!job.Recovery.StopSettled || job.Recovery.StopRecoveryTimedOut) {
 					t.Fatalf("stop not confirmed: %+v", job.Recovery)
