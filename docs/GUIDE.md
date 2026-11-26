@@ -211,8 +211,9 @@ while your game servers keep running; the page comes back by itself once it
 has, usually within a few minutes.
 
 If the new version doesn't start properly, Ludock puts the version you had
-back, with its data as it was just before the update. A setting or sign-in
-changed in those last seconds is undone. **Settings** and **Needs attention**
+back, with its data as it was just before the update. While it updates,
+Ludock refuses changes to settings and accounts, so none is lost; someone who
+signs in meanwhile may need to sign in again. **Settings** and **Needs attention**
 then say why.
 
 When Ludock can't update itself in your setup, **Settings** says why, and

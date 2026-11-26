@@ -503,13 +503,15 @@ If the new container doesn't start, stops, reports unhealthy (as an image
 older than Ludock's data does), or isn't healthy within 3 minutes, the helper
 removes it and starts the old container again. That Ludock puts the copy of
 its data back before it opens it, so the old version never meets data the
-new one changed; a setting or sign-in changed after the copy is undone.
+new one changed; only a sign-in after the copy is undone.
 **Settings** and **Needs attention** say why, until an administrator
 dismisses it.
 
-While it runs, Ludock accepts no new work, for example a restart someone
-asks for or one a schedule or automatic restart would queue; schedules try
-again once it is back.
+While it runs, in either version, Ludock accepts no new work, for example a
+restart someone asks for or one a schedule or automatic restart would queue,
+and no change a put-back would undo: an administrator's change to settings,
+accounts or sharing, a sign-out, or a password change. Schedules try again
+once it is back.
 
 It isn't offered, and **Settings** gives only the reason, when Ludock keeps
 its data inside its own container rather than in a volume or mounted folder

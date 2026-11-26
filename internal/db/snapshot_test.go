@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -287,4 +288,37 @@ func writeArchive(t *testing.T, path string, files map[string][]byte) {
 		}
 	}
 	writer.Close()
+}
+
+// The copy beside the database holds alert credentials, so under the usual
+// umask no one else can read it at any point, even while SQLite writes it.
+func TestCopyBesideOwnerOnly(t *testing.T) {
+	d, path := openTemp(t)
+	if _, err := d.Exec("CREATE TABLE filler (b BLOB); WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 4000) INSERT INTO filler SELECT randomblob(8192) FROM n"); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Umask(syscall.Umask(0o022))
+	partial := filepath.Join(filepath.Dir(path), "copy.partial")
+	var stop atomic.Bool
+	var open atomic.Int32
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for !stop.Load() {
+			if info, err := os.Lstat(partial); err == nil {
+				open.Add(1)
+				if info.Mode().Perm()&0o077 != 0 {
+					t.Errorf("the partial copy is %v", info.Mode().Perm())
+					return
+				}
+			}
+		}
+	}()
+	err := d.CopyBeside(context.Background(), "copy")
+	stop.Store(true)
+	<-done
+	info, statErr := os.Lstat(filepath.Join(filepath.Dir(path), "copy"))
+	if err != nil || statErr != nil || info.Mode().Perm() != 0o600 || open.Load() == 0 {
+		t.Fatal(err, statErr, open.Load())
+	}
 }
