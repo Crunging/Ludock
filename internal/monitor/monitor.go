@@ -107,22 +107,24 @@ type Service struct {
 	// that pages are told of.
 	announced map[string]int64
 	// down is, for each server, when its game stopped as the latest check
-	// that reached Docker saw it, 0 when unknown.
-	down map[string]int64
+	// that reached Docker saw it, kept while its outage stays open, 0 when
+	// unknown; ended, when this process saw its latest outage end.
+	down, ended map[string]int64
 }
 
 // shownSince is when an outage began as Docker reports it: the game's stop
 // the latest check saw, when that is earlier than when Ludock first saw the
-// outage. A silent game, or Docker out of reach, has no such time.
+// outage, and after the previous outage ended. A silent game, or Docker out
+// of reach, has no such time.
 func (s *Service) shownSince(serverID string, r *row) int64 {
 	noticed := r.outage.Int64
 	if !r.outage.Valid || r.lastState.String == NotAnswering || r.lastState.String == DockerUnavailable {
 		return noticed
 	}
 	s.lookMu.Lock()
-	down := s.down[serverID]
+	down, ended := s.down[serverID], s.ended[serverID]
 	s.lookMu.Unlock()
-	if down > 0 && down < noticed {
+	if down > ended && down < noticed {
 		return down
 	}
 	return noticed
@@ -585,7 +587,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 	s.since.CompareAndSwap(0, now)
 	since := s.since.Load()
 	s.lookMu.Lock()
-	previous := maps.Clone(s.looked)
+	previous, previousDown := maps.Clone(s.looked), maps.Clone(s.down)
 	s.lookMu.Unlock()
 	// judged are the servers this check doesn't skip; shown, those with an
 	// outage kept across a pause, which pages show again once it is saved.
@@ -631,6 +633,9 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			if !found || server.ContainerID == "" || server.Status != identity.StatusActive ||
 				(container.State == "running" && container.DownSince != 0 && !earlyRun(container, s.answered(server.ID, container), policy.GraceSeconds, now)) {
 				container.DownSince = 0
+			}
+			if container.DownSince == 0 && r.outage.Valid {
+				container.DownSince = previousDown[server.ID]
 			}
 			downs[server.ID] = container.DownSince
 		}
@@ -910,7 +915,16 @@ func (s *Service) recovered(ctx context.Context, server identity.Server, r *row,
 	if r.notified == 1 {
 		back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), server.DisplayName + ": the server is back up."}}
 	}
-	return s.transitionIf(ctx, server.ID, r, back, whileIdle, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
+	changed, err := s.transitionIf(ctx, server.ID, r, back, whileIdle, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
+	if changed {
+		s.lookMu.Lock()
+		if s.ended == nil {
+			s.ended = map[string]int64{}
+		}
+		s.ended[server.ID] = now
+		s.lookMu.Unlock()
+	}
+	return changed, err
 }
 
 // asRead matches a row whose outage, alert, pause and stop are still as r

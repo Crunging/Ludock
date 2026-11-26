@@ -552,6 +552,28 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 		if !slices.Equal(events.events, []string{down, back, down, back, down, back}) {
 			t.Fatal(events.events)
 		}
+		// Another loop is dated from its first exit, even once one of its
+		// runs outlives the grace period while failing its health check; a
+		// crash just after it recovers is not.
+		since := func(want int64) {
+			t.Helper()
+			if shown, _ := s.Get(ctx, server.ID); shown.State.Since != want {
+				t.Fatal("shown since", shown.State.Since, "want", want)
+			}
+		}
+		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "restarting", DownSince: 790_000}}, 800_000)
+		since(790_000)
+		failing := map[string]servers.Container{"mc": {ID: "mc", State: "running", Health: "unhealthy", StateSince: 802_000, RestartCount: 1, DownSince: 790_000}}
+		s.Check(ctx, failing, 805_000)
+		failing["mc"] = servers.Container{ID: "mc", State: "running", Health: "unhealthy", StateSince: 802_000, RestartCount: 1}
+		s.Check(ctx, failing, 900_000)
+		since(790_000)
+		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: 802_000, RestartCount: 1}}, 905_000)
+		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "restarting", DownSince: 790_000}}, 910_000)
+		since(910_000)
+		if !slices.Equal(events.events, []string{down, back, down, back, down, back, down, back}) {
+			t.Fatal(events.events)
+		}
 	}
 }
 
