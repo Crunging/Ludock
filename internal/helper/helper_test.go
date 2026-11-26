@@ -1299,6 +1299,66 @@ func TestRestoreSetAsideKeepsAnything(t *testing.T) {
 	})
 }
 
+// On a filesystem without RENAME_NOREPLACE, such as NFS, one item's restore
+// and its undo move by a plain rename to a name checked free just before, as
+// a whole folder's do. Something in the way is refused with both copies
+// where they were and nothing made: a restore that finds the game's file
+// where the backup's goes, and an undo that finds one where the previous
+// copy returns, which says the storage can't move it aside.
+func TestRestoreItemWithoutNoReplace(t *testing.T) {
+	original := renameat2
+	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
+	t.Cleanup(func() { renameat2 = original })
+	const id = "0f9619ff-8b86-4011-b42d-00c04fc964ff"
+	stage := StageName(id)
+	for _, c := range []struct {
+		name string
+		// steps run in turn; the last answers code, and inWay, when set, is
+		// put at the item's name before it.
+		steps []string
+		inWay string
+		code  int
+		// live and staged are the item's contents afterwards.
+		live, staged string
+	}{
+		{name: "restore", steps: []string{RestoreMoveOld, RestoreMoveNew}, live: "backup", staged: "current"},
+		{name: "restore, something in the way", steps: []string{RestoreMoveOld, RestoreMoveNew}, inWay: "game made", code: 1, live: "game made", staged: "current"},
+		{name: "undo", steps: []string{RestoreMoveOld, RestoreRollbackOld}, live: "current"},
+		{name: "undo, something in the way", steps: []string{RestoreMoveOld, RestoreRollbackOld}, inWay: "game made", code: RestoreClashNeedsNoReplace,
+			live: "game made", staged: "current"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, dir := range []string{"world", stage + "/old", stage + "/new/world"} {
+				os.MkdirAll(filepath.Join(root, dir), 0o755)
+			}
+			os.WriteFile(filepath.Join(root, "world", "level.dat"), []byte("current"), 0o644)
+			os.WriteFile(filepath.Join(root, stage, "new", "world", "level.dat"), []byte("backup"), 0o644)
+			for index, operation := range c.steps {
+				last := index == len(c.steps)-1
+				if last && c.inWay != "" {
+					os.WriteFile(filepath.Join(root, "world", "level.dat"), []byte(c.inWay), 0o644)
+				}
+				request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: operation, Item: "world/level.dat", Aside: map[bool]string{true: SetAsideName(id)}[operation == RestoreRollbackOld], Base: root})
+				want := 0
+				if last {
+					want = c.code
+				}
+				if code := RunRestore(string(request), io.Discard, io.Discard); code != want {
+					t.Fatalf("%s said %d, want %d", operation, code, want)
+				}
+			}
+			staged, _ := os.ReadFile(filepath.Join(root, stage, "old", "item"))
+			if live, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(live) != c.live || string(staged) != c.staged {
+				t.Fatalf("live %q, staged %q", live, staged)
+			}
+			if _, err := os.Lstat(filepath.Join(root, SetAsideName(id))); !os.IsNotExist(err) {
+				t.Fatal("made the set-aside folder")
+			}
+		})
+	}
+}
+
 // The data a restore replaces, one item or a whole folder, holds something
 // cleanup could never remove, first a named pipe and then another filesystem
 // mounted inside it, such as a disk the host mounted under the data: the

@@ -82,6 +82,12 @@ const RestoreClashUnsafe = 21
 
 var errClashUnsafe = errors.New("an undo would refuse to move an entry")
 
+// RestoreClashNeedsNoReplace is the exit code for something in the way of
+// what an undo returns on a filesystem that can't move it aside safely.
+const RestoreClashNeedsNoReplace = 23
+
+var errClashNeedsNoReplace = errors.New("an undo found something in the way it can't move aside")
+
 var errUnsafeEntry = errors.New("an entry an undo would move can't be moved")
 
 // StagePrefix starts the name of a restore's stage folder, which sits in the
@@ -586,7 +592,7 @@ func setAsideAs(parent fd, name string, aside fd, kept string, info *unix.Stat_t
 		}
 		target = base + suffix
 	}
-	if err := rename(parent, name, aside, target, target != name); err != nil {
+	if err := rename(parent, name, aside, target, target != kept); err != nil {
 		return err
 	}
 	moved, err := lstatAt(aside, target)
@@ -793,7 +799,7 @@ func (h *restoreHelper) cleanup(root, stage fd, item []string) error {
 			if err != nil {
 				return err
 			}
-			if err := setAsideAs(stage, "returned", aside, item[len(item)-1], info, strictRename); err != nil {
+			if err := setAsideAs(stage, "returned", aside, item[len(item)-1], info, h.renameRun); err != nil {
 				return err
 			}
 			h.movedAside++
@@ -976,7 +982,7 @@ func (h *restoreHelper) rollbackOld(root, stage fd) error {
 				return err
 			}
 			if h.noReplace != noReplaceWorks {
-				return errUnsafe
+				return errClashNeedsNoReplace
 			}
 			if aside, err = h.asideFor(root, stage, root, aside, name, name, info); err != nil {
 				return err
@@ -1286,12 +1292,18 @@ func movable(parent fd, name string, device uint64) (*unix.Stat_t, error) {
 
 // move renames an item to an absent destination and proves the same inode
 // arrived. An absent item may have moved in an interrupted earlier attempt,
-// so both folders are synced either way.
-func move(from fd, name string, to fd, target string, info *unix.Stat_t) error {
+// so both folders are synced either way. On a filesystem without
+// RENAME_NOREPLACE the name checked free here gets a plain rename.
+func (h *restoreHelper) move(from fd, name string, to fd, target string, info *unix.Stat_t) error {
 	if info == nil {
 		return syncAll(from, to)
 	}
-	if err := renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE); err != nil {
+	if _, err := lstatAt(to, target); err == nil {
+		return unix.EEXIST
+	} else if !isNotExist(err) {
+		return err
+	}
+	if err := h.renameRun(from, name, to, target, false); err != nil {
 		return err
 	}
 	moved, err := lstatAt(to, target)
@@ -1361,7 +1373,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 				return err
 			}
 		}
-		return move(parent, name, old, "item", info)
+		return h.move(parent, name, old, "item", info)
 	case RestoreMoveNew:
 		next, err := h.t.openAt(stage, "new", directoryFlags, 0)
 		if err != nil {
@@ -1382,7 +1394,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		if err != nil {
 			return err
 		}
-		return move(staged, name, parent, name, info)
+		return h.move(staged, name, parent, name, info)
 	case RestoreSetAside:
 		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 		if err != nil {
@@ -1409,7 +1421,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		if err != nil {
 			return err
 		}
-		if err := setAsideEntry(parent, name, aside, info, strictRename); err != nil {
+		if err := setAsideEntry(parent, name, aside, info, h.renameRun); err != nil {
 			return err
 		}
 		h.movedAside++
@@ -1442,7 +1454,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 					return err
 				}
 				if h.noReplace != noReplaceWorks {
-					return errUnsafe
+					return errClashNeedsNoReplace
 				}
 				aside, err := h.asideFor(root, stage, parent, -1, strings.Join(parts, "/"), name, live)
 				if err != nil {
@@ -1463,7 +1475,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 				}
 			}
 		}
-		return move(old, "item", parent, name, info)
+		return h.move(old, "item", parent, name, info)
 	case RestoreCheckReturn:
 		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 		if err != nil {
@@ -1511,6 +1523,8 @@ func RunRestore(argument string, stdout, stderr io.Writer) int {
 			return RestoreUnsafeEntry
 		case errors.Is(err, errClashUnsafe):
 			return RestoreClashUnsafe
+		case errors.Is(err, errClashNeedsNoReplace):
+			return RestoreClashNeedsNoReplace
 		}
 		return 1
 	}

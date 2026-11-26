@@ -289,7 +289,18 @@ func (h *Helpers) ExecWatching(ctx context.Context, id string, command []string,
 var helperErrors = &launch.ExecErrors{Timeout: errTimeout, Failed: errFailed, Unsafe: errFailed,
 	OutputLimit: fail("HELPER_OUTPUT", "Ludock’s helper sent back more than expected, so the work was stopped."),
 	Exits: map[int]*apperr.Error{helper.FileMounted: ErrHostMount, helper.RestoreHoldsStage: StageInside(""),
-		helper.RestoreUnsafeEntry: ErrUndoEntryUnsafe, helper.RestoreClashUnsafe: ErrUndoClashUnsafe}}
+		helper.RestoreUnsafeEntry: ErrUndoEntryUnsafe, helper.RestoreClashUnsafe: ErrUndoClashUnsafe, helper.RestoreClashNeedsNoReplace: ErrUndoNeedsNoReplace}}
+
+// ErrUndoNeedsNoReplace is something in the way of an undo on a filesystem
+// that can't refuse to replace it as it moves, such as NFS.
+var ErrUndoNeedsNoReplace = fail("RESTORE_UNDO_IN_THE_WAY_NO_REPLACE", UndoNeedsNoReplace("something"))
+
+// UndoNeedsNoReplace is ErrUndoNeedsNoReplace's message naming what is in
+// the way.
+func UndoNeedsNoReplace(what string) string {
+	return "This server’s data is on storage, such as NFS, where Ludock can’t safely move things out of the way, and " + what +
+		" is in the way of the previous data. Remove or rename it in the server’s data, then undo the restore again."
+}
 
 // ErrUndoEntryUnsafe is an undo that would have to move a link, a special
 // file, or a file with a second name.
