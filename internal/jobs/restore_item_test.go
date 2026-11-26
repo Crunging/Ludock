@@ -124,51 +124,69 @@ func TestRestoreItemRefusesUnsafePaths(t *testing.T) {
 // A selective restore interrupted after its swap, with the replaced copy
 // still staged, is rolled back on startup: the backup's copy is set aside,
 // the current copy returns, the stage is removed, the server starts again,
-// and Activity says it was undone and where the backup's copy went.
+// and Activity says it was undone and where the backup's copy went. So is
+// one whose undo by 1.0 had already moved the backup's copy into the stage
+// as returned, and a returned copy is kept whether or not the current copy
+// was back yet.
 func TestRestoreItemInterrupted(t *testing.T) {
-	f := setup(t)
-	backupID, rootID := f.itemBackup(t)
-	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
-	f.runner.Stop()
-	job, err := f.runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: "restore",
-		BindingRevision: logical.BindingRevision, Input: map[string]any{"backupId": backupID, "confirmation": "mc", "root": rootID, "item": "world/level.dat"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The swap had finished: the backup's copy is live and the current one
-	// waits in the stage.
-	if err := f.jobs.Docker.Stop(ctx, f.game, nil); err != nil {
-		t.Fatal(err)
-	}
-	stopped, err := f.jobs.Docker.Inspect(ctx, f.game)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage := filepath.Join(f.data, ".ludock-restore-"+job.ID)
-	os.MkdirAll(filepath.Join(stage, "new", "world"), 0o700)
-	os.MkdirAll(filepath.Join(stage, "old"), 0o700)
-	os.Rename(filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
-	os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("original"), 0o644)
-	journal, _ := json.Marshal(map[string]any{"status": "replacing", "roots": []map[string]any{
-		{"root": map[string]any{"id": rootID, "path": f.data}, "item": "world/level.dat", "phase": "replaced"}}})
-	running := true
-	recovery, _ := json.Marshal(ops.Recovery{ContainerID: logical.ContainerID, Fingerprint: logical.BindingFingerprint,
-		LockKeys: []string{locks.ServerKey(f.serverID)}, InitialRunning: &running, StopStarted: true, StopSettled: true,
-		StoppedStartedAt: stopped.State.StartedAt, DataUnsafe: true, Restore: journal})
-	if _, err := f.jobs.DB.Exec("UPDATE operations SET status='running',phase='restore_replaced',recovery_json=? WHERE id=?", string(recovery), job.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.runner.Start(ctx, nil); err != nil {
-		t.Fatal(err)
-	}
-	recovered, _ := f.runner.Get(ctx, job.ID)
-	if recovered.Status != ops.Interrupted || !strings.Contains(recovered.Error, "restarted") ||
-		recovered.Result.Guidance != "The restore was undone: the server’s data is as it was. "+keptNote(&ops.Context{Job: recovered})+" Ludock started the server again." {
-		t.Fatalf("%+v", recovered)
-	}
-	if read(t, filepath.Join(f.data, "world", "level.dat")) != "newer" || read(t, filepath.Join(f.data, "world", "today.dat")) != "today" ||
-		read(t, filepath.Join(f.data, helper.SetAsideName(job.ID), "level.dat")) != "original" || f.staged() || !f.running() {
-		t.Fatal("recovery did not return the current copy", read(t, filepath.Join(f.data, "world", "level.dat")), f.staged(), f.running())
+	for _, phase := range []string{"replaced", "rolling_back", "rolled_back"} {
+		t.Run(phase, func(t *testing.T) {
+			f := setup(t)
+			backupID, rootID := f.itemBackup(t)
+			logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
+			f.runner.Stop()
+			job, err := f.runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: "restore",
+				BindingRevision: logical.BindingRevision, Input: map[string]any{"backupId": backupID, "confirmation": "mc", "root": rootID, "item": "world/level.dat"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.jobs.Docker.Stop(ctx, f.game, nil); err != nil {
+				t.Fatal(err)
+			}
+			stopped, err := f.jobs.Docker.Inspect(ctx, f.game)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stage := filepath.Join(f.data, ".ludock-restore-"+job.ID)
+			os.MkdirAll(filepath.Join(stage, "new", "world"), 0o700)
+			os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+			switch phase {
+			case "replaced":
+				// The backup's copy is live and the current one waits in the stage.
+				os.Rename(filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
+				os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("original"), 0o644)
+			case "rolling_back":
+				os.Rename(filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
+				os.WriteFile(filepath.Join(stage, "returned"), []byte("original"), 0o644)
+			case "rolled_back":
+				os.WriteFile(filepath.Join(stage, "returned"), []byte("original"), 0o644)
+			}
+			status := "replacing"
+			if phase != "replaced" {
+				status = "rolling_back"
+			}
+			journal, _ := json.Marshal(map[string]any{"status": status, "roots": []map[string]any{
+				{"root": map[string]any{"id": rootID, "path": f.data}, "item": "world/level.dat", "phase": phase}}})
+			running := true
+			recovery, _ := json.Marshal(ops.Recovery{ContainerID: logical.ContainerID, Fingerprint: logical.BindingFingerprint,
+				LockKeys: []string{locks.ServerKey(f.serverID)}, InitialRunning: &running, StopStarted: true, StopSettled: true,
+				StoppedStartedAt: stopped.State.StartedAt, DataUnsafe: true, Restore: journal})
+			if _, err := f.jobs.DB.Exec("UPDATE operations SET status='running',phase='restore_"+status+"',recovery_json=? WHERE id=?", string(recovery), job.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.runner.Start(ctx, nil); err != nil {
+				t.Fatal(err)
+			}
+			recovered, _ := f.runner.Get(ctx, job.ID)
+			if recovered.Status != ops.Interrupted || !strings.Contains(recovered.Error, "restarted") ||
+				recovered.Result.Guidance != "The restore was undone: the server’s data is as it was. "+keptNote(&ops.Context{Job: recovered})+" Ludock started the server again." {
+				t.Fatalf("%+v", recovered)
+			}
+			if read(t, filepath.Join(f.data, "world", "level.dat")) != "newer" || read(t, filepath.Join(f.data, "world", "today.dat")) != "today" ||
+				read(t, filepath.Join(f.data, helper.SetAsideName(job.ID), "level.dat")) != "original" || f.staged() || !f.running() {
+				t.Fatal("recovery did not return the current copy, or didn't keep the backup's", read(t, filepath.Join(f.data, "world", "level.dat")), f.staged(), f.running())
+			}
+		})
 	}
 }
 

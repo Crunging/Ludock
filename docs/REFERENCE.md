@@ -806,9 +806,9 @@ says which folder it left out.
 `ludock-set-aside-<id>`, without the leading dot, holds what undoing a
 restore found in the place of the previous data: the backup's copy, if it was
 already in place, and anything a game or another program wrote there
-meanwhile. Ludock never deletes it. It is ordinary data: Files shows it,
-backups include it, a later restore replaces it with the rest of the data, and
-you can delete it once you've kept what you need.
+meanwhile. No undo removes anything from it. It is ordinary data: Files shows
+it, backups include it, a later restore replaces it with the rest of the data,
+and you can delete it once you've kept what you need.
 
 ### Activity results
 
@@ -887,15 +887,16 @@ started, and stops moving it as soon as it sees that:
 | Where it stopped | What it leaves | How it is finished |
 | --- | --- | --- |
 | Before any data moved (staging, unpacking) | Nothing: the unpacked copy is removed even if the server is running | Nothing to finish |
-| After data moved, with the server stopped | The restore undone; anything in the place of the previous data, such as the backup's copy, in `ludock-set-aside-<id>` | Nothing to finish |
-| After data moved, with the server started elsewhere | The previous data, or the part of it that had moved, in the root's `.ludock-restore-<id>/old`, not in place; the server left running | See below |
+| After data moved, with the server stopped and nothing else writing to its data | The restore undone; anything in the place of the previous data, such as the backup's copy, in `ludock-set-aside-<id>` | Nothing to finish |
+| After data moved, with the server, or another container that can write to its data, started elsewhere | The previous data, or the part of it that had moved, in the root's `.ludock-restore-<id>/old`, not in place; the server left as it is | See below |
 | After the backup's data was in place, cleanup failing | The data it replaced in `.ludock-restore-<id>` | Removed at the next backup, restore, or update |
 
 A restore left with previous data out of place is listed in **Needs
 attention** for administrators. **Undo the restore** stops the server, the one
 case where a data operation stops a server another manager started; it warns
-players first when anyone is online and the game can be messaged. Ludock moves
-whatever is in the data folder now into `ludock-set-aside-<id>` beside it,
+players first when anyone is online and the game can be messaged. It refuses
+while another container that can write to the data runs, so stop that first.
+Ludock moves whatever is in the data folder now into `ludock-set-aside-<id>` beside it,
 returns the previous data, and starts the server again if it was running. A
 restore stopped while it was still moving data out left some of the previous
 data in place, so only what the game made in place of the rest moves there; a

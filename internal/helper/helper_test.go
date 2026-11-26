@@ -1237,6 +1237,83 @@ func TestExtractExitOnFullDisk(t *testing.T) {
 	}
 }
 
+// Undoing a restore whose old data had all moved out sets aside whatever is
+// live, as another program may have written it: a link, a file with a second
+// name, and a named pipe move as they are. A folder with a mount inside it
+// is refused with nothing moved, as its mount would move with it. On a disk
+// too full to make the set-aside folder, the stage's emptied folder for the
+// backup's data becomes it.
+func TestRestoreSetAsideKeepsAnything(t *testing.T) {
+	const id = "0f9619ff-8b86-4011-b42d-00c04fc964ff"
+	stage, aside := StageName(id), SetAsideName(id)
+	setAside := func(root string) int {
+		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: RestoreSetAside, Aside: aside, Base: root})
+		return RunRestore(string(request), io.Discard, io.Discard)
+	}
+	live := func(t *testing.T) string {
+		root := t.TempDir()
+		os.MkdirAll(filepath.Join(root, stage, "old"), 0o700)
+		os.MkdirAll(filepath.Join(root, stage, "new"), 0o700)
+		os.WriteFile(filepath.Join(root, "save"), []byte("theirs"), 0o644)
+		os.Link(filepath.Join(root, "save"), filepath.Join(root, "save-link"))
+		os.Symlink("save", filepath.Join(root, "latest"))
+		unix.Mkfifo(filepath.Join(root, "console"), 0o600)
+		os.MkdirAll(filepath.Join(root, "maps", "tiles"), 0o755)
+		return root
+	}
+	kept := func(t *testing.T, root, folder string) {
+		t.Helper()
+		entries, _ := os.ReadDir(filepath.Join(root, folder))
+		var names []string
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		if !slices.Equal(names, []string{"console", "latest", "maps", "save", "save-link"}) {
+			t.Errorf("%s holds %q", folder, names)
+		}
+		if target, _ := os.Readlink(filepath.Join(root, folder, "latest")); target != "save" {
+			t.Error("the link changed:", target)
+		}
+	}
+	t.Run("links and pipes", func(t *testing.T) {
+		root := live(t)
+		if setAside(root) != 0 {
+			t.Fatal("refused")
+		}
+		kept(t, root, aside)
+	})
+	t.Run("mount inside", func(t *testing.T) {
+		root := live(t)
+		previous := mountinfo.Table
+		mountinfo.Table = func() ([]byte, error) {
+			return []byte("40 22 0:45 / " + filepath.Join(root, "maps", "tiles") + " rw - ext4 /dev/sdb rw\n"), nil
+		}
+		t.Cleanup(func() { mountinfo.Table = previous })
+		if setAside(root) == 0 {
+			t.Fatal("moved a folder with a mount inside it")
+		}
+		if _, err := os.Lstat(filepath.Join(root, aside)); !os.IsNotExist(err) {
+			t.Fatal("made the set-aside folder")
+		}
+		if _, err := os.Stat(filepath.Join(root, "maps", "tiles")); err != nil {
+			t.Fatal("moved the mount")
+		}
+	})
+	t.Run("full disk", func(t *testing.T) {
+		root := live(t)
+		previous := mkdirat
+		mkdirat = func(int, string, uint32) error { return unix.ENOSPC }
+		t.Cleanup(func() { mkdirat = previous })
+		if setAside(root) != 0 {
+			t.Fatal("refused")
+		}
+		kept(t, root, aside)
+		if _, err := os.Lstat(filepath.Join(root, stage, "new")); !os.IsNotExist(err) {
+			t.Fatal("didn't use the stage's emptied folder")
+		}
+	})
+}
+
 // Rolling back a one-item restore whose replacement is still staged keeps a
 // live entry something else created after the old copy moved out, and keeps
 // the old copy; once the replacement is installed, rollback takes it back

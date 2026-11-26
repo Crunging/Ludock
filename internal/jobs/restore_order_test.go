@@ -401,7 +401,13 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 		{name: "revoked during rollback", status: ops.Failed, journal: "rolled_back put back kept", kept: true, trace: slices.Concat(swapped, rolledBack("old_moved")),
 			after: func(t *testing.T, f *fixture) afterHook {
 				fail := once(helper.RestoreMoveNew, "config", func(*fakedocker.Container, int) int { return 1 })
-				revoke := once(helper.RestoreRollbackClean, "config", func(_ *fakedocker.Container, code int) int { f.revoke(t); return code })
+				revoked := false
+				revoke := once(helper.RestoreSetAside, "config", func(_ *fakedocker.Container, code int) int { f.revoke(t); revoked = true; return code })
+				t.Cleanup(func() {
+					if !revoked {
+						t.Error("never revoked")
+					}
+				})
 				return func(c *fakedocker.Container, op, root string, code int) int {
 					return revoke(c, op, root, fail(c, op, root, code))
 				}

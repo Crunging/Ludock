@@ -212,7 +212,8 @@ func (j *Jobs) watchedStep(ctx context.Context, data *backups.DataHelper, root, 
 		limit = removalLimit
 	}
 	request := helper.RestoreRequest{Root: root, Stage: stageName(job), Operation: operation, Item: item, Base: backups.HelperBaseOf(root)}
-	if operation == helper.RestoreSetAside || operation == helper.RestoreRollbackOld {
+	// One item's cleanup keeps what a 1.0 undo left in the stage.
+	if operation == helper.RestoreSetAside || operation == helper.RestoreRollbackOld || (operation == helper.RestoreCleanup && item != "") {
 		request.Aside = helper.SetAsideName(job.Job.ID)
 	}
 	out, err := j.Backups.Helpers.ExecWatching(ctx, data.Container, helper.Command("restore", request), assertAccess, limit, watch)
@@ -406,9 +407,11 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 				return err
 			}
 		}
-		if _, err := j.restoreStep(ctx, data, rootPath, "", job, helper.RestoreCleanup, nil); err != nil {
+		cleaned, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, helper.RestoreCleanup, nil)
+		if err != nil {
 			return err
 		}
+		kept = kept || cleaned["setAside"] == true
 	}
 	if blocked != nil {
 		return blocked

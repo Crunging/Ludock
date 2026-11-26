@@ -2032,6 +2032,8 @@ var (
 	renameat2 = unix.Renameat2
 	renameat  = unix.Renameat
 	linkat    = unix.Linkat
+	// mkdirat stands in for a full disk.
+	mkdirat = unix.Mkdirat
 	// fchown and fchmod let tests see the order an upload hands over in,
 	// helperUID stand in for a helper that isn't the files' owner, and
 	// fsetxattr fail to keep an ACL.
