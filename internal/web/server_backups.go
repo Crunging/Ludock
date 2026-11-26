@@ -76,6 +76,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 			}
 			if backup.ID == restore && restoreOffered(view, d.DiscoveryUnavailable) && !d.UndoBlocked && b.Fits[backup.ID].Refusal == "" && !backup.Missing && !backup.CopyAway {
 				b.Restore = backup
+				b.SetAside = s.setAside(r, request, view.ID)
 			}
 			if backup.ID == keep && backup.KeptAt == 0 && !b.Gone {
 				b.Keep = backup
@@ -83,6 +84,33 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		}
 	}
 	return b
+}
+
+// setAside names the folders undoing earlier restores set aside at the top
+// of a server's data folders, which a whole restore replaces with everything
+// else. None are named when a folder can't be read in time.
+func (s *Server) setAside(r *http.Request, request *Request, serverID string) []string {
+	action, err := s.startAction(r, request, serverID, authz.FilesRead)
+	if err != nil {
+		return nil
+	}
+	defer action.Done()
+	ctx, cancel := context.WithTimeout(action.Ctx, 10*time.Second)
+	defer cancel()
+	var names []string
+	for _, root := range action.Container.FileRoots {
+		listing, err := s.App.Files.List(ctx, fileTarget(action), root.ID, "", action.Assert)
+		if err != nil {
+			log.Warn("Could not look for folders set aside by earlier restores")
+			return nil
+		}
+		for _, entry := range listing.Entries {
+			if entry.Type == "directory" && views.IsSetAside(entry.Name) {
+				names = append(names, entry.Name)
+			}
+		}
+	}
+	return names
 }
 
 func (s *Server) readBackups(r *http.Request, b *views.BackupsView) {
@@ -320,6 +348,19 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 	}
 	if fit.Moved {
 		input[jobs.MovedInput] = true
+	}
+	// The folders the confirmation named, for its result to say where they
+	// went.
+	if input["item"] == nil {
+		var names []string
+		for _, name := range r.PostForm["setAside"] {
+			if views.IsSetAside(name) && !slices.Contains(names, name) && len(names) < 100 {
+				names = append(names, name)
+			}
+		}
+		if len(names) > 0 {
+			input["setAside"] = names
+		}
 	}
 	s.enqueue(w, r, request, resolved, user, ops.KindRestore, input)
 }

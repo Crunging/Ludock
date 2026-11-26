@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/backups"
+	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/update"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -36,6 +37,9 @@ type BackupsView struct {
 	// FolderIssue says a backup folder isn't responding.
 	FolderIssue string
 	Restore      *backups.Backup
+	// SetAside names the folders undoing earlier restores set aside in the
+	// server's data, which restoring Restore replaces.
+	SetAside []string
 	// Fits says, for each backup, whether it restores onto the server as it
 	// is now; nil while that is unknown.
 	Fits map[string]backups.Fit
@@ -469,6 +473,12 @@ templ RestoreForm(b BackupsView) {
 			<input type="hidden" name="bindingRevision" value={ strconv.FormatInt(b.BindingRevision, 10) }/>
 		}
 		<p>This replaces the server’s current game data. Ludock stops the server and takes a safety backup first; if that fails, nothing is replaced.</p>
+		if len(b.SetAside) > 0 {
+			<p class="restore-set-aside">The data folder holds copies Ludock set aside earlier: { nameList(b.SetAside) }. They are replaced with everything else, and stay in the safety backup taken before the restore.</p>
+			for _, name := range b.SetAside {
+				<input type="hidden" name="setAside" value={ name }/>
+			}
+		}
 		if note := DisconnectNote(b.Running); note != "" {
 			<p>{ note }</p>
 		}
@@ -518,6 +528,40 @@ type BackupBrowser struct {
 	BindingRevision int64
 	Warn            bool
 	Running          bool
+}
+
+// nameList names things in a sentence.
+func nameList(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+// IsSetAside reports a folder name that undoing a restore gives what it set
+// aside.
+func IsSetAside(name string) bool {
+	id, ok := strings.CutPrefix(name, helper.SetAsidePrefix)
+	return ok && helper.ValidID(id)
+}
+
+// SetAsideReplaced says where a whole restore that succeeded put the
+// folders earlier undos had set aside, as its confirmation named them.
+func SetAsideReplaced(operation *ops.Job) string {
+	if operation.Kind != ops.KindRestore || operation.Status != ops.Succeeded || operation.Result.SafetyBackupID == "" || operation.Result.RestoredItem != "" {
+		return ""
+	}
+	listed, _ := operation.Input["setAside"].([]any)
+	var names []string
+	for _, value := range listed {
+		if name, ok := value.(string); ok && IsSetAside(name) {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return "The copies Ludock had set aside earlier, " + nameList(names) + ", were replaced with everything else. They are in the backup taken before this restore."
 }
 
 // rootList names data folders in a sentence.
