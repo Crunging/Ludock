@@ -919,7 +919,8 @@ restoring and undoing the whole data use plain renames: an undo of a restore
 stopped while it was moving data out refuses if something is in the way
 instead of moving it aside, and a file a game creates in the instant between
 Ludock checking a name and moving data there can be replaced. Restoring one
-file or folder needs such renames, so it fails there.
+file or folder doesn't work on such storage: it fails before moving anything,
+the data is left as it was, and there is nothing to undo.
 
 If the server's data folders or game change where it is defined, such as in
 Compose, while such a restore waits to be undone, Ludock can't tell where the
