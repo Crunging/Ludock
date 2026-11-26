@@ -41,16 +41,15 @@ type RestoreRequest struct {
 
 // The restore helper's operations, named by RestoreRequest.Operation.
 const (
-	RestoreCheck         = "check"
-	RestoreSpace         = "space"
-	RestoreStageExists   = "stageExists"
-	RestoreStage         = "stage"
-	RestoreCleanup       = "cleanup"
-	RestoreMoveOld       = "moveOld"
-	RestoreMoveNew       = "moveNew"
-	RestoreRollbackClean = "rollbackClean"
-	RestoreSetAside      = "setAside"
-	RestoreRollbackOld   = "rollbackOld"
+	RestoreCheck       = "check"
+	RestoreSpace       = "space"
+	RestoreStageExists = "stageExists"
+	RestoreStage       = "stage"
+	RestoreCleanup     = "cleanup"
+	RestoreMoveOld     = "moveOld"
+	RestoreMoveNew     = "moveNew"
+	RestoreSetAside    = "setAside"
+	RestoreRollbackOld = "rollbackOld"
 	// RestoreCheckReturn refuses, before the server stops, what rollbackOld
 	// would refuse to set aside, reading only.
 	RestoreCheckReturn = "checkReturn"
@@ -679,8 +678,6 @@ func (h *restoreHelper) step() (any, error) {
 		err = h.moveOld(root, stage)
 	case RestoreMoveNew:
 		err = h.moveNew(root, stage)
-	case RestoreRollbackClean:
-		err = h.rollbackClean(root, stage)
 	case RestoreSetAside:
 		if err := h.setAside(root, stage); err != nil {
 			return nil, err
@@ -879,32 +876,9 @@ func (h *restoreHelper) moveNew(root, stage fd) error {
 	return ownRoot(root, archived)
 }
 
-func (h *restoreHelper) rollbackClean(root, stage fd) error {
-	// Prove the old data exists before deleting a failed replacement.
-	if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
-		return err
-	}
-	if err := h.ownTree(root, false); err != nil {
-		return err
-	}
-	children, err := names(root)
-	if err != nil {
-		return err
-	}
-	for _, name := range children {
-		if Reserved(name) {
-			continue
-		}
-		if err := h.removeEntry(root, name, 0); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (h *restoreHelper) setAside(root, stage fd) error {
-	// Like rollbackClean, but what is live is kept: a server started
-	// elsewhere may have written there.
+	// What is live is kept, never removed: another program may have written
+	// there.
 	if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
 		return err
 	}
@@ -1409,44 +1383,6 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		return move(staged, name, parent, name, info)
-	case RestoreRollbackClean:
-		// The replacement goes back into the stage rather than being deleted,
-		// so nothing outside the stage is ever removed.
-		if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
-			return err
-		}
-		parent, err := h.itemParent(root, parts)
-		if err != nil {
-			return err
-		}
-		info, err := movable(parent, name, rootInfo.Dev)
-		if err != nil {
-			return err
-		}
-		// Only a live entry the swap installed is taken back: while the
-		// replacement is still staged, a live entry belongs to someone else
-		// and both are kept for review.
-		next, err := h.t.openAt(stage, "new", directoryFlags, 0)
-		if err != nil {
-			return err
-		}
-		staged, err := h.itemParent(next, parts)
-		if err != nil {
-			return err
-		}
-		if _, err := lstatAt(staged, name); err == nil {
-			if info != nil {
-				return errUnsafe
-			}
-		} else if !isNotExist(err) {
-			return err
-		}
-		if info != nil && isDir(info) {
-			if err := h.safeToMove(parent, name, 0, false); err != nil {
-				return err
-			}
-		}
-		return move(parent, name, stage, "returned", info)
 	case RestoreSetAside:
 		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
 		if err != nil {

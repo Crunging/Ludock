@@ -208,7 +208,7 @@ func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, 
 // watchedStep is restoreStep, stopped early once watch fails.
 func (j *Jobs) watchedStep(ctx context.Context, data *backups.DataHelper, root, item string, job *ops.Context, operation string, assertAccess func() error, watch func(context.Context) error) (map[string]any, error) {
 	limit := 2 * time.Minute
-	if operation == helper.RestoreCleanup || operation == helper.RestoreRollbackClean || operation == helper.RestoreSetAside {
+	if operation == helper.RestoreCleanup || operation == helper.RestoreSetAside {
 		limit = removalLimit
 	}
 	request := helper.RestoreRequest{Root: root, Stage: stageName(job), Operation: operation, Item: item, Base: backups.HelperBaseOf(root)}

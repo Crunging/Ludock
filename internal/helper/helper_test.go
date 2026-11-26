@@ -1299,41 +1299,6 @@ func TestRestoreSetAsideKeepsAnything(t *testing.T) {
 	})
 }
 
-// Rolling back a one-item restore whose replacement is still staged keeps a
-// live entry something else created after the old copy moved out, and keeps
-// the old copy; once the replacement is installed, rollback takes it back
-// and returns the old copy.
-func TestRestoreItemRollbackOwnership(t *testing.T) {
-	root := t.TempDir()
-	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
-	for _, dir := range []string{"world", stage + "/old", stage + "/new/world"} {
-		os.MkdirAll(filepath.Join(root, dir), 0o755)
-	}
-	os.WriteFile(filepath.Join(root, stage, "old", "item"), []byte("current"), 0o644)
-	os.WriteFile(filepath.Join(root, stage, "new", "world", "level.dat"), []byte("backup"), 0o644)
-	os.WriteFile(filepath.Join(root, "world", "level.dat"), []byte("someone else"), 0o644)
-	step := func(operation string) int {
-		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: operation, Item: "world/level.dat", Base: root})
-		return RunRestore(string(request), io.Discard, io.Discard)
-	}
-	if step(RestoreRollbackClean) == 0 {
-		t.Fatal("took back an entry the swap never installed")
-	}
-	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "someone else" {
-		t.Fatal(string(data))
-	}
-	os.Remove(filepath.Join(root, "world", "level.dat"))
-	if step(RestoreMoveNew) != 0 || step(RestoreRollbackClean) != 0 || step(RestoreRollbackOld) != 0 {
-		t.Fatal("rollback after the swap failed")
-	}
-	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "current" {
-		t.Fatal(string(data))
-	}
-	if data, _ := os.ReadFile(filepath.Join(root, stage, "returned")); string(data) != "backup" {
-		t.Fatal(string(data))
-	}
-}
-
 // The data a restore replaces, one item or a whole folder, holds something
 // cleanup could never remove, first a named pipe and then another filesystem
 // mounted inside it, such as a disk the host mounted under the data: the
@@ -1399,8 +1364,6 @@ func TestRestoreRefusesUnremovableData(t *testing.T) {
 		{Operation: RestoreCheck, Item: "world"},
 		{Operation: RestoreMoveOld, Item: "world"},
 		{Operation: RestoreMoveOld},
-		{Operation: RestoreRollbackClean, Item: "world"},
-		{Operation: RestoreRollbackClean},
 		{Operation: RestoreSetAside, Item: "world", Aside: SetAsideName("0f9619ff-8b86-4011-b42d-00c04fc964ff")},
 		{Operation: RestoreSetAside, Aside: SetAsideName("0f9619ff-8b86-4011-b42d-00c04fc964ff")},
 	} {
