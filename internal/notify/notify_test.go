@@ -394,7 +394,7 @@ func TestDeliveryAndProviderDetailsStayOut(t *testing.T) {
 // Revoked administrator cannot save a webhook.
 func TestRevokedAdminWebhook(t *testing.T) {
 	s := setup(t, func(*http.Request) (*http.Response, error) { return respond(204, "") })
-	if err := s.DB.DeleteUserSessions(ctx, "admin"); err != nil {
+	if err := dbtest.DeleteUserSessions(ctx, s.DB, "admin"); err != nil {
 		t.Fatal(err)
 	}
 	other := "https://discord.com/api/webhooks/456/departing-admin"

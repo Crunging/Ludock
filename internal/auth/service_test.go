@@ -382,7 +382,7 @@ func TestAdminChangesAfterDemotion(t *testing.T) {
 			if c.change == "demote" {
 				s.DB.UpdateUserAccess(ctx, adminID, db.RoleMember, false)
 			} else {
-				s.DB.DeleteUserSessions(ctx, adminID)
+				dbtest.DeleteUserSessions(ctx, s.DB, adminID)
 			}
 		}
 		before, _ := s.DB.FindUserByID(ctx, targetID)

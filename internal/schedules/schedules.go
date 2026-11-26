@@ -387,6 +387,9 @@ func (s *Service) write(ctx context.Context, actor *db.SessionUser, tokenHash st
 		if err := db.AssertSession(ctx, tx, actor.ID, tokenHash, db.Now()); err != nil {
 			return err
 		}
+		if err := db.RefuseWhileUpdating(ctx, tx); err != nil {
+			return err
+		}
 		return within(tx)
 	}))
 }

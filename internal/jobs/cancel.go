@@ -94,6 +94,9 @@ func (j *Jobs) Cancel(ctx context.Context, user *db.SessionUser, tokenHash, serv
 				if err := j.Authz.AssertIn(ctx, tx, user.ID, tokenHash, serverID, capabilities...); err != nil {
 					return err
 				}
+				if err := db.RefuseWhileUpdating(ctx, tx); err != nil {
+					return err
+				}
 				return fn(tx)
 			})
 		}
