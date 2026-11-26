@@ -668,6 +668,10 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		switch {
 		case s.PutBack == DataRestored:
 			record.Data = DataRestored
+		case s.MountID == "":
+			// A development Ludock runs outside the container it stands
+			// for, so its data never left it.
+			record.Data, record.Copy = DataRestored, false
 		case record.Copy:
 			// It is there, but this Ludock couldn't put it back.
 			record.Data = DataNotRestored
