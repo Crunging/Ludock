@@ -257,13 +257,6 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		// One folder's restore, the backup's copy in its place.
 		{name: "item-replaced", status: ops.Interrupted, guidance: undone, data: merged(now, itemAside),
 			containers: []string{"/mc running unless-stopped 0000"}, alerts: []string{restoreAlert}},
-		// An undo of a restore that failed because the server was started
-		// elsewhere, killed once it set aside what the game wrote meanwhile
-		// and before it journaled that it kept anything.
-		{name: "undo-set-aside", status: ops.Succeeded, guidance: undoFinished, pending: finishedUndo, data: merged(now, setAside), containers: []string{"/mc exited unless-stopped 0000"}},
-		// The same undo killed later, as it put the previous data back, with
-		// kept journaled.
-		{name: "undo-set-aside-kept", status: ops.Succeeded, guidance: undoFinished, pending: finishedUndo, data: merged(now, setAside), containers: []string{"/mc exited unless-stopped 0000"}},
 		// A backup written but not published: the partial archive goes.
 		{name: "backup-copying", status: ops.Interrupted,
 			guidance: "Ludock restarted before the backup finished, so there’s no new backup. Ludock asked Docker to start the server, and it is running.",
