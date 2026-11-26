@@ -353,13 +353,9 @@ then goes ahead. If nobody is on, it goes ahead at once, and **Activity** says
 nobody was online. A server that keeps restarting has no game to warn or ask
 to save, so its work goes ahead at once and **Activity** says so.
 
-If the game's console or Docker doesn't answer when it's time to warn, Ludock
-keeps trying for a minute (**Warning players** in **Activity**) and gives
-players a full minute from when the warning goes out; if it never goes out, the
-work goes ahead and **Activity** says Ludock couldn't warn players. If Ludock
-restarts during the minute, it finishes the wait afterwards; if it was down for
-more than five minutes past the time players were given, it leaves the server
-alone and says so in **Activity**.
+If the game's console or Docker doesn't answer when it's time to warn, the
+work still goes ahead, and **Activity** says what players were told; see
+[warnings that can't go out](REFERENCE.md#warnings-that-cant-go-out).
 
 Until the minute is up, the server's page, its row on the server list, and its
 rows in **Activity** show **Cancel restart** (or stop, backup, restore, or
@@ -434,14 +430,12 @@ such as Valheim's `/opt/valheim`. It shows container paths, never host paths.
   and get the permissions a new file there would get, including what the
   folder's default ACL gives. In a folder its group can write to, the group
   can write to them too. A replaced file keeps its owner, permissions,
-  and ACL. One exception, for uploads and files saved in the editor: where a
-  file's group, others, or ACL would give its owner more than the owner's
-  own permissions, they are cut to those, unless the owner is root.
+  and ACL, with [one exception](REFERENCE.md#files-permissions-and-protected-folders)
+  for uploads and edits.
 - A folder mounted separately inside another, such as a mods folder, can't
   be deleted, renamed, or moved with what holds it; change what's inside it.
-  Neither can a folder holding a restore's hidden `.ludock-restore-*` folder,
-  which can be the only copy of the server's previous data, and a restore of
-  that folder or the whole server is refused until it is dealt with.
+  The same goes for a folder that holds a restore's hidden folder
+  ([why](REFERENCE.md#files-permissions-and-protected-folders)).
 
 Stop a game before replacing a world or configuration it has open. Many
 images write some settings from their environment variables each time they
@@ -471,12 +465,8 @@ time limits are in the [reference](REFERENCE.md#limits).
   might not, Ludock removes the server's safety backups first, then its
   oldest other backups, never its newest backup, the 3 newest of your own
   that can be restored, or kept ones. A backup that still runs out of room
-  fails and says why; one without room for even empty data folders, under the
-  total limit or above the free space kept, is refused before the server
-  stops. A backup whose archive is gone or damaged doesn't count toward the
-  total limit, so it never stops new backups; one in a folder Ludock can't
-  reach counts toward the limit for new backups, but never makes Ludock
-  remove others.
+  fails and says why. [How space is counted](REFERENCE.md#how-backup-space-is-counted)
+  has the details.
 - **Cancelled backups:** a forced stop, a start from another tool, a replaced
   container, or another running container writing the same data cancels the
   copy.
@@ -579,24 +569,14 @@ it off, change its levels, or **Pause alerts for maintenance**.
 | Memory near its limit | A container with a memory limit stays at 90% of it for 5 minutes |
 
 Each alert is sent once, with another when it recovers. **Outage since** is
-when Docker says the server stopped, or the first exit Ludock saw of a crash
-loop, even if Ludock wasn't watching when the server stopped; the wait before
-alerting still counts from when Ludock noticed. A server that stopped
-by itself shows in **Needs attention** with **Start**, which is also the
+when Docker says the server stopped, or the first exit Ludock saw of a server
+that keeps restarting, which counts as one outage. A server that stopped by
+itself shows in **Needs attention** with **Start**, which is also the
 highlighted button on a stopped server's row and page. Stops and work started
 through Ludock don't alert, and a server that was already stopped when Ludock
-found it stays quiet until it runs. A stop through Ludock after a server was
-reported down doesn't end that outage: once the server runs again, you hear
-that it's back up. A game still starting, or whose status
-check is off or wrong, never counts as not answering. Ludock remembers that a
-game answered, so one that hangs while Ludock itself restarts is still caught;
-the wait starts again when Ludock is back, unless the alert was already sent.
-A server that keeps restarting is one outage, timed from when Ludock first
-sees it restarting, even if it was stopped through Ludock before. A run after
-it, even one you start, ends it only once the game answers or the run has
-stayed up for **Wait before alerting**.
-Disks are measured about every 10 minutes while someone has Ludock open and
-every 30 otherwise.
+found it stays quiet until it runs. Disks are measured about every 10 minutes
+while someone has Ludock open and every 30 otherwise.
+[How outages are timed](REFERENCE.md#how-outages-are-timed) has the details.
 
 ### Notifications
 

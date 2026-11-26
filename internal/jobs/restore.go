@@ -840,9 +840,9 @@ func (r *restoreRun) failed(err error) (*ops.Result, error) {
 			return r.restored, nil
 		}
 		r.j.notify(notify.Results, "restore-result:"+job.Job.ID, r.server.Container.DisplayName+": "+r.what+
-			" completed, but its staging folder could not be removed yet. Its Activity says more.")
-		return nil, fail("RESTORE_STAGING_LEFT", "The backup was restored, but Ludock could not remove the folder "+stageName(job)+
-			" from the server's data, which holds the replaced data. Ludock removes it the next time it stops the server for a backup, a restore or an update.")
+			" completed, but Ludock couldn’t remove the folder "+stageName(job)+" yet. Its Activity says more.")
+		return nil, fail("RESTORE_STAGING_LEFT", "The backup was restored, but Ludock couldn’t remove the folder "+stageName(job)+
+			" from the server’s data, which holds the data it replaced. Ludock removes it "+pendingLater+".")
 	}
 	touched := state != nil && slices.ContainsFunc(state.Roots, holdsLive)
 	if (r.data != nil || r.stageMade) && (state == nil || (state.Status != "committed" && state.Status != "cleaned")) {
@@ -904,11 +904,11 @@ func endedGuidance(job *ops.Context, state *restoreRecovery, touched bool) strin
 		return ""
 	// A return that was under way may have finished without Ludock hearing.
 	case slices.ContainsFunc(state.Roots, func(entry journal) bool { return entry.Phase == "rolling_back" }):
-		guidance = "The restore was stopped partway while its previous data was being put back, so Ludock can’t confirm where all of it is: look in the server’s data and in the folder " +
-			stageName(job) + ". An administrator can undo the restore from Needs attention; otherwise Ludock undoes it " + pendingLater + "."
+		guidance = "The restore was stopped partway while its previous data was being put back. An administrator can undo the restore from Needs attention to finish that; otherwise Ludock does it " +
+			pendingLater + ". Until then Ludock can’t confirm where all of it is: look in the server’s data and in the folder " + stageName(job) + "."
 	case slices.ContainsFunc(state.Roots, holdsLive):
 		guidance = "The restore was stopped partway. The server’s previous data is safe in the folder " + stageName(job) +
-			" in its data, but not in place. An administrator can undo the restore from Needs attention; otherwise Ludock undoes it " + pendingLater + "."
+			" in its data, but not in place: an administrator can undo the restore from Needs attention to put it back; otherwise Ludock does it " + pendingLater + "."
 	case returned:
 		guidance = restoreUndone + " Ludock finishes removing its folder " + stageName(job) + " " + pendingLater + "."
 	default:
