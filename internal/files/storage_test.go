@@ -794,6 +794,18 @@ func TestUploadFolderLimits(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.data, "late")); !os.IsNotExist(err) {
 		t.Fatal("an older helper made a folder", err)
 	}
+	// Nor does it replace a file saved in the editor.
+	os.WriteFile(filepath.Join(f.data, "eula.txt"), []byte("eula=false\n"), 0o644)
+	preview, err := f.service.Preview(ctx, f.target, f.root, "eula.txt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.Save(ctx, f.target, f.root, "eula.txt", []byte("eula=true\n"), preview.Version, nil); !errors.Is(err, launch.ErrHelperOutdated) {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(f.data, "eula.txt")); string(data) != "eula=false\n" {
+		t.Fatal("an older helper saved a file:", string(data))
+	}
 }
 
 // The backend holds the helper to the batch: a folder is approved only for

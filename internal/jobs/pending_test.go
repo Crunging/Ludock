@@ -14,6 +14,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/mountinfo"
 	"github.com/Crunging/Ludock/internal/ops"
 )
@@ -193,6 +194,19 @@ func TestUnfinishableRestoreRefusesBeforeStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.refusedBeforeStop(t, restore.ID, errPendingBlocked.Error())
+}
+
+// A restore stops partway, then LUDOCK_HELPER_IMAGE names a helper older than
+// this Ludock: work that would finish the restore, an undo or an update
+// without a backup too, is refused before the server stops, as in
+// refusedBeforeStop.
+func TestOlderHelperRefusesBeforeStop(t *testing.T) {
+	f := setup(t)
+	restore, _ := f.stoppedRestore(t)
+	older := "ghcr.io/crunging/ludock@sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	f.engine.AddImage(older)
+	f.jobs.Backups.Helpers.Images.Configured, f.failStep = older, "version"
+	f.refusedBeforeStop(t, restore.ID, launch.ErrHelperOutdated.Message)
 }
 
 // Ludock's data is saved while a restore moves the backup's data in, the

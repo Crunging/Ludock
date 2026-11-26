@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"slices"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/files"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/ops"
@@ -318,13 +320,17 @@ func (j *Jobs) assertPendingUndoable(ctx context.Context, server *servers.Contex
 		if !ok {
 			return errPendingBlocked
 		}
-		if state.Status == "committed" {
-			continue
-		}
+		// Starting the helper also refuses a configured one older than
+		// Ludock, which finishing even a committed restore would use.
 		if data == nil {
-			if data, err = j.Backups.Helpers.NewDataHelper(ctx, server, true, job.Job.ID); err != nil {
+			if data, err = j.Backups.Helpers.NewDataHelper(ctx, server, true, job.Job.ID); errors.Is(err, launch.ErrHelperOutdated) {
+				return err
+			} else if err != nil {
 				return nil
 			}
+		}
+		if state.Status == "committed" {
+			continue
 		}
 		if _, _, err := j.checkUndo(ctx, server, data, restore, state, assertAccess, false); err != nil {
 			if apperr.Is(err, backups.StageInside("").Code) || apperr.Is(err, backups.ErrHostMount.Code) || apperr.Is(err, backups.ErrUndoEntryUnsafe.Code) {
