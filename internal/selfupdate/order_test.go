@@ -437,6 +437,12 @@ func TestSelfUpdateOrder(t *testing.T) {
 				"Labels": map[string]any{"org.opencontainers.image.version": "1.1.0"}})
 		}, trace: []string{"pull", "create helper", "start helper", "create new", "remove new", "remove helper", "policy old"}, image: oldImage,
 			state: selfupdate.StateFailed, reason: "Docker couldn’t swap in Ludock’s new container, so nothing was changed", probe: "after"},
+		{name: "a new container nothing ran in, which Docker won't remove, isn't called nothing changed", arrange: func(g *rig) {
+			g.engine.SetImageConfig(newImage, map[string]any{"Healthcheck": map[string]any{"Test": []string{"CMD-SHELL", "nc -z localhost 3000"}},
+				"Labels": map[string]any{"org.opencontainers.image.version": "1.1.0"}})
+			g.fail["remove new"] = 500
+			g.at["remove new"] = func() { g.fail["remove new"] = 500 }
+		}, trace: []string{"pull", "create helper", "start helper", "create new", "remove new", "remove helper", "remove new", "policy old"}, image: oldImage, state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true},
 		{name: "a health check of the container's own", arrange: func(g *rig) {
 			g.engine.Update(g.old, func(c *fakedocker.Container) {
 				c.ExtraConfig = map[string]any{"Healthcheck": map[string]any{"Test": []string{"CMD-SHELL", "nc -z localhost 3000"}}}
