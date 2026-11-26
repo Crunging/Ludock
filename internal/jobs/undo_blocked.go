@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 
+	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -35,10 +36,20 @@ func (j *Jobs) UndoBlocked(ctx context.Context, server *servers.Context) (bool, 
 		return false, err
 	}
 	for _, restore := range pending {
-		state, err := restoreState(restore)
-		if err != nil || state == nil || !journalMatches(state.Roots, server) || restore.Job.Recovery.Fingerprint != server.Logical.BindingFingerprint {
+		if _, ok := undoable(restore, server); !ok {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// undoable returns the journal of a restore that stopped partway when
+// finishPending can undo it on server: the journal still matches the server's
+// data folders and its game is the one the restore stopped.
+func undoable(restore *ops.Context, server *servers.Context) (*restoreRecovery, bool) {
+	state, err := restoreState(restore)
+	if err != nil || state == nil || !journalMatches(state.Roots, server) || restore.Job.Recovery.Fingerprint != server.Logical.BindingFingerprint {
+		return nil, false
+	}
+	return state, true
 }

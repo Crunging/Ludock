@@ -46,9 +46,8 @@ func (f *fixture) stoppedRestore(t *testing.T) (*ops.Job, *restoreTrace) {
 // data is set aside before its previous data returns.
 var undoneLines = []string{"stageExists world: rolling_back old_moved,staging unsafe", "cleanup config: rolling_back old_moved,staging unsafe",
 	"setAside world: rolling_back old_moved,staging unsafe",
-	"rollbackOld world: rolling_back rolling_back,staging kept unsafe",
-	"cleanup world: rolling_back rolled_back,staging kept unsafe",
-	"kept world: rolling_back rolled_back,staging kept unsafe", "kept config: rolling_back rolled_back,staging kept unsafe"}
+	"rollbackOld world: rolling_back rolling_back,staging unsafe",
+	"cleanup world: rolling_back rolled_back,staging unsafe"}
 
 // checkUndone confirms stoppedRestore was finished: previous data in place,
 // what the game wrote kept beside it, no stage folder, and both Activity
@@ -58,7 +57,7 @@ func (f *fixture) checkUndone(t *testing.T, failed *ops.Job, later *ops.Job) {
 	restoreID := failed.ID
 	aside := helper.SetAsideName(restoreID)
 	if read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" || read(t, filepath.Join(f.data, "world", aside, "generated.dat")) != "generated" {
-		t.Error("previous data not returned, or the game's writes not kept")
+		t.Error("previous data not returned, or the game's writes not")
 	}
 	for _, root := range []string{"world", "config"} {
 		entries, _ := os.ReadDir(filepath.Join(f.data, root))
@@ -68,7 +67,7 @@ func (f *fixture) checkUndone(t *testing.T, failed *ops.Job, later *ops.Job) {
 	}
 	restore, _ := f.runner.Get(ctx, restoreID)
 	if guidance := restore.Result.Guidance; restore.Status != ops.Failed || restore.UpdatedAt != failed.UpdatedAt ||
-		f.savedJournal(restoreID) != "rolled_back put back kept" ||
+		f.savedJournal(restoreID) != "rolled_back put back" ||
 		!strings.Contains(guidance, "back in place") || !strings.Contains(guidance, aside) {
 		t.Errorf("%+v, journal %s", restore, f.savedJournal(restoreID))
 	}
@@ -124,12 +123,12 @@ func TestStartupFinishesStoppedRestoreOnStoppedServer(t *testing.T) {
 	if err := f.runner.Start(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
-	if f.savedJournal(restore.ID) != "rolled_back put back kept" || f.running() {
+	if f.savedJournal(restore.ID) != "rolled_back put back" || f.running() {
 		t.Fatal(f.savedJournal(restore.ID))
 	}
 	if read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" ||
 		read(t, filepath.Join(f.data, "world", helper.SetAsideName(restore.ID), "generated.dat")) != "generated" {
-		t.Fatal("previous data not returned, or the game's writes not kept")
+		t.Fatal("previous data not returned, or the game's writes not")
 	}
 }
 
@@ -160,7 +159,7 @@ func TestTakeOverFinishesStoppedRestore(t *testing.T) {
 				if err := f.runner.Start(ctx, nil); err != nil {
 					t.Fatal(err)
 				}
-				if f.savedJournal(restore.ID) != "rolled_back put back kept" || f.running() ||
+				if f.savedJournal(restore.ID) != "rolled_back put back" || f.running() ||
 					read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" ||
 					read(t, filepath.Join(f.data, "world", helper.SetAsideName(restore.ID), "generated.dat")) != "generated" {
 					t.Fatal(f.savedJournal(restore.ID))
@@ -451,7 +450,7 @@ func TestUndoStopsWhenStarted(t *testing.T) {
 						t.Fatalf("%+v", later)
 					}
 				}
-				if f.savedJournal(restore.ID) != "rolled_back put back kept" || read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" ||
+				if f.savedJournal(restore.ID) != "rolled_back put back" || read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" ||
 					read(t, filepath.Join(f.data, "world", helper.SetAsideName(restore.ID), "generated.dat")) != "generated" {
 					t.Errorf("journal %s", f.savedJournal(restore.ID))
 				}

@@ -179,7 +179,7 @@ func TestRestoreItemInterrupted(t *testing.T) {
 			}
 			recovered, _ := f.runner.Get(ctx, job.ID)
 			if recovered.Status != ops.Interrupted || !strings.Contains(recovered.Error, "restarted") ||
-				recovered.Result.Guidance != "The restore was undone: the server’s data is as it was. "+keptNote(&ops.Context{Job: recovered})+" Ludock asked Docker to start the server, and it is running." {
+				recovered.Result.Guidance != "The restore was undone: the server’s data is as it was. "+asideNote(&ops.Context{Job: recovered})+" Ludock asked Docker to start the server, and it is running." {
 				t.Fatalf("%+v", recovered)
 			}
 			if read(t, filepath.Join(f.data, "world", "level.dat")) != "newer" || read(t, filepath.Join(f.data, "world", "today.dat")) != "today" ||
