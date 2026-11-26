@@ -124,12 +124,9 @@ func TestRestoreItemRefusesUnsafePaths(t *testing.T) {
 // A selective restore interrupted after its swap, with the replaced copy
 // still staged, is rolled back on startup: the backup's copy is set aside,
 // the current copy returns, the stage is removed, the server starts again,
-// and Activity says it was undone and where the backup's copy went. So is
-// one whose undo by 1.0 had already moved the backup's copy into the stage
-// as returned, and a returned copy is kept whether or not the current copy
-// was back yet.
+// and Activity says it was undone and where the backup's copy went.
 func TestRestoreItemInterrupted(t *testing.T) {
-	for _, phase := range []string{"replaced", "rolling_back", "rolled_back"} {
+	for _, phase := range []string{"replaced"} {
 		t.Run(phase, func(t *testing.T) {
 			f := setup(t)
 			backupID, rootID := f.itemBackup(t)
@@ -150,21 +147,10 @@ func TestRestoreItemInterrupted(t *testing.T) {
 			stage := filepath.Join(f.data, ".ludock-restore-"+job.ID)
 			os.MkdirAll(filepath.Join(stage, "new", "world"), 0o700)
 			os.MkdirAll(filepath.Join(stage, "old"), 0o700)
-			switch phase {
-			case "replaced":
-				// The backup's copy is live and the current one waits in the stage.
-				os.Rename(filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
-				os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("original"), 0o644)
-			case "rolling_back":
-				os.Rename(filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
-				os.WriteFile(filepath.Join(stage, "returned"), []byte("original"), 0o644)
-			case "rolled_back":
-				os.WriteFile(filepath.Join(stage, "returned"), []byte("original"), 0o644)
-			}
+			// The backup's copy is live and the current one waits in the stage.
+			os.Rename(filepath.Join(f.data, "world", "level.dat"), filepath.Join(stage, "old", "item"))
+			os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("original"), 0o644)
 			status := "replacing"
-			if phase != "replaced" {
-				status = "rolling_back"
-			}
 			journal, _ := json.Marshal(map[string]any{"status": status, "roots": []map[string]any{
 				{"root": map[string]any{"id": rootID, "path": f.data}, "item": "world/level.dat", "phase": phase}}})
 			running := true

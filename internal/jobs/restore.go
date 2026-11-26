@@ -31,9 +31,6 @@ type journal struct {
 type restoreRecovery struct {
 	Status string    `json:"status"`
 	Roots  []journal `json:"roots,omitempty"`
-	// SetAside is what 1.0 saved before an undo that kept what was live.
-	// Every undo keeps it now, so it is only read.
-	SetAside bool `json:"setAside,omitempty"`
 	// StageMissing: the undo found a stage folder gone, so that root's live
 	// data was left as it was, which may not be the server's previous data.
 	StageMissing bool `json:"stageMissing,omitempty"`
@@ -41,11 +38,6 @@ type restoreRecovery struct {
 	// put all of the server's previous data back. Without it and
 	// StageMissing, live data never moved.
 	PutBack bool `json:"putBack,omitempty"`
-	// Kept and KeptUnknown are what earlier versions read back from the
-	// set-aside folder. Activity names the folder whenever live data moved,
-	// so they are only read.
-	Kept        bool `json:"kept,omitempty"`
-	KeptUnknown bool `json:"keptUnknown,omitempty"`
 }
 
 var errJournal = fail("INVALID_RESTORE_JOURNAL", "Restore recovery records are invalid. Keep the server stopped and review its recovery state.")
@@ -209,8 +201,7 @@ func (j *Jobs) watchedStep(ctx context.Context, data *backups.DataHelper, root, 
 		limit = removalLimit
 	}
 	request := helper.RestoreRequest{Root: root, Stage: stageName(job), Operation: operation, Item: item, Base: backups.HelperBaseOf(root)}
-	// One item's cleanup keeps what a 1.0 undo left in the stage.
-	if operation == helper.RestoreSetAside || operation == helper.RestoreRollbackOld || (operation == helper.RestoreCleanup && item != "") {
+	if operation == helper.RestoreSetAside || operation == helper.RestoreRollbackOld {
 		request.Aside = helper.SetAsideName(job.Job.ID)
 	}
 	out, err := j.Backups.Helpers.ExecWatching(ctx, data.Container, helper.Command("restore", request), assertAccess, limit, watch)
@@ -401,7 +392,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 				return err
 			}
 		}
-		if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, helper.RestoreCleanup, nil); err != nil {
+		if _, err := j.restoreStep(ctx, data, rootPath, "", job, helper.RestoreCleanup, nil); err != nil {
 			return err
 		}
 	}

@@ -24,8 +24,7 @@ type RestoreRequest struct {
 	Stage     string `json:"stage"`
 	Operation string `json:"operation"`
 	// Item, when set, limits the operation to that path below Root. The
-	// replaced copy waits in the stage as old/item, a rolled-back one as
-	// returned.
+	// replaced copy waits in the stage as old/item.
 	Item string `json:"item,omitempty"`
 	// Aside names the folder below Root that setAside moves live data into,
 	// and rollbackOld any live entry in an original's way.
@@ -466,15 +465,10 @@ func (h *restoreHelper) checkEntry(old, root fd, device uint64, name string) (so
 // the folder doesn't hold yet, since an earlier attempt may have set a copy
 // aside by that name. Only Ludock's locked helper writes that folder.
 func setAsideEntry(parent fd, name string, aside fd, info *unix.Stat_t) error {
-	return setAsideAs(parent, name, aside, name, info)
-}
-
-// setAsideAs is setAsideEntry under the name kept.
-func setAsideAs(parent fd, name string, aside fd, kept string, info *unix.Stat_t) error {
 	if info == nil {
 		return syncAll(parent, aside)
 	}
-	target := kept
+	target := name
 	for count := 2; ; count++ {
 		if _, err := lstatAt(aside, target); isNotExist(err) {
 			break
@@ -484,11 +478,11 @@ func setAsideAs(parent fd, name string, aside fd, kept string, info *unix.Stat_t
 			return errUnsafe
 		}
 		// The numbered name still fits the filesystem's 255-byte limit.
-		suffix, base := " ("+strconv.Itoa(count)+")", kept
+		suffix, base := " ("+strconv.Itoa(count)+")", name
 		for len(base)+len(suffix) > 255 {
 			base = base[:len(base)-1]
 		}
-		for utf8.ValidString(kept) && !utf8.ValidString(base) {
+		for utf8.ValidString(name) && !utf8.ValidString(base) {
 			base = base[:len(base)-1]
 		}
 		target = base + suffix
@@ -520,8 +514,7 @@ func (h *restoreHelper) step() (any, error) {
 	}
 	if h.request.Aside != "" {
 		id, ok := strings.CutPrefix(h.request.Aside, SetAsidePrefix)
-		if !ok || !ValidID(id) || (h.request.Operation != RestoreSetAside && h.request.Operation != RestoreRollbackOld &&
-			h.request.Operation != RestoreCleanup) {
+		if !ok || !ValidID(id) || (h.request.Operation != RestoreSetAside && h.request.Operation != RestoreRollbackOld) {
 			return nil, errUnsafe
 		}
 	} else if h.request.Operation == RestoreSetAside {
@@ -556,10 +549,7 @@ func (h *restoreHelper) step() (any, error) {
 	}
 	if stage < 0 {
 		// An earlier cleanup may have removed the stage and failed to sync.
-		if err := syncAll(root); err != nil {
-			return nil, err
-		}
-		return h.done(root)
+		return ok, syncAll(root)
 	}
 	if item != nil && h.request.Operation != RestoreCleanup {
 		if err := h.runItem(root, stage, item); err != nil {
@@ -569,10 +559,7 @@ func (h *restoreHelper) step() (any, error) {
 	}
 	switch h.request.Operation {
 	case RestoreCleanup:
-		if err := h.cleanup(root, stage, item); err != nil {
-			return nil, err
-		}
-		return h.done(root)
+		return ok, h.cleanup(root, stage)
 	case RestoreMoveOld:
 		err = h.moveOld(root, stage)
 	case RestoreMoveNew:
@@ -662,28 +649,12 @@ func (h *restoreHelper) makeStage(root fd) error {
 	return syncAll(next, old, stage, root)
 }
 
-func (h *restoreHelper) cleanup(root, stage fd, item []string) error {
+func (h *restoreHelper) cleanup(root, stage fd) error {
 	if err := h.unchanged(root, h.request.Stage, stage); err != nil {
 		return err
 	}
 	if same, err := sameMount(root, stage); err != nil || !same {
 		return errUnsafe
-	}
-	// A 1.0 undo of one item moved the live copy into the stage, where
-	// another program may have written it, so it is kept.
-	if item != nil && h.request.Aside != "" {
-		info, err := lstatAt(stage, "returned")
-		if err == nil {
-			aside, err := h.pinAside(root, stage)
-			if err != nil {
-				return err
-			}
-			if err := setAsideAs(stage, "returned", aside, item[len(item)-1], info); err != nil {
-				return err
-			}
-		} else if !isNotExist(err) {
-			return err
-		}
 	}
 	children, err := names(stage)
 	if err != nil {

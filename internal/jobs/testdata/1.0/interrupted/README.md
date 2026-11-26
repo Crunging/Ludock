@@ -1,7 +1,9 @@
 # Work a 1.0 install left interrupted
 
-Each folder is a 1.0 install killed partway through one operation, as
-`TestRecoversWorkInterruptedOn10` starts it again:
+Each folder is an install killed partway through one operation, as
+`TestRecoversWorkInterruptedOn10` starts it again. Each was captured from a
+commit before the 1.0 tag, named below; a set will be captured again from the
+tagged binary.
 
 - `data.tar.gz`: its data folder, `ludock.db` with its identity key. The
   database is what SQLite holds after the crash: everything committed.
@@ -12,9 +14,9 @@ Each folder is a 1.0 install killed partway through one operation, as
 - `docker.json`: the fake daemon's containers, as `fakedocker.Container`,
   without Ludock's own.
 
-They were made on 2026-11-25 from 7d004c0 (`restart-backup-copying`,
-`restore-failed-pending` and `update-replaced` on review) by a throwaway test,
-not committed. It ran each install in this package's harness against
+Unless named below, they were made on 2026-11-25 from 7d004c0
+(`restart-backup-copying`, `restore-failed-pending` and `update-replaced` on
+review) by a throwaway test, not committed. It ran each install in this package's harness against
 `fakedocker`, with the server `mc` running and, for restores, one backup taken
 and the data changed since. At the crash point (a helper step about to run or
 just run, a Docker request, or, for the warning, its wait) it copied the
@@ -51,8 +53,6 @@ automatic restarts on, and monitoring found the game silent past its wait.
 | `restore-rolled-back` | old data back, stage not yet removed, `rolled_back` |
 | `restore-committed` | committed, stage with the replaced data not yet removed |
 | `item-old-moved`, `item-replaced` | as above, for a restore of the folder `world` |
-| `undo-set-aside` | an undo, of a restore that failed when the server was started elsewhere, after it set aside what the game wrote, before journaling `kept` |
-| `undo-set-aside-kept` | the same undo before it put the old data back, `kept` journaled |
 | `backup-copying` | archive written, not published |
 | `backup-stop-unconfirmed` | stop sent and done, not yet confirmed |
 | `backup-start-sent` | backup recorded, start sent and done |
