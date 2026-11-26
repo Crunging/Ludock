@@ -199,28 +199,47 @@ func TestUnfinishableRestoreRefusesBeforeStop(t *testing.T) {
 // Ludock's data is saved while a restore moves the backup's data in, the
 // restore then finishes, and later the owner restores Ludock from that save:
 // the copy's journal names a stage folder that is gone. The next backup finds
-// nothing to put back, says so, backs up, and leaves the server running.
+// nothing to put back, says so, backs up, and leaves the server running. If
+// the journal says an earlier attempt put one folder back, it says that one
+// is back and only the other had nothing to put back.
 func TestNextBackupAfterStaleRestoreJournal(t *testing.T) {
-	f := setup(t)
-	input := map[string]any{"backupId": twoRootBackup(t, f), "confirmation": "mc"}
-	var restoreID, saved string
-	f.traceRestore(once(helper.RestoreMoveNew, "world", func(_ *fakedocker.Container, code int) int {
-		f.jobs.DB.QueryRow("SELECT id,recovery_json FROM operations WHERE kind='restore'").Scan(&restoreID, &saved)
-		return code
-	}))
-	if restore := f.run(t, "restore", input); restore.Status != ops.Succeeded || saved == "" || !f.running() {
-		t.Fatalf("%+v", restore)
-	}
-	if _, err := f.jobs.DB.Exec("UPDATE operations SET status='interrupted', recovery_json=? WHERE id=?", saved, restoreID); err != nil {
-		t.Fatal(err)
-	}
-	backup := f.run(t, "backup", nil)
-	if undone := backup.Result.UndoNote; backup.Status != ops.Succeeded || !f.running() || !strings.Contains(undone, "nothing to put back") ||
-		f.savedJournal(restoreID) != "rolled_back stage missing" {
-		t.Fatalf("%+v, running %v, journal %s", backup, f.running(), f.savedJournal(restoreID))
-	}
-	if pending, _ := f.jobs.pendingRestores(ctx, f.serverID); len(pending) != 0 {
-		t.Fatal(pending)
+	for _, earlier := range []bool{false, true} {
+		t.Run(map[bool]string{false: "none returned", true: "one returned"}[earlier], func(t *testing.T) {
+			f := setup(t)
+			input := map[string]any{"backupId": twoRootBackup(t, f), "confirmation": "mc"}
+			var restoreID, saved string
+			f.traceRestore(once(helper.RestoreMoveNew, "world", func(_ *fakedocker.Container, code int) int {
+				f.jobs.DB.QueryRow("SELECT id,recovery_json FROM operations WHERE kind='restore'").Scan(&restoreID, &saved)
+				return code
+			}))
+			if restore := f.run(t, "restore", input); restore.Status != ops.Succeeded || saved == "" || !f.running() {
+				t.Fatalf("%+v", restore)
+			}
+			if _, err := f.jobs.DB.Exec("UPDATE operations SET status='interrupted', recovery_json=? WHERE id=?", saved, restoreID); err != nil {
+				t.Fatal(err)
+			}
+			says := []string{"nothing to put back"}
+			if earlier {
+				f.jobs.DB.Exec(`UPDATE operations SET recovery_json=json_set(recovery_json,'$.restore.status','rolling_back','$.restore.roots[0].phase','rolled_back',
+					'$.restore.roots[1].phase','moving_old') WHERE id=?`, restoreID)
+				says = []string{"back in place", "One of its data folders had nothing to put back"}
+			}
+			backup := f.run(t, "backup", nil)
+			if backup.Status != ops.Succeeded || !f.running() || !strings.HasPrefix(f.savedJournal(restoreID), "rolled_back") {
+				t.Fatalf("%+v, running %v, journal %s", backup, f.running(), f.savedJournal(restoreID))
+			}
+			for _, part := range says {
+				if !strings.Contains(backup.Result.UndoNote, part) {
+					t.Errorf("the backup says %q", backup.Result.UndoNote)
+				}
+			}
+			if !earlier && strings.Contains(backup.Result.UndoNote, "back in place") {
+				t.Errorf("the backup says %q of data it didn't put back", backup.Result.UndoNote)
+			}
+			if pending, _ := f.jobs.pendingRestores(ctx, f.serverID); len(pending) != 0 {
+				t.Fatal(pending)
+			}
+		})
 	}
 }
 

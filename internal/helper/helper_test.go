@@ -1078,8 +1078,8 @@ func TestRenamesNeverClobber(t *testing.T) {
 		os.WriteFile(filepath.Join(root, stage, "old", "ops.json"), []byte("original"), 0o644)
 		os.WriteFile(filepath.Join(root, "ops.json"), []byte("game made"), 0o644)
 		os.Chmod(filepath.Join(root, stage), 0o500)
-		if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
-			t.Fatal("set aside without finding out about RENAME_NOREPLACE")
+		if code := RunRestore(string(argument), io.Discard, io.Discard); code != RestoreProbeFailed {
+			t.Fatalf("said %d, not that it couldn't find out about RENAME_NOREPLACE", code)
 		}
 		if _, err := os.Lstat(filepath.Join(root, asideName)); !os.IsNotExist(err) {
 			t.Fatal("made the set-aside folder for a refused clash")

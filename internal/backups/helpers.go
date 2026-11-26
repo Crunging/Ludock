@@ -289,7 +289,10 @@ func (h *Helpers) ExecWatching(ctx context.Context, id string, command []string,
 var helperErrors = &launch.ExecErrors{Timeout: errTimeout, Failed: errFailed, Unsafe: errFailed,
 	OutputLimit: fail("HELPER_OUTPUT", "Ludock’s helper sent back more than expected, so the work was stopped."),
 	Exits: map[int]*apperr.Error{helper.FileMounted: ErrHostMount, helper.RestoreHoldsStage: StageInside(""),
-		helper.RestoreUnsafeEntry: ErrUndoEntryUnsafe, helper.RestoreClashUnsafe: ErrUndoClashUnsafe, helper.RestoreClashNeedsNoReplace: ErrUndoNeedsNoReplace}}
+		helper.RestoreUnsafeEntry: ErrUndoEntryUnsafe, helper.RestoreClashUnsafe: ErrUndoClashUnsafe, helper.RestoreClashNeedsNoReplace: ErrUndoNeedsNoReplace,
+		helper.RestoreProbeFailed: errUndoProbe}}
+
+var errUndoProbe = fail("RESTORE_UNDO_NO_ROOM", "Ludock couldn’t make the small folder in the server’s data that it needs before moving anything out of the way of the previous data, so it went no further. The disk may be full or over its quota: free some space, then undo the restore again.")
 
 // ErrUndoNeedsNoReplace is something in the way of an undo on a filesystem
 // that can't refuse to replace it as it moves, such as NFS.
