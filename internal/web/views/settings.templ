@@ -343,12 +343,16 @@ templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 					<div>
 						<p><strong>{ ludockFailed(*failed) }</strong></p>
 						if failed.State == selfupdate.StateInterrupted {
+							if failed.OnLeftover {
+								<p>This Ludock runs in the new container, still under its temporary name { failed.Leftover }. The commands below remove it and start Ludock again under its own name, on the new version; this page is away for a moment meanwhile.</p>
+							}
 							<p>In the folder with its compose.yaml, run:</p>
 							<pre><code>
+								docker compose pull ludock{ "\n" }
 								if failed.Leftover != "" {
 									docker rm -f { failed.Leftover }{ "\n" }
 								}
-								docker compose pull ludock{ "\n" }docker compose up -d ludock
+								docker compose up -d ludock
 							</code></pre>
 							if failed.Copy {
 								<p class="muted">The copy of its data from before the update, { selfupdate.CopyName }, is beside its database.</p>

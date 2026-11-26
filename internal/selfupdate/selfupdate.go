@@ -67,9 +67,13 @@ type Record struct {
 	// Leftover is the new container an interrupted update left under its
 	// temporary name, for the owner to remove; Copy, that the data copy
 	// from before the update is still beside the database.
-	Leftover  string `json:"leftover,omitempty"`
-	Copy      bool   `json:"copy,omitempty"`
-	Dismissed bool   `json:"dismissed,omitempty"`
+	Leftover string `json:"leftover,omitempty"`
+	Copy     bool   `json:"copy,omitempty"`
+	// OnLeftover: the Ludock that recorded it runs in Leftover.
+	OnLeftover bool `json:"onLeftover,omitempty"`
+	// NoPolicy: the original was put back without its restart policy.
+	NoPolicy  bool `json:"noPolicy,omitempty"`
+	Dismissed bool `json:"dismissed,omitempty"`
 }
 
 func (r *Record) InProgress() bool { return r != nil && r.State == StateUpdating }
@@ -646,6 +650,10 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	if err == nil && replacement.ID != own.ID && operationOf(replacement) == record.ID {
 		record.Leftover = strings.TrimPrefix(replacement.Name, "/")
 	}
+	// This Ludock may be that container, not yet under Ludock's name.
+	if ownReplacement && own.Name != "/"+record.Name {
+		record.Leftover, record.OnLeftover = strings.TrimPrefix(own.Name, "/"), true
+	}
 	_, copyErr := os.Lstat(filepath.Join(s.DataDir, CopyName))
 	record.Copy = copyErr == nil
 	// An original running since before the update was never stopped, so
@@ -659,12 +667,13 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		}
 	}
 	log.Info("Ludock's update helper ended", logging.F("exitCode", code))
+	putBack, policy := putBackReason(code)
 	switch {
 	case !original && !ownReplacement:
 		// The owner started Ludock from a terminal, on the data as it is.
 		record.Copy = false
 		return s.settle(ctx, record, StateInterrupted, reasonInterrupted)
-	case original && code >= ExitPutBack && code < ExitPutBack+len(Reasons):
+	case original && putBack >= 0:
 		switch {
 		case s.PutBack == DataRestored:
 			record.Data = DataRestored
@@ -678,7 +687,8 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		default:
 			record.Data = DataKept
 		}
-		return s.settle(ctx, record, StatePutBack, Reasons[code-ExitPutBack])
+		record.NoPolicy = !policy
+		return s.settle(ctx, record, StatePutBack, Reasons[putBack])
 	case original && code == ExitUnchanged:
 		record.Copy = false
 		return s.settle(ctx, record, StateFailed, reasonUnchanged)

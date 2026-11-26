@@ -58,7 +58,7 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 				break
 			}
 			if err == nil && !spec.State.Running && !spec.State.Restarting {
-				if spec.State.ExitCode < ExitPutBack || spec.State.ExitCode >= ExitPutBack+len(Reasons) {
+				if reason, _ := putBackReason(spec.State.ExitCode); reason < 0 {
 					return ""
 				}
 				if err := putDataBack(dataDir); errors.Is(err, os.ErrNotExist) {

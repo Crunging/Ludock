@@ -386,16 +386,19 @@ func ludockUpdated(record selfupdate.Record) string {
 // ludockFailed says how a failed update ended, in plain words.
 func ludockFailed(record selfupdate.Record) string {
 	reason := strings.TrimSuffix(record.Reason, ".")
+	put := "Ludock’s update didn’t finish: " + reason + ". Ludock put version " + record.From + " back"
+	policy := ""
+	if record.NoPolicy {
+		policy = " Docker didn’t give it back its restart policy, so it won’t start by itself after a restart; run docker compose up -d ludock in the folder with its compose.yaml to set it again."
+	}
 	switch {
 	case record.State == selfupdate.StatePutBack && record.Data == selfupdate.DataKept:
-		return "Ludock’s update didn’t finish: " + reason + ". Ludock put version " + record.From +
-			" back, but found no copy of its data to put back with it, so it kept the newer data."
+		return put + ", but found no copy of its data to put back with it, so it kept the newer data." + policy
 	case record.State == selfupdate.StatePutBack && record.Data == selfupdate.DataNotRestored:
-		return "Ludock’s update didn’t finish: " + reason + ". Ludock put version " + record.From +
-			" back, but couldn’t put the copy of its data from before the update back, so it runs on the newer data. The copy, " +
-			selfupdate.CopyName + ", is beside its database."
+		return put + ", but couldn’t put the copy of its data from before the update back, so it runs on the newer data. The copy, " +
+			selfupdate.CopyName + ", is beside its database." + policy
 	case record.State == selfupdate.StatePutBack:
-		return "Ludock’s update didn’t finish: " + reason + ". Ludock put version " + record.From + " back, with its data as it was."
+		return put + ", with its data as it was." + policy
 	case record.State == selfupdate.StateInterrupted:
 		return "Ludock’s update didn’t finish: it stopped partway, so Ludock may be on either version. Finish it from a terminal with the commands below."
 	}

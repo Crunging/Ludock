@@ -1,6 +1,7 @@
 package selfupdate_test
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
@@ -229,7 +230,9 @@ func (g *rig) settle(name string) (*process, *docker.ContainerInspect) {
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
 		for _, id := range g.engine.SortedIDs() {
 			info := g.engine.Container(id)
-			if info == nil || info.Name != "/"+name || !info.State.Running {
+			// A name ending in "-" is the start of a temporary one.
+			matches := info != nil && (info.Name == "/"+name || strings.HasSuffix(name, "-") && strings.HasPrefix(info.Name, "/"+name))
+			if !matches || !info.State.Running {
 				continue
 			}
 			g.mu.Lock()
@@ -300,6 +303,10 @@ func TestSelfUpdateOrder(t *testing.T) {
 		probe string
 		data  string
 		copy  bool
+		// settler is the name the Ludock that records it runs under, when
+		// not Ludock's.
+		settler              string
+		noPolicy, onLeftover bool
 	}{
 		{name: "success", trace: join(swap, []string{"policy new", "remove old", "rename new", "remove helper"}),
 			image: newImage, state: selfupdate.StateSucceeded, probe: "after"},
@@ -323,6 +330,20 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 		}, trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored,
 			reason: "the new version didn’t report healthy within 3 minutes", probe: "before"},
+		{name: "the original's restart policy fails after it started again, and its data is still put back", arrange: func(g *rig) {
+			g.onStart = func(c *fakedocker.Container) {
+				if isNew(c) {
+					g.migrate()
+					health(g, c, "unhealthy")
+				}
+			}
+			g.at["start old"] = func() { g.fail["policy old"] = 500 }
+		}, trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored, noPolicy: true,
+			reason: "the new version reported itself unhealthy, as one whose image is older than this Ludock’s data does", probe: "before"},
+		{name: "the original can't be removed, so the new version runs under its temporary name and says how to finish", arrange: func(g *rig) {
+			g.fail["remove old"] = 500
+		}, trace: join(swap, []string{"policy new", "remove old", "rename new", "remove helper"}), image: newImage,
+			settler: "ludock-ludock-update-", state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
 		{name: "a put-back without the data copy keeps the newer data, and says so", arrange: func(g *rig) {
 			g.fail["start new"] = 500
 			g.at["stop new"] = func() { os.Remove(filepath.Join(g.dataDir, selfupdate.CopyName)) }
@@ -401,7 +422,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			name := "ludock"
+			name := cmp.Or(c.settler, "ludock")
 			if c.after != nil {
 				select {
 				case <-g.killed:
@@ -421,7 +442,8 @@ func TestSelfUpdateOrder(t *testing.T) {
 				t.Error("the game was touched")
 			}
 			record := after.svc.Last(ctx)
-			if record.State != c.state || record.Reason != c.reason || record.Data != c.data {
+			if record.State != c.state || record.Reason != c.reason || record.Data != c.data || record.NoPolicy != c.noPolicy ||
+				record.OnLeftover != c.onLeftover || c.onLeftover && record.Leftover != strings.TrimPrefix(running.Name, "/") {
 				t.Errorf("recorded %+v", record)
 			}
 			var probe string

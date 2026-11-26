@@ -24,9 +24,23 @@ const (
 	// the new container.
 	ExitUnchanged = 10
 	// ExitPutBack, plus a Reason's index: the original runs again, and puts
-	// the data copy back as it starts.
-	ExitPutBack = 20
+	// the data copy back as it starts. ExitPutBackNoPolicy is the same with
+	// the original's restart policy not restored.
+	ExitPutBack         = 20
+	ExitPutBackNoPolicy = 40
 )
+
+// putBackReason is the Reason of a put-back's exit code, and whether the
+// original's restart policy was restored, or -1.
+func putBackReason(code int) (reason int, policy bool) {
+	switch {
+	case code >= ExitPutBack && code < ExitPutBack+len(Reasons):
+		return code - ExitPutBack, true
+	case code >= ExitPutBackNoPolicy && code < ExitPutBackNoPolicy+len(Reasons):
+		return code - ExitPutBackNoPolicy, false
+	}
+	return -1, false
+}
 
 // Reasons the new version was put back, by index into the exit code.
 var Reasons = []string{
@@ -150,9 +164,10 @@ func (h *Helper) putBack(ctx context.Context, old *docker.ContainerSpec, id stri
 		log.Error("Ludock's update couldn't start the previous container; start it with docker compose up -d", logging.Cause(err, docker.StatusCode(err))...)
 		return 1
 	}
+	// Started, the original is put back, whatever its policy.
 	if err := h.Docker.SetRestartPolicy(ctx, old.ID, policy); err != nil {
 		log.Error("Ludock's update couldn't restore the previous container's restart policy", logging.Cause(err, docker.StatusCode(err))...)
-		return 1
+		return ExitPutBackNoPolicy + reason
 	}
 	return ExitPutBack + reason
 }
