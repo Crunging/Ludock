@@ -28,6 +28,18 @@ for the second, the game exits as soon as Ludock's start takes; for the
 third, removing the stage fails twice and the server is stopped once the
 restore has failed; the fourth has no operation, only a schedule's run
 waiting for players to leave.
+`restart-stop-confirmed`, `undo-finished`, `undo-stage-missing`,
+`needs-administrator`, `command-scheduled` and `recovery-restart` were made
+on 2026-11-26 from a00b4e37, to hold fields no other install saved. For the
+undos the server was started elsewhere, failing the restore, then stopped;
+for `undo-stage-missing` the stage folder was moved out of `data/mc` first.
+For `needs-administrator` an administrator first set an ntfy destination,
+the address players connect to, the upload limit, verbose logging, trusted
+proxies, and a container left out of Ludock; a restore was killed as in
+`restore-replaced`, the server's container was recreated, and a second
+install recovered it. `command-scheduled` has a console reachable over RCON
+and monitoring that saved the game's last answer; `recovery-restart` has
+automatic restarts on, and monitoring found the game silent past its wait.
 
 | Folder | Killed |
 | --- | --- |
@@ -53,6 +65,12 @@ waiting for players to leave.
 | `restore-committed-pending` | nothing running: a restore that committed but couldn't remove its stage folder, the server stopped since |
 | `schedule-waiting` | nothing running: a daily restart waiting for players to leave, saved as `Waiting for players to leave` |
 | `restore-failed-pending` | nothing running: a restore that failed when the server was started elsewhere, new data in place, the server stopped since |
+| `restart-stop-confirmed` | a restart's start sent, its stop confirmed and the run it stopped saved (`stoppedRun`) |
+| `undo-finished` | an undo, removing its helper after it saved `undoFinished`, the restore journaled `putBack` |
+| `undo-stage-missing` | the same undo with the stage gone, the restore journaled `stageMissing` |
+| `needs-administrator` | nothing running: a restore a second install marked `needsAdministrator`, with the settings above |
+| `command-scheduled` | a scheduled console command as it was sent, its input the schedule and revision, and the saved last answer |
+| `recovery-restart` | an automatic recovery restart's stop sent, its input the run and answer judged hung, and the attempt monitoring saved |
 | `update-created` | replacement created under its temporary name, its ID not saved |
 | `update-started` | replacement started, not yet verified |
 | `update-original-removed` | original removed, replacement still under its temporary name |

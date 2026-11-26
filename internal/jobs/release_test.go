@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/advanced"
+	"github.com/Crunging/Ludock/internal/attention"
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
@@ -194,6 +196,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 	// Each interrupted outcome says what the server was left as, so none
 	// asks the owner to check it.
 	interrupted := "Ludock restarted while this ran."
+	running, exited := []string{"/mc running unless-stopped 0000"}, []string{"/mc exited unless-stopped 0000"}
 	for _, c := range []struct {
 		name string
 		// status, err, and guidance are the interrupted operation's outcome,
@@ -215,6 +218,13 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		// waiting: no operation, and a schedule's run waits for players.
 		waiting bool
 		alerts  []string
+		// needsAdministrator: the outcome is marked as only an administrator
+		// can sort it out.
+		needsAdministrator bool
+		// listed, when set, is what Needs attention shows an administrator.
+		listed []string
+		// saved reads back what else the install saved.
+		saved func(t *testing.T, i *installed10)
 	}{
 		// Staging: only the stage folder changed, which is removed.
 		{name: "restore-staging", status: ops.Interrupted, guidance: "Nothing was restored: the server’s data is as it was. Ludock asked Docker to start the server, and it is running.",
@@ -334,6 +344,64 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		{name: "update-replaced", status: ops.Succeeded,
 			guidance: "Ludock restarted while the updated container replaced the previous one, so it finished the update.",
 			data:     backedUp, containers: []string{"/mc running unless-stopped 1111"}, sameRun: true},
+		// A restart killed as it sent the start, its stop confirmed and the
+		// run it stopped saved: recovery starts the server.
+		{name: "restart-stop-confirmed", status: ops.Succeeded, guidance: "Ludock restarted while this ran. Ludock asked Docker to start the server, and it is running.",
+			data: backedUp, containers: running, stopConfirmed: true},
+		// The undo of a restore that failed because the server was started
+		// elsewhere, killed removing its helper after it saved that it
+		// finished: it ends as finished, and the restore is listed as undone.
+		{name: "undo-finished", status: ops.Succeeded, guidance: undoFinished, pending: finishedUndo, data: merged(now, setAside),
+			containers: exited, listed: []string{"operation restore failed undone"}},
+		// The same undo with the restore's stage folder gone before it ran,
+		// so it put nothing back and the restore isn't listed as undone.
+		{name: "undo-stage-missing", status: ops.Succeeded, guidance: undoFinished,
+			data: map[string]string{"server.properties": "motd=as backed up\n", "world/": "", "world/level.dat": "the world as the game saved it later"},
+			pending: "Ludock found nothing to put back for a restore that had stopped partway: the folder {stage} that held the server’s previous data is no longer there, " +
+				"so its data was left as it is. Anything Ludock moved out of the way of the server’s previous data went to the folder {aside} in its data.",
+			containers: exited, listed: []string{"operation restore failed"}},
+		// A restore 1.0 killed with the backup's data in place, which a second
+		// 1.0 start found with its server's container replaced: it stays as
+		// that start left it, for an administrator. The install also holds the
+		// settings an owner commonly sets.
+		{name: "needs-administrator", status: ops.Interrupted,
+			err: "Recovery requires administrator attention. The server has been left stopped where possible.",
+			guidance: "The restore was stopped partway. The server’s previous data is safe in the folder {stage} in its data, but not in place. " +
+				"An administrator can undo the restore from Needs attention; otherwise Ludock undoes it the next time it stops the server for a backup, a restore or an update. " +
+				"Anything Ludock moved out of the way of the server’s previous data went to the folder {aside} in its data.",
+			needsAdministrator: true, data: merged(backedUp, map[string]string{"{stage}/": "", "{stage}/new/": "", "{stage}/root": "", "{stage}/old/": "",
+				"{stage}/old/server.properties": "motd=as it is now\n", "{stage}/old/world/": "", "{stage}/old/world/level.dat": "the world as it is now",
+				"{stage}/old/world/since.dat": "made since the backup"}), containers: exited, listed: []string{"restore restore"}, saved: settings10},
+		// A scheduled console command killed as it was sent, so whether the
+		// game got it is unknown. The schedule's last run is that command, and
+		// the game's saved last answer is recalled for the run it was in.
+		{name: "command-scheduled", status: ops.Interrupted, err: "Ludock restarted while this ran. Check the server before trying again.",
+			data: backedUp, containers: running, sameRun: true, saved: func(t *testing.T, i *installed10) {
+				admin := &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
+				saved, err := (&schedules.Service{DB: i.jobs.DB, Authz: i.jobs.Authz, Identity: i.jobs.Identity, Runner: i.runner}).List(ctx, admin, i.server(t))
+				if err != nil || len(saved) != 1 || saved[0].LastOperation == nil || saved[0].LastOperation.ID != i.interrupted {
+					t.Fatalf("schedules %+v %v", saved, err)
+				}
+				var recalled int64
+				i.jobs.Monitor.LastAnswer = func(string, servers.Container) int64 { return 0 }
+				i.jobs.Monitor.Recall = func(_ string, _ servers.Container, at int64) { recalled = at }
+				current, err := i.jobs.Servers.RefreshNow(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := i.jobs.Monitor.Check(ctx, current, time.Now().UnixMilli()); err != nil || recalled != 1795684461644 {
+					t.Fatalf("recalled %d %v", recalled, err)
+				}
+			}},
+		// An automatic recovery restart killed as it stopped the hung game:
+		// it starts the server, and monitoring keeps the attempt it counted.
+		{name: "recovery-restart", status: ops.Succeeded, guidance: "Ludock restarted while this ran. Ludock asked Docker to start the server, and it is running.",
+			data: backedUp, containers: running, saved: func(t *testing.T, i *installed10) {
+				recovery, err := i.jobs.Monitor.Recovery(ctx, i.server(t))
+				if err != nil || !slices.Equal(recovery.Attempts, []int64{1795684584080}) || recovery.OperationID != i.interrupted || recovery.Last != "restarted" {
+					t.Fatalf("recovery %+v %v", recovery, err)
+				}
+			}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			i := interrupted10(t, c.name)
@@ -362,14 +430,30 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 				if c.stopConfirmed && (!job.Recovery.StopSettled || job.Recovery.StopRecoveryTimedOut) {
 					t.Fatalf("stop not confirmed: %+v", job.Recovery)
 				}
+				if job.Result.NeedsAdministrator != c.needsAdministrator {
+					t.Fatalf("needs an administrator: %v", job.Result.NeedsAdministrator)
+				}
 			}
-			if c.waiting {
-				var serverID string
-				if err := i.jobs.DB.QueryRow("SELECT id FROM logical_servers").Scan(&serverID); err != nil {
+			admin := &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
+			if c.listed != nil {
+				list, err := (&attention.Service{DB: i.jobs.DB, Authz: i.jobs.Authz, Identity: i.jobs.Identity, Monitor: i.jobs.Monitor}).List(ctx, admin, time.Now().UnixMilli())
+				if err != nil {
 					t.Fatal(err)
 				}
-				admin := &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
-				saved, err := (&schedules.Service{DB: i.jobs.DB, Authz: i.jobs.Authz, Identity: i.jobs.Identity}).List(ctx, admin, serverID)
+				var listed []string
+				for _, item := range list.Items {
+					listed = append(listed, strings.Join(slices.DeleteFunc([]string{item.Kind, item.OperationKind, item.Status, map[bool]string{true: "undone"}[item.Undone]},
+						func(s string) bool { return s == "" }), " "))
+				}
+				if !slices.Equal(listed, c.listed) {
+					t.Fatalf("listed %q, want %q", listed, c.listed)
+				}
+			}
+			if c.saved != nil {
+				c.saved(t, i)
+			}
+			if c.waiting {
+				saved, err := (&schedules.Service{DB: i.jobs.DB, Authz: i.jobs.Authz, Identity: i.jobs.Identity}).List(ctx, admin, i.server(t))
 				if err != nil || len(saved) != 1 || saved[0].WaitingUntil == 0 {
 					t.Fatalf("schedules %+v %v", saved, err)
 				}
@@ -425,6 +509,39 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 			}
 		})
 	}
+}
+
+// settings10 reads back the settings an owner commonly sets: an alert
+// destination, the address players connect to, advanced settings, and a
+// discovered container left out of Ludock.
+func settings10(t *testing.T, i *installed10) {
+	ntfy := (&notify.Service{DB: i.jobs.DB}).Configuration(ctx, notify.Ntfy)
+	settings := &advanced.Service{DB: i.jobs.DB, ClientIP: &auth.ClientIP{}}
+	limit, _ := settings.UploadLimit(ctx)
+	choices, err := i.jobs.Identity.Choices(ctx)
+	// The service reports a deadline only until it passes, so the saved one
+	// is read as it is stored.
+	var logging struct {
+		VerboseUntil int64 `json:"verboseUntil"`
+	}
+	if _, readErr := db.ReadSetting(ctx, i.jobs.DB, "advanced.verbose-logging", &logging); readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !ntfy.Ready() || ntfy.Config.URL != "https://ntfy.example.invalid" || !ntfy.Saved["topic"] || i.jobs.Servers.ConnectionHost(ctx) != "play.example.invalid" ||
+		limit != 512<<20 || logging.VerboseUntil != 1795770861010 || settings.Proxies(ctx).Trusted != "10.0.0.0/8" ||
+		err != nil || !maps.Equal(choices, map[string]identity.Choice{"standalone:not-a-game": {}}) {
+		t.Fatalf("ntfy %+v, host %q, upload %d, logging %+v, proxies %+v, choices %v %v", ntfy, i.jobs.Servers.ConnectionHost(ctx), limit,
+			logging, settings.Proxies(ctx), choices, err)
+	}
+}
+
+func (i *installed10) server(t *testing.T) string {
+	t.Helper()
+	var id string
+	if err := i.jobs.DB.QueryRow("SELECT id FROM logical_servers").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func merged(a, b map[string]string) map[string]string {

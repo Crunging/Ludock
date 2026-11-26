@@ -1,0 +1,177 @@
+[
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb8e371aa603d1",
+    "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "Name": "/ludock",
+    "Created": "2026-11-26T09:27:23.758711074Z",
+    "Config": {
+      "Image": "ghcr.io/crunging/ludock:1",
+      "Labels": {
+        "com.docker.compose.project": "ludock",
+        "com.docker.compose.service": "ludock"
+      },
+      "Env": [
+        "LUDOCK_DATA_DIR=/var/tmp/ludock-1.0-self-update/put-back-kept/data"
+      ],
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "2026-11-26T09:27:23.789126727Z",
+      "FinishedAt": "2026-11-26T09:27:23.788522437Z",
+      "Health": {
+        "Status": "healthy",
+        "Log": [
+          {
+            "End": "2026-11-26T09:27:23.789126727Z",
+            "ExitCode": 0
+          }
+        ]
+      }
+    },
+    "RestartCount": 0,
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-self-update/put-back-kept/docker/docker.sock",
+        "Destination": "/var/run/docker.sock",
+        "RW": false
+      },
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-self-update/put-back-kept/data",
+        "Destination": "/var/tmp/ludock-1.0-self-update/put-back-kept/data",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": ""
+    },
+    "ExtraConfig": {
+      "Healthcheck": {
+        "Test": [
+          "CMD",
+          "/usr/local/bin/ludock",
+          "healthcheck"
+        ]
+      }
+    },
+    "HostConfig": {
+      "Binds": [
+        "/var/tmp/ludock-1.0-self-update/put-back-kept/docker/docker.sock:/var/run/docker.sock:ro",
+        "/var/tmp/ludock-1.0-self-update/put-back-kept/data:/var/tmp/ludock-1.0-self-update/put-back-kept/data"
+      ],
+      "NetworkMode": "bridge",
+      "PortBindings": {
+        "3000/tcp": [
+          {
+            "HostIp": "",
+            "HostPort": "3000"
+          }
+        ]
+      },
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      }
+    },
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  },
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb8e371aa6b0ee",
+    "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "Name": "/valheim",
+    "Created": "2026-11-26T09:27:23.758753Z",
+    "Config": {
+      "Image": "lloesche/valheim-server",
+      "Labels": {},
+      "Env": null,
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "2026-11-26T09:27:23.758753Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "RestartCount": 0,
+    "Mounts": null,
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": ""
+    },
+    "ExtraConfig": null,
+    "HostConfig": null,
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  }
+]

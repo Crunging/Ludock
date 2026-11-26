@@ -1,0 +1,475 @@
+[
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb8e37ef7ab698",
+    "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "Name": "/ludock",
+    "Created": "2026-11-26T09:27:27.329420027Z",
+    "Config": {
+      "Image": "ghcr.io/crunging/ludock:1",
+      "Labels": {
+        "com.docker.compose.project": "ludock",
+        "com.docker.compose.service": "ludock"
+      },
+      "Env": [
+        "LUDOCK_DATA_DIR=/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data"
+      ],
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "2026-11-26T09:27:27.358588075Z",
+      "FinishedAt": "2026-11-26T09:27:27.358379205Z",
+      "Health": {
+        "Status": "healthy",
+        "Log": [
+          {
+            "End": "2026-11-26T09:27:27.358588075Z",
+            "ExitCode": 0
+          }
+        ]
+      }
+    },
+    "RestartCount": 0,
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/docker/docker.sock",
+        "Destination": "/var/run/docker.sock",
+        "RW": false
+      },
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data",
+        "Destination": "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": ""
+    },
+    "ExtraConfig": {
+      "Healthcheck": {
+        "Test": [
+          "CMD",
+          "/usr/local/bin/ludock",
+          "healthcheck"
+        ]
+      }
+    },
+    "HostConfig": {
+      "Binds": [
+        "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/docker/docker.sock:/var/run/docker.sock:ro",
+        "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data:/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data"
+      ],
+      "NetworkMode": "bridge",
+      "PortBindings": {
+        "3000/tcp": [
+          {
+            "HostIp": "",
+            "HostPort": "3000"
+          }
+        ]
+      },
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "no"
+      }
+    },
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  },
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb8e37ef7b6158",
+    "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "Name": "/valheim",
+    "Created": "2026-11-26T09:27:27.329461606Z",
+    "Config": {
+      "Image": "lloesche/valheim-server",
+      "Labels": {},
+      "Env": null,
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "2026-11-26T09:27:27.329461606Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "RestartCount": 0,
+    "Mounts": null,
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": ""
+    },
+    "ExtraConfig": null,
+    "HostConfig": null,
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  },
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb8e37f0fb8157",
+    "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "Name": "/ludock-self-update-d9555f6e-2c0c-40a2-988e-1552ade672f2",
+    "Created": "2026-11-26T09:27:27.354637116Z",
+    "Config": {
+      "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "Labels": {
+        "ludock.enable": "false",
+        "ludock.internal": "self-update"
+      },
+      "Env": [
+        "LUDOCK_DOCKER_SOCKET=/var/run/docker.sock"
+      ],
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "exited",
+      "Running": false,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 137,
+      "StartedAt": "2026-11-26T09:27:27.354830161Z",
+      "FinishedAt": "2026-11-26T09:27:27.358496592Z"
+    },
+    "RestartCount": 0,
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/docker/docker.sock",
+        "Destination": "/var/run/docker.sock",
+        "RW": false,
+        "Name": "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/docker/docker.sock"
+      }
+    ],
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "Healthcheck": {
+        "Test": [
+          "NONE"
+        ]
+      },
+      "Entrypoint": [
+        "/usr/local/bin/ludock"
+      ],
+      "Cmd": [
+        "self-update",
+        "00000000000000000000000000000000000000000000000018eb8e37ef7ab698",
+        "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "d9555f6e-2c0c-40a2-988e-1552ade672f2"
+      ],
+      "Env": [
+        "LUDOCK_DOCKER_SOCKET=/var/run/docker.sock"
+      ],
+      "Labels": {
+        "ludock.enable": "false",
+        "ludock.internal": "self-update"
+      },
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "bind",
+            "Source": "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/docker/docker.sock",
+            "Target": "/var/run/docker.sock",
+            "ReadOnly": true
+          }
+        ],
+        "NetworkMode": "none",
+        "ReadonlyRootfs": true,
+        "CapDrop": [
+          "ALL"
+        ],
+        "SecurityOpt": [
+          "no-new-privileges:true"
+        ]
+      }
+    },
+    "ExtraConfig": {
+      "Cmd": [
+        "self-update",
+        "00000000000000000000000000000000000000000000000018eb8e37ef7ab698",
+        "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "d9555f6e-2c0c-40a2-988e-1552ade672f2"
+      ],
+      "Entrypoint": [
+        "/usr/local/bin/ludock"
+      ],
+      "Env": [
+        "LUDOCK_DOCKER_SOCKET=/var/run/docker.sock"
+      ],
+      "ExposedPorts": {},
+      "Healthcheck": {
+        "Test": [
+          "NONE"
+        ]
+      },
+      "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "Labels": {
+        "ludock.enable": "false",
+        "ludock.internal": "self-update"
+      },
+      "User": "",
+      "Volumes": {}
+    },
+    "HostConfig": {
+      "CapAdd": null,
+      "CapDrop": [
+        "ALL"
+      ],
+      "GroupAdd": null,
+      "Mounts": [
+        {
+          "ReadOnly": true,
+          "Source": "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/docker/docker.sock",
+          "Target": "/var/run/docker.sock",
+          "Type": "bind"
+        }
+      ],
+      "NetworkMode": "none",
+      "ReadonlyRootfs": true,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ]
+    },
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  },
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb8e37f12b9b0c",
+    "Image": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "Name": "/ludock-ludock-update-dd6c3759",
+    "Created": "2026-11-26T09:27:27.357789029Z",
+    "Config": {
+      "Image": "ghcr.io/crunging/ludock:1",
+      "Labels": {
+        "com.docker.compose.project": "ludock",
+        "com.docker.compose.service": "ludock",
+        "ludock.update": "d9555f6e-2c0c-40a2-988e-1552ade672f2",
+        "org.opencontainers.image.version": "1.1.0"
+      },
+      "Env": [
+        "LUDOCK_DATA_DIR=/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data"
+      ],
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "created",
+      "Running": false,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "0001-01-01T00:00:00Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "RestartCount": 0,
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/docker/docker.sock",
+        "Destination": "/var/run/docker.sock",
+        "RW": false
+      },
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data",
+        "Destination": "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": "ghcr.io/crunging/ludock:1",
+      "Env": [
+        "LUDOCK_DATA_DIR=/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data"
+      ],
+      "Labels": {
+        "com.docker.compose.project": "ludock",
+        "com.docker.compose.service": "ludock",
+        "ludock.update": "d9555f6e-2c0c-40a2-988e-1552ade672f2"
+      },
+      "HostConfig": {
+        "Binds": [
+          "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/docker/docker.sock:/var/run/docker.sock:ro",
+          "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data:/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data"
+        ],
+        "NetworkMode": "bridge"
+      }
+    },
+    "ExtraConfig": {
+      "Cmd": null,
+      "Env": [
+        "LUDOCK_DATA_DIR=/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data"
+      ],
+      "ExposedPorts": {
+        "3000/tcp": {}
+      },
+      "Healthcheck": {
+        "Test": [
+          "CMD",
+          "/usr/local/bin/ludock",
+          "healthcheck"
+        ]
+      },
+      "Image": "ghcr.io/crunging/ludock:1",
+      "Labels": {
+        "com.docker.compose.project": "ludock",
+        "com.docker.compose.service": "ludock",
+        "ludock.update": "d9555f6e-2c0c-40a2-988e-1552ade672f2",
+        "org.opencontainers.image.version": "1.1.0"
+      },
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false,
+      "Volumes": {}
+    },
+    "HostConfig": {
+      "Binds": [
+        "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/docker/docker.sock:/var/run/docker.sock:ro",
+        "/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data:/var/tmp/ludock-1.0-self-update/updating-owner-restarted/data"
+      ],
+      "NetworkMode": "bridge",
+      "PortBindings": {
+        "3000/tcp": [
+          {
+            "HostIp": "",
+            "HostPort": "3000"
+          }
+        ]
+      },
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "no"
+      }
+    },
+    "Networks": {},
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  }
+]
