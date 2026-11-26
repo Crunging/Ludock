@@ -59,7 +59,8 @@ server list.
   up, plus automatic restarts when a game hangs. If alerts stop getting through,
   Ludock says so.
 - **Image updates**, with a backup first and the previous version put back if
-  the new one fails to start.
+  the new one fails to start. Ludock updates itself the same way, from
+  **Settings**.
 - **Sharing** a server with a friend by invite link, letting them see it, run
   it, or also change its files and make backups. Restoring and updates stay
   with administrators.
