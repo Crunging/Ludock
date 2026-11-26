@@ -257,10 +257,11 @@ func (o *Observer) loopSince(id string) int64 {
 }
 
 // sawRestarting reports a run that began soon after the exit Ludock saw its
-// container restarting from.
+// container restarting from, or shortly before it: that run ended in the
+// restart, though a page may still hold it from a moment ago.
 func (o *Observer) sawRestarting(id string, started int64) bool {
 	seen, ok := o.restarting.Load(id)
-	return ok && started >= seen.(int64) && started-seen.(int64) <= restartEvidence.Milliseconds()
+	return ok && max(started-seen.(int64), seen.(int64)-started) <= restartEvidence.Milliseconds()
 }
 
 // A Docker stats sample takes about a second. Viewers of the same container
