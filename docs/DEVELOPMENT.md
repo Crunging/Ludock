@@ -29,7 +29,9 @@ address.
 - **Real Docker:** set `LUDOCK_DOCKER_SOCKET` to a dedicated test daemon with
   disposable game data, never one running real servers. Native runs also need
   `LUDOCK_HELPER_IMAGE`, a Ludock image pinned by digest, for file and backup
-  helpers.
+  helpers. It must be the version being run: Ludock asks a configured helper
+  its version before it uploads, backs up, or restores, and refuses another.
+  A Ludock in a container uses its own image and needs no such setting.
 
 ## Checks
 

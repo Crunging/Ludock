@@ -21,7 +21,7 @@ var errImageUnavailable = apperr.New("HELPER_IMAGE_UNAVAILABLE", 503,
 // Outside a container there is no runtime image to reuse; helpers then need
 // an explicitly configured, digest-pinned Ludock image.
 var errNoHelperImage = apperr.New("HELPER_IMAGE_UNAVAILABLE", 503,
-	"Ludock is not running in a container it can identify. Set LUDOCK_HELPER_IMAGE to a Ludock image pinned by digest, or set LUDOCK_SELF_CONTAINER.")
+	"Ludock is not running in a container it can identify. Set LUDOCK_SELF_CONTAINER to its container name or ID.")
 
 var imageID = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
@@ -37,10 +37,10 @@ type Images struct {
 	speaking map[string]bool
 }
 
-// ErrHelperOutdated is a configured helper image older than this Ludock: one
-// that predates its uploads or archives could drop what they now keep.
+// ErrHelperOutdated is a configured helper image of another version than
+// this Ludock: an older one could drop what uploads and archives now keep.
 var ErrHelperOutdated = apperr.New("HELPER_IMAGE_OUTDATED", 503,
-	"The helper image set for Ludock in LUDOCK_HELPER_IMAGE is older than this Ludock, so it wasn’t used. Remove LUDOCK_HELPER_IMAGE, or set it to the image of this Ludock version.")
+	"The helper image set for Ludock in LUDOCK_HELPER_IMAGE isn’t this Ludock’s version, so it wasn’t used. Remove LUDOCK_HELPER_IMAGE, or set it to the image of this Ludock version.")
 
 // Speaks confirms that a configured helper image speaks helper.Version
 // before it uploads, backs up, or restores; Ludock's own image always does.
