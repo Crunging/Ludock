@@ -971,9 +971,6 @@ templ SelectedOperation(a ActivityView) {
 			if detail := MovedDetail(operation.Result); detail != "" {
 				<p class="section-note">{ detail }</p>
 			}
-			if detail := SetAsideReplaced(operation); detail != "" {
-				<p class="section-note">{ detail }</p>
-			}
 			if detail := LeftOutDetail(operation.Result); detail != "" {
 				<p class="section-note">{ detail }</p>
 			}

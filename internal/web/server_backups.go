@@ -349,19 +349,6 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 	if fit.Moved {
 		input[jobs.MovedInput] = true
 	}
-	// The folders the confirmation named, for its result to say where they
-	// went.
-	if input["item"] == nil {
-		var names []string
-		for _, name := range r.PostForm["setAside"] {
-			if views.IsSetAside(name) && !slices.Contains(names, name) && len(names) < 100 {
-				names = append(names, name)
-			}
-		}
-		if len(names) > 0 {
-			input["setAside"] = names
-		}
-	}
 	s.enqueue(w, r, request, resolved, user, ops.KindRestore, input)
 }
 

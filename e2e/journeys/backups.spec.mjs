@@ -66,7 +66,7 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   await expect(page).toHaveURL(/\?tab=backups$/);
 
   // A copy an earlier undo set aside is named before the restore replaces
-  // it, and the result says where it went.
+  // it.
   const aside = "ludock-set-aside-6f9619ff-8b86-4011-b42d-00c04fc964ff";
   mkdirSync(join(ownServer.data, aside));
   await rows.first().getByRole("link", { name: "Restore…" }).click();
@@ -78,8 +78,6 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   await submit.click();
   await expect(page).toHaveURL(/\?tab=backups&operation=/);
   await expectOperationSucceeded(page);
-  await expect(page.locator("#selected-operation")).toContainText(
-    `The copies Ludock had set aside earlier, ${aside}, were replaced with everything else. They are in the backup taken before this restore.`);
   expect(existsSync(join(ownServer.data, aside))).toBe(false);
 
   // The restore kept a safety backup of the replaced data.
