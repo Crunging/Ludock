@@ -363,6 +363,10 @@ templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 							if failed.Copy {
 								<p class="muted">The copy of its data from before the update, { selfupdate.CopyName }, is beside its database.</p>
 							}
+						} else if offer.NoCommands {
+							// Recreating Ludock now would do harm, so no commands; the
+							// notice below says why.
+							<p>Try again later.</p>
 						} else {
 							<p>Try again later. To see what goes wrong, update it from a terminal instead, in the folder with its compose.yaml, then read <code>docker compose logs ludock</code>:</p>
 							<pre><code>docker compose pull ludock{ "\n" }docker compose up -d ludock</code></pre>

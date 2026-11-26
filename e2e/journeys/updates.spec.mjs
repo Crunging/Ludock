@@ -331,6 +331,18 @@ test("finding a newer Ludock and updating it", async ({ page }) => {
     const item = page.locator(".needs-attention__list li", { hasText: "Ludock’s update didn’t finish" });
     await expect(item).toContainText("The new version reported itself unhealthy, as one whose image is older than this Ludock’s data does. Ludock is still on version dev.");
     await item.getByRole("link", { name: /^Open Settings/ }).click();
+    // While a copy an earlier update left is there, the failure's own
+    // commands are held back too.
+    const left = join(process.env.LUDOCK_E2E_DIR, "data", "ludock.db.before-update");
+    writeFileSync(left, "kept");
+    try {
+      await page.reload();
+      await expect(notice.locator(".alert--error")).toContainText("Try again later.");
+      await expect(notice.locator("pre")).toHaveCount(0);
+    } finally {
+      rmSync(left);
+    }
+    await page.reload();
     await notice.getByRole("button", { name: "Dismiss" }).click();
     await expect(notice.locator(".alert--error")).toHaveCount(0);
     await page.goto("/");
