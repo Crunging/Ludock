@@ -177,9 +177,9 @@ func (j *Jobs) Register(queue *ops.Runner) {
 			return nil, err
 		}
 		result := job.Job.Result
-		// Finished once no restore of the server is left to undo; its note
-		// says what this undo did, and without one it did nothing, as when
-		// other work finished the restore first.
+		// Finished once no restore of the server is left to undo. Without
+		// UndoFinished it undid nothing, as when other work finished the
+		// restore first; a record saved before that field counts its note.
 		pending, err := j.pendingRestores(ctx, job.Job.ServerID)
 		if err != nil {
 			return nil, err
@@ -187,7 +187,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 		switch {
 		case len(pending) > 0:
 			result.Guidance = "Ludock restarted before the undo finished. Undo the restore again from Needs attention."
-		case job.Job.Recovery.Undone == "":
+		case !job.Job.Recovery.UndoFinished && job.Job.Recovery.Undone == "":
 			result.Guidance, result.Skipped, result.Finished = "Ludock restarted while this ran. There was nothing left to undo.", true, true
 		default:
 			result.Guidance, result.Finished = "Ludock restarted while this ran, and finished it.", true

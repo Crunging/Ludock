@@ -296,13 +296,18 @@ func TestFailedUndoReturnsServerToRunning(t *testing.T) {
 // Ludock restarts while an Undo runs. It ends as what it did: finished, with
 // its note, once no restore is left to undo; skipped when it undid nothing,
 // as when other work finished the restore first; and interrupted, saying to
-// undo again, while a restore is still left.
+// undo again, while a restore is still left. Whether it finished one is its
+// saved mark, whatever its note says; a record saved before the mark
+// existed counts its note.
 func TestUndoRecoveryEndsAsWhatItDid(t *testing.T) {
 	for _, c := range []struct {
 		name, undone, status, guidance string
-		pending                        bool
+		pending, finished              bool
 	}{
-		{name: "finished", undone: "Ludock finished undoing a restore that was stopped partway.", status: ops.Succeeded,
+		{name: "finished", undone: "Ludock finished undoing a restore that was stopped partway.", finished: true, status: ops.Succeeded,
+			guidance: "Ludock restarted while this ran, and finished it."},
+		{name: "finished, without a note", finished: true, status: ops.Succeeded, guidance: "Ludock restarted while this ran, and finished it."},
+		{name: "finished, saved before the mark", undone: "Ludock finished undoing a restore that was stopped partway.", status: ops.Succeeded,
 			guidance: "Ludock restarted while this ran, and finished it."},
 		{name: "nothing to undo", status: ops.Skipped, guidance: "Ludock restarted while this ran. There was nothing left to undo."},
 		{name: "restore still left", pending: true, status: ops.Interrupted,
@@ -319,7 +324,7 @@ func TestUndoRecoveryEndsAsWhatItDid(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			recovery, _ := json.Marshal(ops.Recovery{Undone: c.undone})
+			recovery, _ := json.Marshal(ops.Recovery{Undone: c.undone, UndoFinished: c.finished})
 			id := identity.NewUUID()
 			if _, err := f.jobs.DB.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at)
 				VALUES (?,?,'admin','undo_restore','running','stopping','{}',?,?,2,2)`, id, f.serverID, string(recovery), logical.BindingRevision); err != nil {

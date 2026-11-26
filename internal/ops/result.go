@@ -13,6 +13,9 @@ type Result struct {
 	// CancelledBy is the account that cancelled the job.
 	CancelledBy     string `json:"cancelledBy,omitempty"`
 	WaitedForDocker bool   `json:"waitedForDocker,omitempty"`
+	// NeedsAdministrator: the work ended in a state only an administrator can
+	// sort out, which Needs attention keeps listed through later successes.
+	NeedsAdministrator bool `json:"needsAdministrator,omitempty"`
 
 	SaveStatus           string `json:"saveStatus,omitempty"`
 	SaveReason           string `json:"saveReason,omitempty"`
@@ -55,7 +58,8 @@ type Result struct {
 
 // JSON paths of the Result fields that SQL reads or sets.
 const (
-	PathCancelledBy     = "$.cancelledBy"
-	PathForceStopped    = "$.forceStopped"
-	PathWaitedForDocker = "$.waitedForDocker"
+	PathCancelledBy        = "$.cancelledBy"
+	PathForceStopped       = "$.forceStopped"
+	PathWaitedForDocker    = "$.waitedForDocker"
+	PathNeedsAdministrator = "$.needsAdministrator"
 )
