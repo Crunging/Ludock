@@ -198,7 +198,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		rows, err := s.DB.QueryContext(ctx, `SELECT id,kind,status,updated_at,actor_id=?,`+forced+`,
       kind='restore' AND COALESCE(CASE WHEN json_valid(recovery_json) THEN json_extract(recovery_json,'$.restore.status') = 'rolled_back' AND
         json_extract(recovery_json,'$.restore.putBack') = 1 END, 0)
-      FROM (SELECT id,kind,status,updated_at,actor_id,result_json,recovery_json,created_at,error FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100) o
+      FROM (SELECT id,kind,status,updated_at,actor_id,result_json,recovery_json,created_at FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100) o
       WHERE (status IN ('failed','interrupted') AND (`+needsAdministrator+` OR `+forced+` OR
         (kind='restore' AND NOT COALESCE(CASE WHEN json_valid(recovery_json) THEN json_type(recovery_json,'$.restore') IS NULL OR
           json_extract(recovery_json,'$.restore.status') IN ('rolled_back','cleaned') END, 0)) OR

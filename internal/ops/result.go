@@ -60,6 +60,5 @@ type Result struct {
 const (
 	PathCancelledBy        = "$.cancelledBy"
 	PathForceStopped       = "$.forceStopped"
-	PathWaitedForDocker    = "$.waitedForDocker"
 	PathNeedsAdministrator = "$.needsAdministrator"
 )

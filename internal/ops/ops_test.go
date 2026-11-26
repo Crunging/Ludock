@@ -336,7 +336,7 @@ func TestBackgroundHoldersAreCancelled(t *testing.T) {
 // can't read, whether found at startup or as queued work runs, is marked as
 // needing an administrator, which no wording decides.
 func TestInterruptedOperationsReconciled(t *testing.T) {
-	r, servers := setup(t, 3)
+	r, servers := setup(t, 4)
 	ran := false
 	r.Register("stop", Handler{
 		Run: func(context.Context, *Context) (*Result, error) { ran = true; return nil, nil },
@@ -351,6 +351,9 @@ func TestInterruptedOperationsReconciled(t *testing.T) {
     VALUES ('00000000-0000-4000-8000-000000000001',?,'admin','stop','running','stopping','{}','{"stopStarted":true}',1,1,1),
            ('00000000-0000-4000-8000-000000000002',?,'admin','stop','running','stopping','not json','{}',1,1,1),
            ('00000000-0000-4000-8000-000000000003',?,'admin','stop','queued','queued','not json','{}',1,1,1)`, servers[0], servers[1], servers[2])
+	// A saved result Ludock can't read is replaced by the mark.
+	r.DB.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,result_json,binding_revision,created_at,updated_at)
+    VALUES ('00000000-0000-4000-8000-000000000004',?,'admin','stop','running','stopping','{}','{}','not json',1,1,1)`, servers[3])
 	if err := r.Start(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +373,7 @@ func TestInterruptedOperationsReconciled(t *testing.T) {
 			t.Fatal("queued damaged work:", status)
 		}
 	}
-	for id, want := range map[string]bool{"01": false, "02": true, "03": true} {
+	for id, want := range map[string]bool{"01": false, "02": true, "03": true, "04": true} {
 		var marked bool
 		r.DB.QueryRow("SELECT COALESCE(json_extract(result_json,'"+PathNeedsAdministrator+"'),0) FROM operations WHERE id=?",
 			"00000000-0000-4000-8000-0000000000"+id).Scan(&marked)
@@ -625,7 +628,7 @@ func TestResultPathsNameFields(t *testing.T) {
 		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		names["$."+name] = true
 	}
-	for _, path := range []string{PathCancelledBy, PathForceStopped, PathWaitedForDocker, db.GuidancePath} {
+	for _, path := range []string{PathCancelledBy, PathForceStopped, PathNeedsAdministrator, db.GuidancePath} {
 		if !names[path] {
 			t.Error(path)
 		}

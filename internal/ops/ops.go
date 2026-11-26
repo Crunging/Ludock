@@ -514,7 +514,7 @@ func (r *Runner) finishAlerting(ctx context.Context, job *Job, status string, re
 	finished, alerted := false, false
 	if err := r.DB.Tx(ctx, func(tx *sql.Tx) error {
 		updated, err := tx.ExecContext(ctx, `UPDATE operations SET status=?1,phase=?1,result_json=CASE
-			WHEN ?2<>'{}' AND json_valid(COALESCE(?3,result_json,'{}')) THEN json_patch(COALESCE(?3,result_json,'{}'),?2)
+			WHEN ?2<>'{}' THEN json_patch(CASE WHEN json_valid(COALESCE(?3,result_json,'{}')) THEN COALESCE(?3,result_json,'{}') ELSE '{}' END,?2)
 			ELSE COALESCE(?3,result_json) END,error=?4,updated_at=?5 WHERE id=?6 AND status='running'`,
 			status, string(patch), resultJSON, errorValue, db.Now(), job.ID)
 		if err != nil {
