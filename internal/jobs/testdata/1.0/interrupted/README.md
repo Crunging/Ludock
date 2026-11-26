@@ -22,7 +22,12 @@ database with `VACUUM INTO`, the host's folder, and the daemon's containers.
 `restart-recovery-start-sent` was made from 3486aee4, the first commit whose
 recovery starts an interrupted restart's server: a second install on the
 same data recovered a restart killed as in `restart-stop-unconfirmed`, and
-was killed in turn.
+was killed in turn. `backup-warning-resend`, `backup-started-then-exited`,
+`restore-committed-pending` and `schedule-waiting` were made from 5a6b4609:
+for the second, the game exits as soon as Ludock's start takes; for the
+third, removing the stage fails twice and the server is stopped once the
+restore has failed; the fourth has no operation, only a schedule's run
+waiting for players to leave.
 
 | Folder | Killed |
 | --- | --- |
@@ -40,9 +45,13 @@ was killed in turn.
 | `backup-stop-unconfirmed` | stop sent and done, not yet confirmed |
 | `backup-start-sent` | backup recorded, start sent and done |
 | `backup-warning` | players warned, waiting |
+| `backup-warning-resend` | the warning not yet sent, its console unreachable |
+| `backup-started-then-exited` | backup recorded, start taken, the game exited before Ludock confirmed it |
 | `restart-stop-unconfirmed` | a restart's stop sent and done, not yet confirmed |
 | `restart-recovery-start-sent` | that restart's recovery (from 3486aee4), its stop confirmed and its start saved and taken, not yet confirmed |
 | `restart-backup-copying` | a restart with a backup, its archive written, not published |
+| `restore-committed-pending` | nothing running: a restore that committed but couldn't remove its stage folder, the server stopped since |
+| `schedule-waiting` | nothing running: a daily restart waiting for players to leave, saved as `Waiting for players to leave` |
 | `restore-failed-pending` | nothing running: a restore that failed when the server was started elsewhere, new data in place, the server stopped since |
 | `update-created` | replacement created under its temporary name, its ID not saved |
 | `update-started` | replacement started, not yet verified |
