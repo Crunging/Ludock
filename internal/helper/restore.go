@@ -219,10 +219,17 @@ func moveEntry(source, destination fd, name string, rename func(from fd, name st
 // filesystem, and moving by link and unlink can lose an original.
 func renameChecked(from fd, name string, to fd, target string) error {
 	err := renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE)
-	if unsupported(err) {
-		err = renameat(int(from), name, int(to), target)
+	if !unsupported(err) {
+		return err
 	}
-	return err
+	// A seccomp refusal comes before the kernel looks at the name, so it is
+	// checked again just before the plain rename.
+	if _, err := lstatAt(to, target); err == nil {
+		return unix.EEXIST
+	} else if !isNotExist(err) {
+		return err
+	}
+	return renameat(int(from), name, int(to), target)
 }
 
 func (h *restoreHelper) removeEntry(parent fd, name string, depth int) error {

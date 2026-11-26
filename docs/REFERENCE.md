@@ -921,10 +921,11 @@ Anything in the way of the previous data during an undo moves to
 most local Linux filesystems can, restoring and undoing never overwrite a file
 a game creates at the same moment. On filesystems that can't, such as NFS,
 restoring and undoing, of the whole data or of one file or folder, check that
-each name is free and then use a plain rename, so a file a game creates in the
+each name is free and then use a plain rename, so a file created in the
 instant between that check and the move can be replaced. The server is stopped
-for those moves and watched while they run, so only something started outside
-Ludock in that instant could create one.
+for those moves and Ludock watches for it or another container that can write
+its data starting, but a program already running on the host can still write
+in that instant.
 
 If the server's data folders or game change where it is defined, such as in
 Compose, while such a restore waits to be undone, Ludock can't tell where the

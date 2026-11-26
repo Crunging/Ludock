@@ -763,6 +763,19 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(dir, "aside", "b.txt")); string(data) != "made meanwhile" {
 		t.Fatal("destination changed:", string(data))
 	}
+	// Nor where a seccomp profile refuses the flagged rename, which it does
+	// before the kernel looks at the name.
+	os.Remove(filepath.Join(dir, "aside", "b.txt"))
+	renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
+		os.WriteFile(filepath.Join(dir, "aside", to), []byte("made meanwhile"), 0o644)
+		return unix.EPERM
+	}
+	if err := setAsideEntry(parent, "b.txt", fd(aside), stat("b.txt")); err == nil {
+		t.Fatal("replaced a file made meanwhile by a plain rename")
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "aside", "b.txt")); string(data) != "made meanwhile" {
+		t.Fatal("destination changed:", string(data))
+	}
 	renameat2 = original
 	// A file with another name is never moved, even to keep it.
 	root := filepath.Join(t.TempDir(), "data")
@@ -1217,7 +1230,11 @@ func TestRestoreItemWithoutNoReplace(t *testing.T) {
 			if live, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(live) != c.live || string(staged) != c.staged {
 				t.Fatalf("live %q, staged %q", live, staged)
 			}
-			if kept, _ := os.ReadFile(filepath.Join(root, SetAsideName(id), "level.dat")); string(kept) != c.kept {
+			if c.kept == "" {
+				if _, err := os.Lstat(filepath.Join(root, SetAsideName(id))); !os.IsNotExist(err) {
+					t.Fatal("made the set-aside folder")
+				}
+			} else if kept, _ := os.ReadFile(filepath.Join(root, SetAsideName(id), "level.dat")); string(kept) != c.kept {
 				t.Fatalf("kept %q", kept)
 			}
 		})
