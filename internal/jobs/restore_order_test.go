@@ -238,7 +238,12 @@ func changedDuring(operation, root string, change func(*fixture)) func(*testing.
 			if len(cmd) > 3 && cmd[2] == "restore" {
 				json.Unmarshal([]byte(cmd[3]), &request)
 			}
-			if hit || request.Operation != operation || filepath.Base(request.Root) != root {
+			// A single root's helper path ends in its generated ID.
+			name := filepath.Base(request.Root)
+			if strings.HasPrefix(name, "root-") {
+				name = "game"
+			}
+			if hit || request.Operation != operation || name != root {
 				return run(c, cmd, stdin, stdout, stderr)
 			}
 			hit = true
@@ -387,6 +392,17 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 		{name: "started at a stalled move out", after: stalledStart, status: ops.Failed, journal: "replacing moving_old,staging unsafe",
 			left: true, elsewhere: true, guidance: "The restore was stopped partway.", trace: slices.Concat(extracted,
 				[]string{"kept world: replacing moving_old,staging unsafe", "kept config: replacing moving_old,staging unsafe"})},
+		// So does one started during a failed restore's rollback, which is
+		// left for a later undo.
+		{name: "started during a rollback", after: revokedAfter(helper.RestoreMoveOld, "world"), during: startedDuring(helper.RestoreRollbackOld, "world"),
+			status: ops.Failed, journal: "rolling_back rolling_back,staging unsafe", left: true, elsewhere: true, guidance: "The restore was stopped partway",
+			trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe", "cleanup config: rolling_back old_moved,staging unsafe",
+				"rollbackClean world: rolling_back old_moved,staging unsafe", "rollbackOld world: rolling_back rolling_back,staging unsafe",
+				"kept world: rolling_back rolling_back,staging unsafe", "kept config: rolling_back rolling_back,staging unsafe"})},
+		{name: "item started during a rollback", item: true, after: failedAt(helper.RestoreMoveNew, "game"), during: startedDuring(helper.RestoreRollbackOld, "game"),
+			status: ops.Failed, journal: "rolling_back rolling_back unsafe", left: true, elsewhere: true, guidance: "The restore was stopped partway",
+			trace: slices.Concat(itemSwapped, []string{"rollbackClean game: rolling_back old_moved unsafe", "rollbackOld game: rolling_back rolling_back unsafe",
+				"kept game: rolling_back rolling_back unsafe"})},
 		{name: "started during a move in", during: startedDuring(helper.RestoreMoveNew, "world"), status: ops.Failed, journal: "replacing old_moved,staging unsafe",
 			left: true, elsewhere: true, guidance: "The restore was stopped partway.", trace: slices.Concat(worldSwapped,
 				[]string{"kept world: replacing old_moved,staging unsafe", "kept config: replacing old_moved,staging unsafe"})},
