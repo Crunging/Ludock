@@ -702,7 +702,7 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 			guidance := job.Result.Guidance
 			c.guidance = strings.ReplaceAll(c.guidance, "%s", job.ID)
 			if c.running {
-				c.guidance += " Ludock started the server again."
+				c.guidance += " Ludock asked Docker to start the server, and it is running."
 			}
 			// A restore that had finished ends as succeeded.
 			status := ops.Interrupted

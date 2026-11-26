@@ -159,15 +159,14 @@ func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (*ops
 	// The restart is done once the server is back as it was.
 	result := &ops.Result{Finished: completed && (!running || job.Job.Recovery.StateRestored)}
 	switch {
-	case completed && running && !job.Job.Recovery.StateRestored:
-		result.Guidance = restartedAfter + "the backup had finished, but Ludock couldn’t confirm the server is running again. Check it."
 	case completed && running:
 		result.Guidance = restartedAfter + "the backup had finished."
 		withServerAfterRecovery(job, result)
 	case completed:
 		result.Guidance = restartedAfter + "the backup had finished. " + stoppedElsewhere
-	case !completed && running:
-		result.Guidance = "Ludock restarted before the backup finished, so there’s no new backup. The server was started again."
+	case running:
+		result.Guidance = "Ludock restarted before the backup finished, so there’s no new backup."
+		withServerAfterRecovery(job, result)
 	case !completed:
 		result.Guidance = "Ludock restarted before the backup finished, so there’s no new backup. Something outside Ludock had stopped the server before the backup, so Ludock didn’t start it."
 	}
@@ -243,7 +242,7 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) (*ops.Result
 		return nil, err
 	}
 	if wasRunning(job) {
-		return withSave(job, &ops.Result{Guidance: "Ludock restarted during the update, so the update didn’t happen. The server was started again as it was."}), nil
+		return withSave(job, withServerAfterRecovery(job, &ops.Result{Guidance: "Ludock restarted during the update, so the update didn’t happen."})), nil
 	}
 	return withSave(job, &ops.Result{Guidance: "Ludock restarted during the update, so the update didn’t happen. The server stays stopped, as it was."}), nil
 }

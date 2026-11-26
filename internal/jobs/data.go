@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -336,6 +337,16 @@ func settleStop(r *ops.Recovery) { r.StopSettled = true }
 // before Ludock restarted.
 const restartedAfter = "Ludock restarted while this ran, after "
 
+// What recovery found a server it had stopped as, for every operation. A
+// start whose answer was lost counts as sent once Docker shows a newer run,
+// which may be another manager's, so the start is worded as asked for.
+const (
+	serverStarted      = "Ludock asked Docker to start the server, and it is running."
+	serverRunningAgain = "The server was running again, so Ludock left it as it was."
+	serverStoppedAgain = "The server ran again and had stopped when Ludock checked it, so Ludock left it stopped."
+	serverRestarting   = "The server was started again, and its game keeps exiting, so Docker keeps restarting it."
+)
+
 // withServerAfterRecovery adds to result's guidance what recovery did with
 // the server the operation stopped.
 func withServerAfterRecovery(job *ops.Context, result *ops.Result) *ops.Result {
@@ -344,12 +355,21 @@ func withServerAfterRecovery(job *ops.Context, result *ops.Result) *ops.Result {
 	switch {
 	case recovery.InitialRunning != nil && !*recovery.InitialRunning:
 		said = "The server was stopped before this began, so Ludock didn’t start it."
-	case !wasRunning(job) || !recovery.StateRestored:
+	case !wasRunning(job):
 		return result
-	case recovery.StartRequested:
-		said = "Ludock started the server again."
+	case recovery.StateRestored && recovery.StartRequested:
+		said = serverStarted
+	case recovery.StateRestored:
+		said = serverRunningAgain
+	// A newer run after a start recovery had requested, seen this attempt.
+	case slices.Contains(stoppedStates, recovery.RunSeen):
+		said = serverStoppedAgain
+	case recovery.RunSeen == "restarting":
+		said = serverRestarting
+	case recovery.RunSeen != "":
+		said = "The server was started again, and Docker shows it " + recovery.RunSeen + ", so Ludock left it as it is."
 	default:
-		said = "The server was running again, so Ludock left it as it was."
+		return result
 	}
 	if result == nil {
 		result = &ops.Result{}
@@ -370,8 +390,10 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 	if err != nil {
 		return err
 	}
+	// Running without a start from this attempt, it may be anyone's.
+	foundRunning := func(r *ops.Recovery) { r.StateRestored, r.StartRequested = true, false }
 	if observed == nil {
-		return job.Progress("state_restored", func(r *ops.Recovery) { r.StateRestored = true }, nil)
+		return job.Progress("state_restored", foundRunning, nil)
 	}
 	if observed.Container.State != "running" {
 		if job.Job.Recovery.StartRequested {
@@ -379,7 +401,12 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 			if err != nil {
 				return err
 			}
+			// A newer run means the start took; it isn't sent again.
 			if info.State.StartedAt != job.Job.Recovery.StoppedStartedAt {
+				if info.State.Running && !info.State.Restarting && !info.State.Paused {
+					return job.Progress("state_restored", foundRunning, nil)
+				}
+				job.Job.Recovery.RunSeen = info.State.Status
 				return nil
 			}
 		}
@@ -387,14 +414,33 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 		if err := job.Progress("restarting", func(r *ops.Recovery) { r.StartRequested = true }, nil); err != nil {
 			return err
 		}
-		if err := j.Servers.Observer.ChangeState(ctx, server.Container.ID, servers.Start, func(observation identity.Observation, _ *docker.ContainerInspect) error {
+		err := j.Servers.Observer.ChangeStateExact(ctx, server.Container.ID, servers.Start, func(observation identity.Observation, _ *docker.ContainerInspect) error {
 			_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observation, server.Logical.BindingRevision)
 			return err
-		}); err != nil {
+		})
+		// Docker had it running already: someone else's start, whose game
+		// may be exiting again.
+		restored := func(r *ops.Recovery) { r.StateRestored = true }
+		if errors.Is(err, servers.ErrUnchanged) {
+			info, inspectErr := j.Docker.Inspect(ctx, server.Container.ID)
+			if inspectErr != nil {
+				return inspectErr
+			}
+			if info.State.Restarting || !info.State.Running {
+				job.Job.Recovery.RunSeen = info.State.Status
+				return nil
+			}
+			restored, err = foundRunning, nil
+		}
+		if err != nil {
 			return err
 		}
+		if err := job.Progress("state_restored", restored, nil); err != nil {
+			return err
+		}
+		return j.Monitor.Suppress(ctx, server.Logical.ID, nil)
 	}
-	if err := job.Progress("state_restored", func(r *ops.Recovery) { r.StateRestored = true }, nil); err != nil {
+	if err := job.Progress("state_restored", foundRunning, nil); err != nil {
 		return err
 	}
 	return j.Monitor.Suppress(ctx, server.Logical.ID, nil)

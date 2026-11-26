@@ -179,7 +179,7 @@ func TestRestoreItemInterrupted(t *testing.T) {
 			}
 			recovered, _ := f.runner.Get(ctx, job.ID)
 			if recovered.Status != ops.Interrupted || !strings.Contains(recovered.Error, "restarted") ||
-				recovered.Result.Guidance != "The restore was undone: the server’s data is as it was. "+keptNote(&ops.Context{Job: recovered})+" Ludock started the server again." {
+				recovered.Result.Guidance != "The restore was undone: the server’s data is as it was. "+keptNote(&ops.Context{Job: recovered})+" Ludock asked Docker to start the server, and it is running." {
 				t.Fatalf("%+v", recovered)
 			}
 			if read(t, filepath.Join(f.data, "world", "level.dat")) != "newer" || read(t, filepath.Join(f.data, "world", "today.dat")) != "today" ||
@@ -216,7 +216,7 @@ func TestRestoreInterruptedAfterCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	recovered, _ := f.runner.Get(ctx, job.ID)
-	if recovered.Status != ops.Succeeded || recovered.Result.Guidance != "Ludock restarted while this ran, after the restore had finished: what it restored is in place. Ludock started the server again." || !f.running() {
+	if recovered.Status != ops.Succeeded || recovered.Result.Guidance != "Ludock restarted while this ran, after the restore had finished: what it restored is in place. Ludock asked Docker to start the server, and it is running." || !f.running() {
 		t.Fatalf("%+v", recovered)
 	}
 }

@@ -62,11 +62,11 @@ func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 			recovered, _ := f.runner.Get(ctx, job.ID)
 			guidance := recovered.Result.Guidance
 			status, message, alerts, outcome := ops.Interrupted, "Ludock restarted while this ran.", []string{"mc: " + backupInterrupted}, "ended as interrupted"
-			ok := strings.HasSuffix(guidance, map[string]string{"restart": "The server was started again.", "backup": "Ludock started the server again."}[kind]) &&
+			ok := strings.HasSuffix(guidance, serverStarted) &&
 				strings.Contains(guidance, "no new backup")
 			if c.complete {
 				status, message, alerts, outcome = ops.Succeeded, "", nil, "finished"
-				ok = guidance == "Ludock restarted while this ran, after the backup had finished. Ludock started the server again."
+				ok = guidance == "Ludock restarted while this ran, after the backup had finished. Ludock asked Docker to start the server, and it is running."
 			}
 			if recovered.Status != status || recovered.Error != message || !ok || !f.running() {
 				t.Fatalf("%+v", recovered)

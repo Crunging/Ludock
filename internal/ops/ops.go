@@ -104,8 +104,12 @@ type Recovery struct {
 	StopSettled            bool   `json:"stopSettled,omitempty"`
 	StopRecoveryDeadlineAt int64  `json:"stopRecoveryDeadlineAt,omitempty"`
 	StopInitialStartedAt   *int64 `json:"stopInitialStartedAt,omitempty"`
-	StopRecoveryTimedOut   bool   `json:"stopRecoveryTimedOut,omitempty"`
-	ForceStopped           bool   `json:"forceStopped,omitempty"`
+	// StoppedRun (Unix ms) is the start of the run a stop Ludock saw end it
+	// stopped, which is newer than StopInitialStartedAt when Docker started
+	// the container again just before the stop arrived; 0 when not known.
+	StoppedRun           int64 `json:"stoppedRun,omitempty"`
+	StopRecoveryTimedOut bool  `json:"stopRecoveryTimedOut,omitempty"`
+	ForceStopped         bool  `json:"forceStopped,omitempty"`
 	// Restarting: Docker was restarting the server, whose game kept exiting,
 	// when the stop was sent, so its exit is the game's own.
 	Restarting bool `json:"restarting,omitempty"`
@@ -113,7 +117,10 @@ type Recovery struct {
 	// anything starts it.
 	StoppedStartedAt string `json:"stoppedStartedAt,omitempty"`
 	StartRequested   bool   `json:"startRequested,omitempty"`
-	StateRestored    bool   `json:"stateRestored,omitempty"`
+	// RunSeen, never saved: the state of a newer run recovery found after a
+	// start it had requested, such as "exited" or "restarting".
+	RunSeen       string `json:"-"`
+	StateRestored bool   `json:"stateRestored,omitempty"`
 
 	SaveStatus string `json:"saveStatus,omitempty"`
 	SaveReason string `json:"saveReason,omitempty"`
