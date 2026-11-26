@@ -215,8 +215,10 @@ back, with its data as it was just before the update. A setting or sign-in
 changed in those last seconds is undone. **Settings** and **Needs attention**
 then say why.
 
-When Ludock can't update itself in your setup, **Settings** shows two
-commands to run instead, and why. If an update is cut off partway, for example
+When Ludock can't update itself in your setup, **Settings** says why, and
+shows two commands to run instead where running them now is safe. They
+assume a `compose.yaml` with the service named `ludock`; use your own service
+name, or your own tool, if yours differ. If an update is cut off partway, for example
 because the machine restarted, Ludock may be stopped. Run the same two
 commands; **Settings** then says the update didn't finish, and what else to
 do if anything. Details are in [Update Ludock](REFERENCE.md#update-ludock).
@@ -612,8 +614,8 @@ Each destination's **Alert types**:
 - **Restores and updates:** a restore or update fails, or a restore is cut
   short by Ludock restarting. One that succeeds shows its result in the panel,
   where it was started.
-- **Newer images available:** a newer image is published for a server, once per
-  version. Off by default.
+- **Newer images available:** a newer image is published for a server or for
+  Ludock, once per version. Off by default.
 
 Alerts read "<server>: <what happened>." and name servers and container paths,
 never images or host paths. Each alert is tried up to five times, over about

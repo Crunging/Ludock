@@ -143,7 +143,7 @@ var (
 	errPortNotFixed = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
 		"Docker picks Ludock’s port each time its container starts, so this page wouldn’t come back at the same address. Publish a fixed port, such as 3000:3000, or use the commands below.")
 	errNoDataMount = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
-		"Ludock keeps its data inside its own container rather than in a volume or mounted folder, so a new container wouldn’t have it. Before updating with the commands below, save Ludock’s data and mount a volume or folder at its data folder: recreating the container would otherwise lose it.")
+		"Ludock keeps its data inside its own container rather than in a volume or mounted folder, so recreating it would lose its data. Move its data to a volume or mounted folder first, then update.")
 	errCopyLeft = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
 		"The copy of Ludock’s data from an earlier update, "+CopyName+", is still beside its database. Move it somewhere safe, then update again.")
 	errPull = apperr.New("PULL_FAILED", 409,
@@ -209,11 +209,12 @@ type Offer struct {
 	Available bool
 	// Reason says why not, when there is one to give.
 	Reason string
-	// Pinned: Ludock's image names no tag that could move. Unmounted: its
-	// data is inside its container, which the commands would recreate.
-	Pinned, Unmounted bool
-	Updating          bool
-	Last              *Record
+	// Pinned: Ludock's image names no tag that could move. NoCommands: the
+	// commands that recreate it would lose its data or interrupt work now.
+	// Refused: a click on Update Ludock failed for Reason.
+	Pinned, NoCommands, Refused bool
+	Updating                    bool
+	Last                        *Record
 	// Failed is a failed update an administrator hasn't dismissed.
 	Failed *Record
 }
@@ -229,15 +230,25 @@ func (s *Service) Offer(ctx context.Context) Offer {
 		if err != errNotHere {
 			offer.Reason, _ = apperr.Public(err)
 		}
-		offer.Pinned, offer.Unmounted = err == errPinned, err == errNoDataMount
+		offer.Pinned, offer.NoCommands = err == errPinned, noCommands(err)
 		return offer
 	}
 	if busy, err := s.busy(ctx, s.DB); err != nil || busy {
-		offer.Reason = errBusy.Message
+		offer.Reason, offer.NoCommands = errBusy.Message, true
 		return offer
 	}
 	offer.Available = true
 	return offer
+}
+
+// Refuse is the offer after err refused a click on Update Ludock.
+func (o *Offer) Refuse(err error) {
+	o.Reason, _ = apperr.Public(err)
+	o.Available, o.Refused, o.NoCommands = false, true, o.NoCommands || noCommands(err)
+}
+
+func noCommands(err error) bool {
+	return errors.Is(err, errNoDataMount) || errors.Is(err, errCopyLeft) || errors.Is(err, errBusy)
 }
 
 type queryer interface {
@@ -812,7 +823,7 @@ func (s *Service) record(ctx context.Context, record Record, state, reason strin
 // announce alerts about an update that didn't succeed.
 func (s *Service) announce(record Record, state, reason string) {
 	if (state == StatePutBack || state == StateFailed || state == StateInterrupted) && s.Notify != nil {
-		s.Notify(notify.FailedWork, "ludock-update:"+record.ID, "Ludock couldn’t update itself: "+strings.TrimSuffix(reason, ".")+
+		s.Notify(notify.Results, "ludock-update:"+record.ID, "Ludock couldn’t update itself: "+strings.TrimSuffix(reason, ".")+
 			". Needs attention says what happened and what to do.")
 	}
 }

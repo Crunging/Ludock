@@ -100,6 +100,7 @@ func (e *Engine) control(w http.ResponseWriter, r *http.Request) {
 		// removes it. image=REF changes the image reference it was created
 		// from, keeping the image it runs. mount=DESTINATION=SOURCE moves the
 		// bind mount at DESTINATION to another host folder. name=NAME renames it.
+		// host=KEY=VALUE sets a HostConfig field, such as NetworkMode.
 		query := r.URL.Query()
 		e.Recreate(query.Get("container"), query)
 		w.WriteHeader(204)
