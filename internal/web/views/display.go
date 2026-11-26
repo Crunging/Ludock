@@ -390,6 +390,10 @@ func ludockFailed(record selfupdate.Record) string {
 	case record.State == selfupdate.StatePutBack && record.Data == selfupdate.DataKept:
 		return "Ludock’s update didn’t finish: " + reason + ". Ludock put version " + record.From +
 			" back, but found no copy of its data to put back with it, so it kept the newer data."
+	case record.State == selfupdate.StatePutBack && record.Data == selfupdate.DataNotRestored:
+		return "Ludock’s update didn’t finish: " + reason + ". Ludock put version " + record.From +
+			" back, but couldn’t put the copy of its data from before the update back, so it runs on the newer data. The copy, " +
+			selfupdate.CopyName + ", is beside its database."
 	case record.State == selfupdate.StatePutBack:
 		return "Ludock’s update didn’t finish: " + reason + ". Ludock put version " + record.From + " back, with its data as it was."
 	case record.State == selfupdate.StateInterrupted:

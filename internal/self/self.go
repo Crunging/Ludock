@@ -41,8 +41,6 @@ const (
 // answer has the rest.
 type Info struct {
 	Answer Answer
-	// ID is the container's full ID.
-	ID string
 	// Image is the content-addressed image ID.
 	Image  string
 	Mounts []identity.Mount
@@ -90,7 +88,7 @@ func (c *Container) Read(ctx context.Context) (Info, error) {
 			if err != nil {
 				return Info{}, err
 			}
-			answer = Info{Answer: Found, ID: info.ID, Image: info.Image, Mounts: identity.DockerMounts(info)}
+			answer = Info{Answer: Found, Image: info.Image, Mounts: identity.DockerMounts(info)}
 		}
 	}
 	c.mu.Lock()

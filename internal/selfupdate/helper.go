@@ -35,6 +35,7 @@ var Reasons = []string{
 	"the new version reported itself unhealthy, as one whose image is older than this Ludock’s data does",
 	"the new version didn’t report healthy within 3 minutes",
 	"the new image has no health check, so Ludock couldn’t confirm it works",
+	"Docker couldn’t give the new container Ludock’s restart policy",
 }
 
 const (
@@ -43,6 +44,7 @@ const (
 	reasonUnhealthy
 	reasonTimeout
 	reasonNoHealth
+	reasonPolicy
 )
 
 // HealthWait is how long the new version has to report healthy.
@@ -98,6 +100,12 @@ func (h *Helper) Run(ctx context.Context) int {
 		log.Error("Docker couldn't create Ludock's new container, so nothing was changed", logging.Cause(err, docker.StatusCode(err))...)
 		return ExitUnchanged
 	}
+	// The new container names the tag, which may have moved since the pull.
+	if created, err := h.Docker.Inspect(ctx, id); err != nil || created.Image != h.Image {
+		log.Error("Ludock's tag moved during the update, so nothing was changed")
+		h.Docker.Remove(ctx, id, true, true)
+		return ExitUnchanged
+	}
 	// From here until the swap settles the original doesn't restart by
 	// itself, so a reboot can't run both.
 	if err := h.Docker.SetRestartPolicy(ctx, old.ID, noRestart); err != nil {
@@ -113,12 +121,15 @@ func (h *Helper) Run(ctx context.Context) int {
 	if err := h.Docker.Start(ctx, id); err == nil {
 		reason = h.awaitHealthy(ctx, id)
 	}
+	// The new one runs with the original's restart policy before the
+	// original goes, which it does only once the new one passed.
+	if reason < 0 && h.Docker.SetRestartPolicy(ctx, id, policy) != nil {
+		reason = reasonPolicy
+	}
 	if reason < 0 {
-		// The original goes only once the new one passed.
 		if err := h.Docker.Remove(ctx, old.ID, true, false); err != nil && !docker.IsNotFound(err) {
 			log.Error("Ludock's update couldn't remove the previous container; remove it with docker rm", logging.Cause(err, docker.StatusCode(err))...)
 		}
-		h.Docker.SetRestartPolicy(ctx, id, policy)
 		if err := h.Docker.Rename(ctx, id, strings.TrimPrefix(old.Name, "/")); err != nil {
 			log.Error("Ludock's update couldn't give the new container Ludock's name", logging.Cause(err, docker.StatusCode(err))...)
 		}
@@ -139,7 +150,10 @@ func (h *Helper) putBack(ctx context.Context, old *docker.ContainerSpec, id stri
 		log.Error("Ludock's update couldn't start the previous container; start it with docker compose up -d", logging.Cause(err, docker.StatusCode(err))...)
 		return 1
 	}
-	h.Docker.SetRestartPolicy(ctx, old.ID, policy)
+	if err := h.Docker.SetRestartPolicy(ctx, old.ID, policy); err != nil {
+		log.Error("Ludock's update couldn't restore the previous container's restart policy", logging.Cause(err, docker.StatusCode(err))...)
+		return 1
+	}
 	return ExitPutBack + reason
 }
 
@@ -195,13 +209,6 @@ func relabelled(info *docker.ContainerInspect, target string) bool {
 		}
 	}
 	return false
-}
-
-// resolveImage is the ID of the image reference names, the image's own,
-// not a platform manifest's, which Docker can't create a container from
-// when the image is an index.
-func resolveImage(ctx context.Context, client *docker.Client, reference string) (string, error) {
-	return client.InspectImage(ctx, reference)
 }
 
 func encode(fields map[string]json.RawMessage) []byte {

@@ -301,7 +301,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 		data  string
 		copy  bool
 	}{
-		{name: "success", trace: join(swap, []string{"remove old", "policy new", "rename new", "remove helper"}),
+		{name: "success", trace: join(swap, []string{"policy new", "remove old", "rename new", "remove helper"}),
 			image: newImage, state: selfupdate.StateSucceeded, probe: "after"},
 		{name: "the new version reports itself unhealthy, as one that can't use the data does", arrange: func(g *rig) {
 			g.onStart = func(c *fakedocker.Container) {
@@ -363,6 +363,11 @@ func TestSelfUpdateOrder(t *testing.T) {
 		{name: "no health check", arrange: func(g *rig) {
 			g.engine.SetImageConfig(oldImage, map[string]any{})
 			g.engine.Update(g.old, func(c *fakedocker.Container) { c.ExtraConfig = map[string]any{} })
+		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
+		{name: "data kept inside the container rather than a volume or mounted folder", arrange: func(g *rig) {
+			g.engine.Update(g.old, func(c *fakedocker.Container) {
+				c.Mounts = []docker.MountPoint{{Type: "bind", Source: g.engine.Socket, Destination: socket}}
+			})
 		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
 		{name: "a host port Docker picks", arrange: func(g *rig) {
 			g.engine.Update(g.old, func(c *fakedocker.Container) {

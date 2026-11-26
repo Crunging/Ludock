@@ -99,13 +99,16 @@ func (t *Table) Hold(reason error) (lift func()) {
 }
 
 // Maintain is Hold taken only when nothing is in the way: it fails while
-// startup recovery runs or foreground work holds keys, in the same step that
-// takes the hold.
+// startup recovery runs, another hold is taken, or foreground work holds
+// keys, in the same step that takes the hold.
 func (t *Table) Maintain(reason error) (lift func(), err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.fences > 0 {
 		return nil, ErrRecovering
+	}
+	if len(t.holds) > 0 {
+		return nil, t.holds[0]
 	}
 	for _, owner := range t.active {
 		if owner.background == nil {

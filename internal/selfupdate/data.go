@@ -12,11 +12,13 @@ import (
 	"github.com/Crunging/Ludock/internal/launch"
 )
 
-// What BeforeOpen did with a put-back's data.
+// How a put-back left the data.
 const (
 	DataRestored = "restored"
 	// DataKept: no copy was there to put back, so the newer data stayed.
 	DataKept = "kept"
+	// DataNotRestored: the copy is there, but Ludock couldn't put it back.
+	DataNotRestored = "not_restored"
 )
 
 // BeforeOpen runs as Ludock starts in container, before it opens its
@@ -29,37 +31,47 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 	if container == "" {
 		return ""
 	}
-	helpers, err := client.ListContainers(ctx, true, docker.Filters{"label": {launch.InternalLabel + "=" + helperKind}})
-	if err != nil {
-		return ""
+	// Docker not answering is waited out as a running helper is.
+	deadline := time.Now().Add(wait)
+	pause := func() bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(time.Second):
+		}
+		return time.Now().Before(deadline)
+	}
+	var helpers []docker.ContainerSummary
+	for {
+		var err error
+		if helpers, err = client.ListContainers(ctx, true, docker.Filters{"label": {launch.InternalLabel + "=" + helperKind}}); err == nil {
+			break
+		}
+		if !pause() {
+			return ""
+		}
 	}
 	for _, summary := range helpers {
-		deadline := time.Now().Add(wait)
 		for {
 			spec, err := client.InspectSpec(ctx, summary.ID)
-			if err != nil || !ours(spec, container) {
+			if docker.IsNotFound(err) || (err == nil && !ours(spec, container)) {
 				break
 			}
-			if !spec.State.Running && !spec.State.Restarting {
+			if err == nil && !spec.State.Running && !spec.State.Restarting {
 				if spec.State.ExitCode < ExitPutBack || spec.State.ExitCode >= ExitPutBack+len(Reasons) {
 					return ""
 				}
 				if err := putDataBack(dataDir); errors.Is(err, os.ErrNotExist) {
 					return DataKept
 				} else if err != nil {
-					log.Error("Ludock couldn't put back the copy of its data from before the update")
+					log.Error("Ludock couldn't put back the copy of its data from before the update, so it starts on the newer data")
 					return ""
 				}
 				log.Info("Ludock put back the copy of its data from before the update")
 				return DataRestored
 			}
-			if time.Now().After(deadline) {
+			if !pause() {
 				return ""
-			}
-			select {
-			case <-ctx.Done():
-				return ""
-			case <-time.After(time.Second):
 			}
 		}
 	}

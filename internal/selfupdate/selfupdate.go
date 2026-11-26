@@ -65,8 +65,10 @@ type Record struct {
 	Reason string `json:"reason,omitempty"`
 	Data   string `json:"data,omitempty"`
 	// Leftover is the new container an interrupted update left under its
-	// temporary name, for the owner to remove.
+	// temporary name, for the owner to remove; Copy, that the data copy
+	// from before the update is still beside the database.
 	Leftover  string `json:"leftover,omitempty"`
+	Copy      bool   `json:"copy,omitempty"`
 	Dismissed bool   `json:"dismissed,omitempty"`
 }
 
@@ -128,6 +130,8 @@ var (
 		"Ludock’s Docker socket is relabelled for its container alone (:Z), so a helper couldn’t reach it. Mount it with :z, or use the commands below.")
 	errPortNotFixed = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
 		"Docker picks Ludock’s port each time its container starts, so this page wouldn’t come back at the same address. Publish a fixed port, such as 3000:3000, or use the commands below.")
+	errNoDataMount = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
+		"Ludock keeps its data inside its own container rather than in a volume or mounted folder, so a new container wouldn’t have it. Update it with the commands below.")
 	errPull = apperr.New("PULL_FAILED", 409,
 		"Docker couldn’t download Ludock’s new image. Check the machine’s internet connection; for a private registry, set LUDOCK_DOCKER_CONFIG.")
 	errSave = apperr.New("LUDOCK_UPDATE_SAVE", 409,
@@ -164,7 +168,9 @@ func (s *Service) Last(ctx context.Context) *Record {
 // or Ludock runs another version.
 func (s *Service) Failed(ctx context.Context) *Record {
 	last := s.Last(ctx)
-	if !last.Failed() || last.Dismissed || last.From != s.Version {
+	// One that stopped partway stays until dismissed, whichever version
+	// the owner then started.
+	if !last.Failed() || last.Dismissed || (last.From != s.Version && last.State != StateInterrupted) {
 		return nil
 	}
 	return last
@@ -269,6 +275,11 @@ func (s *Service) check(ctx context.Context, dependents bool) (*docker.Container
 	}
 	if s.socket(plan.Spec) == nil {
 		return own, nil, errNoSocket
+	}
+	// A new container has Ludock's data only from a volume or mounted
+	// folder.
+	if dataDir, err := filepath.Abs(s.DataDir); err != nil || !mounted(own, dataDir) {
+		return own, nil, errNoDataMount
 	}
 	if relabelled(own, s.Socket) {
 		return own, nil, errSocketLabel
@@ -430,8 +441,11 @@ func (s *Service) background() context.Context {
 // the next start to settle.
 func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerInspect, plan *update.Plan, tokenHash string) {
 	failed := func(err error) {
-		message, _ := apperr.Public(err)
-		s.settle(ctx, record, StateFailed, message)
+		// A Ludock stopping meanwhile leaves the update to the next one.
+		if ctx.Err() == nil {
+			message, _ := apperr.Public(err)
+			s.settle(ctx, record, StateFailed, message)
+		}
 	}
 	auth, err := s.Updates.RegistryAuth(plan)
 	if err != nil {
@@ -447,7 +461,9 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 	}
 	// The new container runs what this pull fetched, whatever the tag
 	// points to by now.
-	target, err := resolveImage(ctx, s.Docker, repository(plan.Image)+"@"+digest)
+	// By the image's own ID, not a platform manifest's, which Docker can't
+	// create a container from when the image is an index.
+	target, err := s.Docker.InspectImage(ctx, repository(plan.Image)+"@"+digest)
 	if err != nil {
 		failed(errPull)
 		return
@@ -497,7 +513,15 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 		failed(errSave)
 		return
 	}
-	if err := s.startHelper(ctx, record, own); err != nil {
+	// The copy can take a while too.
+	if err := s.DB.AdminMutation(ctx, record.ActorID, tokenHash, db.Now(), func(*sql.Tx) error { return nil }); err != nil {
+		failed(errNoLongerAdmin)
+		return
+	}
+	if err := s.startHelper(ctx, record, own); errors.Is(err, errUncertain) {
+		// The helper may be swapping already; watch, or the Ludock that runs
+		// next, finds out.
+	} else if err != nil {
 		log.Warn("Ludock's update helper didn't start, so nothing was changed", logging.Cause(err, docker.StatusCode(err))...)
 		failed(errHelper)
 		return
@@ -536,12 +560,37 @@ func (s *Service) startHelper(ctx context.Context, record Record, own *docker.Co
 	if err != nil {
 		return err
 	}
-	if err := s.Docker.Start(call, id); err != nil {
+	if err := s.Docker.Start(call, id); docker.StatusCode(err) == 0 && err != nil {
+		return errUncertain
+	} else if err != nil {
+		// Docker refused it, so it never ran.
 		s.Docker.Remove(context.WithoutCancel(call), id, true, true)
 		return err
 	}
 	return nil
 }
+
+// mounted reports whether the deepest mount holding dataDir is a volume or
+// a mounted folder.
+func mounted(own *docker.ContainerInspect, dataDir string) bool {
+	var found *docker.MountPoint
+	for index, mount := range own.Mounts {
+		if helper.Within(dataDir, mount.Destination) && (found == nil || len(filepath.Clean(mount.Destination)) > len(filepath.Clean(found.Destination))) {
+			found = &own.Mounts[index]
+		}
+	}
+	return found != nil && (found.Type == "bind" || found.Type == "volume")
+}
+
+// operationOf is the update a container was created for, from its label.
+func operationOf(spec *docker.ContainerSpec) string {
+	var config struct{ Labels map[string]string }
+	json.Unmarshal(encode(spec.Config), &config)
+	return config.Labels[update.OperationLabel]
+}
+
+// errUncertain: Docker didn't answer whether it started the helper.
+var errUncertain = errors.New("docker didn't answer whether it started the helper")
 
 // watch waits for the helper to end, then records how the update did. The
 // helper may stop this Ludock meanwhile; the one that runs next settles it.
@@ -584,10 +633,13 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	}
 	_, gone := s.Docker.InspectSpec(ctx, record.Container)
 	original, ownReplacement := own.ID == record.Container, own.Config.Labels[update.OperationLabel] == record.ID
+	// Only a container of this update, by its label, is left over.
 	replacement, err := s.Docker.InspectSpec(ctx, servers.ReplacementName(record.Name, record.ID))
-	if err == nil && replacement.ID != own.ID {
+	if err == nil && replacement.ID != own.ID && operationOf(replacement) == record.ID {
 		record.Leftover = strings.TrimPrefix(replacement.Name, "/")
 	}
+	_, copyErr := os.Lstat(filepath.Join(s.DataDir, CopyName))
+	record.Copy = copyErr == nil
 	// An original running since before the update was never stopped, so
 	// its data is as it was; a new container the helper left unstarted
 	// goes.
@@ -601,19 +653,30 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	log.Info("Ludock's update helper ended", logging.F("exitCode", code))
 	switch {
 	case !original && !ownReplacement:
-		os.Remove(filepath.Join(s.DataDir, CopyName))
+		// The owner started Ludock from a terminal, on the data as it is.
+		record.Copy = false
 		return s.settle(ctx, record, StateInterrupted, reasonInterrupted)
 	case original && code >= ExitPutBack && code < ExitPutBack+len(Reasons):
-		record.Data = s.PutBack
+		switch {
+		case s.PutBack == DataRestored:
+			record.Data = DataRestored
+		case record.Copy:
+			// It is there, but this Ludock couldn't put it back.
+			record.Data = DataNotRestored
+		default:
+			record.Data = DataKept
+		}
 		return s.settle(ctx, record, StatePutBack, Reasons[code-ExitPutBack])
 	case original && code == ExitUnchanged:
+		record.Copy = false
 		return s.settle(ctx, record, StateFailed, reasonUnchanged)
 	case ownReplacement && own.Name == "/"+record.Name && docker.IsNotFound(gone):
-		record.To = s.Version
+		record.To, record.Copy = s.Version, false
 		// Its name, which Ludock may find itself by, is the new container's.
 		s.Own.Forget()
 		return s.settle(ctx, record, StateSucceeded, "")
 	case untouched && record.Leftover == "":
+		record.Copy = false
 		return s.settle(ctx, record, StateFailed, reasonNotReplaced)
 	}
 	return s.settle(ctx, record, StateInterrupted, reasonInterrupted)
@@ -626,7 +689,7 @@ func (s *Service) settle(ctx context.Context, record Record, state, reason strin
 	for {
 		settled, err := s.record(ctx, record, state, reason)
 		if err == nil {
-			if state != StateInterrupted {
+			if !record.Copy {
 				os.Remove(filepath.Join(s.DataDir, CopyName))
 			}
 			s.release()
