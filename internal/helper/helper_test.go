@@ -757,7 +757,7 @@ func TestRenamesNeverClobber(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "aside", to), []byte("made meanwhile"), 0o644)
 		return original(fromFD, from, toFD, to, flags)
 	}
-	if err := setAsideEntry(parent, "b.txt", fd(aside), stat("b.txt"), strictRename); err == nil {
+	if err := setAsideEntry(parent, "b.txt", fd(aside), stat("b.txt")); err == nil {
 		t.Fatal("replaced a file made meanwhile")
 	}
 	if data, _ := os.ReadFile(filepath.Join(dir, "aside", "b.txt")); string(data) != "made meanwhile" {
@@ -872,123 +872,32 @@ func TestRenamesNeverClobber(t *testing.T) {
 	for index := range 30 {
 		os.Remove(filepath.Join(root, stage, "old", "clash"+strconv.Itoa(index)))
 	}
-	tree := func(top string) string {
-		var all []string
-		filepath.WalkDir(top, func(path string, entry os.DirEntry, err error) error {
-			data, _ := os.ReadFile(path)
-			all = append(all, path+"="+string(data))
-			return nil
-		})
-		return strings.Join(all, "\n")
-	}
 	// On a filesystem without RENAME_NOREPLACE, in any of the ways it says
-	// so, something in the way of an undo is refused with the disk left
-	// exactly as it was, and once the owner clears it the return uses the
-	// plain rename.
+	// so, an undo renames to names it found free: what is in the way is set
+	// aside and the original returns.
 	for _, errno := range []unix.Errno{unix.EINVAL, unix.ENOSYS, unix.EOPNOTSUPP, unix.EPERM} {
 		renameat2 = func(int, string, int, string, uint) error { return errno }
-		before := tree(root)
-		if RunRestore(string(argument), io.Discard, io.Discard) == 0 || tree(root) != before {
-			t.Fatalf("%v: set aside, or changed the disk:\n%s\nwas:\n%s", errno, tree(root), before)
-		}
-		os.Rename(filepath.Join(root, "ops.json"), filepath.Join(dir, "cleared"))
 		if RunRestore(string(argument), io.Discard, io.Discard) != 0 {
-			t.Fatalf("%v: refused a return with nothing in the way", errno)
+			t.Fatalf("%v: refused", errno)
 		}
-		if data, _ := os.ReadFile(filepath.Join(root, "ops.json")); string(data) != "original" {
-			t.Fatal("didn't return the original:", string(data))
+		returned, _ := os.ReadFile(filepath.Join(root, "ops.json"))
+		kept, _ := os.ReadFile(filepath.Join(root, asideName, "ops.json"))
+		if string(returned) != "original" || string(kept) != "game made" {
+			t.Fatalf("%v: returned %q, kept %q", errno, returned, kept)
 		}
 		os.Rename(filepath.Join(root, "ops.json"), filepath.Join(root, stage, "old", "ops.json"))
-		os.Rename(filepath.Join(dir, "cleared"), filepath.Join(root, "ops.json"))
+		os.Rename(filepath.Join(root, asideName, "ops.json"), filepath.Join(root, "ops.json"))
+		os.Remove(filepath.Join(root, asideName))
 	}
-	// On one that has it, as the run's first flagged rename finds, every
-	// later move uses it, so an "unsupported" answer then fails the step and
-	// never becomes a plain rename.
-	os.WriteFile(filepath.Join(root, stage, "old", "whitelist.json"), []byte("original"), 0o644)
-	calls := 0
-	renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
-		if calls++; calls > 1 {
-			return unix.EINVAL
-		}
-		return original(fromFD, from, toFD, to, flags)
-	}
-	plainRename, renamed := renameat, false
-	renameat = func(fromFD int, from string, toFD int, to string) error {
-		renamed = true
-		return plainRename(fromFD, from, toFD, to)
-	}
-	os.Remove(filepath.Join(root, "ops.json"))
-	if RunRestore(string(argument), io.Discard, io.Discard) == 0 || renamed {
-		t.Fatal("fell back to a plain rename on a filesystem with RENAME_NOREPLACE")
-	}
-	renameat2, renameat = original, plainRename
+	renameat2 = original
 	// Something else at the set-aside folder's name doesn't stop a return
 	// with nothing in the way.
+	os.Remove(filepath.Join(root, "ops.json"))
 	os.WriteFile(filepath.Join(root, asideName), nil, 0o644)
 	if RunRestore(string(argument), io.Discard, io.Discard) != 0 {
 		t.Fatal("returned nothing past a file at the set-aside name")
 	}
 	os.Remove(filepath.Join(root, asideName))
-	// Files at the stage's top that Ludock didn't make, such as one named
-	// like its scratch folder, survive an undo it refuses.
-	for _, name := range []string{"probe", "probe.to"} {
-		os.WriteFile(filepath.Join(root, stage, name), []byte("theirs"), 0o644)
-	}
-	os.WriteFile(filepath.Join(root, stage, "old", "ops.json"), []byte("original"), 0o644)
-	os.WriteFile(filepath.Join(root, "ops.json"), []byte("game made"), 0o644)
-	renameat2 = func(int, string, int, string, uint) error { return unix.EOPNOTSUPP }
-	if RunRestore(string(argument), io.Discard, io.Discard) == 0 {
-		t.Fatal("set aside without RENAME_NOREPLACE")
-	}
-	renameat2 = original
-	for _, name := range []string{"probe", "probe.to"} {
-		if data, _ := os.ReadFile(filepath.Join(root, stage, name)); string(data) != "theirs" {
-			t.Fatalf("removed %s from the stage", name)
-		}
-		os.Remove(filepath.Join(root, stage, name))
-	}
-	if entries, _ := os.ReadDir(filepath.Join(root, stage)); len(entries) != 1 {
-		t.Fatalf("left scratch in the stage: %v", entries)
-	}
-	// A probe never removes a file, whichever of its names one takes, before
-	// its rename or after it.
-	for _, when := range []string{"before", "after success", "after refusal"} {
-		var theirs string
-		renameat2 = func(fromFD int, from string, toFD int, to string, flags uint) error {
-			if to != "to" {
-				return original(fromFD, from, toFD, to, flags)
-			}
-			folder, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(toFD))
-			err := error(unix.EEXIST)
-			switch theirs = filepath.Join(folder, "to"); when {
-			case "after success":
-				err = original(fromFD, from, toFD, to, flags)
-				os.Remove(theirs)
-			case "after refusal":
-				theirs = filepath.Join(folder, "from")
-				os.Remove(theirs)
-			}
-			os.WriteFile(theirs, []byte("theirs"), 0o644)
-			return err
-		}
-		code := RunRestore(string(argument), io.Discard, io.Discard)
-		renameat2 = original
-		if (code == 0) != (when == "after success") {
-			t.Fatalf("%s: the undo said %d", when, code)
-		}
-		if data, _ := os.ReadFile(theirs); string(data) != "theirs" {
-			t.Fatalf("%s: the probe removed a file it didn't make", when)
-		}
-		if entries, _ := os.ReadDir(filepath.Dir(theirs)); len(entries) != 1 {
-			t.Fatalf("%s: the probe left its own folder: %v", when, entries)
-		}
-		os.Remove(theirs)
-		os.Remove(filepath.Dir(theirs))
-		os.WriteFile(filepath.Join(root, stage, "old", "ops.json"), []byte("original"), 0o644)
-		os.WriteFile(filepath.Join(root, "ops.json"), []byte("game made"), 0o644)
-		os.Remove(filepath.Join(root, asideName, "ops.json"))
-		os.Remove(filepath.Join(root, asideName))
-	}
 	os.Remove(filepath.Join(root, "ops.json"))
 	os.Remove(filepath.Join(root, stage, "old", "ops.json"))
 	// Each original is returned in turn, so an attempt cut short, as by the
@@ -1045,29 +954,6 @@ func TestRenamesNeverClobber(t *testing.T) {
 	for index := range 20 {
 		os.Remove(filepath.Join(root, "file"+strconv.Itoa(index)))
 	}
-	// Finding out about RENAME_NOREPLACE needs a scratch folder only where
-	// something is in the way: on a full disk, a clear return still
-	// finishes, and a clash is refused with nothing made.
-	// A stage it can't write in stands in for the full disk; root writes
-	// anyway.
-	if os.Geteuid() != 0 {
-		os.WriteFile(filepath.Join(root, stage, "old", "ops.json"), []byte("original"), 0o644)
-		os.WriteFile(filepath.Join(root, "ops.json"), []byte("game made"), 0o644)
-		os.Chmod(filepath.Join(root, stage), 0o500)
-		if code := RunRestore(string(argument), io.Discard, io.Discard); code != RestoreProbeFailed {
-			t.Fatalf("said %d, not that it couldn't find out about RENAME_NOREPLACE", code)
-		}
-		if _, err := os.Lstat(filepath.Join(root, asideName)); !os.IsNotExist(err) {
-			t.Fatal("made the set-aside folder for a refused clash")
-		}
-		os.Remove(filepath.Join(root, "ops.json"))
-		if RunRestore(string(argument), io.Discard, io.Discard) != 0 {
-			t.Fatal("a full disk refused a return with nothing in the way")
-		}
-		os.Chmod(filepath.Join(root, stage), 0o700)
-	}
-	// One item's return needs RENAME_NOREPLACE, so without it nothing moves,
-	// and nothing is made.
 	os.MkdirAll(filepath.Join(root, "world"), 0o755)
 	os.WriteFile(filepath.Join(root, "world", "level.dat"), []byte("game made"), 0o644)
 	os.WriteFile(filepath.Join(root, stage, "old", "item"), []byte("original"), 0o644)
@@ -1084,17 +970,6 @@ func TestRenamesNeverClobber(t *testing.T) {
 	mountinfo.Table = previousTable
 	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "game made" {
 		t.Fatal("moved the live copy:", string(data))
-	}
-	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
-	if RunRestore(string(item), io.Discard, io.Discard) == 0 {
-		t.Fatal("returned one item without RENAME_NOREPLACE")
-	}
-	renameat2 = original
-	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "game made" {
-		t.Fatal("moved the live copy:", string(data))
-	}
-	if _, err := os.Lstat(filepath.Join(root, asideName)); !os.IsNotExist(err) {
-		t.Fatal("made the set-aside folder for a refused clash")
 	}
 	// Nor is it returned once it gains a second name as the clash moves.
 	linkOnceAside(filepath.Join(root, stage, "old", "item"))
@@ -1292,10 +1167,9 @@ func TestRestoreSetAsideKeepsAnything(t *testing.T) {
 
 // On a filesystem without RENAME_NOREPLACE, such as NFS, one item's restore
 // and its undo move by a plain rename to a name checked free just before, as
-// a whole folder's do. Something in the way is refused with both copies
-// where they were and nothing made: a restore that finds the game's file
-// where the backup's goes, and an undo that finds one where the previous
-// copy returns, which says the storage can't move it aside.
+// a whole folder's do. A restore that finds the game's file where the
+// backup's goes is refused with both copies where they were; an undo that
+// finds one where the previous copy returns sets it aside first.
 func TestRestoreItemWithoutNoReplace(t *testing.T) {
 	original := renameat2
 	renameat2 = func(int, string, int, string, uint) error { return unix.EINVAL }
@@ -1309,14 +1183,14 @@ func TestRestoreItemWithoutNoReplace(t *testing.T) {
 		steps []string
 		inWay string
 		code  int
-		// live and staged are the item's contents afterwards.
-		live, staged string
+		// live, staged and kept are the item's contents afterwards, live, in
+		// the stage, and in the set-aside folder.
+		live, staged, kept string
 	}{
 		{name: "restore", steps: []string{RestoreMoveOld, RestoreMoveNew}, live: "backup", staged: "current"},
 		{name: "restore, something in the way", steps: []string{RestoreMoveOld, RestoreMoveNew}, inWay: "game made", code: 1, live: "game made", staged: "current"},
 		{name: "undo", steps: []string{RestoreMoveOld, RestoreRollbackOld}, live: "current"},
-		{name: "undo, something in the way", steps: []string{RestoreMoveOld, RestoreRollbackOld}, inWay: "game made", code: RestoreClashNeedsNoReplace,
-			live: "game made", staged: "current"},
+		{name: "undo, something in the way", steps: []string{RestoreMoveOld, RestoreRollbackOld}, inWay: "game made", live: "current", kept: "game made"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -1343,8 +1217,8 @@ func TestRestoreItemWithoutNoReplace(t *testing.T) {
 			if live, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(live) != c.live || string(staged) != c.staged {
 				t.Fatalf("live %q, staged %q", live, staged)
 			}
-			if _, err := os.Lstat(filepath.Join(root, SetAsideName(id))); !os.IsNotExist(err) {
-				t.Fatal("made the set-aside folder")
+			if kept, _ := os.ReadFile(filepath.Join(root, SetAsideName(id), "level.dat")); string(kept) != c.kept {
+				t.Fatalf("kept %q", kept)
 			}
 		})
 	}
