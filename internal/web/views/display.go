@@ -1,6 +1,7 @@
 package views
 
 import (
+	"encoding/json"
 	"net"
 	"slices"
 	"strconv"
@@ -13,7 +14,9 @@ import (
 	"github.com/Crunging/Ludock/internal/jobs"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/servers"
+	"github.com/Crunging/Ludock/internal/update"
 )
 
 type Status struct{ Label, Tone string }
@@ -367,4 +370,42 @@ func BrowserName(userAgent string) string {
 		return "A browser on " + system
 	}
 	return "Unknown browser"
+}
+
+// updatedSince reports an update of Ludock that succeeded since the last
+// check of its image.
+func updatedSince(last *selfupdate.Record, check *update.CheckStatus) bool {
+	return last != nil && (last.State == selfupdate.StateSucceeded || last.State == selfupdate.StateCurrent) &&
+		(check == nil || check.CheckedAt < last.FinishedAt)
+}
+
+func ludockUpdated(record selfupdate.Record) string {
+	return "Ludock was updated to version " + record.To + "."
+}
+
+// ludockFailed says how a failed update ended, in plain words.
+func ludockFailed(record selfupdate.Record) string {
+	reason := strings.TrimSuffix(record.Reason, ".")
+	put := "Ludock’s update didn’t finish: " + reason + ". Ludock put version " + record.From + " back"
+	policy := ""
+	if record.NoPolicy {
+		policy = " Docker didn’t give it back its restart policy, so it won’t start by itself after a restart; run docker compose up -d ludock in the folder with its compose.yaml to set it again."
+	}
+	switch {
+	case record.State == selfupdate.StatePutBack && record.Data == selfupdate.DataKept:
+		return put + ", but found no copy of its data to put back with it, so it kept the newer data." + policy
+	case record.State == selfupdate.StatePutBack && record.Data == selfupdate.DataNotRestored:
+		return put + ", but couldn’t put the copy of its data from before the update back, so it runs on the newer data. The copy, " +
+			selfupdate.CopyName + ", is beside its database." + policy
+	case record.State == selfupdate.StatePutBack:
+		return put + ", with its data as it was." + policy
+	case record.State == selfupdate.StateInterrupted:
+		return "Ludock’s update didn’t finish: it stopped partway, so Ludock may be on either version. Finish it from a terminal with the commands below." + policy
+	}
+	return "Ludock couldn’t update itself: " + reason + ". It is still on version " + record.From + "." + policy
+}
+
+func dismissValues(id string) string {
+	encoded, _ := json.Marshal(map[string]string{"id": id})
+	return string(encoded)
 }

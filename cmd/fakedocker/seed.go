@@ -18,10 +18,11 @@ import (
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/launch"
+	"github.com/Crunging/Ludock/internal/selfupdate/fake"
 )
 
 // seed adds a few game servers whose data lives under dir.
-func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
+func seed(engine *fakedocker.Engine, dir, self, backups, data string, demo bool) {
 	helper.HostRoot = "/"
 	image := "ghcr.io/crunging/ludock@sha256:" + strings.Repeat("ab", 32)
 	engine.AddImage(image)
@@ -37,7 +38,20 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 			selfMounts = append(selfMounts, docker.MountPoint{Type: "bind", Source: root, Destination: root, RW: true})
 		}
 	}
-	engine.AddContainer(fakedocker.GameOptions{ID: self, Name: self, Image: image, Running: true, Mounts: selfMounts})
+	// Mounted as compose.yaml mounts them, with the image's health check,
+	// so Ludock can update itself: its helpers run in this process.
+	selfMounts = append(selfMounts, docker.MountPoint{Type: "bind", Source: engine.Socket, Destination: engine.Socket})
+	if data != "" {
+		selfMounts = append(selfMounts, docker.MountPoint{Type: "bind", Source: data, Destination: data, RW: true})
+	}
+	engine.AddContainer(fakedocker.GameOptions{ID: self, Name: self, Image: image, Running: true, Mounts: selfMounts,
+		Env: []string{"LUDOCK_DATA_DIR=" + data, "LUDOCK_DOCKER_SOCKET=" + engine.Socket}})
+	healthcheck := map[string]any{"Healthcheck": map[string]any{"Test": []any{"CMD", "/usr/local/bin/ludock", "healthcheck"}}}
+	engine.SetImageConfig("sha256:"+strings.Repeat("a", 64), healthcheck)
+	engine.Update(self, func(c *fakedocker.Container) {
+		c.Image, c.ExtraConfig = "sha256:"+strings.Repeat("a", 64), healthcheck
+	})
+	fake.Run(engine, fake.Dev())
 	// Console helpers run for real, so commands reach the fake game consoles
 	// on 127.0.0.1. A game with a stdin console reads its commands.
 	var stdinGames sync.Map

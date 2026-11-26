@@ -333,6 +333,11 @@ var auditLabels = map[string]string{
 	"settings.backups.updated":           "Changed backup storage",
 	"settings.connection_updated":        "Changed the server address",
 	"settings.image_updates.updated":     "Changed image update checks",
+	"ludock.update.started":              "Updated Ludock",
+	"ludock.update.succeeded":            "Updated Ludock",
+	"ludock.update.failed":               "Updated Ludock",
+	"ludock.update.already_current":      "Updated Ludock",
+	"ludock.update.restored":             "Updated Ludock",
 	"settings.trusted_proxies.updated":   "Changed the trusted proxy",
 	"settings.upload_limit.updated":      "Changed the upload limit",
 	"settings.verbose_logging.updated":   "Changed verbose logging",
@@ -388,6 +393,35 @@ func AuditLabel(action string) string {
 	return Capitalize(strings.ReplaceAll(action, ".", " "))
 }
 
+// ludockUpdateLabel says which versions an update of Ludock went between and
+// how it ended.
+func ludockUpdateLabel(action string, details map[string]any) string {
+	from, _ := details["from"].(string)
+	to, _ := details["to"].(string)
+	reason, _ := details["reason"].(string)
+	outcome, _ := details["outcome"].(string)
+	versions := " from version " + from
+	if to != "" {
+		versions += " to version " + to
+	}
+	reason = strings.TrimSuffix(reason, ".")
+	switch {
+	case action == "ludock.update.succeeded":
+		return "Updated Ludock" + versions
+	case action == "ludock.update.already_current":
+		return "Updated Ludock: it already ran the newest image"
+	case action == "ludock.update.started":
+		return "Updating Ludock" + versions
+	case action == "ludock.update.restored":
+		return "Updated Ludock" + versions + ", then restored the data saved before it"
+	case outcome == "put_back":
+		return "Updated Ludock" + versions + ", put back: " + reason
+	case outcome == "interrupted":
+		return "Updated Ludock" + versions + ", stopped partway"
+	}
+	return "Updated Ludock" + versions + ", didn’t start: " + reason
+}
+
 var playerActionLabels = map[string]string{"kick": "Kicked", "ban": "Banned", "unban": "Unbanned",
 	"allow": "Added to the allowlist:", "disallow": "Removed from the allowlist:"}
 
@@ -403,6 +437,9 @@ func entryLabel(entry history.AuditEntry) string {
 	}
 	if from, _ := details["from"].(string); entry.Action == "server.taken-over" && from != "" {
 		return "Moved " + from + "’s backups, schedules, and sharing here"
+	}
+	if strings.HasPrefix(entry.Action, "ludock.update.") && details != nil {
+		return ludockUpdateLabel(entry.Action, details)
 	}
 	return AuditLabel(entry.Action)
 }

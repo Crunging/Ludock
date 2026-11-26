@@ -9,6 +9,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/notify"
+	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/update"
 )
 
@@ -20,6 +21,8 @@ type SettingsView struct {
 	Advanced          AdvancedSettings
 	// Ludock is the check of Ludock's own image, or nil when there is none.
 	Ludock *update.CheckStatus
+	// Offer is whether Ludock can update itself from here.
+	Offer selfupdate.Offer
 }
 
 type AdvancedSettings struct {
@@ -119,7 +122,7 @@ templ SettingsPage(page Page, s SettingsView) {
 				<h1 class="page__title">Settings</h1>
 			</div>
 			@settingsTabs("/settings")
-			@LudockNotice(s.Ludock)
+			@LudockNotice(s.Ludock, s.Offer)
 			<section class="settings-section settings-section--divided" aria-labelledby="connection-settings-title">
 				<h2 id="connection-settings-title" tabindex="-1">Server address</h2>
 				@ConnectionForm(s.Connection)
@@ -145,7 +148,7 @@ templ SettingsPage(page Page, s SettingsView) {
 						<section class="settings-group" aria-labelledby="image-update-settings-title">
 							<h3 id="image-update-settings-title" tabindex="-1">Image updates</h3>
 							@ImageUpdateSettingsForm(s.ImageUpdates)
-							@LudockCheck(s.Ludock)
+							@LudockCheck(s.Ludock, s.Offer)
 						</section>
 						<section class="settings-group" aria-labelledby="backup-storage-settings-title">
 							<h3 id="backup-storage-settings-title" tabindex="-1">Backup folder and limits</h3>
@@ -304,42 +307,121 @@ templ ImageUpdateSettingsForm(u ImageUpdateSettings) {
 
 // ImageUpdateSettingsSaved is the saved form and the Ludock check, which the
 // setting turns on or off with the server checks.
-templ ImageUpdateSettingsSaved(u ImageUpdateSettings, ludock *update.CheckStatus) {
+templ ImageUpdateSettingsSaved(u ImageUpdateSettings, ludock *update.CheckStatus, offer selfupdate.Offer) {
 	@ImageUpdateSettingsForm(u)
 	@Partial("#ludock-check", "outerHTML") {
-		@LudockCheck(ludock)
+		@LudockCheck(ludock, offer)
 	}
 	@Partial("#ludock-notice", "outerHTML") {
-		@LudockNotice(ludock)
+		@LudockNotice(ludock, offer)
 	}
 }
 
 // LudockCheckSaved is a fresh Ludock check and the notice above Settings.
-templ LudockCheckSaved(check *update.CheckStatus) {
-	@LudockCheck(check)
+templ LudockCheckSaved(check *update.CheckStatus, offer selfupdate.Offer) {
+	@LudockCheck(check, offer)
 	@Partial("#ludock-notice", "outerHTML") {
-		@LudockNotice(check)
+		@LudockNotice(check, offer)
 	}
 }
 
-// LudockNotice tops Settings while a newer Ludock is available.
-templ LudockNotice(check *update.CheckStatus) {
+// LudockNotice tops Settings while a newer Ludock is available, while it
+// updates, and with how the last update ended: a success until the next
+// check, a failure until it is dismissed. While it updates the page polls
+// it, and reloads once Ludock answers again after a restart.
+templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 	<div id="ludock-notice">
-		if check != nil && check.State == update.CheckAvailable {
-			<div class="alert alert--info" role="status">
+		if offer.Updating {
+			<div class="alert alert--info" role="status" data-await-restart hx-get="/fragments/settings/ludock-update" hx-trigger="every 3s" hx-target="#ludock-notice" hx-swap="outerHTML">
 				<div>
-					<p><strong>A newer Ludock is available.</strong> Ludock doesn’t update itself. Where you started it, in the folder with its compose.yaml, run:</p>
-					<pre><code>docker compose pull ludock{ "\n" }docker compose up -d ludock</code></pre>
+					<p><strong>Ludock is updating.</strong> It restarts on the new version while your game servers keep running. This page comes back by itself once it has, usually within a few minutes; downloading a large image can take longer.</p>
 				</div>
 			</div>
+		} else {
+			if failed := offer.Failed; failed != nil {
+				<div class="alert alert--error" role="alert">
+					<div>
+						<p><strong>{ ludockFailed(*failed) }</strong></p>
+						if failed.State == selfupdate.StateInterrupted {
+							if failed.OnLeftover && failed.OriginalGone {
+								// Removing it could orphan an anonymous volume that holds the data.
+								<p>This Ludock runs in the new container, still under its temporary name { failed.Leftover }. Give it Ludock’s name:</p>
+								<pre><code>docker rename { failed.Leftover } { failed.Name }</code></pre>
+							} else {
+								if failed.OnLeftover {
+									<p>This Ludock runs in the new container, still under its temporary name { failed.Leftover }. The commands below remove it and start Ludock again under its own name, on the new version; this page is away for a moment meanwhile.</p>
+								}
+								<p>In the folder with its compose.yaml, run:</p>
+								<pre><code>
+									docker compose pull ludock{ "\n" }
+									if failed.Leftover != "" {
+										docker rm -f { failed.Leftover }{ "\n" }
+									}
+									docker compose up -d ludock
+								</code></pre>
+							}
+							if failed.Copy {
+								<p class="muted">The copy of its data from before the update, { selfupdate.CopyName }, is beside its database.</p>
+							}
+						} else {
+							<p>Try again later. To see what goes wrong, update it from a terminal instead, in the folder with its compose.yaml, then read <code>docker compose logs ludock</code>:</p>
+							<pre><code>docker compose pull ludock{ "\n" }docker compose up -d ludock</code></pre>
+						}
+						<div class="inline-actions">
+							<button class="secondary-btn" type="button" hx-post="/settings/ludock-update/dismiss" hx-vals={ dismissValues(failed.ID) } hx-target="#ludock-notice" hx-swap="outerHTML" data-busy-label="Dismissing…">Dismiss</button>
+						</div>
+					</div>
+				</div>
+			} else if last := offer.Last; updatedSince(last, check) {
+				if last.State == selfupdate.StateCurrent {
+					@Alert("success", "Ludock already runs the newest image its tag points to.")
+				} else {
+					@Alert("success", ludockUpdated(*last))
+				}
+			}
+			if check != nil && check.State == update.CheckAvailable {
+				<div class="alert alert--info" role="status">
+					<div>
+						if offer.Available {
+							<p><strong>A newer Ludock is available.</strong></p>
+							<div class="inline-actions">
+								<button
+									class="primary-btn"
+									type="button"
+									hx-post="/settings/ludock-update"
+									hx-target="#ludock-notice"
+									hx-swap="outerHTML"
+									hx-confirm="Update Ludock?"
+									data-confirm-detail="Ludock downloads the new version and restarts on it. Your game servers keep running, and this page comes back by itself once it has, usually within a few minutes. If the new version doesn’t start properly, Ludock puts this one back, with its data as it was just before: a setting or sign-in changed in those last seconds is undone."
+									data-confirm-action="Update Ludock"
+									data-busy-label="Starting…"
+								>Update Ludock</button>
+							</div>
+						} else {
+							if offer.Unmounted {
+								<p><strong>A newer Ludock is available.</strong> { offer.Reason }</p>
+							} else {
+								<p><strong>A newer Ludock is available.</strong> Where you started it, in the folder with its compose.yaml, run:</p>
+								<pre><code>docker compose pull ludock{ "\n" }docker compose up -d ludock</code></pre>
+								if offer.Reason != "" {
+									<p class="muted">{ offer.Reason }</p>
+								}
+							}
+						}
+					</div>
+				</div>
+			}
 		}
 	</div>
 }
 
 // LudockCheck shows whether Ludock's own image tag points to a newer image.
-// Images Ludock can't compare show nothing.
-templ LudockCheck(check *update.CheckStatus) {
+// Images Ludock can't compare show nothing, unless pinned.
+templ LudockCheck(check *update.CheckStatus, offer selfupdate.Offer) {
 	<div class="image-check ludock-check" id="ludock-check">
+		if check == nil && offer.Pinned {
+			<p class="muted">{ offer.Reason }</p>
+		}
 		if check != nil && check.State != update.CheckUnknown && check.State != update.CheckPlatform {
 			<p class="muted">
 				switch check.State {

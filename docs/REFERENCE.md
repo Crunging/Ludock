@@ -480,8 +480,47 @@ Recreate it without `--rm` to manage it fully.
 
 ### Update Ludock
 
-Ludock doesn't update itself. **Settings** says at the top when a newer image
-is published. In the folder with its `compose.yaml`:
+**Settings** says at the top when a newer image is published for Ludock's
+tag, and an administrator can choose **Update Ludock**:
+
+1. Ludock downloads the new image, with the credentials server updates use
+   (`LUDOCK_DOCKER_CONFIG`). Meanwhile no new work starts.
+2. It writes a copy of its database beside it, `ludock.db.before-update`, and
+   starts a short-lived helper container from its own image, with only the
+   Docker socket.
+3. The helper creates the new container from Ludock's definition, under a
+   temporary name, stops Ludock, and starts the new one. Ludock doesn't
+   restart by itself meanwhile.
+4. Once the new version's health check passes, the helper removes the old
+   container and gives the new one Ludock's name and restart policy.
+
+Game servers keep running throughout, and the page comes back by itself on
+the new version. **Settings → System** shows the version, and **Activity →
+Everything** records who updated Ludock and how it ended.
+
+If the new container doesn't start, stops, reports unhealthy (as an image
+older than Ludock's data does), or isn't healthy within 3 minutes, the helper
+removes it and starts the old container again. That Ludock puts the copy of
+its data back before it opens it, so the old version never meets data the
+new one changed; a setting or sign-in changed after the copy is undone.
+**Settings** and **Needs attention** say why, until an administrator
+dismisses it.
+
+While it runs, Ludock accepts no new work, for example a restart someone
+asks for or one a schedule or automatic restart would queue; schedules try
+again once it is back.
+
+It isn't offered when Ludock keeps its data inside its own container rather
+than in a volume or mounted folder: **Settings** then says to move the data
+to one first, since recreating the container would lose it. Otherwise,
+**Settings** shows these commands with the reason when Ludock can't prove
+which container it runs in, was started with `--rm`, has its health check
+turned off or replaced by one of its own (only the image's fails when
+Ludock can't open its data), reaches Docker other than through a mounted
+socket (or one relabelled with `:Z`), has a host port Docker picks at each
+start, still has the copy an earlier update kept beside its database (move
+it somewhere safe first), or work is queued or running. In the folder with
+its `compose.yaml`:
 
 ```bash
 docker compose pull ludock
@@ -490,6 +529,18 @@ docker compose up -d ludock
 
 Its data and your servers stay as they are. Work Ludock is stopped in the
 middle of is recovered at the next start.
+
+If an update is cut off partway, for example by a reboot, Ludock may be left
+stopped, or the new container may be left under its temporary name
+(`ludock-ludock-update-…`). Run the two commands above; the Ludock that
+starts says the update didn't finish and what else to run, if anything: the
+`docker rm -f` command for a container left behind, or, when Ludock itself
+runs in the new container under its temporary name with the old one gone, a
+`docker rename` to give it Ludock's name. If the new version changed the data
+before it was cut off and the old version can't open it, the old version
+says so on its address and gives the two commands. The copy of the data from
+before the update stays beside the database until then. A Ludock put back
+sets its own restart policy back, and says so if Docker won't.
 
 `latest` follows every release. Each release is also published under its
 version, such as `1.2.3`, and moves the shorter tags `1.2` and `1`. To stay

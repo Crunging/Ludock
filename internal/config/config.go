@@ -5,6 +5,7 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
@@ -41,6 +42,8 @@ type Config struct {
 	// SelfContainer identifies Ludock's own container (LUDOCK_SELF_CONTAINER,
 	// else detected from its mounts, else HOSTNAME).
 	SelfContainer string
+	// MountID is the container's ID as its mounts show it, or "".
+	MountID string
 	// BackupRoots are approved backup destinations (LUDOCK_BACKUP_ROOTS,
 	// ':'-separated, default /backups; set it empty to turn backups off).
 	BackupRoots []string
@@ -57,6 +60,11 @@ type Config struct {
 	// DevCopyRoot is a folder treated as mounted at /backups-copy, for
 	// development against cmd/fakedocker (LUDOCK_DEV_COPY_ROOT).
 	DevCopyRoot string
+	// DevSelfProof lets Ludock outside a container prove the container it
+	// stands for by reading back a file in its data folder, for development
+	// against cmd/fakedocker (LUDOCK_DEV_SELF_PROOF=1). A real container's
+	// mounts name its ID instead; shared data proves nothing there.
+	DevSelfProof bool
 }
 
 const (
@@ -75,6 +83,10 @@ func (c Config) HealthURL() string {
 	}
 	return "http://" + net.JoinHostPort(host, port) + "/api/v1/health"
 }
+
+// DataDir is the data folder a LUDOCK_DATA_DIR value names, as Ludock reads
+// it at startup.
+func DataDir(raw string) string { return cmp.Or(strings.TrimSpace(raw), "data") }
 
 func value(name, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
@@ -126,7 +138,7 @@ var levels = []string{"error", "warn", "info", "debug"}
 func Load() (Config, error) {
 	c := Config{
 		Listen:         value("LUDOCK_LISTEN", DefaultListen),
-		DataDir:        value("LUDOCK_DATA_DIR", "data"),
+		DataDir:        DataDir(os.Getenv("LUDOCK_DATA_DIR")),
 		LogLevel:       strings.ToLower(value("LUDOCK_LOG_LEVEL", "")),
 		TrustedProxies: value("LUDOCK_TRUSTED_PROXIES", ""),
 		SetupCode:      value("LUDOCK_SETUP_CODE", ""),
@@ -135,14 +147,16 @@ func Load() (Config, error) {
 		DockerConfig:   value("LUDOCK_DOCKER_CONFIG", ""),
 		HelperImage:    value("LUDOCK_HELPER_IMAGE", ""),
 	}
+	if mounts, err := mountinfo.Read(); err == nil {
+		c.MountID = containerID(mounts)
+	}
 	if c.SelfContainer == "" {
 		c.SelfContainer = value("HOSTNAME", "")
-		if mounts, err := mountinfo.Read(); err == nil {
-			if id := containerID(mounts); id != "" {
-				c.SelfContainer = id
-			}
+		if c.MountID != "" {
+			c.SelfContainer = c.MountID
 		}
 	}
+	c.DevSelfProof = os.Getenv("LUDOCK_DEV_SELF_PROOF") == "1"
 	var problems []error
 	if host, port, err := net.SplitHostPort(c.Listen); err != nil || port == "" {
 		problems = append(problems, errors.New("LUDOCK_LISTEN must be host:port, for example :3000"))

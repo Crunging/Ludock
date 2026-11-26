@@ -416,6 +416,9 @@ var errConflict = apperr.New("OPERATION_CONFLICT", 409, "Something else is alrea
 // Enqueue saves an operation and wakes the runner. tx, when non-nil, makes
 // the insert part of the caller's transaction; the caller then calls Wake
 // after committing.
+// ErrLudockUpdating refuses new work while Ludock updates itself.
+var ErrLudockUpdating = apperr.New("LUDOCK_UPDATING", 409, "Ludock is updating itself. Try again in a minute, once it is back.")
+
 func (r *Runner) Enqueue(ctx context.Context, tx *sql.Tx, options EnqueueOptions) (*Job, error) {
 	if tx == nil {
 		var job *Job
@@ -451,6 +454,15 @@ func (r *Runner) Enqueue(ctx context.Context, tx *sql.Tx, options EnqueueOptions
 		if !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
+	}
+	// Work queued while Ludock updates itself would be forgotten by putting
+	// the old version back, which restores the data as it was before.
+	var updating bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM settings WHERE key = 'ludock.update' AND json_extract(value_json, '$.state') = 'updating')").Scan(&updating); err != nil {
+		return nil, err
+	}
+	if updating {
+		return nil, ErrLudockUpdating
 	}
 	var conflict string
 	err := tx.QueryRowContext(ctx, "SELECT id FROM operations WHERE server_id = ? AND status IN ('queued','running')", options.ServerID).Scan(&conflict)

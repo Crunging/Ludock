@@ -100,6 +100,14 @@ func (c *Container) Read(ctx context.Context) (Info, error) {
 	return clone(*known), nil
 }
 
+// Forget drops the remembered answer, after an update gave Ludock's name to
+// a new container.
+func (c *Container) Forget() {
+	c.mu.Lock()
+	c.known = nil
+	c.mu.Unlock()
+}
+
 func clone(info Info) Info {
 	info.Mounts = slices.Clone(info.Mounts)
 	return info

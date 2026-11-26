@@ -38,8 +38,14 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	e.mu.Lock()
 	e.Requests = append(e.Requests, r.Method+" "+r.URL.Path)
-	injected, hang := e.faultLocked(r.Method+" "+r.URL.Path), e.Hang
+	injected, hang, intercept := e.faultLocked(r.Method+" "+r.URL.Path), e.Hang, e.Intercept
 	e.mu.Unlock()
+	if intercept != nil {
+		if status := intercept(r); status != 0 {
+			fail(w, status)
+			return
+		}
+	}
 	if hang != nil && hang(r.Method+" "+r.URL.Path) {
 		io.Copy(io.Discard, r.Body)
 		<-r.Context().Done()
@@ -100,8 +106,13 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 			pulled = "sha256:" + strings.Repeat("1", 64)
 		}
 		e.images[reference] = pulled
+		repository, _, _ := strings.Cut(reference, "@")
+		if slash, colon := strings.LastIndex(repository, "/"), strings.LastIndex(repository, ":"); colon > slash {
+			repository = repository[:colon]
+		}
+		e.images[repository+"@"+ManifestDigest(pulled)] = pulled
 		e.mu.Unlock()
-		w.Write([]byte(`{"status":"Pulled"}` + "\n"))
+		w.Write([]byte(`{"status":"Pulled"}` + "\n" + `{"status":"Digest: ` + ManifestDigest(pulled) + `"}` + "\n"))
 	case container.MatchString(path):
 		parts := container.FindStringSubmatch(path)
 		e.containerRequest(w, r, parts[1], parts[2])
@@ -128,19 +139,32 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()
 		id, ok := e.images[reference]
 		// Every image ID a container reports exists.
-		if !ok && strings.HasPrefix(reference, "sha256:") {
+		if !ok && strings.HasPrefix(reference, "sha256:") && !e.manifestLocked(reference) {
 			id, ok = reference, true
 		}
 		config := e.imageConfigs[id]
 		if variant, ok := e.imageConfigs[id+" "+r.URL.Query().Get("platform")]; ok {
 			config = variant
 		}
-		repoDigests := e.repoDigestsLocked(id)
+		answer := map[string]any{"Id": id, "Config": config, "RepoDigests": e.repoDigestsLocked(id)}
+		if manifests, indexed := e.indexes[id]; indexed {
+			var listed []map[string]any
+			var want docker.Platform
+			json.Unmarshal([]byte(r.URL.Query().Get("platform")), &want)
+			for manifest, platform := range manifests {
+				listed = append(listed, map[string]any{"ID": manifest, "Kind": "image", "Available": true,
+					"ImageData": map[string]any{"Platform": platform}})
+				if platform == want {
+					answer["Id"] = manifest
+				}
+			}
+			answer["Manifests"] = listed
+		}
 		e.mu.Unlock()
 		if !ok {
 			fail(w, 404)
 		} else {
-			writeJSON(w, 200, map[string]any{"Id": id, "Config": config, "RepoDigests": repoDigests})
+			writeJSON(w, 200, answer)
 		}
 	case distribution.MatchString(path):
 		reference := distribution.FindStringSubmatch(path)[1]
