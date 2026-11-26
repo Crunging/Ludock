@@ -180,11 +180,11 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		"{aside}/world/level.dat": "the world as the game saved it later"}
 	restoreAlert := "mc: Ludock restarted during a restore. Its Activity says what the data was left as."
 	backupAlert := "mc: Ludock restarted during a backup, so there’s no new backup. Its Activity says more."
-	undone := "The restore was undone: the server’s data is as it was. Ludock started the server again."
+	undone := "The restore was undone: the server’s data is as it was. Ludock asked Docker to start the server, and it is running."
 	// Undoing a restore whose backup's data was in place keeps that data
 	// aside rather than removing it.
 	keptUndone := "The restore was undone: the server’s data is as it was. Anything Ludock moved out of the way of the server’s previous data " +
-		"went to the folder {aside} in its data. Ludock started the server again."
+		"went to the folder {aside} in its data. Ludock asked Docker to start the server, and it is running."
 	backupAside := map[string]string{"{aside}/": "", "{aside}/server.properties": "motd=as backed up\n", "{aside}/world/": "",
 		"{aside}/world/level.dat": "the world as backed up"}
 	itemAside := map[string]string{"{aside}/": "", "{aside}/world/": "", "{aside}/world/level.dat": "the world as backed up"}
@@ -215,7 +215,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		alerts  []string
 	}{
 		// Staging: only the stage folder changed, which is removed.
-		{name: "restore-staging", status: ops.Interrupted, guidance: "Nothing was restored: the server’s data is as it was. Ludock started the server again.",
+		{name: "restore-staging", status: ops.Interrupted, guidance: "Nothing was restored: the server’s data is as it was. Ludock asked Docker to start the server, and it is running.",
 			data: now, containers: []string{"/mc running unless-stopped 0000"}, alerts: []string{restoreAlert}},
 		// Moving the old data out, which had all moved: it is put back.
 		{name: "restore-moving-old", status: ops.Interrupted, guidance: undone, data: now,
@@ -237,7 +237,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		// Committed, its stage folder with the replaced data not yet removed:
 		// the restore stands.
 		{name: "restore-committed", status: ops.Succeeded,
-			guidance: "Ludock restarted while this ran, after the restore had finished: what it restored is in place. Ludock started the server again.",
+			guidance: "Ludock restarted while this ran, after the restore had finished: what it restored is in place. Ludock asked Docker to start the server, and it is running.",
 			data:     backedUp, containers: []string{"/mc running unless-stopped 0000"}},
 		// One folder's restore, the folder moved into the stage.
 		{name: "item-old-moved", status: ops.Interrupted, guidance: undone, data: now,
@@ -254,11 +254,11 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		{name: "undo-set-aside-kept", status: ops.Succeeded, guidance: undoFinished, pending: finishedUndo, data: merged(now, setAside), containers: []string{"/mc exited unless-stopped 0000"}},
 		// A backup written but not published: the partial archive goes.
 		{name: "backup-copying", status: ops.Interrupted,
-			guidance: "Ludock restarted before the backup finished, so there’s no new backup. Ludock started the server again.",
+			guidance: "Ludock restarted before the backup finished, so there’s no new backup. Ludock asked Docker to start the server, and it is running.",
 			data:     backedUp, containers: []string{"/mc running unless-stopped 0000"}, alerts: []string{backupAlert}},
 		// The stop sent and done, but not yet confirmed.
 		{name: "backup-stop-unconfirmed", status: ops.Interrupted,
-			guidance: "Ludock restarted before the backup finished, so there’s no new backup. Ludock started the server again.",
+			guidance: "Ludock restarted before the backup finished, so there’s no new backup. Ludock asked Docker to start the server, and it is running.",
 			data:     backedUp, containers: []string{"/mc running unless-stopped 0000"}, stopConfirmed: true, alerts: []string{backupAlert}},
 		// The backup recorded and the start sent: it isn't sent again.
 		{name: "backup-start-sent", status: ops.Succeeded, guidance: "Ludock restarted while this ran, after the backup had finished. The server was running again, so Ludock left it as it was.",
@@ -270,7 +270,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 			data: backedUp, containers: []string{"/mc running unless-stopped 0000"}, sameRun: true},
 		// A restart whose stop was sent and done but not confirmed: recovery
 		// confirms the stop and starts the server, as the restart would have.
-		{name: "restart-stop-unconfirmed", status: ops.Succeeded, guidance: "Ludock restarted while this ran. Ludock started the server again.", data: backedUp,
+		{name: "restart-stop-unconfirmed", status: ops.Succeeded, guidance: "Ludock restarted while this ran. Ludock asked Docker to start the server, and it is running.", data: backedUp,
 			containers: []string{"/mc running unless-stopped 0000"}, stopConfirmed: true},
 		// That restart's recovery killed in turn, its start saved and taken
 		// but not confirmed: it isn't sent again, and with only a request
@@ -281,7 +281,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		// A restart with a backup, its archive written but not published:
 		// the partial archive goes and the server runs again.
 		{name: "restart-backup-copying", status: ops.Interrupted,
-			guidance: "Ludock restarted before the backup finished, so there’s no new backup. Ludock started the server again.",
+			guidance: "Ludock restarted before the backup finished, so there’s no new backup. Ludock asked Docker to start the server, and it is running.",
 			data:     backedUp, containers: []string{"/mc running unless-stopped 0000"}, alerts: []string{backupAlert}},
 		// A restore that failed because the server was started elsewhere,
 		// with its new data in place, and the server stopped since: startup
@@ -310,7 +310,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		// The replacement created under its temporary name, its ID not yet
 		// saved: found by its name and label, removed.
 		{name: "update-created", status: ops.Interrupted,
-			guidance: "Ludock restarted during the update, so the update didn’t happen. Ludock started the server again.",
+			guidance: "Ludock restarted during the update, so the update didn’t happen. Ludock asked Docker to start the server, and it is running.",
 			data:     backedUp, containers: []string{"/mc running unless-stopped 0000"}},
 		// The replacement started but not yet verified: removed, and the
 		// original kept stopped.

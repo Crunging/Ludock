@@ -337,9 +337,11 @@ func settleStop(r *ops.Recovery) { r.StopSettled = true }
 // before Ludock restarted.
 const restartedAfter = "Ludock restarted while this ran, after "
 
-// What recovery found a server it had stopped as, for every operation.
+// What recovery found a server it had stopped as, for every operation. A
+// start whose answer was lost counts as sent once Docker shows a newer run,
+// which may be another manager's, so the start is worded as asked for.
 const (
-	serverStarted      = "Ludock started the server again."
+	serverStarted      = "Ludock asked Docker to start the server, and it is running."
 	serverRunningAgain = "The server was running again, so Ludock left it as it was."
 	serverStoppedAgain = "The server ran again and had stopped when Ludock checked it, so Ludock left it stopped."
 	serverRestarting   = "The server was started again, and its game keeps exiting, so Docker keeps restarting it."

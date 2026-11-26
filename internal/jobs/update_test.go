@@ -128,8 +128,8 @@ func TestUpdateRecoveryUndoesUncheckedReplacement(t *testing.T) {
 		stage    string
 		guidance string
 	}{
-		{"", "Ludock restarted during the update, so the update didn’t happen. Ludock started the server again."},
-		{swapCreating, "Ludock restarted during the update, so the update didn’t happen. Ludock started the server again."},
+		{"", "Ludock restarted during the update, so the update didn’t happen. Ludock asked Docker to start the server, and it is running."},
+		{swapCreating, "Ludock restarted during the update, so the update didn’t happen. Ludock asked Docker to start the server, and it is running."},
 		{swapStarting, "Ludock restarted while it checked the updated container, so the update was undone and the previous container kept. " +
 			"The server was left stopped, since the new version may already have run and changed the game data. Check the server, then start it."},
 	} {

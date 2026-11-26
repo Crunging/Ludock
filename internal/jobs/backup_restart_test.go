@@ -66,7 +66,7 @@ func TestBackupRestartInterruptedDuringBackup(t *testing.T) {
 				strings.Contains(guidance, "no new backup")
 			if c.complete {
 				status, message, alerts, outcome = ops.Succeeded, "", nil, "finished"
-				ok = guidance == "Ludock restarted while this ran, after the backup had finished. Ludock started the server again."
+				ok = guidance == "Ludock restarted while this ran, after the backup had finished. Ludock asked Docker to start the server, and it is running."
 			}
 			if recovered.Status != status || recovered.Error != message || !ok || !f.running() {
 				t.Fatalf("%+v", recovered)
