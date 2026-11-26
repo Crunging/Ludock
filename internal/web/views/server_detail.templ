@@ -182,11 +182,11 @@ templ detailBody(d ServerDetail) {
 				@SharingTab(d.Sharing)
 			default:
 				@OverviewLive(d)
-				if d.Admin && d.Availability != nil {
+				if d.Admin && d.Availability != nil && !d.Removed {
 					@AvailabilityForm(server.ID, d.Availability.Policy, monitor.RecoveryOffered(server.Container))
 				}
-				if d.Admin {
-					@RemoveServer(server, d.Removed)
+				if d.Admin && !d.Removed {
+					@RemoveServer(server)
 				}
 		}
 	</section>
@@ -256,12 +256,14 @@ templ DetailLive(d ServerDetail) {
 			</div>
 		}
 		if server.BindingStatus == "active" {
-			if guidance := StateGuidance(server.State); guidance != "" {
+			if guidance := StateGuidance(server.State, d.Row.CanStop); guidance != "" {
 				<p class="section-note" role="status">{ guidance }</p>
 			}
 			if server.AutoRemove {
 				<p class="section-note" id="deleted-on-stop">{ servers.AutoRemoveMessage }</p>
 			}
+		} else if d.Removed {
+			@Alert("info", RemovedNote)
 		} else {
 			<div class="alert alert--error" role="alert">{ BindingNote(string(server.BindingStatus)) } Controls come back once Docker has exactly one container for it.</div>
 		}
@@ -532,7 +534,9 @@ templ OverviewLive(d ServerDetail) {
 			}
 		</section>
 		@overviewDetails(d)
-		if d.Availability != nil {
+		// A removed server is no longer checked, so what monitoring last saved
+		// would never change.
+		if d.Availability != nil && !d.Removed {
 			@AvailabilityStatus(d)
 		}
 	</div>
@@ -1113,15 +1117,15 @@ func ActorLabel(actor *history.Actor) string {
 	return "Not recorded"
 }
 
-// RemoveServer takes a server out of Ludock (administrators only). removed:
-// it was taken out already, and is shown only for its backups.
-templ RemoveServer(server servers.View, removed bool) {
+// RemovedNote is on the page of a server kept only for its backups.
+const RemovedNote = "This server was removed from Ludock. Its backups stay here until you delete them on the Backups tab, and come back with it if you add its container again from the server list."
+
+// RemoveServer takes a server out of Ludock (administrators only).
+templ RemoveServer(server servers.View) {
 	<section class="stack-form remove-server" aria-labelledby="remove-server-title">
 		<h2 id="remove-server-title">Remove from Ludock</h2>
 		if server.Source == servers.SourceLabel {
 			<p class="muted">Its <code>ludock.enable: "true"</code> label keeps this server in Ludock. To take it out, set the label to <code>"false"</code> where the container is defined and recreate it.</p>
-		} else if removed {
-			<p class="muted">This server was removed from Ludock. Its backups stay here until you delete them, and come back with it if you add its container again from the server list.</p>
 		} else if server.BindingStatus == identity.StatusMissing && server.LatestBackup != nil {
 			<p class="muted">{ servers.RemoveKeepsBackups }</p>
 		} else if server.BindingStatus == identity.StatusMissing {

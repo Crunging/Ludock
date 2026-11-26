@@ -778,8 +778,9 @@ type UpdateView struct {
 	// NoData: the server has no data folders, so no backup can come first.
 	NoData bool
 	Blocked, Active      bool
-	// Gone: the server's container is missing, so there is nothing to update.
-	Gone                 bool
+	// Gone: the server's container is missing, so there is nothing to update;
+	// Removed: an administrator removed it from Ludock.
+	Gone, Removed        bool
 	Recreate             bool
 	Capability           *update.Capability
 	Error                string
@@ -806,7 +807,9 @@ templ UpdateTab(serverID string, recreate bool) {
 // restore's undo is blocked or unblocked.
 templ UpdatePanel(u UpdateView) {
 	<div id="update-panel" hx-get={ "/fragments/servers/" + u.ServerID + "/update" + map[bool]string{true: "?recreate=1"}[u.Recreate] } hx-trigger="operation-finished from:document" hx-swap="outerHTML">
-		if u.Gone {
+		if u.Removed {
+			<p role="status">This server was removed from Ludock, so it can’t be updated.</p>
+		} else if u.Gone {
 			<p role="status">Ludock can’t find this server in Docker, so it can’t be updated.</p>
 		} else if u.Capability == nil {
 			<div>

@@ -90,7 +90,7 @@ func adoptRestores(ctx context.Context, tx *sql.Tx, from *identity.Server, targe
 		return err == nil && state != nil && recovery.Fingerprint == target.Logical.BindingFingerprint && journalMatches(state.Roots, target)
 	}
 	refused := errTakeOver("A restore of " + from.DisplayName + " stopped partway, and only its old data folders can finish it. " +
-		"Bring back its old container and back it up once, which finishes the restore, then try again.")
+		"Bring back its old container and undo the restore from Needs attention, or back it up once, which also finishes it, then try again.")
 	// Recovery finishes a server's restores in turn, so one of the target's
 	// own that can't be finished there would hold back the moved ones.
 	for _, recovery := range theirs {

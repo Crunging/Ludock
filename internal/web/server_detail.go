@@ -59,6 +59,11 @@ func (s *Server) detail(r *http.Request, request *Request, id, tab string, withS
 	if admin {
 		d.Tabs = append(d.Tabs, views.DetailTab{ID: "update", Label: "Update"}, views.DetailTab{ID: "sharing", Label: "Sharing"})
 	}
+	// A server removed from Ludock stays missing, kept for its backups.
+	if admin && view.BindingStatus == identity.StatusMissing {
+		d.Removed, _ = s.App.Identity.Removed(ctx, view.ID)
+		d.Row.Removed = d.Removed
+	}
 	if view.BindingStatus == identity.StatusActive && (admin || can(view, authz.BackupsCreate)) {
 		d.UndoBlocked = s.undoBlocked(ctx, view.ID)
 		d.Row.CanBackup = d.Row.CanBackup && !d.UndoBlocked
@@ -221,12 +226,11 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 	if d.Operation == "" {
 		d.Operation = r.URL.Query().Get("operation")
 	}
-	if d.Admin && d.Row.Server.BindingStatus == identity.StatusMissing {
+	if d.Admin && d.Row.Server.BindingStatus == identity.StatusMissing && !d.Removed {
 		if all, err := s.App.Identity.List(r.Context(), ""); err == nil {
 			from, _ := s.App.Identity.Get(r.Context(), d.Row.Server.ID)
 			d.TakeOver = s.takeOverOffer(r.Context(), from, all)
 		}
-		d.Removed, _ = s.App.Identity.Removed(r.Context(), d.Row.Server.ID)
 	}
 	page := s.page(r, request, d.Row.Server.DisplayName)
 	page.Path = "/"

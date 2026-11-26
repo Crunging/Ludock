@@ -187,7 +187,7 @@ func TestRestoreRefusesOtherGamesAndServers(t *testing.T) {
 // needs the server is offered or accepted. Removing it from Ludock is
 // refused while it has backups, which nothing could reach once it left the
 // list; one an install removed before that stays on Settings until its
-// backups are gone.
+// backups are gone, and its page says it was removed.
 func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
@@ -278,6 +278,19 @@ func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 	}
 	if !strings.Contains(storage(), link) {
 		t.Fatal(storage())
+	}
+	// Opened from there, its page says once that it was removed, not that
+	// Docker can't find it, shows nothing of the monitoring that no longer
+	// checks it, and its Update tab says why it can't be updated.
+	for _, tab := range []string{"", "?tab=backups"} {
+		page := p.do("GET", "/servers/"+p.server+tab, p.admin, nil, nil).Body.String()
+		if !strings.Contains(page, "Removed from Ludock") || strings.Count(page, "This server was removed from Ludock.") != 1 ||
+			strings.Contains(page, "can’t find this server") || strings.Contains(page, "availability-title") {
+			t.Fatal(tab, page)
+		}
+	}
+	if panel := p.do("GET", "/fragments/servers/"+p.server+"/update", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String(); !strings.Contains(panel, "This server was removed from Ludock, so it can’t be updated.") {
+		t.Fatal(panel)
 	}
 	if response := p.action(backup+"/delete", p.admin, nil); response.StatusCode != http.StatusOK {
 		t.Fatal(response.StatusCode, readBody(t, response))

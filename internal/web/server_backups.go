@@ -451,7 +451,7 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 		NoData:  view.NoDataFolders,
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable || d.UndoBlocked, Gone: view.BindingStatus == identity.StatusMissing && !d.DiscoveryUnavailable,
 		Active: view.ActiveOperation != nil, Recreate: r.URL.Query().Get("recreate") == "1", Warn: warnOffer(view.Container), Running: view.Container.State == "running",
-		DeletedOnStop: view.Refuses(ops.KindUpdate)}
+		DeletedOnStop: view.Refuses(ops.KindUpdate), Removed: d.Removed}
 	resolved, _, err := s.resolveFresh(r, request, id, capability)
 	if err == nil {
 		result := s.App.Updates.Capability(r.Context(), resolved, func() bool {

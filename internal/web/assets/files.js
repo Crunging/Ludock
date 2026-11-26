@@ -318,7 +318,7 @@
     if (total === 1 && inflight) {
       return "Upload cancelled. “" + current + "” may have been written, and cancelling doesn’t undo it. Check the folder before trying again.";
     }
-    var message = "Upload cancelled. " + completed + " of " + total + " files are confirmed uploaded";
+    var message = "Upload cancelled. " + completed + " of " + total + (total === 1 ? " file is" : " files are") + " confirmed uploaded";
     if (inflight && inflight.length === 1) {
       message += ", and “" + label(inflight[0]) + "”, which was being sent, may have been written too.";
     } else if (inflight) {
@@ -379,7 +379,7 @@
         return false;
       }
       if (!maxUpload || item.file.size <= maxUpload) return true;
-      lines.push("Could not upload “" + label(item) + "”: File exceeds the upload size limit of " + page.getAttribute("data-max-upload-text"));
+      lines.push("Could not upload “" + label(item) + "”: File exceeds the upload size limit of " + page.getAttribute("data-max-upload-text") + ".");
       return false;
     });
     // run sends items in batches, numbering them in the status as the last

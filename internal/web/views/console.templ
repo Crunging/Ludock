@@ -23,6 +23,7 @@ type ConsoleView struct {
 	Placeholder   string
 	Quick         []games.QuickCommand
 	CanStart      bool
+	CanStop       bool
 }
 
 var modeLabels = map[string]string{"logs": "Logs", "game": "Console", "shell": "Shell"}
@@ -133,7 +134,7 @@ templ ConsolePage(page Page, c ConsoleView) {
 						}
 						Commands are never resent automatically.
 						if !c.Running {
-							if guidance := StateGuidance(c.State); guidance != "" {
+							if guidance := StateGuidance(c.State, c.CanStop); guidance != "" {
 								<p class="console-warning__guidance">{ guidance } Reload once it’s running.</p>
 							}
 							<div class="console-warning__actions">
@@ -141,7 +142,7 @@ templ ConsolePage(page Page, c ConsoleView) {
 									<a class="console-retry" href={ templ.SafeURL("/console/" + c.ServerID + "?mode=logs") }>View logs</a>
 								}
 								<a class="text-link" href={ templ.SafeURL("/servers/" + c.ServerID) }>
-									if c.CanStart {
+									if c.CanStart || c.CanStop {
 										Open server controls
 									} else {
 										Open server details

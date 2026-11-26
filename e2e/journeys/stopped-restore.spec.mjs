@@ -1,6 +1,6 @@
 import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { test, expect, asAdmin, openServer, serverRow, expectOperationSucceeded, fake } from "./fixtures.mjs";
+import { test, expect, asAdmin, openServer, serverRow, expectOperationSucceeded, fake, createUser, shareServer, signIn } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -9,12 +9,13 @@ asAdmin();
 // the server's data folder points elsewhere, the undo is refused and says
 // how to get out, and no page offers a backup or an undo that would be
 // refused. The game, finding its folder emptied, keeps exiting and
-// being restarted by Docker: its page says so and offers Stop. Needs
+// being restarted by Docker: its page says so and offers Stop, and tells
+// someone who can only see it what is happening, without steps. Needs
 // attention offers to undo the restore, which stops the server without
 // warning anyone, puts the data back, keeps what the game wrote meanwhile,
 // and starts the server again. Stop works on a server that keeps restarting,
 // even caught in one of the loop's brief runs.
-test("undoing a restore that was stopped partway", async ({ page, ownServer: server }) => {
+test("undoing a restore that was stopped partway", async ({ page, session, ownServer: server }) => {
   const marker = join(server.data, "stopped-restore.txt");
   writeFileSync(marker, "from the backup");
   await openServer(page, server.name);
@@ -90,6 +91,16 @@ test("undoing a restore that was stopped partway", async ({ page, ownServer: ser
   await expect(page.locator("#detail-live")).toContainText("The game keeps stopping and Docker keeps starting it again.");
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeEnabled();
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Restart" })).toHaveCount(0);
+  // Someone who can only see it is told what is happening, without steps
+  // they can't take.
+  const watcher = "watcher-" + server.container;
+  await createUser(page, watcher, "watcher password one");
+  await shareServer(page, server.name, watcher, "Can see it");
+  const member = await session({ storageState: { cookies: [], origins: [] } });
+  await signIn(member, watcher, "watcher password one");
+  await openServer(member, server.name);
+  await expect(member.locator("#detail-live")).toContainText("The game keeps stopping and Docker keeps starting it again.");
+  await expect(member.locator("#detail-live")).not.toContainText("Stop it, check its logs");
 
   await page.goto("/");
   await expect(item).toContainText(`The restore of ${server.name} was stopped partway. Its previous data is safe but not in place: undo the restore to put it back.`);
