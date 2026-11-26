@@ -66,7 +66,7 @@ func state(value, health string) map[string]servers.Container {
 
 // An outage shows on pages once its grace ends, before the next tick alerts.
 // A server that recovers in between raises no alert, but pages still have to
-// hear that the outage is gone.
+// hear that the outage is gone, and that the time it began was learned.
 func TestClearedOutageUpdatesPagesWithoutAnAlert(t *testing.T) {
 	s, events, server := setup(t)
 	var changes []string
@@ -82,12 +82,23 @@ func TestClearedOutageUpdatesPagesWithoutAnAlert(t *testing.T) {
 	if len(events.events) != 0 || len(changes) != 1 || changes[0] != server.ID {
 		t.Fatal(events.events, changes)
 	}
+	// An alerted outage whose stop time Docker reports only later, as after
+	// Ludock restarts, tells pages so.
+	s.Check(ctx, state("exited", ""), 100_000)
+	s.Check(ctx, state("exited", ""), 161_000)
+	before := len(changes)
+	s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "exited", DownSince: 90_000}}, 170_000)
+	if found, _ := problem(s, server.ID, 170_000); found == nil || found.Since != 90_000 || len(changes) != before+1 {
+		t.Fatal(found, changes)
+	}
 }
 
 // An outage alerts once after its grace and once when it ends. A policy saved
 // during it that keeps the server watched keeps it, timed from its start;
 // turning watching off, or pausing it for maintenance, ends it, so it is
-// alerted again once watched.
+// alerted again once watched. A server that stopped long before Ludock first
+// looked shows as down since Docker's time for its stop, but waits and
+// alerts from when Ludock looked.
 func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 	const down, back = "Minecraft: the server is down.", "Minecraft: the server is back up."
 	for _, c := range []struct {
@@ -98,8 +109,11 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 		savedAt, quiet int64
 		want           []string
 		start          int64
+		// stopped is when Docker says the container stopped, 0 for unknown.
+		stopped int64
 	}{
 		{name: "no change", want: []string{down, back}, start: 1000},
+		{name: "stopped long before Ludock looked", stopped: 100, want: []string{down, back}, start: 1000},
 		{name: "disk threshold after the alert", saved: []Policy{testPolicy(func(p *Policy) { p.DiskPercent = 80 })}, savedAt: 61_000,
 			want: []string{down, back}, start: 1000},
 		{name: "longer grace after the alert", saved: []Policy{testPolicy(func(p *Policy) { p.GraceSeconds = 600 })}, savedAt: 61_000,
@@ -113,8 +127,9 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, events, server, configure := setupWith(t, nil)
+			exited := map[string]servers.Container{"mc": {ID: "mc", State: "exited", DownSince: c.stopped}}
 			for _, at := range []int64{1000, 30_000, 61_000, 62_000, 130_000} {
-				s.Check(ctx, state("exited", ""), at)
+				s.Check(ctx, exited, at)
 				if found, _ := problem(s, server.ID, at); at <= cmp.Or(c.quiet, 30_000) && (found != nil || len(events.events) != 0) {
 					t.Fatal("outage before grace:", found, events.events)
 				}
@@ -124,8 +139,12 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 					}
 				}
 			}
-			if found, _ := problem(s, server.ID, 130_000); found == nil || found.State != "exited" || found.OutageStartedAt != c.start {
+			if found, _ := problem(s, server.ID, 130_000); found == nil || found.State != "exited" || found.OutageStartedAt != c.start ||
+				found.Since != cmp.Or(c.stopped, c.start) {
 				t.Fatal(found)
+			}
+			if shown, _ := s.Get(ctx, server.ID); shown.State.Since != cmp.Or(c.stopped, c.start) {
+				t.Fatal("page shows down since", shown.State.Since)
 			}
 			s.Check(ctx, state("running", "starting"), 135_000)
 			s.Check(ctx, state("running", ""), 140_000)
@@ -450,7 +469,8 @@ func problem(s *Service, serverID string, now int64) (*Problem, error) {
 // A game that keeps exiting under its restart policy shows restarting, with
 // runs too short for anyone to join between restarts. That is one outage,
 // timed from the first check that sees it, even on a server stopped through
-// Ludock before, and alerted once its grace ends even during such a run: a
+// Ludock before, though shown as down since the loop's first exit discovery
+// saw, and alerted once its grace ends even during such a run: a
 // run counts as the server back only once the game answers or it has stayed
 // up for the grace period, or an answer recorded in it. A stop through Ludock
 // after the alert keeps the outage owed its recovery alert, sent once the
@@ -462,14 +482,17 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 		s, events, server := setup(t)
 		game := GameWaiting
 		s.Game = func(string, servers.Container) GameAnswer { return game }
+		// Discovery reports the loop's first exit it saw, at 900, for its
+		// restarts and its runs alike.
 		runSince := func(started int64) map[string]servers.Container {
-			return map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: started, RestartCount: 3}}
+			return map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: started, RestartCount: 3, DownSince: 900}}
 		}
+		restarting := map[string]servers.Container{"mc": {ID: "mc", State: "restarting", DownSince: 900}}
 		if stoppedFirst {
 			s.SetIntentionalStop(ctx, server.ID, true)
 			s.Check(ctx, state("exited", ""), 500)
 		}
-		s.Check(ctx, state("restarting", ""), 1000)
+		s.Check(ctx, restarting, 1000)
 		s.Check(ctx, runSince(58_000), 61_000)
 		if !slices.Equal(events.events, []string{down}) {
 			t.Fatal(stoppedFirst, events.events)
@@ -481,9 +504,10 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 			t.Fatal("Docker unreachable during a crash loop:", found)
 		}
 		s.Check(ctx, runSince(78_000), 88_000)
-		s.Check(ctx, state("restarting", ""), 90_000)
-		s.Check(ctx, state("restarting", ""), 151_000)
-		if found, _ := problem(s, server.ID, 151_000); found == nil || found.State != "restarting" || found.OutageStartedAt != 1000 {
+		s.Check(ctx, restarting, 90_000)
+		s.Check(ctx, restarting, 151_000)
+		if found, _ := problem(s, server.ID, 151_000); found == nil || found.State != "restarting" || found.OutageStartedAt != 1000 ||
+			found.Since != 900 {
 			t.Fatal(found)
 		}
 		s.Check(ctx, runSince(155_000), 160_000)
@@ -491,6 +515,15 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 		game = GameUnknown
 		s.LastAnswer = func(string, servers.Container) int64 { return 162_000 }
 		s.Check(ctx, runSince(155_000), 165_000)
+		// The same run, no longer the loop's, later fails its health check:
+		// that outage began when Ludock saw it.
+		unhealthy := runSince(155_000)
+		unhealthy["mc"] = servers.Container{ID: "mc", State: "running", Health: "unhealthy", StateSince: 155_000, RestartCount: 3, DownSince: 900}
+		s.Check(ctx, unhealthy, 170_000)
+		if shown, _ := s.Get(ctx, server.ID); shown.State.Since != 170_000 {
+			t.Fatal("an outage after the loop shown since", shown.State.Since)
+		}
+		s.Check(ctx, runSince(155_000), 175_000)
 		s.LastAnswer = nil
 		if !slices.Equal(events.events, []string{down, back}) {
 			t.Fatal(events.events)
@@ -517,6 +550,36 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 		}
 		s.Check(ctx, startedByHand, 760_000)
 		if !slices.Equal(events.events, []string{down, back, down, back, down, back}) {
+			t.Fatal(events.events)
+		}
+		// Another loop is dated from its first exit, even once one of its
+		// runs outlives the grace period while failing its health check, or
+		// its restart policy gives up; a crash just after it recovers that
+		// discovery still counts as the loop's is not, but the recovered run's
+		// own exit, however soon, is.
+		since := func(want int64) {
+			t.Helper()
+			if shown, _ := s.Get(ctx, server.ID); shown.State.Since != want {
+				t.Fatal("shown since", shown.State.Since, "want", want)
+			}
+		}
+		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "restarting", DownSince: 790_000}}, 800_000)
+		since(790_000)
+		failing := map[string]servers.Container{"mc": {ID: "mc", State: "running", Health: "unhealthy", StateSince: 802_000, RestartCount: 1, DownSince: 790_000}}
+		s.Check(ctx, failing, 805_000)
+		failing["mc"] = servers.Container{ID: "mc", State: "running", Health: "unhealthy", StateSince: 802_000, RestartCount: 1}
+		s.Check(ctx, failing, 900_000)
+		since(790_000)
+		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "exited", DownSince: 902_500}}, 903_000)
+		since(790_000)
+		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: 904_000}}, 905_000)
+		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "restarting", DownSince: 790_000}}, 910_000)
+		since(910_000)
+		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: 912_000}}, 975_000)
+		s.Check(ctx, nil, 978_000)
+		s.Check(ctx, map[string]servers.Container{"mc": {ID: "mc", State: "exited", DownSince: 974_000}}, 980_000)
+		since(974_000)
+		if !slices.Equal(events.events, []string{down, back, down, back, down, back, down, back}) {
 			t.Fatal(events.events)
 		}
 	}

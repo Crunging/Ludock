@@ -552,7 +552,10 @@ it off, change its levels, or **Pause alerts for maintenance**.
 | Disk nearly full | A data folder's disk reaches 90% full |
 | Memory near its limit | A container with a memory limit stays at 90% of it for 5 minutes |
 
-Each alert is sent once, with another when it recovers. A server that stopped
+Each alert is sent once, with another when it recovers. **Outage since** is
+when Docker says the server stopped, or the first exit Ludock saw of a crash
+loop, even if Ludock wasn't watching when the server stopped; the wait before
+alerting still counts from when Ludock noticed. A server that stopped
 by itself shows in **Needs attention** with **Start**, which is also the
 highlighted button on a stopped server's row and page. Stops and work started
 through Ludock don't alert, and a server that was already stopped when Ludock

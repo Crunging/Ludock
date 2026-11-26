@@ -1,6 +1,7 @@
 package views
 
 import (
+	"cmp"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -604,9 +605,10 @@ func hasTab(d ServerDetail, id string) bool {
 
 // availability describes monitoring for the status block.
 type availability struct {
-	Status      string
-	OutageSince int64
-	Suppressed  bool
+	Status string
+	// OutageSince times the wait before alerting; Since is shown.
+	OutageSince, Since int64
+	Suppressed         bool
 }
 
 func describeAvailability(a *monitor.Availability, paused bool, now int64) availability {
@@ -615,7 +617,7 @@ func describeAvailability(a *monitor.Availability, paused bool, now int64) avail
 	monitoring := policy.Enabled && !policy.Maintenance && !paused && !state.IntentionallyStopped && !suppressed
 	result := availability{Status: "No outage detected.", Suppressed: suppressed && policy.Enabled && !policy.Maintenance && !paused && !state.IntentionallyStopped}
 	if monitoring {
-		result.OutageSince = state.OutageStartedAt
+		result.OutageSince, result.Since = state.OutageStartedAt, cmp.Or(state.Since, state.OutageStartedAt)
 	}
 	switch {
 	case !policy.Enabled:
@@ -661,7 +663,7 @@ templ AvailabilityStatus(d ServerDetail) {
 			<dl class="metadata-list">
 				if described.OutageSince != 0 {
 					<dt>Outage since</dt>
-					<dd>@Time(described.OutageSince, "", "")</dd>
+					<dd>@Time(described.Since, "", "")</dd>
 				}
 				// Monitoring's last check can lag Docker, so the server shows as
 				// discovery sees it now; monitoring adds only a game not answering.

@@ -30,7 +30,8 @@ type Item struct {
 	// binding
 	BindingStatus identity.Status
 	// availability
-	State           string
+	State string
+	// OutageStartedAt is when the outage began as Docker reports it.
 	OutageStartedAt int64
 	// CanStart: the server is stopped and the viewer may start it.
 	CanStart bool
@@ -126,7 +127,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		}
 		if problem := problems[server.ID]; problem != nil {
 			item := base
-			item.ID, item.Kind, item.State, item.OutageStartedAt = "availability:"+server.ID, "availability", problem.State, problem.OutageStartedAt
+			item.ID, item.Kind, item.State, item.OutageStartedAt = "availability:"+server.ID, "availability", problem.State, problem.Since
 			item.CanStart = server.Status == identity.StatusActive && slices.Contains(permissions, authz.ServerStart) &&
 				(problem.State == "exited" || problem.State == "created")
 			result.Items = append(result.Items, item)

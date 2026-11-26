@@ -66,10 +66,14 @@ type Container struct {
 	// by hand.
 	RestartCount int
 	// exited is when a restarting container's game last exited, or 0.
-	exited   int64
-	Exit     *Exit
-	GameType string
-	GameName string
+	exited int64
+	// DownSince is when Docker says the game stopped: a stopped container's
+	// exit, or the first exit Ludock saw of a crash loop it is still in; 0
+	// when unknown.
+	DownSince int64
+	Exit      *Exit
+	GameType  string
+	GameName  string
 	// AddressLabel is the owner's ludock.address, which replaces port
 	// detection when valid.
 	AddressLabel *games.Address
@@ -207,8 +211,9 @@ type Observer struct {
 	samples   map[string]*statsSample
 
 	// restarting is when each container seen restarting last exited (Unix
-	// ms, Docker's clock), until it is seen stopped.
-	restarting sync.Map
+	// ms, Docker's clock), and loops when that loop's first exit seen was,
+	// until it is seen stopped.
+	restarting, loops sync.Map
 }
 
 // restartEvidence is how soon after a restarting container's exit a run
@@ -218,16 +223,37 @@ const restartEvidence = 2 * time.Minute
 // note remembers when a container seen restarting last exited, until it is
 // seen stopped.
 func (o *Observer) note(observed *Observed) {
-	switch observed.Container.State {
+	container := &observed.Container
+	switch container.State {
 	case "restarting":
-		exited := observed.Container.exited
+		exited := container.exited
 		if exited == 0 {
 			exited = o.now().UnixMilli()
 		}
-		o.restarting.Store(observed.Container.ID, exited)
+		// An exit long after the last one seen begins another loop, dated
+		// only by Docker's own exit time.
+		if last, ok := o.restarting.Load(container.ID); !ok || exited-last.(int64) > restartEvidence.Milliseconds() {
+			o.loops.Delete(container.ID)
+		}
+		if _, dated := o.loops.Load(container.ID); !dated && container.exited != 0 {
+			o.loops.Store(container.ID, container.exited)
+		}
+		o.restarting.Store(container.ID, exited)
+		container.DownSince = o.loopSince(container.ID)
+	case "running":
+		if container.RestartCount > 0 && o.sawRestarting(container.ID, container.StateSince) {
+			container.DownSince = o.loopSince(container.ID)
+		}
 	case "exited", "created", "dead":
-		o.restarting.Delete(observed.Container.ID)
+		o.restarting.Delete(container.ID)
+		o.loops.Delete(container.ID)
 	}
+}
+
+func (o *Observer) loopSince(id string) int64 {
+	first, _ := o.loops.Load(id)
+	since, _ := first.(int64)
+	return since
 }
 
 // sawRestarting reports a run that began soon after the exit Ludock saw its
@@ -591,6 +617,7 @@ func toContainer(info *docker.ContainerInspect, own self.Info) (*Container, erro
 		container.exited = dockerTime(info.State.FinishedAt)
 	case "exited", "dead":
 		container.StateSince = dockerTime(info.State.FinishedAt)
+		container.DownSince = container.StateSince
 		container.Exit = &Exit{Code: info.State.ExitCode, OOMKilled: info.State.OOMKilled, Started: dockerTime(info.State.StartedAt)}
 	}
 	// Host addresses stay internal; only ports are shown.

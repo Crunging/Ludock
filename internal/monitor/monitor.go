@@ -52,7 +52,11 @@ func DefaultPolicy() Policy {
 }
 
 type State struct {
-	OutageStartedAt      int64 // 0 when none
+	// OutageStartedAt is when Ludock first saw the outage, which times its
+	// wait and keys its alerts; 0 when none.
+	OutageStartedAt int64
+	// Since is when the outage began as Docker reports it, for display.
+	Since                int64
 	Notified             bool
 	SuppressedUntil      int64
 	IntentionallyStopped bool
@@ -102,6 +106,29 @@ type Service struct {
 	// announced is, for each server, the end of the latest wait for a check
 	// that pages are told of.
 	announced map[string]int64
+	// down is, for each server, when its game stopped as the latest check
+	// that reached Docker saw it, the earliest while its outage stays open,
+	// 0 when unknown; ended, when the run that ended its latest outage, as
+	// this process saw, began.
+	down, ended map[string]int64
+}
+
+// shownSince is when an outage began as Docker reports it: the game's stop
+// the latest check saw, when that is earlier than when Ludock first saw the
+// outage, and after the previous outage ended. A silent game, or Docker out
+// of reach, has no such time.
+func (s *Service) shownSince(serverID string, r *row) int64 {
+	noticed := r.outage.Int64
+	if !r.outage.Valid || r.lastState.String == NotAnswering || r.lastState.String == DockerUnavailable {
+		return noticed
+	}
+	s.lookMu.Lock()
+	down, ended := s.down[serverID], s.ended[serverID]
+	s.lookMu.Unlock()
+	if down > ended && down < noticed {
+		return down
+	}
+	return noticed
 }
 
 // answerSaveInterval is how often a game that keeps answering has that
@@ -282,12 +309,22 @@ func (s *Service) active(ctx context.Context) (map[string]bool, error) {
 }
 
 func (s *Service) Get(ctx context.Context, serverID string) (*Availability, error) {
-	return availabilityOf(s.row(ctx, serverID))
+	return s.availabilityOf(serverID)(s.row(ctx, serverID))
 }
 
 // GetIn is Get through tx.
 func (s *Service) GetIn(ctx context.Context, tx *sql.Tx, serverID string) (*Availability, error) {
-	return availabilityOf(rowIn(ctx, tx, serverID))
+	return s.availabilityOf(serverID)(rowIn(ctx, tx, serverID))
+}
+
+func (s *Service) availabilityOf(serverID string) func(*row, error) (*Availability, error) {
+	return func(r *row, err error) (*Availability, error) {
+		availability, err := availabilityOf(r, err)
+		if err == nil && r != nil {
+			availability.State.Since = s.shownSince(serverID, r)
+		}
+		return availability, err
+	}
 }
 
 func availabilityOf(r *row, err error) (*Availability, error) {
@@ -423,6 +460,8 @@ func (s *Service) Monitored(ctx context.Context) (map[string]bool, error) {
 type Problem struct {
 	State           string
 	OutageStartedAt int64
+	// Since is State.Since.
+	Since int64
 }
 
 // unchecked is how long after a pause ends an outage kept across it stays
@@ -468,7 +507,7 @@ func (s *Service) Problems(ctx context.Context, now int64) (map[string]*Problem,
 		if last == "" {
 			last = "unavailable"
 		}
-		problems[serverID] = &Problem{State: last, OutageStartedAt: r.outage.Int64}
+		problems[serverID] = &Problem{State: last, OutageStartedAt: r.outage.Int64, Since: s.shownSince(serverID, r)}
 	}
 	return problems, nil
 }
@@ -549,7 +588,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 	s.since.CompareAndSwap(0, now)
 	since := s.since.Load()
 	s.lookMu.Lock()
-	previous := maps.Clone(s.looked)
+	previous, previousDown, ended := maps.Clone(s.looked), maps.Clone(s.down), maps.Clone(s.ended)
 	s.lookMu.Unlock()
 	// judged are the servers this check doesn't skip; shown, those with an
 	// outage kept across a pause, which pages show again once it is saved.
@@ -579,6 +618,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			return err
 		}
 	}
+	downs := map[string]int64{}
 	for _, server := range logical {
 		r := rows[server.ID]
 		if r == nil {
@@ -587,6 +627,22 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		policy, err := ParsePolicy([]byte(r.policy))
 		if err != nil {
 			continue
+		}
+		if container, found := current[server.ContainerID]; !unavailable {
+			// A run dates an outage from the loop it was part of only while it
+			// still is one of the loop's.
+			if !found || server.ContainerID == "" || server.Status != identity.StatusActive ||
+				(container.State == "running" && container.DownSince != 0 && !earlyRun(container, s.answered(server.ID, container), policy.GraceSeconds, now)) {
+				container.DownSince = 0
+			}
+			// The earliest stop since the latest recovery's run began.
+			if container.DownSince <= ended[server.ID] {
+				container.DownSince = 0
+			}
+			if kept := previousDown[server.ID]; r.outage.Valid && kept > ended[server.ID] && (container.DownSince == 0 || kept < container.DownSince) {
+				container.DownSince = kept
+			}
+			downs[server.ID] = container.DownSince
 		}
 		container, found := current[server.ContainerID]
 		running := server.Status == identity.StatusActive && found && server.ContainerID != "" && container.State == "running"
@@ -607,7 +663,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			}
 			up = up && !(r.lastState.String == "restarting" && earlyRun(container, s.answered(server.ID, container), policy.GraceSeconds, now))
 			if up {
-				if changed, err := s.recovered(ctx, server, r, now); err != nil {
+				if changed, err := s.recovered(ctx, server, container, r, now); err != nil {
 					log.Warn("Could not save a server's availability; it will be checked again")
 				} else if changed {
 					s.changed(server.ID)
@@ -683,7 +739,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			if !r.outage.Valid && r.notified == 0 && r.intentional == 0 && r.lastState.String == "running" {
 				continue
 			}
-			changed, err := s.recovered(ctx, server, r, now)
+			changed, err := s.recovered(ctx, server, container, r, now)
 			if err != nil {
 				log.Warn("Could not save a server's availability; it will be checked again")
 				continue
@@ -764,6 +820,16 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 	for _, serverID := range judged {
 		s.looked[serverID] = now
 	}
+	if s.down == nil {
+		s.down = map[string]int64{}
+	}
+	// Pages hear when the time an outage they show began is learned.
+	for serverID, down := range downs {
+		if r := rows[serverID]; down != s.down[serverID] && r != nil && r.outage.Valid {
+			shown = append(shown, serverID)
+		}
+	}
+	maps.Copy(s.down, downs)
 	s.lookMu.Unlock()
 	for _, serverID := range shown {
 		s.changed(serverID)
@@ -849,12 +915,23 @@ func (s *Service) transitionIf(ctx context.Context, serverID string, r *row, ale
 const whileIdle = " AND NOT EXISTS(SELECT 1 FROM operations WHERE operations.server_id=availability.server_id AND operations.status IN ('queued','running'))"
 
 // recovered ends an outage, with its recovery alert if it was alerted.
-func (s *Service) recovered(ctx context.Context, server identity.Server, r *row, now int64) (bool, error) {
+func (s *Service) recovered(ctx context.Context, server identity.Server, container servers.Container, r *row, now int64) (bool, error) {
 	var back []alert
 	if r.notified == 1 {
 		back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), server.DisplayName + ": the server is back up."}}
 	}
-	return s.transitionIf(ctx, server.ID, r, back, whileIdle, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
+	changed, err := s.transitionIf(ctx, server.ID, r, back, whileIdle, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
+	if changed {
+		s.lookMu.Lock()
+		if s.ended == nil {
+			s.ended = map[string]int64{}
+		}
+		// Stop times from before the run that recovered are an earlier
+		// outage's.
+		s.ended[server.ID] = container.StateSince
+		s.lookMu.Unlock()
+	}
+	return changed, err
 }
 
 // asRead matches a row whose outage, alert, pause and stop are still as r
