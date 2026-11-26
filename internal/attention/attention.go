@@ -54,6 +54,8 @@ type Item struct {
 	// Undone: a restore that ended without finishing had moved live data,
 	// and its undo put all of the server's previous data back.
 	Undone bool
+	// StartedAt is when the work began, which Activity dates it by.
+	StartedAt int64
 	// UndoBlocked: a restore that stopped partway can't be undone until the
 	// server's data folders and game are back as it found them.
 	UndoBlocked bool
@@ -195,7 +197,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		// so JSON is read only under CASE.
 		forced := `COALESCE(CASE WHEN json_valid(result_json) THEN json_extract(result_json,'` + ops.PathForceStopped + `') = 1 END, 0)`
 		needsAdministrator := `COALESCE(CASE WHEN json_valid(result_json) THEN json_extract(result_json,'` + ops.PathNeedsAdministrator + `') = 1 END, 0)`
-		rows, err := s.DB.QueryContext(ctx, `SELECT id,kind,status,updated_at,actor_id=?,`+forced+`,
+		rows, err := s.DB.QueryContext(ctx, `SELECT id,kind,status,updated_at,created_at,actor_id=?,`+forced+`,
       kind='restore' AND COALESCE(CASE WHEN json_valid(recovery_json) THEN json_extract(recovery_json,'$.restore.status') = 'rolled_back' AND
         json_extract(recovery_json,'$.restore.putBack') = 1 END, 0)
       FROM (SELECT id,kind,status,updated_at,actor_id,result_json,recovery_json,created_at FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100) o
@@ -213,7 +215,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		}
 		for rows.Next() {
 			item := base
-			if err := rows.Scan(&item.OperationID, &item.OperationKind, &item.Status, &item.UpdatedAt, &item.Recovery, &item.ForceStopped, &item.Undone); err != nil {
+			if err := rows.Scan(&item.OperationID, &item.OperationKind, &item.Status, &item.UpdatedAt, &item.StartedAt, &item.Recovery, &item.ForceStopped, &item.Undone); err != nil {
 				rows.Close()
 				return nil, err
 			}

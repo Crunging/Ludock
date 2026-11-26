@@ -690,7 +690,7 @@ templ attentionDetail(item attention.Item) {
 			<span class="muted">Last tried @Time(item.Since, "", "")<span>.</span> { item.Reason }</span>
 		case "operation":
 			<span class="muted">
-				@Time(item.UpdatedAt, "", "")
+				Started @Time(item.StartedAt, "", "")
 				if item.Recovery {
 					<span>· By { RecoveryActorLabel }</span>
 				}

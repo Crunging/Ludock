@@ -122,10 +122,12 @@ templ backupsTabBody(b BackupsView) {
 	if failed := b.LastFailed; failed != nil {
 		<p class="section-note backup-last-failed" id="backup-last-failed">
 			@Pip("failed")
+			// Dated by when it started, as Activity dates it: an interrupted
+			// one was marked so only when Ludock started again.
 			if failed.Status == ops.Interrupted {
-				The last backup was interrupted @Time(failed.UpdatedAt, "", "")<span>.</span>
+				The last backup, started @Time(failed.CreatedAt, "", ""), was interrupted.
 			} else {
-				The last backup failed @Time(failed.UpdatedAt, "", "")<span>.</span>
+				The last backup, started @Time(failed.CreatedAt, "", ""), failed.
 			}
 			<a class="text-link" href={ templ.SafeURL("/servers/" + b.ServerID + "?tab=activity&operation=" + failed.ID) }>See what happened</a>
 		</p>

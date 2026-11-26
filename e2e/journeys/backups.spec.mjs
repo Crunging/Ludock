@@ -506,7 +506,7 @@ test("a backup Docker fails says so plainly, and the Backups tab shows it until 
     }
     await page.getByRole("link", { name: "Dismiss" }).click();
     const failed = page.locator("#backup-last-failed");
-    await expect(failed).toContainText(/^The last backup failed \S/);
+    await expect(failed).toContainText(/^The last backup, started \S.*, failed\./);
     await failed.getByRole("link", { name: "See what happened" }).click();
     await expect(page).toHaveURL(/\?tab=activity&operation=/);
     await expect(page.locator("#selected-operation")).toContainText("Docker reported an error");
