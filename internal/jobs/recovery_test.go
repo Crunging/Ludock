@@ -450,6 +450,18 @@ func TestRecoverySaysWhatBecameOfTheServer(t *testing.T) {
 				c.State.StartedAt = time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
 			})
 		}, said: serverRunningAgain, running: true},
+		// A start saved before Ludock exited may never have been sent.
+		{name: "start saved, started elsewhere", requested: true, meanwhile: func(f *fixture, _ string) {
+			f.engine.Update(f.game, func(c *fakedocker.Container) {
+				c.State.StartedAt = time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
+			})
+		}, said: serverRunningAgain, running: true},
+		{name: "start saved, game exiting again", requested: true, meanwhile: func(f *fixture, _ string) {
+			f.engine.Update(f.game, func(c *fakedocker.Container) {
+				c.State.Status, c.State.Running, c.State.Restarting = "restarting", true, true
+				c.State.StartedAt = time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
+			})
+		}, said: serverRestarting, running: true},
 		{name: "ran again and stopped", requested: true, meanwhile: func(f *fixture, _ string) {
 			f.engine.Update(f.game, func(c *fakedocker.Container) {
 				c.State.Status, c.State.Running = "exited", false
@@ -494,7 +506,7 @@ func TestRecoverySaysWhatBecameOfTheServer(t *testing.T) {
 					}
 				}
 				status := ops.Interrupted
-				if k.done && (!k.back || s.said != serverStoppedAgain) {
+				if k.done && (!k.back || s.said == serverStarted || s.said == serverRunningAgain) {
 					status = ops.Succeeded
 				}
 				if job.Status != status || job.Result.Guidance != k.lead+" "+s.said || f.running() != s.running || starts != s.starts {

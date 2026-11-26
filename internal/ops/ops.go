@@ -117,7 +117,10 @@ type Recovery struct {
 	// anything starts it.
 	StoppedStartedAt string `json:"stoppedStartedAt,omitempty"`
 	StartRequested   bool   `json:"startRequested,omitempty"`
-	StateRestored    bool   `json:"stateRestored,omitempty"`
+	// RunSeen, never saved: the state of a newer run recovery found after a
+	// start it had requested, such as "exited" or "restarting".
+	RunSeen       string `json:"-"`
+	StateRestored bool   `json:"stateRestored,omitempty"`
 
 	SaveStatus string `json:"saveStatus,omitempty"`
 	SaveReason string `json:"saveReason,omitempty"`

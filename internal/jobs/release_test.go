@@ -261,7 +261,7 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 			guidance: "Ludock restarted before the backup finished, so there’s no new backup. Ludock started the server again.",
 			data:     backedUp, containers: []string{"/mc running unless-stopped 0000"}, stopConfirmed: true, alerts: []string{backupAlert}},
 		// The backup recorded and the start sent: it isn't sent again.
-		{name: "backup-start-sent", status: ops.Succeeded, guidance: "Ludock restarted while this ran, after the backup had finished. Ludock started the server again.",
+		{name: "backup-start-sent", status: ops.Succeeded, guidance: "Ludock restarted while this ran, after the backup had finished. The server was running again, so Ludock left it as it was.",
 			data: backedUp, containers: []string{"/mc running unless-stopped 0000"}, sameRun: true},
 		// Players warned, the backup waiting: it resumes, long past the time
 		// players were given, so it doesn't run.

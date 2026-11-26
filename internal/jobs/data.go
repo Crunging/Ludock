@@ -358,9 +358,13 @@ func withServerAfterRecovery(job *ops.Context, result *ops.Result) *ops.Result {
 		said = serverStarted
 	case recovery.StateRestored:
 		said = serverRunningAgain
-	// restoreInitialState leaves only a newer run that stopped unrestored.
-	case recovery.StartRequested:
+	// A newer run after a start recovery had requested, seen this attempt.
+	case slices.Contains(stoppedStates, recovery.RunSeen):
 		said = serverStoppedAgain
+	case recovery.RunSeen == "restarting":
+		said = serverRestarting
+	case recovery.RunSeen != "":
+		said = "The server was started again, and Docker shows it " + recovery.RunSeen + ", so Ludock left it as it is."
 	default:
 		return result
 	}
@@ -383,8 +387,10 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 	if err != nil {
 		return err
 	}
+	// Running without a start from this attempt, it may be anyone's.
+	foundRunning := func(r *ops.Recovery) { r.StateRestored, r.StartRequested = true, false }
 	if observed == nil {
-		return job.Progress("state_restored", func(r *ops.Recovery) { r.StateRestored = true }, nil)
+		return job.Progress("state_restored", foundRunning, nil)
 	}
 	if observed.Container.State != "running" {
 		if job.Job.Recovery.StartRequested {
@@ -392,13 +398,10 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 			if err != nil {
 				return err
 			}
-			// The start took. A run that has stopped since stays stopped; one
-			// Docker is restarting, or that is paused, was started again.
+			// A newer run means the start took; it isn't sent again.
 			if info.State.StartedAt != job.Job.Recovery.StoppedStartedAt {
-				if slices.Contains(stoppedStates, observed.Container.State) {
-					return nil
-				}
-				return job.Progress("state_restored", func(r *ops.Recovery) { r.StateRestored = true }, nil)
+				job.Job.Recovery.RunSeen = info.State.Status
+				return nil
 			}
 		}
 		// Persist before dispatch, so recovery recognizes a start that reached Docker.
@@ -411,8 +414,12 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 		}); err != nil {
 			return err
 		}
+		if err := job.Progress("state_restored", func(r *ops.Recovery) { r.StateRestored = true }, nil); err != nil {
+			return err
+		}
+		return j.Monitor.Suppress(ctx, server.Logical.ID, nil)
 	}
-	if err := job.Progress("state_restored", func(r *ops.Recovery) { r.StateRestored = true }, nil); err != nil {
+	if err := job.Progress("state_restored", foundRunning, nil); err != nil {
 		return err
 	}
 	return j.Monitor.Suppress(ctx, server.Logical.ID, nil)
