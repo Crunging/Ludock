@@ -407,7 +407,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 			return "ludock"
 		}, trace: join(swap, []string{"start new", "remove helper"}), image: newImage, state: selfupdate.StateInterrupted,
 			reason: "the update stopped partway", probe: "after"},
-		{name: "work asked for after the copy is refused, so a put-back can't forget it", arrange: func(g *rig) { g.fail["start new"] = 500 },
+		{name: "work and access changes asked for after the copy are refused, so a put-back can't forget them", arrange: func(g *rig) { g.fail["start new"] = 500 },
 			duringCopy: func(t *testing.T, g *rig, p *process) {
 				store := identity.Store{DB: p.d}
 				games, err := store.Reconcile(context.Background(), []identity.Observation{{ContainerID: g.game, Name: "game", DisplayName: "game", GameType: "minecraft"}}, "", 0)
@@ -417,6 +417,29 @@ func TestSelfUpdateOrder(t *testing.T) {
 				}
 				if !errors.Is(err, ops.ErrLudockUpdating) {
 					t.Errorf("work was accepted: %v", err)
+				}
+				// Nor is a change to access, such as a revocation, that a
+				// put-back would undo.
+				ctx, now := context.Background(), db.Now()
+				link := p.d.Tx(ctx, func(tx *sql.Tx) error {
+					_, err := db.PutAccountLink(ctx, tx, "admin", "link", now, now+time.Hour.Milliseconds())
+					return err
+				})
+				_, used := p.d.UseAccountLink(ctx, db.LinkUse{TokenHash: "link", UserID: "admin", PasswordHash: "y", Session: db.SessionInput{CreatedAt: now}})
+				for change, err := range map[string]error{
+					"reset link":   cmp.Or(link, used),
+					"recovery":     p.d.UpdateUserPassword(ctx, "admin", "y", db.AuditEntry{Action: "user.password.recovered"}),
+					"two-factor":   p.d.ChangeTwoFactor(ctx, db.TwoFactorChange{UserID: "admin", TokenHash: g.session, Session: db.SessionInput{CreatedAt: now}}),
+					"admin change": p.d.AdminMutation(ctx, "admin", g.session, now, func(*sql.Tx) error { return nil }),
+					"sign-out":     p.d.Logout(ctx, g.session, db.AuditEntry{Action: "auth.logout"}),
+					"password":     p.d.ChangePassword(ctx, "admin", g.session, "x", "y", "", db.SessionInput{CreatedAt: now}, db.AuditEntry{Action: "auth.password.changed"}),
+				} {
+					if !errors.Is(err, db.ErrLudockUpdating) {
+						t.Errorf("%s was accepted: %v", change, err)
+					}
+				}
+				if _, err := p.d.DeleteUserSessionByID(ctx, "admin", g.session, "x", db.Now, db.AuditEntry{}); !errors.Is(err, db.ErrLudockUpdating) {
+					t.Errorf("session revocation was accepted: %v", err)
 				}
 			}, trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored,
 			reason: "Docker couldn’t start the new container, for example because its port was still in use", probe: "before"},

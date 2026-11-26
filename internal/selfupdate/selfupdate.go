@@ -52,7 +52,8 @@ type Record struct {
 	ID      string `json:"id"`
 	State   string `json:"state"`
 	ActorID string `json:"actorId"`
-	// From and To are versions; To is known once the new version runs.
+	// From and To are versions. Until the update succeeds, To is the version
+	// the pulled image advertises, if any; after it, the new binary's own.
 	From string `json:"from"`
 	To   string `json:"to,omitempty"`
 	// Container, Name, and Previous are Ludock's container, its name, and
@@ -542,7 +543,7 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 	}
 	// The pull can take minutes: the helper gets Docker's socket only for
 	// the same administrator still signed in, with no work queued.
-	err = s.DB.AdminMutation(ctx, record.ActorID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+	err = s.DB.SelfUpdateMutation(ctx, record.ActorID, tokenHash, db.Now(), func(tx *sql.Tx) error {
 		if busy, err := s.busy(ctx, tx); err != nil || busy {
 			return cmpErr(err, errBusy)
 		}
@@ -560,7 +561,7 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 		return
 	}
 	// The copy can take a while too.
-	if err := s.DB.AdminMutation(ctx, record.ActorID, tokenHash, db.Now(), func(*sql.Tx) error { return nil }); err != nil {
+	if err := s.DB.SelfUpdateMutation(ctx, record.ActorID, tokenHash, db.Now(), func(*sql.Tx) error { return nil }); err != nil {
 		failed(errNoLongerAdmin)
 		return
 	}

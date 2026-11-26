@@ -127,6 +127,9 @@ func (d *DB) UseAccountLink(ctx context.Context, use LinkUse) (bool, error) {
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && userID != use.UserID) {
 			return ErrLinkGone
 		}
+		if err == nil {
+			err = RefuseWhileUpdating(ctx, tx)
+		}
 		if err != nil {
 			return err
 		}

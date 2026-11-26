@@ -49,6 +49,13 @@ func (d *DB) CopyBeside(ctx context.Context, name string) error {
 	folder := filepath.Dir(d.path)
 	partial := filepath.Join(folder, name+".partial")
 	os.Remove(partial)
+	// SQLite fills an empty file as it is, but creates a new one readable by
+	// everyone the umask allows, and the copy holds alert credentials.
+	empty, err := os.OpenFile(partial, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
+	if err != nil {
+		return err
+	}
+	empty.Close()
 	if _, err := d.ExecContext(ctx, "VACUUM INTO ?", partial); err != nil {
 		os.Remove(partial)
 		return err

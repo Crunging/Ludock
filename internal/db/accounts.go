@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 	"sync"
+
+	"github.com/Crunging/Ludock/internal/apperr"
 )
 
 type Role string
@@ -184,6 +186,9 @@ func (d *DB) UpdateUserAccess(ctx context.Context, id string, role Role, disable
 // and revokes every session.
 func (d *DB) UpdateUserPassword(ctx context.Context, id, passwordHash string, audit AuditEntry) error {
 	return d.Tx(ctx, func(tx *sql.Tx) error {
+		if err := RefuseWhileUpdating(ctx, tx); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
 			passwordHash, Now(), id); err != nil {
 			return err
@@ -316,6 +321,9 @@ func (d *DB) DeleteUserSessionByID(ctx context.Context, userID, tokenHash, sessi
 		if err := AssertSession(ctx, tx, userID, tokenHash, now()); err != nil {
 			return err
 		}
+		if err := RefuseWhileUpdating(ctx, tx); err != nil {
+			return err
+		}
 		result, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ? AND session_id = ?", userID, sessionID)
 		if err != nil {
 			return err
@@ -366,6 +374,9 @@ func (d *DB) FindSessionUser(ctx context.Context, tokenHash string, now int64) (
 // Logout removes one session and writes its audit entry in one transaction.
 func (d *DB) Logout(ctx context.Context, tokenHash string, audit AuditEntry) error {
 	return d.Tx(ctx, func(tx *sql.Tx) error {
+		if err := RefuseWhileUpdating(ctx, tx); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash = ?", tokenHash); err != nil {
 			return err
 		}
@@ -773,6 +784,9 @@ func (d *DB) ChangePassword(ctx context.Context, userID, tokenHash, oldHash, new
 		if !valid {
 			return ErrSessionGone
 		}
+		if err := RefuseWhileUpdating(ctx, tx); err != nil {
+			return err
+		}
 		result, err := tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND password_hash = ?",
 			newHash, Now(), userID, oldHash)
 		if err != nil {
@@ -799,8 +813,19 @@ func (d *DB) ChangePassword(ctx context.Context, userID, tokenHash, oldHash, new
 }
 
 // AdminMutation runs fn in a transaction after confirming that the
-// requesting session still belongs to an enabled administrator.
+// requesting session still belongs to an enabled administrator, and that
+// Ludock isn't updating itself.
 func (d *DB) AdminMutation(ctx context.Context, adminID, tokenHash string, now int64, fn func(tx *sql.Tx) error) error {
+	return d.adminMutation(ctx, adminID, tokenHash, now, true, fn)
+}
+
+// SelfUpdateMutation is AdminMutation for Ludock's update itself, which goes
+// on while it refuses every other.
+func (d *DB) SelfUpdateMutation(ctx context.Context, adminID, tokenHash string, now int64, fn func(tx *sql.Tx) error) error {
+	return d.adminMutation(ctx, adminID, tokenHash, now, false, fn)
+}
+
+func (d *DB) adminMutation(ctx context.Context, adminID, tokenHash string, now int64, refuseUpdating bool, fn func(tx *sql.Tx) error) error {
 	return d.Tx(ctx, func(tx *sql.Tx) error {
 		if err := AssertSession(ctx, tx, adminID, tokenHash, now); err != nil {
 			return err
@@ -812,8 +837,30 @@ func (d *DB) AdminMutation(ctx context.Context, adminID, tokenHash string, now i
 		if Role(role) != RoleAdmin {
 			return ErrNotAdmin
 		}
+		if refuseUpdating {
+			if err := RefuseWhileUpdating(ctx, tx); err != nil {
+				return err
+			}
+		}
 		return fn(tx)
 	})
+}
+
+// ErrLudockUpdating refuses a change while Ludock updates itself.
+var ErrLudockUpdating = apperr.New("LUDOCK_UPDATING", 409, "Ludock is updating itself. Try again in a minute, once it is back.")
+
+// RefuseWhileUpdating refuses while Ludock's update is in progress: putting
+// the old version back restores the data as the update copied it, which
+// would undo the change.
+func RefuseWhileUpdating(ctx context.Context, tx *sql.Tx) error {
+	var updating bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM settings WHERE key = 'ludock.update' AND json_extract(value_json, '$.state') = 'updating')").Scan(&updating); err != nil {
+		return err
+	}
+	if updating {
+		return ErrLudockUpdating
+	}
+	return nil
 }
 
 // ErrNotAdmin rejects a principal that is no longer an administrator.
