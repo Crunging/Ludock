@@ -292,7 +292,7 @@ var helperErrors = &launch.ExecErrors{Timeout: errTimeout, Failed: errFailed, Un
 		helper.RestoreUnsafeEntry: ErrUndoEntryUnsafe, helper.RestoreClashUnsafe: ErrUndoClashUnsafe, helper.RestoreClashNeedsNoReplace: ErrUndoNeedsNoReplace,
 		helper.RestoreProbeFailed: errUndoProbe}}
 
-var errUndoProbe = fail("RESTORE_UNDO_NO_ROOM", "Ludock couldn’t make the small folder in the server’s data that it needs before moving anything out of the way of the previous data, so it went no further. The disk may be full or over its quota: free some space, then undo the restore again.")
+var errUndoProbe = fail("RESTORE_UNDO_NO_FOLDER", "Ludock couldn’t make the small folder in the server’s data that it needs before moving anything out of the way of the previous data, so it went no further. The disk may be full, over its quota, or not writable: check it, then undo the restore again.")
 
 // ErrUndoNeedsNoReplace is something in the way of an undo on a filesystem
 // that can't refuse to replace it as it moves, such as NFS.
