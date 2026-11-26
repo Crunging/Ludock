@@ -781,14 +781,14 @@ func TestUploadFolderLimits(t *testing.T) {
 	f.service.Images.Configured = "ghcr.io/crunging/ludock@sha256:" + strings.Repeat("c", 64)
 	f.engine.AddImage(f.service.Images.Configured)
 	f.engine.RunHelpers(func(_ *fakedocker.Container, _, args []string, _ *bufio.Reader, _, stderr func([]byte)) (int, bool) {
-		if len(args) > 1 && strings.Contains(args[1], `"operation":"upload-version"`) {
+		if len(args) > 1 && strings.Contains(args[1], `"operation":"version"`) {
 			stderr([]byte(helper.FileFailure))
 			return 1, true
 		}
 		return 0, false
 	})
 	results, err = f.service.UploadFiles(ctx, f.target, f.root, "", []UploadEntry{{Name: "late/x.txt", Size: 1}}, strings.NewReader("x"), nil)
-	if !errors.Is(err, ErrHelperOutdated) || !errors.Is(results[0], ErrHelperOutdated) {
+	if !errors.Is(err, launch.ErrHelperOutdated) || !errors.Is(results[0], launch.ErrHelperOutdated) {
 		t.Fatal(results, err)
 	}
 	if _, err := os.Stat(filepath.Join(f.data, "late")); !os.IsNotExist(err) {

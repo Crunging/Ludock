@@ -4,10 +4,14 @@ package launch
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/self"
 )
 
@@ -27,6 +31,46 @@ type Images struct {
 	// Configured is LUDOCK_HELPER_IMAGE.
 	Configured string
 	Own        *self.Container
+
+	mu sync.Mutex
+	// speaking are configured images that answered helper.Version.
+	speaking map[string]bool
+}
+
+// ErrHelperOutdated is a configured helper image older than this Ludock: one
+// that predates its uploads or archives could drop what they now keep.
+var ErrHelperOutdated = apperr.New("HELPER_IMAGE_OUTDATED", 503,
+	"The helper image set for Ludock in LUDOCK_HELPER_IMAGE is older than this Ludock, so it wasn’t used. Remove LUDOCK_HELPER_IMAGE, or set it to the image of this Ludock version.")
+
+// Speaks confirms that a configured helper image speaks helper.Version
+// before it uploads, backs up, or restores; Ludock's own image always does.
+// ask runs the helper's version operation, once per image. A helper too old
+// to know it refuses it as an unknown operation.
+func (i *Images) Speaks(ask func() ([]byte, error)) error {
+	if i.Configured == "" {
+		return nil
+	}
+	i.mu.Lock()
+	known := i.speaking[i.Configured]
+	i.mu.Unlock()
+	if known {
+		return nil
+	}
+	out, err := ask()
+	var answer struct{ Version int }
+	if errors.Is(err, ErrUnsafe) || (err == nil && (json.Unmarshal(out, &answer) != nil || answer.Version != helper.Version)) {
+		return ErrHelperOutdated
+	}
+	if err != nil {
+		return err
+	}
+	i.mu.Lock()
+	if i.speaking == nil {
+		i.speaking = map[string]bool{}
+	}
+	i.speaking[i.Configured] = true
+	i.mu.Unlock()
+	return nil
 }
 
 // NewImages resolves helper images: configured (pinned by digest) wins,

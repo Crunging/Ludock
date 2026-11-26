@@ -89,9 +89,6 @@ type Service struct {
 	// listers are idle read-only helpers kept for the next listing of the
 	// same root, by container and root path.
 	listers map[string]*lister
-	// uploadImages are configured helper images that speak this backend's
-	// batch uploads.
-	uploadImages map[string]bool
 }
 
 const listerIdle = 30 * time.Second

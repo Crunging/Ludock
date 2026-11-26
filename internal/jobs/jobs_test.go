@@ -811,6 +811,17 @@ func TestImpossibleBackupNeverStopsServer(t *testing.T) {
 		refused("full", problem+" Delete backups you no longer need, or raise the limit in Settings.")
 	}
 	limit(1 << 30)
+	// LUDOCK_HELPER_IMAGE names a helper older than this Ludock, which fails
+	// the question of which protocol it speaks; nothing is archived.
+	older := "ghcr.io/crunging/ludock@sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	f.engine.AddImage(older)
+	f.jobs.Backups.Helpers.Images.Configured, f.failStep = older, "version"
+	archives, _ := os.ReadDir(f.backupTo)
+	refused("older helper", launch.ErrHelperOutdated.Message)
+	if after, _ := os.ReadDir(f.backupTo); len(after) != len(archives) {
+		t.Errorf("an older helper wrote %d archives", len(after)-len(archives))
+	}
+	f.jobs.Backups.Helpers.Images.Configured, f.failStep = image, ""
 	// Docker can't change a container's mounts; a label changed with them
 	// stands in for the new container a real change makes.
 	redefine := func(change func(c *fakedocker.Container)) {

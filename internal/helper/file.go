@@ -1082,9 +1082,10 @@ const (
 	UploadBatchFolders = 256
 )
 
-// UploadVersion is the batch upload protocol this helper speaks, which
-// upload-version reports, so a backend never drives an older helper.
-const UploadVersion = 3
+// Version is the protocol this helper speaks, for uploads and for archives
+// and restores, which the version operation reports, so Ludock never drives
+// an older helper. It goes up whenever either changes.
+const Version = 4
 
 // UploadPrepared is the free space a batch upload starts with, after its
 // folder's sweep, and how many staging files the sweep could not remove.
@@ -1609,8 +1610,8 @@ func (h *fileHelper) run() error {
 	switch operation {
 	case "check":
 		return h.json(map[string]bool{"safe": true})
-	case "upload-version":
-		return h.json(map[string]int{"version": UploadVersion})
+	case "version":
+		return h.json(map[string]int{"version": Version})
 	case "space":
 		// A folder below the root can be on another disk, such as a nested
 		// mount.

@@ -244,6 +244,14 @@ func (h *Helpers) NewDataHelper(ctx context.Context, context *servers.Context, r
 		cleanup()
 		return nil, err
 	}
+	// Every backup and restore starts its helper before the server stops.
+	if err := h.Images.Speaks(func() ([]byte, error) {
+		return launch.Exec(ctx, h.Docker, id, launch.ExecOptions{Limit: 2 * time.Minute, Settle: true, Poll: h.pollInterval,
+			Cmd: helper.Command("file", helper.FileRequest{Operation: "version", Root: plan.Mounts[0].Target, Blocked: []string{}})})
+	}); err != nil {
+		cleanup()
+		return nil, err
+	}
 	return &DataHelper{Container: id, Roots: plan.Roots, Cleanup: sync.OnceFunc(cleanup)}, nil
 }
 
