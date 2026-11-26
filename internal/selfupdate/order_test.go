@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/ops"
 	"net/http"
 	"os"
@@ -328,6 +329,20 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 		}, trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored,
 			reason: "the new version reported itself unhealthy, as one whose image is older than this Ludock’s data does", probe: "before"},
+		{name: "an earlier update's helper left behind doesn't hide this one's put-back", arrange: func(g *rig) {
+			g.onStart = func(c *fakedocker.Container) {
+				if isNew(c) {
+					g.migrate()
+					health(g, c, "unhealthy")
+				}
+			}
+			earlier := g.engine.AddContainer(fakedocker.GameOptions{Name: "ludock-self-update-earlier", Image: oldImage, Labels: launch.HelperLabels("self-update")})
+			g.engine.Update(earlier, func(c *fakedocker.Container) {
+				c.ExtraConfig = map[string]any{"Cmd": []string{"self-update", g.old, newImage, "earlier"}}
+				c.Created, c.State.ExitCode = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), selfupdate.ExitUnchanged
+			})
+		}, trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored,
+			reason: "the new version reported itself unhealthy, as one whose image is older than this Ludock’s data does", probe: "before"},
 		{name: "the new container fails to start", arrange: func(g *rig) { g.fail["start new"] = 500 },
 			trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored,
 			reason: "Docker couldn’t start the new container, for example because its port was still in use", probe: "before"},
@@ -563,7 +578,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 // helper is the update's helper container's ID, or "".
 func (g *rig) helper() string {
 	for _, id := range g.engine.SortedIDs() {
-		if info := g.engine.Container(id); info != nil && info.Config.Labels["ludock.internal"] == "self-update" {
+		if info := g.engine.Container(id); info != nil && info.Config.Labels["ludock.internal"] == "self-update" && info.Name != "/ludock-self-update-earlier" {
 			return id
 		}
 	}

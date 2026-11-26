@@ -40,8 +40,9 @@ func (e *Engine) list(w http.ResponseWriter, r *http.Request) {
 		if local, ok := e.images[image]; ok && local != c.Image {
 			image = c.Image
 		}
+		created, _ := time.Parse(time.RFC3339Nano, c.Created)
 		result = append(result, docker.ContainerSummary{ID: id, Names: []string{c.Name}, Image: image,
-			Labels: c.Config.Labels, State: &state, Status: &status, Mounts: c.Mounts})
+			Labels: c.Config.Labels, State: &state, Status: &status, Created: created.Unix(), Mounts: c.Mounts})
 	}
 	writeJSON(w, 200, result)
 }

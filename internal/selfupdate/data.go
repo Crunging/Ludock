@@ -1,11 +1,13 @@
 package selfupdate
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/docker"
@@ -51,6 +53,9 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 			return ""
 		}
 	}
+	// The newest helper replacing this container is this update's; one an
+	// earlier, interrupted update left says nothing about it.
+	slices.SortFunc(helpers, func(a, b docker.ContainerSummary) int { return cmp.Compare(b.Created, a.Created) })
 	for _, summary := range helpers {
 		for {
 			spec, err := client.InspectSpec(ctx, summary.ID)
