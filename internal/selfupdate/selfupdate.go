@@ -640,9 +640,12 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	// The copy stays whenever how it ended is uncertain.
 	_, copyErr := os.Lstat(filepath.Join(s.DataDir, CopyName))
 	record.Copy = copyErr == nil
-	// Each change has a deadline, so the one above holds.
-	call, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
+	// Each change has its own deadline, so the one above holds.
+	call := func() context.Context {
+		bounded, cancel := context.WithTimeout(ctx, time.Minute)
+		context.AfterFunc(bounded, cancel)
+		return bounded
+	}
 	spec, err := s.Docker.InspectSpec(ctx, HelperName(record.ID))
 	if !stuck && (err != nil && !docker.IsNotFound(err) || err == nil && (spec.State.Running || spec.State.Restarting)) {
 		return false
@@ -654,7 +657,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		}
 		// One still created may be starting as a lost start answer lands:
 		// unforced, Docker refuses to remove it once it runs.
-		if err := s.Docker.Remove(call, spec.ID, spec.State.Status != "created", true); err != nil && !docker.IsNotFound(err) && !stuck {
+		if err := s.Docker.Remove(call(), spec.ID, spec.State.Status != "created", true); err != nil && !docker.IsNotFound(err) && !stuck {
 			return false
 		}
 	}
@@ -683,8 +686,9 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	// goes.
 	started, _ := time.Parse(time.RFC3339Nano, own.State.StartedAt)
 	untouched := original && started.Before(time.UnixMilli(record.StartedAt))
-	if untouched && record.Leftover != "" && !replacement.State.Running {
-		if err := s.Docker.Remove(call, replacement.ID, true, true); err == nil || docker.IsNotFound(err) {
+	// So does one after the helper said nothing changed: it never ran.
+	if (untouched || original && code == ExitUnchanged) && record.Leftover != "" && !replacement.State.Running {
+		if err := s.Docker.Remove(call(), replacement.ID, true, true); err == nil || docker.IsNotFound(err) {
 			record.Leftover = ""
 		}
 	}
@@ -692,7 +696,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	putBack := putBackReason(code)
 	// The original, whatever happened, gets back the restart policy it had
 	// as the update began, which the helper took away before it stopped it.
-	if original && len(record.Policy) > 0 && s.Docker.SetRestartPolicy(call, own.ID, record.Policy) != nil {
+	if original && len(record.Policy) > 0 && s.Docker.SetRestartPolicy(call(), own.ID, record.Policy) != nil {
 		record.NoPolicy = true
 	}
 	switch {
@@ -715,7 +719,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 			record.Data = DataKept
 		}
 		return s.settle(ctx, record, StatePutBack, Reasons[putBack])
-	case original && code == ExitUnchanged:
+	case original && code == ExitUnchanged && record.Leftover == "":
 		record.Copy = false
 		return s.settle(ctx, record, StateFailed, reasonUnchanged)
 	case ownReplacement && own.Name == "/"+record.Name && docker.IsNotFound(gone):
