@@ -561,7 +561,7 @@ func (c *Checks) apply(ctx context.Context, o observation, now int64, quiet bool
 	if announce && c.Notify != nil {
 		message := updateMessage(o.container)
 		if o.serverID == selfID {
-			message = "Ludock: a newer version is available. An administrator can update it from Settings in Ludock."
+			message = "Ludock: a newer version is available. Settings in Ludock says how to update it."
 		}
 		c.Notify(notify.NewerImages, "image-update:"+o.serverID+":"+digest, message)
 	}

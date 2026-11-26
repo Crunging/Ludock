@@ -226,14 +226,21 @@ func (s *Service) Offer(ctx context.Context) Offer {
 		offer.Updating = true
 		return offer
 	}
+	busy, err := s.busy(ctx, s.DB)
+	working := err != nil || busy
 	if _, _, err := s.check(ctx, false); err != nil {
 		if err != errNotHere {
 			offer.Reason, _ = apperr.Public(err)
 		}
 		offer.Pinned, offer.NoCommands = err == errPinned, noCommands(err)
+		// The commands would interrupt work too, whatever else stops the
+		// button.
+		if working && !offer.Pinned && !offer.NoCommands {
+			offer.Reason, offer.NoCommands = errBusy.Message, true
+		}
 		return offer
 	}
-	if busy, err := s.busy(ctx, s.DB); err != nil || busy {
+	if working {
 		offer.Reason, offer.NoCommands = errBusy.Message, true
 		return offer
 	}
