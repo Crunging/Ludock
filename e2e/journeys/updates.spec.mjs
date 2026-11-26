@@ -1,3 +1,4 @@
+import { rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { request } from "node:http";
 import { join } from "node:path";
@@ -269,6 +270,32 @@ test("finding a newer Ludock and updating it", async ({ page }) => {
     await expect(form.locator(".alert--success")).toHaveText("Image update checks turned on.");
     await expect(check).toContainText("A newer Ludock is available.");
 
+    // A copy an earlier update left is said alone: the commands would
+    // replace it too.
+    const copy = join(process.env.LUDOCK_E2E_DIR, "data", "ludock.db.before-update");
+    writeFileSync(copy, "kept");
+    try {
+      await page.reload();
+      await expect(notice).toContainText("is still beside its database. Move it somewhere safe, then update again.");
+      await expect(notice.locator("pre")).toHaveCount(0);
+      await expect(notice.getByRole("button", { name: "Update Ludock" })).toHaveCount(0);
+    } finally {
+      rmSync(copy);
+    }
+    // A container sharing Ludock's network is found only once the update
+    // starts: the click says why, with the commands.
+    await page.reload();
+    await fake("/fake/recreate", { container: "portainer", host: "NetworkMode=container:ludock-dev" });
+    try {
+      await notice.getByRole("button", { name: "Update Ludock" }).click();
+      await page.getByRole("dialog", { name: "Update Ludock?" }).getByRole("button", { name: "Update Ludock" }).click();
+      await expect(notice.locator(".alert--error")).toHaveText("Ludock’s container is set up in a way it can’t safely replace itself, so update it with the commands below.");
+      await expect(notice.locator("pre")).toHaveText("docker compose pull ludock\ndocker compose up -d ludock");
+    } finally {
+      await fake("/fake/recreate", { container: "portainer", host: "NetworkMode=bridge" });
+    }
+    await page.reload();
+
     await notice.getByRole("button", { name: "Update Ludock" }).click();
     const confirm = page.getByRole("dialog", { name: "Update Ludock?" });
     await expect(confirm).toContainText("Your game servers keep running, and this page comes back by itself once it has, usually within a few minutes.");
@@ -302,8 +329,20 @@ test("finding a newer Ludock and updating it", async ({ page }) => {
     await expect(entry).toContainText(admin.username);
     await page.goto("/");
     const item = page.locator(".needs-attention__list li", { hasText: "Ludock’s update didn’t finish" });
-    await expect(item).toContainText("The new version reported itself unhealthy, as one whose image is older than this Ludock’s data does, so Ludock is still on version dev.");
+    await expect(item).toContainText("The new version reported itself unhealthy, as one whose image is older than this Ludock’s data does. Ludock is still on version dev.");
     await item.getByRole("link", { name: /^Open Settings/ }).click();
+    // While a copy an earlier update left is there, the failure's own
+    // commands are held back too.
+    const left = join(process.env.LUDOCK_E2E_DIR, "data", "ludock.db.before-update");
+    writeFileSync(left, "kept");
+    try {
+      await page.reload();
+      await expect(notice.locator(".alert--error")).toContainText("Try again later.");
+      await expect(notice.locator("pre")).toHaveCount(0);
+    } finally {
+      rmSync(left);
+    }
+    await page.reload();
     await notice.getByRole("button", { name: "Dismiss" }).click();
     await expect(notice.locator(".alert--error")).toHaveCount(0);
     await page.goto("/");

@@ -405,6 +405,15 @@ func ludockFailed(record selfupdate.Record) string {
 	return "Ludock couldn’t update itself: " + reason + ". It is still on version " + record.From + "." + policy
 }
 
+// offerReason is why Update Ludock isn't offered, unless a refused click
+// already shows it as an error.
+func offerReason(offer selfupdate.Offer) string {
+	if offer.Refused {
+		return ""
+	}
+	return offer.Reason
+}
+
 func dismissValues(id string) string {
 	encoded, _ := json.Marshal(map[string]string{"id": id})
 	return string(encoded)

@@ -177,7 +177,7 @@ test("Ludock updates itself, and puts itself back when the new version fails", a
     expect(docker("ps", "--all", "--quiet", "--filter", "name=ludock-self-update-")).toBe("");
     await page.goto("/");
     await expect(page.locator(".needs-attention__list li", { hasText: "Ludock’s update didn’t finish" }))
-      .toContainText("The new version reported itself unhealthy, as one whose image is older than this Ludock’s data does, so Ludock is still on version e2e-next");
+      .toContainText("The new version reported itself unhealthy, as one whose image is older than this Ludock’s data does. Ludock is still on version e2e-next");
   } catch (error) {
     diagnose(eventsFile);
     throw error;

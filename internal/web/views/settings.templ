@@ -295,7 +295,7 @@ templ ImageUpdateSettingsForm(u ImageUpdateSettings) {
 			<input type="checkbox" id="image-update-enabled" name="enabled" value="true" checked?={ u.Enabled } aria-describedby="image-update-help" data-autosubmit/>
 			Check for newer server images
 		</label>
-		<p class="muted check-help" id="image-update-help">A few times a day, without downloading or installing anything.</p>
+		<p class="muted check-help" id="image-update-help">For your servers and for Ludock itself, a few times a day, without downloading or installing anything.</p>
 		if u.Error != "" {
 			@Alert("error", u.Error)
 		}
@@ -363,6 +363,10 @@ templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 							if failed.Copy {
 								<p class="muted">The copy of its data from before the update, { selfupdate.CopyName }, is beside its database.</p>
 							}
+						} else if offer.NoCommands {
+							// Recreating Ludock now would do harm, so no commands; the
+							// notice below says why.
+							<p>Try again later.</p>
 						} else {
 							<p>Try again later. To see what goes wrong, update it from a terminal instead, in the folder with its compose.yaml, then read <code>docker compose logs ludock</code>:</p>
 							<pre><code>docker compose pull ludock{ "\n" }docker compose up -d ludock</code></pre>
@@ -378,6 +382,9 @@ templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 				} else {
 					@Alert("success", ludockUpdated(*last))
 				}
+			}
+			if offer.Refused && offer.Reason != "" {
+				@Alert("error", offer.Reason)
 			}
 			if check != nil && check.State == update.CheckAvailable {
 				<div class="alert alert--info" role="status">
@@ -398,13 +405,13 @@ templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 								>Update Ludock</button>
 							</div>
 						} else {
-							if offer.Unmounted {
-								<p><strong>A newer Ludock is available.</strong> { offer.Reason }</p>
+							if offer.NoCommands {
+								<p><strong>A newer Ludock is available.</strong> { offerReason(offer) }</p>
 							} else {
 								<p><strong>A newer Ludock is available.</strong> Where you started it, in the folder with its compose.yaml, run:</p>
 								<pre><code>docker compose pull ludock{ "\n" }docker compose up -d ludock</code></pre>
-								if offer.Reason != "" {
-									<p class="muted">{ offer.Reason }</p>
+								if offerReason(offer) != "" {
+									<p class="muted">{ offerReason(offer) }</p>
 								}
 							}
 						}
@@ -726,7 +733,7 @@ func alertDescription(a notify.Alert) string {
 		notify.ServerProblems: "A server goes down or recovers, its game stops answering, or it runs low on disk or memory.",
 		notify.FailedWork:     "A backup, second copy, save of Ludock’s data, or scheduled action fails or can’t run.",
 		notify.Results:        "A restore or update fails. Ones that succeed show their result in the panel.",
-		notify.NewerImages:    "A newer image is published for a server. The server list shows this too.",
+		notify.NewerImages:    "A newer image is published for a server or for Ludock. The server list or Settings shows this too.",
 	}[a]
 }
 

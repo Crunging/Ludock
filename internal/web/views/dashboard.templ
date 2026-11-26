@@ -10,6 +10,7 @@ import (
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -636,6 +637,9 @@ func describeAttention(item attention.Item) attentionText {
 	case "notifications":
 		return attentionText{"Alerts aren’t reaching " + item.Destination.Label(), DestinationURL(item.Destination), "Check " + item.Destination.Label()}
 	case "ludock":
+		if item.Unchanged {
+			return attentionText{"Ludock couldn’t update itself", "/settings", "Open Settings"}
+		}
 		return attentionText{"Ludock’s update didn’t finish", "/settings", "Open Settings"}
 	case "operation":
 		title := Capitalize(item.OperationKind) + " " + item.Status
@@ -705,9 +709,12 @@ templ attentionDetail(item attention.Item) {
 				if item.Interrupted {
 					<span>· It stopped partway. Settings says how to finish it from a terminal.</span>
 				} else {
-					<span>· { Capitalize(strings.TrimSuffix(item.Reason, ".")) }, so Ludock is still on version { item.Version }.</span>
-					if item.DataKept {
-						<span>It found no copy of its data to put back, so it kept the newer data.</span>
+					<span>· { Capitalize(strings.TrimSuffix(item.Reason, ".")) }. Ludock is still on version { item.Version }.</span>
+					switch item.Data {
+						case selfupdate.DataKept:
+							<span>It found no copy of its data to put back, so it kept the newer data.</span>
+						case selfupdate.DataNotRestored:
+							<span>It couldn’t put the copy of its data from before the update back, so it runs on the newer data. The copy, { selfupdate.CopyName }, is beside its database.</span>
 					}
 					<span>Try again later. To see what goes wrong, update it from a terminal with <code>docker compose pull ludock</code> and <code>docker compose up -d ludock</code>, then read <code>docker compose logs ludock</code>.</span>
 				}

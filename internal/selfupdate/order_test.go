@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/launch"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"net/http"
 	"os"
@@ -63,6 +64,8 @@ type rig struct {
 	// closes once a case killed it.
 	kill   context.CancelFunc
 	killed chan struct{}
+	// alerts are the types of the alerts sent.
+	alerts []notify.Alert
 }
 
 type process struct {
@@ -214,7 +217,11 @@ func (g *rig) boot(container, image string, run ...string) *process {
 	version := map[string]string{oldImage: "1.0.0", newImage: "1.1.0"}[image]
 	p := &process{d: d, cancel: cancel, svc: &selfupdate.Service{DB: d, Docker: g.client, Own: self.New(g.client, container),
 		Updates: &update.Service{Docker: g.client}, Locks: locks.New(), DataDir: g.dataDir, Socket: socket, MountID: container,
-		Version: version, Poll: 5 * time.Millisecond, PutBack: putBack}}
+		Version: version, Poll: 5 * time.Millisecond, PutBack: putBack, Notify: func(alert notify.Alert, _, _ string) {
+			g.mu.Lock()
+			g.alerts = append(g.alerts, alert)
+			g.mu.Unlock()
+		}}}
 	g.mu.Lock()
 	g.processes[container] = p
 	g.mu.Unlock()
@@ -571,6 +578,14 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 			if g.helper() != "" {
 				t.Error("the helper is left")
+			}
+			// One that didn't succeed alerts as Restores and updates.
+			g.mu.Lock()
+			alerts := slices.Clone(g.alerts)
+			g.mu.Unlock()
+			if unsuccessful := c.state != selfupdate.StateSucceeded && c.state != selfupdate.StateCurrent; unsuccessful != (len(alerts) > 0) ||
+				slices.ContainsFunc(alerts, func(alert notify.Alert) bool { return alert != notify.Results }) {
+				t.Errorf("alerts %v", alerts)
 			}
 			if release, err := after.svc.Locks.Acquire([]string{"server:x"}, nil); err != nil {
 				t.Errorf("work is still held back: %v", err)

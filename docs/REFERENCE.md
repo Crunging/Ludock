@@ -511,17 +511,17 @@ While it runs, Ludock accepts no new work, for example a restart someone
 asks for or one a schedule or automatic restart would queue; schedules try
 again once it is back.
 
-It isn't offered when Ludock keeps its data inside its own container rather
-than in a volume or mounted folder: **Settings** then says to move the data
-to one first, since recreating the container would lose it. Otherwise,
-**Settings** shows these commands with the reason when Ludock can't prove
-which container it runs in, was started with `--rm`, has its health check
-turned off or replaced by one of its own (only the image's fails when
-Ludock can't open its data), reaches Docker other than through a mounted
-socket (or one relabelled with `:Z`), has a host port Docker picks at each
-start, still has the copy an earlier update kept beside its database (move
-it somewhere safe first), or work is queued or running. In the folder with
-its `compose.yaml`:
+It isn't offered, and **Settings** gives only the reason, when Ludock keeps
+its data inside its own container rather than in a volume or mounted folder
+(move the data to one first, since recreating the container would lose it),
+when work is queued or running (wait for it), or when the copy an earlier
+update kept is still beside its database (move it somewhere safe first).
+Otherwise, **Settings** shows these commands with the reason when Ludock
+can't prove which container it runs in, was started with `--rm`, has its
+health check turned off or replaced by one of its own (only the image's
+fails when Ludock can't open its data), reaches Docker other than through a
+mounted socket (or one relabelled with `:Z`), or has a host port Docker
+picks at each start. In the folder with its `compose.yaml`:
 
 ```bash
 docker compose pull ludock
@@ -529,7 +529,9 @@ docker compose up -d ludock
 ```
 
 Its data and your servers stay as they are. Work Ludock is stopped in the
-middle of is recovered at the next start.
+middle of is recovered at the next start. These and the other commands
+Settings shows assume a `compose.yaml` with the service named `ludock`; use
+your own service name, or your own tool, if yours differ.
 
 If an update is cut off partway, for example by a reboot, Ludock may be left
 stopped, or the new container may be left under its temporary name

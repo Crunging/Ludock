@@ -337,7 +337,6 @@ var auditLabels = map[string]string{
 	"ludock.update.succeeded":            "Updated Ludock",
 	"ludock.update.failed":               "Updated Ludock",
 	"ludock.update.already_current":      "Updated Ludock",
-	"ludock.update.restored":             "Updated Ludock",
 	"settings.trusted_proxies.updated":   "Changed the trusted proxy",
 	"settings.upload_limit.updated":      "Changed the upload limit",
 	"settings.verbose_logging.updated":   "Changed verbose logging",
@@ -412,14 +411,12 @@ func ludockUpdateLabel(action string, details map[string]any) string {
 		return "Updated Ludock: it already ran the newest image"
 	case action == "ludock.update.started":
 		return "Updating Ludock" + versions
-	case action == "ludock.update.restored":
-		return "Updated Ludock" + versions + ", then restored the data saved before it"
 	case outcome == "put_back":
 		return "Updated Ludock" + versions + ", put back: " + reason
 	case outcome == "interrupted":
 		return "Updated Ludock" + versions + ", stopped partway"
 	}
-	return "Updated Ludock" + versions + ", didn’t start: " + reason
+	return "Updated Ludock" + versions + ", failed: " + reason
 }
 
 var playerActionLabels = map[string]string{"kick": "Kicked", "ban": "Banned", "unban": "Unbanned",

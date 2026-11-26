@@ -183,6 +183,20 @@ func (e *Engine) Recreate(reference string, query url.Values) string {
 	if name := query.Get("name"); name != "" {
 		e.containers[replacement].Name = "/" + name
 	}
+	if hosts := query["host"]; len(hosts) > 0 {
+		recreated := e.containers[replacement]
+		if recreated.HostConfig == nil {
+			recreated.HostConfig = recreated.inspection()["HostConfig"].(map[string]any)
+		}
+		recreated.HostConfig = maps.Clone(recreated.HostConfig)
+		for _, entry := range hosts {
+			if key, value, set := strings.Cut(entry, "="); set {
+				recreated.HostConfig[key] = value
+			} else {
+				delete(recreated.HostConfig, key)
+			}
+		}
+	}
 	return replacement
 }
 

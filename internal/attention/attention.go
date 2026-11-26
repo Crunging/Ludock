@@ -62,13 +62,14 @@ type Item struct {
 	UndoBlocked bool
 	// notifications, with Since and Reason
 	Destination notify.Destination
-	// ludock, with Since and Reason: the version it is still on, whether
-	// it kept the newer data, having no copy to put back, and whether the
-	// update stopped partway, leaving the new container under Leftover.
-	Version     string
-	DataKept    bool
-	Interrupted bool
-	Leftover    string
+	// ludock, with Since and Reason: the version it is still on, how a
+	// put-back left the data (selfupdate's Data values), and whether the
+	// update changed nothing or stopped partway, leaving the new container
+	// under Leftover.
+	Version                string
+	Data                   string
+	Unchanged, Interrupted bool
+	Leftover               string
 }
 
 type Result struct {

@@ -168,8 +168,8 @@ func (s *Server) updateLudock(w http.ResponseWriter, r *http.Request, request *R
 		return
 	}
 	offer := s.App.SelfUpdate.Offer(r.Context())
-	if err != nil {
-		offer.Reason, _ = apperr.Public(err)
+	if err != nil && !offer.Updating {
+		offer.Refuse(err)
 	}
 	render(w, r, http.StatusOK, views.LudockNotice(s.App.Checks.SelfStatus(r.Context()), offer))
 }
