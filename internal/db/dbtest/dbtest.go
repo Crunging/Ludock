@@ -98,3 +98,17 @@ func Session(t testing.TB, d *db.DB, userID string) string {
 	}
 	return hash
 }
+
+// DeleteUser removes an account, without the administrator recheck a real
+// change has; sessions and grants cascade.
+func DeleteUser(ctx context.Context, d *db.DB, id string) error {
+	_, err := d.ExecContext(ctx, "DELETE FROM users WHERE id = ?", id)
+	return err
+}
+
+// DeleteUserSessions signs an account out everywhere, without the
+// administrator recheck a real change has.
+func DeleteUserSessions(ctx context.Context, d *db.DB, userID string) error {
+	_, err := d.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", userID)
+	return err
+}

@@ -509,9 +509,10 @@ dismisses it.
 
 While it runs, in either version, Ludock accepts no new work, for example a
 restart someone asks for or one a schedule or automatic restart would queue,
-and no change a put-back would undo: an administrator's change to settings,
-accounts or sharing, a sign-out, a password change or reset, or turning
-two-factor sign-in on or off. Schedules try again once it is back.
+and no change a put-back would undo, whoever makes it: to settings,
+accounts, sharing or schedules, a sign-out, a password change or reset, or
+turning two-factor sign-in on or off. Signing in still works. Schedules try
+again once it is back.
 
 It isn't offered, and **Settings** gives only the reason, when Ludock keeps
 its data inside its own container rather than in a volume or mounted folder

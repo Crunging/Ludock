@@ -7,6 +7,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/db/dbtest"
 )
 
 const linkPassword = "chosen by link holder"
@@ -191,7 +192,7 @@ func TestLinkChangesRecheckTheAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	link, _ := s.CreateLink(ctx, admin, targetID, Client{})
-	if err := s.DB.DeleteUserSessions(ctx, adminID); err != nil {
+	if err := dbtest.DeleteUserSessions(ctx, s.DB, adminID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CreateLink(ctx, admin, targetID, Client{}); !apperr.Is(err, "AUTHENTICATION_REQUIRED") {

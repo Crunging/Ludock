@@ -218,8 +218,16 @@ func TestLateRunsRespectSavesAndRetryConflicts(t *testing.T) {
 	f.s.DB.Exec("UPDATE schedules SET last_slot=NULL,last_result=NULL")
 	f.s.DB.SetSetting(ctx, nil, "ludock.update", map[string]string{"id": "update", "state": "updating"})
 	f.s.Run(ctx, due)
-	if saved := f.first(t, friend); saved.LastSlot != "" || saved.LastResult != "" || f.operations(t) != 0 {
+	saved := f.first(t, friend)
+	if saved.LastSlot != "" || saved.LastResult != "" || f.operations(t) != 0 {
 		t.Fatal("a run due during an update was used up", saved.LastResult)
+	}
+	// Nor does a member's change go through, which a put-back would undo.
+	if _, err := f.s.SetEnabled(ctx, friend, friendSession, f.serverID, saved.ID, saved.Revision, false); !errors.Is(err, db.ErrLudockUpdating) {
+		t.Fatal("paused a schedule during an update", err)
+	}
+	if _, err := f.s.Create(ctx, friend, friendSession, f.serverID, base); !errors.Is(err, db.ErrLudockUpdating) {
+		t.Fatal("created a schedule during an update", err)
 	}
 	f.s.DB.Exec("DELETE FROM settings WHERE key='ludock.update'")
 	f.s.Run(ctx, due+2*60_000)
@@ -301,7 +309,7 @@ func TestScheduleAuthorityChanges(t *testing.T) {
 	if f.first(t, admin).NextRunUnavailableReason != "" {
 		t.Fatal(f.first(t, admin))
 	}
-	f.s.DB.DeleteUser(ctx, friend.ID)
+	dbtest.DeleteUser(ctx, f.s.DB, friend.ID)
 	f.s.Run(ctx, due+3*86400_000)
 	schedule = f.first(t, admin)
 	if f.operations(t) != 0 || schedule.NextRunUnavailableReason != OwnerMissing || schedule.OwnerName != "" ||

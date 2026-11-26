@@ -215,7 +215,7 @@ func TestRecoveryStopsWhenCancelled(t *testing.T) {
 // Backup settings need the admin session still valid.
 func TestBackupSettingsNeedAdminSession(t *testing.T) {
 	f := setup(t)
-	if err := f.jobs.DB.DeleteUserSessions(ctx, f.admin.ID); err != nil {
+	if err := dbtest.DeleteUserSessions(ctx, f.jobs.DB, f.admin.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, err := f.jobs.Backups.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, MaxBytes: 1 << 20},

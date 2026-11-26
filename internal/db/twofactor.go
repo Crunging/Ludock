@@ -110,6 +110,9 @@ func (d *DB) SetPendingTwoFactor(ctx context.Context, userID, tokenHash, sealed 
 		if err := AssertSession(ctx, tx, userID, tokenHash, now()); err != nil {
 			return err
 		}
+		if err := RefuseWhileUpdating(ctx, tx); err != nil {
+			return err
+		}
 		result, err := tx.ExecContext(ctx, "UPDATE users SET totp_pending = ? WHERE id = ? AND totp_secret IS NULL", sealed, userID)
 		if err != nil {
 			return err
@@ -126,6 +129,9 @@ func (d *DB) SetPendingTwoFactor(ctx context.Context, userID, tokenHash, sealed 
 func (d *DB) ClearPendingTwoFactor(ctx context.Context, userID, tokenHash string, now func() int64) error {
 	return d.Tx(ctx, func(tx *sql.Tx) error {
 		if err := AssertSession(ctx, tx, userID, tokenHash, now()); err != nil {
+			return err
+		}
+		if err := RefuseWhileUpdating(ctx, tx); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, "UPDATE users SET totp_pending = NULL WHERE id = ? AND totp_secret IS NULL", userID)

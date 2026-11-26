@@ -210,18 +210,6 @@ func (d *DB) UpgradeUserPasswordHash(ctx context.Context, id, passwordHash strin
 	return err
 }
 
-// DeleteUser removes an account; sessions and grants cascade.
-func (d *DB) DeleteUser(ctx context.Context, id string) error {
-	_, err := d.ExecContext(ctx, "DELETE FROM users WHERE id = ?", id)
-	return err
-}
-
-// DeleteUserSessions signs an account out everywhere.
-func (d *DB) DeleteUserSessions(ctx context.Context, userID string) error {
-	_, err := d.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", userID)
-	return err
-}
-
 type SessionInput struct {
 	SessionID string
 	TokenHash string
