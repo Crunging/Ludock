@@ -67,10 +67,10 @@ func (s *Server) scheduleForm(r *http.Request, d *views.ServerDetail) views.Sche
 		input.Action = actions[0]
 	}
 	canBackup := canBeBackedUp(view) && can(view, authz.BackupsCreate)
-	if input.Action == "restart" && canBackup {
+	if input.Action == "restart" && canBackup && !d.UndoBlocked {
 		input.CreateBackup = s.backupReady(r, view)
 	}
-	form := views.ScheduleForm{ServerID: view.ID, Actions: actions, CanCreateBackup: canBackup,
+	form := views.ScheduleForm{ServerID: view.ID, Actions: actions, CanCreateBackup: canBackup, UndoBlocked: d.UndoBlocked,
 		CanAnnounce: canWarn(view), CanWait: s.App.Players.Source.Lists(view.Container),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable}
 	// The form keeps these for whichever disconnecting action is chosen.

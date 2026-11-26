@@ -14,6 +14,7 @@ import (
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/events"
+	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/jobs"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/ops"
@@ -67,6 +68,7 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 	}
 	sort.Strings(list.States)
 	checks := list.Admin && s.App.Checks.Enabled(ctx)
+	blocked := s.undoBlockedAmong(ctx, all)
 	for index := range all {
 		view := all[index]
 		if list.State != "" && list.State != "all" && view.State != list.State {
@@ -82,12 +84,32 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 		}
 		row := s.serverRow(r, request, view, list.ShowBackup, list.DiscoveryUnavailable)
 		row.ShowPlayers, row.Down = list.ShowPlayers, down[view.ID]
+		row.CanBackup = row.CanBackup && !blocked[view.ID]
 		if check := s.App.Checks.Status(ctx, view.ID, view.Container.ID); checks && !list.DiscoveryUnavailable && check != nil {
 			row.ImageUpdate = check.State == update.CheckAvailable
 		}
 		list.Rows = append(list.Rows, row)
 	}
 	return list
+}
+
+// undoBlockedAmong reports which servers of a list have a restore that
+// stopped partway and can't be undone, which refuses data work. One query
+// finds the servers with such a restore, normally none, and only those are
+// checked further.
+func (s *Server) undoBlockedAmong(ctx context.Context, list []servers.View) map[string]bool {
+	pending, err := s.App.Jobs.PendingRestoreServers(ctx)
+	if err != nil {
+		log.Warn("Could not list restores that stopped partway")
+		return nil
+	}
+	blocked := map[string]bool{}
+	for index := range list {
+		if id := list[index].ID; pending[id] && list[index].BindingStatus == identity.StatusActive {
+			blocked[id] = s.undoBlocked(ctx, id)
+		}
+	}
+	return blocked
 }
 
 // downServers are the servers that stopped without anyone stopping them and
@@ -203,6 +225,9 @@ func (s *Server) attentionFragment(w http.ResponseWriter, r *http.Request, reque
 			// Role ceilings stay applied to administrator-only workflows.
 			if item.Kind == "binding" && request.User().Role != db.RoleAdmin {
 				continue
+			}
+			if item.Kind == "restore" {
+				item.UndoBlocked = s.undoBlocked(r.Context(), item.ServerID)
 			}
 			view.Items = append(view.Items, item)
 		}

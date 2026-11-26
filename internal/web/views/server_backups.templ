@@ -802,8 +802,10 @@ templ UpdateTab(serverID string, recreate bool) {
 	</div>
 }
 
+// UpdatePanel reloads, like the Backups tab, when work ends or an earlier
+// restore's undo is blocked or unblocked.
 templ UpdatePanel(u UpdateView) {
-	<div id="update-panel">
+	<div id="update-panel" hx-get={ "/fragments/servers/" + u.ServerID + "/update" + map[bool]string{true: "?recreate=1"}[u.Recreate] } hx-trigger="operation-finished from:document" hx-swap="outerHTML">
 		if u.Gone {
 			<p role="status">Ludock can’t find this server in Docker, so it can’t be updated.</p>
 		} else if u.Capability == nil {
