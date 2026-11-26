@@ -87,7 +87,9 @@ func TestClearedOutageUpdatesPagesWithoutAnAlert(t *testing.T) {
 // An outage alerts once after its grace and once when it ends. A policy saved
 // during it that keeps the server watched keeps it, timed from its start;
 // turning watching off, or pausing it for maintenance, ends it, so it is
-// alerted again once watched.
+// alerted again once watched. A server that stopped long before Ludock first
+// looked shows as down since Docker's time for its stop, but waits and
+// alerts from when Ludock looked.
 func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 	const down, back = "Minecraft: the server is down.", "Minecraft: the server is back up."
 	for _, c := range []struct {
@@ -98,8 +100,11 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 		savedAt, quiet int64
 		want           []string
 		start          int64
+		// stopped is when Docker says the container stopped, 0 for unknown.
+		stopped int64
 	}{
 		{name: "no change", want: []string{down, back}, start: 1000},
+		{name: "stopped long before Ludock looked", stopped: 100, want: []string{down, back}, start: 1000},
 		{name: "disk threshold after the alert", saved: []Policy{testPolicy(func(p *Policy) { p.DiskPercent = 80 })}, savedAt: 61_000,
 			want: []string{down, back}, start: 1000},
 		{name: "longer grace after the alert", saved: []Policy{testPolicy(func(p *Policy) { p.GraceSeconds = 600 })}, savedAt: 61_000,
@@ -113,8 +118,9 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, events, server, configure := setupWith(t, nil)
+			exited := map[string]servers.Container{"mc": {ID: "mc", State: "exited", DownSince: c.stopped}}
 			for _, at := range []int64{1000, 30_000, 61_000, 62_000, 130_000} {
-				s.Check(ctx, state("exited", ""), at)
+				s.Check(ctx, exited, at)
 				if found, _ := problem(s, server.ID, at); at <= cmp.Or(c.quiet, 30_000) && (found != nil || len(events.events) != 0) {
 					t.Fatal("outage before grace:", found, events.events)
 				}
@@ -124,8 +130,12 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 					}
 				}
 			}
-			if found, _ := problem(s, server.ID, 130_000); found == nil || found.State != "exited" || found.OutageStartedAt != c.start {
+			if found, _ := problem(s, server.ID, 130_000); found == nil || found.State != "exited" || found.OutageStartedAt != c.start ||
+				found.Since != cmp.Or(c.stopped, c.start) {
 				t.Fatal(found)
+			}
+			if shown, _ := s.Get(ctx, server.ID); shown.State.Since != cmp.Or(c.stopped, c.start) {
+				t.Fatal("page shows down since", shown.State.Since)
 			}
 			s.Check(ctx, state("running", "starting"), 135_000)
 			s.Check(ctx, state("running", ""), 140_000)
@@ -450,7 +460,8 @@ func problem(s *Service, serverID string, now int64) (*Problem, error) {
 // A game that keeps exiting under its restart policy shows restarting, with
 // runs too short for anyone to join between restarts. That is one outage,
 // timed from the first check that sees it, even on a server stopped through
-// Ludock before, and alerted once its grace ends even during such a run: a
+// Ludock before, though shown as down since the loop's first exit discovery
+// saw, and alerted once its grace ends even during such a run: a
 // run counts as the server back only once the game answers or it has stayed
 // up for the grace period, or an answer recorded in it. A stop through Ludock
 // after the alert keeps the outage owed its recovery alert, sent once the
@@ -462,14 +473,17 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 		s, events, server := setup(t)
 		game := GameWaiting
 		s.Game = func(string, servers.Container) GameAnswer { return game }
+		// Discovery reports the loop's first exit it saw, at 900, for its
+		// restarts and its runs alike.
 		runSince := func(started int64) map[string]servers.Container {
-			return map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: started, RestartCount: 3}}
+			return map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: started, RestartCount: 3, DownSince: 900}}
 		}
+		restarting := map[string]servers.Container{"mc": {ID: "mc", State: "restarting", DownSince: 900}}
 		if stoppedFirst {
 			s.SetIntentionalStop(ctx, server.ID, true)
 			s.Check(ctx, state("exited", ""), 500)
 		}
-		s.Check(ctx, state("restarting", ""), 1000)
+		s.Check(ctx, restarting, 1000)
 		s.Check(ctx, runSince(58_000), 61_000)
 		if !slices.Equal(events.events, []string{down}) {
 			t.Fatal(stoppedFirst, events.events)
@@ -481,9 +495,10 @@ func TestCrashLoopIsOneOutage(t *testing.T) {
 			t.Fatal("Docker unreachable during a crash loop:", found)
 		}
 		s.Check(ctx, runSince(78_000), 88_000)
-		s.Check(ctx, state("restarting", ""), 90_000)
-		s.Check(ctx, state("restarting", ""), 151_000)
-		if found, _ := problem(s, server.ID, 151_000); found == nil || found.State != "restarting" || found.OutageStartedAt != 1000 {
+		s.Check(ctx, restarting, 90_000)
+		s.Check(ctx, restarting, 151_000)
+		if found, _ := problem(s, server.ID, 151_000); found == nil || found.State != "restarting" || found.OutageStartedAt != 1000 ||
+			found.Since != 900 {
 			t.Fatal(found)
 		}
 		s.Check(ctx, runSince(155_000), 160_000)

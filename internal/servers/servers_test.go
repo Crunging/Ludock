@@ -131,6 +131,10 @@ func TestAddressLabelAndConnectPorts(t *testing.T) {
 	}
 }
 
+// A container's health, run and exit are read as Docker reports them. Its
+// game is down since its exit, or since the first exit seen of a crash loop
+// it is still in, through the loop's restarts and brief runs; a loop long
+// after the last starts again.
 func TestHealthUptimeAndExit(t *testing.T) {
 	engine, s := setup(t)
 	id := engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
@@ -155,8 +159,31 @@ func TestHealthUptimeAndExit(t *testing.T) {
 	stopped := inspectTest(t, s, crashed).Container
 	finished, _ := time.Parse(time.RFC3339, "2026-09-15T12:00:00Z")
 	if stopped.Health != "" || stopped.StateSince != finished.UnixMilli() || stopped.Exit == nil || stopped.Exit.Code != 1 ||
-		stopped.GameName != "Other game" || stopped.ConnectPort != 7777 {
+		stopped.GameName != "Other game" || stopped.ConnectPort != 7777 || stopped.DownSince != finished.UnixMilli() {
 		t.Fatalf("%+v", stopped)
+	}
+	for _, step := range []struct {
+		state, at string
+		want      string
+	}{
+		{"restarting", "2026-09-15T13:00:00Z", "2026-09-15T13:00:00Z"},
+		{"restarting", "2026-09-15T13:00:30Z", "2026-09-15T13:00:00Z"},
+		{"running", "2026-09-15T13:00:31Z", "2026-09-15T13:00:00Z"},
+		{"restarting", "2026-09-15T15:00:00Z", "2026-09-15T15:00:00Z"},
+	} {
+		engine.Update(id, func(c *fakedocker.Container) {
+			c.State.Status, c.State.Running, c.State.Restarting = step.state, true, step.state == "restarting"
+			c.RestartCount++
+			if step.state == "running" {
+				c.State.StartedAt = step.at
+			} else {
+				c.State.FinishedAt = step.at
+			}
+		})
+		want, _ := time.Parse(time.RFC3339, step.want)
+		if looping := inspectTest(t, s, id).Container; looping.DownSince != want.UnixMilli() {
+			t.Fatalf("%s at %s: down since %d", step.state, step.at, looping.DownSince)
+		}
 	}
 }
 
