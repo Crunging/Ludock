@@ -107,8 +107,9 @@ type Service struct {
 	// that pages are told of.
 	announced map[string]int64
 	// down is, for each server, when its game stopped as the latest check
-	// that reached Docker saw it, kept while its outage stays open, 0 when
-	// unknown; ended, when this process saw its latest outage end.
+	// that reached Docker saw it, the earliest while its outage stays open,
+	// 0 when unknown; ended, when the run that ended its latest outage, as
+	// this process saw, began.
 	down, ended map[string]int64
 }
 
@@ -634,8 +635,8 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 				(container.State == "running" && container.DownSince != 0 && !earlyRun(container, s.answered(server.ID, container), policy.GraceSeconds, now)) {
 				container.DownSince = 0
 			}
-			if container.DownSince == 0 && r.outage.Valid {
-				container.DownSince = previousDown[server.ID]
+			if kept := previousDown[server.ID]; r.outage.Valid && kept != 0 && (container.DownSince == 0 || kept < container.DownSince) {
+				container.DownSince = kept
 			}
 			downs[server.ID] = container.DownSince
 		}
@@ -658,7 +659,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			}
 			up = up && !(r.lastState.String == "restarting" && earlyRun(container, s.answered(server.ID, container), policy.GraceSeconds, now))
 			if up {
-				if changed, err := s.recovered(ctx, server, r, now); err != nil {
+				if changed, err := s.recovered(ctx, server, container, r, now); err != nil {
 					log.Warn("Could not save a server's availability; it will be checked again")
 				} else if changed {
 					s.changed(server.ID)
@@ -734,7 +735,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			if !r.outage.Valid && r.notified == 0 && r.intentional == 0 && r.lastState.String == "running" {
 				continue
 			}
-			changed, err := s.recovered(ctx, server, r, now)
+			changed, err := s.recovered(ctx, server, container, r, now)
 			if err != nil {
 				log.Warn("Could not save a server's availability; it will be checked again")
 				continue
@@ -910,7 +911,7 @@ func (s *Service) transitionIf(ctx context.Context, serverID string, r *row, ale
 const whileIdle = " AND NOT EXISTS(SELECT 1 FROM operations WHERE operations.server_id=availability.server_id AND operations.status IN ('queued','running'))"
 
 // recovered ends an outage, with its recovery alert if it was alerted.
-func (s *Service) recovered(ctx context.Context, server identity.Server, r *row, now int64) (bool, error) {
+func (s *Service) recovered(ctx context.Context, server identity.Server, container servers.Container, r *row, now int64) (bool, error) {
 	var back []alert
 	if r.notified == 1 {
 		back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), server.DisplayName + ": the server is back up."}}
@@ -921,7 +922,9 @@ func (s *Service) recovered(ctx context.Context, server identity.Server, r *row,
 		if s.ended == nil {
 			s.ended = map[string]int64{}
 		}
-		s.ended[server.ID] = now
+		// Stop times from before the run that recovered are an earlier
+		// outage's.
+		s.ended[server.ID] = container.StateSince
 		s.lookMu.Unlock()
 	}
 	return changed, err
