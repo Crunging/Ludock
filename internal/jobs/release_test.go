@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -207,7 +208,11 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		sameRun bool
 		// stopConfirmed: recovery saw the stop it had sent end.
 		stopConfirmed bool
-		alerts        []string
+		// newBackup: the work made one backup, into the folder chosen since.
+		newBackup bool
+		// waiting: no operation, and a schedule's run waits for players.
+		waiting bool
+		alerts  []string
 	}{
 		// Staging: only the stage folder changed, which is removed.
 		{name: "restore-staging", status: ops.Interrupted, guidance: "Nothing was restored: the server’s data is as it was. Ludock started the server again.",
@@ -284,6 +289,24 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 		{name: "restore-failed-pending", status: ops.Failed,
 			err:      "Something outside Ludock started or changed the server meanwhile. Check it before trying again.",
 			guidance: finishedUndo, data: merged(now, setAside), containers: []string{"/mc exited unless-stopped 0000"}},
+		// A backup that was warning players when Ludock stopped, the warning
+		// not yet sent: it runs again long after, tries to warn once more, and
+		// backs up.
+		{name: "backup-warning-resend", status: ops.Succeeded, data: backedUp, containers: []string{"/mc running unless-stopped 0000"},
+			newBackup: true},
+		// A backup whose start took, the game exiting at once, before Ludock
+		// confirmed it: the backup stands and the start isn't sent again.
+		{name: "backup-started-then-exited", status: ops.Succeeded, guidance: "Ludock restarted while this ran, after the backup had finished.",
+			data: backedUp, containers: []string{"/mc exited unless-stopped 0000"}, sameRun: true},
+		// Nothing running: a restore that committed but couldn't remove its
+		// stage folder, the server stopped since. Startup removes it.
+		{name: "restore-committed-pending", status: ops.Failed,
+			err: "The backup was restored, but Ludock could not remove the folder {stage} from the server's data, which holds the replaced data. " +
+				"Ludock removes it the next time it stops the server for a backup, a restore or an update.",
+			guidance: "Ludock removed the folder {stage} that a finished restore left, which held the data it replaced.",
+			data:     backedUp, containers: []string{"/mc exited unless-stopped 0000"}},
+		// Nothing running: a daily restart waiting for players to leave.
+		{name: "schedule-waiting", waiting: true, data: backedUp, containers: []string{"/mc running unless-stopped 0000"}},
 		// The replacement created under its temporary name, its ID not yet
 		// saved: found by its name and label, removed.
 		{name: "update-created", status: ops.Interrupted,
@@ -318,18 +341,31 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 			if id == "" {
 				id = restore
 			}
-			job := finished(t, i.runner, id)
-			named := strings.NewReplacer("{aside}", helper.SetAsideName(restore))
-			want := c.err
-			if want == "" && c.status == ops.Interrupted {
-				want = interrupted
+			named := strings.NewReplacer("{aside}", helper.SetAsideName(restore), "{stage}", helper.StageName(restore))
+			if id != "" {
+				job := finished(t, i.runner, id)
+				want := named.Replace(c.err)
+				if want == "" && c.status == ops.Interrupted {
+					want = interrupted
+				}
+				if job.Status != c.status || job.Error != want || job.Result.Guidance != named.Replace(c.guidance) || job.Result.UndoNote != named.Replace(c.pending) {
+					t.Fatalf("%s %q %q, undo %q\nwant %s %q %q, undo %q", job.Status, job.Error, job.Result.Guidance, job.Result.UndoNote,
+						c.status, want, named.Replace(c.guidance), named.Replace(c.pending))
+				}
+				if c.stopConfirmed && (!job.Recovery.StopSettled || job.Recovery.StopRecoveryTimedOut) {
+					t.Fatalf("stop not confirmed: %+v", job.Recovery)
+				}
 			}
-			if job.Status != c.status || job.Error != want || job.Result.Guidance != named.Replace(c.guidance) || job.Result.UndoNote != named.Replace(c.pending) {
-				t.Fatalf("%s %q %q, undo %q\nwant %s %q %q, undo %q", job.Status, job.Error, job.Result.Guidance, job.Result.UndoNote,
-					c.status, want, named.Replace(c.guidance), named.Replace(c.pending))
-			}
-			if c.stopConfirmed && (!job.Recovery.StopSettled || job.Recovery.StopRecoveryTimedOut) {
-				t.Fatalf("stop not confirmed: %+v", job.Recovery)
+			if c.waiting {
+				var serverID string
+				if err := i.jobs.DB.QueryRow("SELECT id FROM logical_servers").Scan(&serverID); err != nil {
+					t.Fatal(err)
+				}
+				admin := &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
+				saved, err := (&schedules.Service{DB: i.jobs.DB, Authz: i.jobs.Authz, Identity: i.jobs.Identity}).List(ctx, admin, serverID)
+				if err != nil || len(saved) != 1 || saved[0].WaitingUntil == 0 {
+					t.Fatalf("schedules %+v %v", saved, err)
+				}
 			}
 			if c.pending != "" {
 				if pending, err := i.runner.Get(ctx, restore); err != nil || pending.Result.Guidance != named.Replace(c.pending) {
@@ -367,8 +403,12 @@ func TestRecoversWorkInterruptedOn10(t *testing.T) {
 				records = append(records, id+".tar")
 			}
 			rows.Close()
-			if !maps.Equal(archives, i.archives) || !slices.Equal(records, slices.Sorted(maps.Keys(i.archives))) ||
-				len(tree(t, i.host+i.install+"/backups-now")) != 0 {
+			made := tree(t, i.host+i.install+"/backups-now")
+			expected := slices.Sorted(maps.Keys(i.archives))
+			if c.newBackup && len(made) == 1 {
+				expected = slices.Sorted(slices.Values(append(expected, slices.Collect(maps.Keys(made))...)))
+			}
+			if !maps.Equal(archives, i.archives) || !slices.Equal(records, expected) || (len(made) == 1) != c.newBackup || len(made) > 1 {
 				t.Fatalf("backups %v, recorded %v\nwant %v", archives, records, i.archives)
 			}
 			i.mu.Lock()
@@ -484,6 +524,8 @@ func interrupted10(t *testing.T, name string) *installed10 {
 			{Type: "bind", Source: chosen, Destination: chosen, RW: true}}})
 
 	i.jobs = wire(i.engine, d, backupTo, chosen)
+	// Work that warns players again waits a moment, not a minute.
+	i.jobs.WarningLead = 100 * time.Millisecond
 	i.jobs.Notify = func(_ notify.Alert, _, message string) {
 		i.mu.Lock()
 		i.alerts = append(i.alerts, message)
