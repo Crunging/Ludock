@@ -157,7 +157,7 @@ var (
 )
 
 const (
-	reasonUnchanged   = "Docker couldn’t create Ludock’s new container, so nothing was changed"
+	reasonUnchanged   = "Docker couldn’t swap in Ludock’s new container, so nothing was changed"
 	reasonNotReplaced = "the update stopped before Ludock was replaced, so nothing was changed"
 	reasonInterrupted = "the update stopped partway"
 )
@@ -637,6 +637,12 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	// A helper still running, or Docker unable to say, long after any swap
 	// would have ended is given up on: the owner finishes from a terminal.
 	stuck := time.Since(time.UnixMilli(record.StartedAt)) > 30*time.Minute
+	// The copy stays whenever how it ended is uncertain.
+	_, copyErr := os.Lstat(filepath.Join(s.DataDir, CopyName))
+	record.Copy = copyErr == nil
+	// Each change has a deadline, so the one above holds.
+	call, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	spec, err := s.Docker.InspectSpec(ctx, HelperName(record.ID))
 	if !stuck && (err != nil && !docker.IsNotFound(err) || err == nil && (spec.State.Running || spec.State.Restarting)) {
 		return false
@@ -648,7 +654,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		}
 		// One still created may be starting as a lost start answer lands:
 		// unforced, Docker refuses to remove it once it runs.
-		if err := s.Docker.Remove(ctx, spec.ID, spec.State.Status != "created", true); err != nil && !docker.IsNotFound(err) && !stuck {
+		if err := s.Docker.Remove(call, spec.ID, spec.State.Status != "created", true); err != nil && !docker.IsNotFound(err) && !stuck {
 			return false
 		}
 	}
@@ -666,19 +672,19 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	if err == nil && replacement.ID != own.ID && operationOf(replacement) == record.ID {
 		record.Leftover = strings.TrimPrefix(replacement.Name, "/")
 	}
-	// This Ludock may be that container, not yet under Ludock's name.
-	if ownReplacement && own.Name != "/"+record.Name {
+	// This Ludock may be that container, not yet under Ludock's name; its
+	// removal is advised only with the original shown to exist, since it
+	// may be the last container naming an anonymous data volume.
+	if ownReplacement && own.Name != "/"+record.Name && (gone == nil || docker.IsNotFound(gone)) {
 		record.Leftover, record.OnLeftover, record.OriginalGone = strings.TrimPrefix(own.Name, "/"), true, docker.IsNotFound(gone)
 	}
-	_, copyErr := os.Lstat(filepath.Join(s.DataDir, CopyName))
-	record.Copy = copyErr == nil
 	// An original running since before the update was never stopped, so
 	// its data is as it was; a new container the helper left unstarted
 	// goes.
 	started, _ := time.Parse(time.RFC3339Nano, own.State.StartedAt)
 	untouched := original && started.Before(time.UnixMilli(record.StartedAt))
 	if untouched && record.Leftover != "" && !replacement.State.Running {
-		if err := s.Docker.Remove(ctx, replacement.ID, true, true); err == nil || docker.IsNotFound(err) {
+		if err := s.Docker.Remove(call, replacement.ID, true, true); err == nil || docker.IsNotFound(err) {
 			record.Leftover = ""
 		}
 	}
@@ -686,7 +692,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	putBack := putBackReason(code)
 	// The original, whatever happened, gets back the restart policy it had
 	// as the update began, which the helper took away before it stopped it.
-	if original && len(record.Policy) > 0 && s.Docker.SetRestartPolicy(ctx, own.ID, record.Policy) != nil {
+	if original && len(record.Policy) > 0 && s.Docker.SetRestartPolicy(call, own.ID, record.Policy) != nil {
 		record.NoPolicy = true
 	}
 	switch {

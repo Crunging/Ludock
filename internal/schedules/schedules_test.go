@@ -212,6 +212,21 @@ func TestLateRunsRespectSavesAndRetryConflicts(t *testing.T) {
 		t.Fatal(result)
 	}
 
+	// Due while Ludock updates itself, which queues no work, a run goes
+	// ahead once it is back within its grace period.
+	f.s.DB.Exec("DELETE FROM operations")
+	f.s.DB.Exec("UPDATE schedules SET last_slot=NULL,last_result=NULL")
+	f.s.DB.SetSetting(ctx, nil, "ludock.update", map[string]string{"id": "update", "state": "updating"})
+	f.s.Run(ctx, due)
+	if saved := f.first(t, friend); saved.LastSlot != "" || saved.LastResult != "" || f.operations(t) != 0 {
+		t.Fatal("a run due during an update was used up", saved.LastResult)
+	}
+	f.s.DB.Exec("DELETE FROM settings WHERE key='ludock.update'")
+	f.s.Run(ctx, due+2*60_000)
+	if f.operations(t) != 1 || f.first(t, friend).LastSlot == "" {
+		t.Fatal("a run due during an update didn't go ahead after it")
+	}
+
 	// A restart due while the game is still starting, as after another
 	// schedule at the same time, waits until it answers, and goes ahead on
 	// the last check of its grace period if it never does.

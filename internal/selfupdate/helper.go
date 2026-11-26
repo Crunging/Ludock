@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/docker"
+	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
@@ -108,9 +109,16 @@ func (h *Helper) Run(ctx context.Context) int {
 		log.Error("Docker couldn't create Ludock's new container, so nothing was changed", logging.Cause(err, docker.StatusCode(err))...)
 		return ExitUnchanged
 	}
-	// The new container names the tag, which may have moved since the pull.
-	if created, err := h.Docker.Inspect(ctx, id); err != nil || created.Image != h.Image {
-		log.Error("Ludock's tag moved during the update, so nothing was changed")
+	// The new container names the tag, which may have moved since the pull,
+	// and must keep Ludock's own health check, which fails when it can't
+	// open the data; one of the image's own might pass its refusal page.
+	var check struct{ Healthcheck *struct{ Test []string } }
+	created, err := h.Docker.InspectSpec(ctx, id)
+	if err == nil {
+		json.Unmarshal(encode(created.Config), &check)
+	}
+	if err != nil || created.Image != h.Image || check.Healthcheck == nil || !slices.Equal(check.Healthcheck.Test, []string{"CMD", helper.Binary, "healthcheck"}) {
+		log.Error("Ludock's new container isn't the pulled image with Ludock's health check, so nothing was changed")
 		h.Docker.Remove(ctx, id, true, true)
 		return ExitUnchanged
 	}

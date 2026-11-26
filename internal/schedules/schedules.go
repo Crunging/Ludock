@@ -877,7 +877,9 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 	err := s.evaluate(ctx, r, now, &d)
 	// A schedule or access changed since it was read, or another operation
 	// holds the server: the next check evaluates the current state.
-	if err == nil || errors.Is(err, errScheduleChanged) || errors.Is(err, errAccessChanged) || errors.Is(err, errRetryLater) {
+	// So is Ludock updating itself, within the run's grace period.
+	if err == nil || errors.Is(err, errScheduleChanged) || errors.Is(err, errAccessChanged) || errors.Is(err, errRetryLater) ||
+		errors.Is(err, ops.ErrLudockUpdating) {
 		return
 	}
 	s.recordSkip(ctx, r, now, d, err)

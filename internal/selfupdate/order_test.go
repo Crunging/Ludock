@@ -360,7 +360,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 			reason: "Docker couldn’t start the new container, for example because its port was still in use", probe: "after"},
 		{name: "Docker refuses to create the new container", arrange: func(g *rig) { g.fail["create new"] = 400 },
 			trace: []string{"pull", "create helper", "start helper", "create new", "remove helper", "policy old"}, image: oldImage,
-			state: selfupdate.StateFailed, reason: "Docker couldn’t create Ludock’s new container, so nothing was changed", probe: "after"},
+			state: selfupdate.StateFailed, reason: "Docker couldn’t swap in Ludock’s new container, so nothing was changed", probe: "after"},
 		{name: "the pull fails", arrange: func(g *rig) { g.fail["pull"] = 500 }, trace: []string{"pull"}, image: oldImage,
 			state: selfupdate.StateFailed, reason: "Docker couldn’t download Ludock’s new image. Check the machine’s internet connection; for a private registry, set LUDOCK_DOCKER_CONFIG.",
 			probe: "before"},
@@ -419,7 +419,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 			g.at["stop old"] = func() { g.engine.Exit(g.old, 0) }
 			g.fail["stop old"] = 500
 		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "stop old", "remove new", "start old", "remove helper", "policy old"},
-			image: oldImage, state: selfupdate.StateFailed, reason: "Docker couldn’t create Ludock’s new container, so nothing was changed", probe: "after"},
+			image: oldImage, state: selfupdate.StateFailed, reason: "Docker couldn’t swap in Ludock’s new container, so nothing was changed", probe: "after"},
 		{name: "Docker starts the original again but its answer is lost", arrange: func(g *rig) {
 			g.fail["start new"] = 500
 			g.at["start old"] = func() { g.client.Start(context.Background(), g.old) }
@@ -432,6 +432,11 @@ func TestSelfUpdateOrder(t *testing.T) {
 			g.fail["stop old"] = 500
 		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "stop old", "remove helper", "remove new", "policy old"},
 			image: oldImage, state: selfupdate.StateFailed, reason: "the update stopped before Ludock was replaced, so nothing was changed", probe: "after"},
+		{name: "a new image whose health check only checks the port", arrange: func(g *rig) {
+			g.engine.SetImageConfig(newImage, map[string]any{"Healthcheck": map[string]any{"Test": []string{"CMD-SHELL", "nc -z localhost 3000"}},
+				"Labels": map[string]any{"org.opencontainers.image.version": "1.1.0"}})
+		}, trace: []string{"pull", "create helper", "start helper", "create new", "remove new", "remove helper", "policy old"}, image: oldImage,
+			state: selfupdate.StateFailed, reason: "Docker couldn’t swap in Ludock’s new container, so nothing was changed", probe: "after"},
 		{name: "a health check of the container's own", arrange: func(g *rig) {
 			g.engine.Update(g.old, func(c *fakedocker.Container) {
 				c.ExtraConfig = map[string]any{"Healthcheck": map[string]any{"Test": []string{"CMD-SHELL", "nc -z localhost 3000"}}}
@@ -575,8 +580,11 @@ func TestSelfUpdateGivesUpOnAnUnreadableHelper(t *testing.T) {
 	if err := p.d.SetSetting(ctx, nil, "ludock.update", record); err != nil {
 		t.Fatal(err)
 	}
+	// Docker can't say anything about the helper, nor this Ludock's own
+	// container, so the copy stays.
+	os.WriteFile(filepath.Join(g.dataDir, selfupdate.CopyName), []byte("copy"), 0o600)
 	g.engine.Intercept = func(r *http.Request) int {
-		if strings.Contains(r.URL.Path, selfupdate.HelperName(record.ID)) {
+		if strings.Contains(r.URL.Path, selfupdate.HelperName(record.ID)) || strings.Contains(r.URL.Path, g.old) {
 			return 500
 		}
 		return 0
@@ -589,5 +597,8 @@ func TestSelfUpdateGivesUpOnAnUnreadableHelper(t *testing.T) {
 	}
 	if last := p.svc.Last(ctx); last.State != selfupdate.StateInterrupted {
 		t.Errorf("recorded %+v", last)
+	}
+	if _, err := os.Stat(filepath.Join(g.dataDir, selfupdate.CopyName)); err != nil {
+		t.Error("the copy went", err)
 	}
 }
