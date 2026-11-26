@@ -394,9 +394,6 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 				continue
 			}
 			_, err := j.watchedStep(ctx, data, rootPath, entry.Item, job, helper.RestoreRollbackOld, live, watch)
-			if errors.Is(err, backups.ErrUndoNeedsNoReplace) && entry.Item != "" {
-				return fail(backups.ErrUndoNeedsNoReplace.Code, backups.UndoNeedsNoReplace(entry.Item))
-			}
 			if err != nil {
 				return err
 			}

@@ -916,16 +916,16 @@ data, makes that work refuse instead, and a running server it stopped
 for the undo starts again (for a restart with a backup first, once its backup
 is taken) unless the undo had begun moving data.
 
-On filesystems that can rename without replacing, as most local Linux
-filesystems can, restoring and undoing never overwrite a file a game creates
-at the same moment, and anything in the way of the previous data during an
-undo moves to `ludock-set-aside-<id>`. On filesystems that can't, such as NFS,
+Anything in the way of the previous data during an undo moves to
+`ludock-set-aside-<id>`. On filesystems that can rename without replacing, as
+most local Linux filesystems can, restoring and undoing never overwrite a file
+a game creates at the same moment. On filesystems that can't, such as NFS,
 restoring and undoing, of the whole data or of one file or folder, check that
-each name is free and then use a plain rename, so a file a game creates in the
-instant between that check and the move can be replaced. An undo of a restore
-stopped while it was moving data out refuses there if something is in the way
-of the previous data, with nothing moved, and asks for it to be removed or
-renamed first.
+each name is free and then use a plain rename, so a file created in the
+instant between that check and the move can be replaced. The server is stopped
+for those moves and Ludock watches for it or another container that can write
+its data starting, but a program already running on the host can still write
+in that instant.
 
 If the server's data folders or game change where it is defined, such as in
 Compose, while such a restore waits to be undone, Ludock can't tell where the
