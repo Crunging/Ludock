@@ -672,6 +672,8 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	original, ownReplacement := own.ID == record.Container, own.Config.Labels[update.OperationLabel] == record.ID
 	// Only a container of this update, by its label, is left over.
 	replacement, err := s.Docker.InspectSpec(ctx, servers.ReplacementName(record.Name, record.ID))
+	// Nothing changed only once Docker showed whether one is left.
+	known := err == nil || docker.IsNotFound(err)
 	if err == nil && replacement.ID != own.ID && operationOf(replacement) == record.ID {
 		record.Leftover = strings.TrimPrefix(replacement.Name, "/")
 	}
@@ -719,7 +721,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 			record.Data = DataKept
 		}
 		return s.settle(ctx, record, StatePutBack, Reasons[putBack])
-	case original && code == ExitUnchanged && record.Leftover == "":
+	case original && code == ExitUnchanged && known && record.Leftover == "":
 		record.Copy = false
 		return s.settle(ctx, record, StateFailed, reasonUnchanged)
 	case ownReplacement && own.Name == "/"+record.Name && docker.IsNotFound(gone):
@@ -727,7 +729,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		// Its name, which Ludock may find itself by, is the new container's.
 		s.Own.Forget()
 		return s.settle(ctx, record, StateSucceeded, "")
-	case untouched && record.Leftover == "":
+	case untouched && known && record.Leftover == "":
 		record.Copy = false
 		return s.settle(ctx, record, StateFailed, reasonNotReplaced)
 	}

@@ -443,6 +443,19 @@ func TestSelfUpdateOrder(t *testing.T) {
 			g.fail["remove new"] = 500
 			g.at["remove new"] = func() { g.fail["remove new"] = 500 }
 		}, trace: []string{"pull", "create helper", "start helper", "create new", "remove new", "remove helper", "remove new", "policy old"}, image: oldImage, state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true},
+		{name: "a new container left over that Docker can't show isn't called nothing changed", arrange: func(g *rig) {
+			g.engine.SetImageConfig(newImage, map[string]any{"Healthcheck": map[string]any{"Test": []string{"CMD-SHELL", "nc -z localhost 3000"}},
+				"Labels": map[string]any{"org.opencontainers.image.version": "1.1.0"}})
+			g.fail["remove new"] = 500
+			intercept := g.engine.Intercept
+			g.engine.Intercept = func(r *http.Request) int {
+				if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/ludock-ludock-update-") {
+					return 500
+				}
+				return intercept(r)
+			}
+		}, trace: []string{"pull", "create helper", "start helper", "create new", "remove new", "remove helper", "policy old"}, image: oldImage,
+			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true},
 		{name: "a health check of the container's own", arrange: func(g *rig) {
 			g.engine.Update(g.old, func(c *fakedocker.Container) {
 				c.ExtraConfig = map[string]any{"Healthcheck": map[string]any{"Test": []string{"CMD-SHELL", "nc -z localhost 3000"}}}
