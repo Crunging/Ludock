@@ -554,8 +554,8 @@ it off, change its levels, or **Pause alerts for maintenance**.
 
 Each alert is sent once, with another when it recovers. **Outage since** is
 when Docker says the server stopped, or the first exit Ludock saw of a crash
-loop, even if Ludock wasn't watching when the server stopped; the wait before alerting still counts from when Ludock
-noticed. A server that stopped
+loop, even if Ludock wasn't watching when the server stopped; the wait before
+alerting still counts from when Ludock noticed. A server that stopped
 by itself shows in **Needs attention** with **Start**, which is also the
 highlighted button on a stopped server's row and page. Stops and work started
 through Ludock don't alert, and a server that was already stopped when Ludock
