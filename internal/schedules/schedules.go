@@ -49,7 +49,7 @@ var unavailableMessages = map[string]string{
 	OwnerDisabled:       "Suspended: the schedule owner’s account is disabled",
 	OwnerAccessRemoved:  "Suspended: the schedule owner can no longer set up schedules",
 	ActionAccessRemoved: "Suspended: the schedule owner can no longer do this action",
-	SharingPaused:       "Suspended: the server’s game or data folders changed, and an administrator needs to confirm it",
+	SharingPaused:       "Suspended: the server is paused until an administrator confirms a change to it",
 	BindingUnavailable:  "Suspended: Ludock can’t find this server in Docker",
 	Unavailable:         "Suspended: this schedule can’t run right now; check the server and the schedule",
 }

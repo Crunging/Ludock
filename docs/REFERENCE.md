@@ -760,7 +760,9 @@ Recreating it with a new password, port, label, or environment variable keeps
 its panel choices, history, sharing, and schedules. A change to its game or to
 the data folders Ludock reads and backs up pauses the access of everyone it's
 shared with, and their schedules, until an administrator chooses **Confirm and
-restore access**, since what they were given has changed.
+restore access**, since what they were given has changed. Meanwhile they see
+only that the server, by its name, is paused until an administrator confirms
+a change to it. Someone whose access was removed is told it ended.
 
 ### Helpers
 

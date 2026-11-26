@@ -336,6 +336,98 @@ var ErrServerNotFound = apperr.New("SERVER_NOT_FOUND", 404, "Server not found")
 
 var errInsufficient = apperr.New("FORBIDDEN", 403, "You can’t do that on this server")
 
+// ErrAccessEnded tells a member a server was shared with them and no longer
+// is, which tells them nothing they didn't know.
+var ErrAccessEnded = apperr.New("ACCESS_ENDED", 403, "Your access to this server ended")
+
+// PausedMessage is what members are told about a server shared with them
+// while a change to it waits for an administrator, in its schedules' words.
+func PausedMessage(name string) string {
+	return name + " is paused until an administrator confirms a change to it"
+}
+
+// Paused lists the servers shared with a member that a change to their game
+// or data folders paused.
+func (s *Service) Paused(ctx context.Context, actor *db.SessionUser) ([]identity.Server, error) {
+	user, err := s.CurrentActor(ctx, actor)
+	if err != nil || user == nil || user.Role == db.RoleAdmin {
+		return nil, err
+	}
+	// The pause outlasts the container being gone for a while, such as
+	// between a compose down and up.
+	rows, err := s.DB.QueryContext(ctx, `SELECT g.capabilities_json, `+identity.ServerColumns("s")+` FROM server_grants g
+    JOIN logical_servers s ON s.id = g.server_id WHERE g.user_id = ? AND s.sharing_paused = 1 AND NOT (`+identity.RemovedServer+`)
+    ORDER BY s.display_name, s.id`, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var paused []identity.Server
+	for rows.Next() {
+		var raw string
+		server, err := identity.ScanServer(rows, &raw)
+		if err != nil {
+			return nil, err
+		}
+		unpaused := *server
+		unpaused.Status, unpaused.SharingPaused = identity.StatusActive, false
+		if slices.Contains(roleCapabilities(user, &unpaused, parseCapabilities(raw)), ServerView) {
+			paused = append(paused, *server)
+		}
+	}
+	return paused, rows.Err()
+}
+
+// unseen is why a server is hidden from a member: paused for them, their
+// access ended, or, for anyone who never had it, not found.
+func (s *Service) unseen(ctx context.Context, actor *db.SessionUser, server *identity.Server) error {
+	if server == nil {
+		return ErrServerNotFound
+	}
+	user, err := s.CurrentActor(ctx, actor)
+	if err != nil {
+		return err
+	}
+	if user == nil || user.Role == db.RoleAdmin {
+		return ErrServerNotFound
+	}
+	paused, err := s.Paused(ctx, user)
+	if err != nil {
+		return err
+	}
+	if index := slices.IndexFunc(paused, func(item identity.Server) bool { return item.ID == server.ID }); index >= 0 {
+		return apperr.New("SERVER_PAUSED", 409, PausedMessage(paused[index].DisplayName))
+	}
+	// Someone it is still shared with, such as one whose server is missing
+	// in Docker, keeps seeing what everyone sees.
+	grant, err := s.UserGrant(ctx, user.ID, server.ID)
+	if err != nil {
+		return err
+	}
+	if grant != nil && slices.Contains(grant.Capabilities, ServerView) {
+		return ErrServerNotFound
+	}
+	// Sharing is audited with the capabilities given or removed, so one that
+	// included seeing the server proves they had it.
+	var shared bool
+	if err := s.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM audit_log WHERE target_type = 'server' AND target_id = ?
+    AND action = 'server.sharing.updated' AND json_valid(details_json) AND details_json->>'userId' = ?
+    AND (EXISTS(SELECT 1 FROM json_each(details_json, '$.capabilities') WHERE value = ?3)
+      OR EXISTS(SELECT 1 FROM json_each(details_json, '$.removed') WHERE value = ?3)))`, server.ID, user.ID, string(ServerView)).Scan(&shared); err != nil {
+		return err
+	}
+	if shared {
+		return ErrAccessEnded
+	}
+	return ErrServerNotFound
+}
+
+// Hidden reports a refusal that hides a server from the account: not found,
+// paused for them, or their access ended.
+func Hidden(err error) bool {
+	return apperr.Is(err, "SERVER_NOT_FOUND") || apperr.Is(err, "SERVER_PAUSED") || apperr.Is(err, "ACCESS_ENDED")
+}
+
 // Assert requires a capability and returns the server.
 func (s *Service) Assert(ctx context.Context, actor *db.SessionUser, serverID string, capability Capability) (*identity.Server, error) {
 	capabilities, server, err := s.Access(ctx, actor, serverID)
@@ -344,7 +436,7 @@ func (s *Service) Assert(ctx context.Context, actor *db.SessionUser, serverID st
 	}
 	if !slices.Contains(capabilities, ServerView) {
 		s.auditDenial(ctx, actor, serverID, capability)
-		return nil, ErrServerNotFound
+		return nil, s.unseen(ctx, actor, server)
 	}
 	if !slices.Contains(capabilities, capability) {
 		s.auditDenial(ctx, actor, serverID, capability)
@@ -508,9 +600,18 @@ func (s *Service) ShareIn(ctx context.Context, tx *sql.Tx, adminID, userID, serv
 	if exists == 0 {
 		return ErrServerNotFound
 	}
+	details := map[string]any{"userId": userID, "capabilities": capabilities}
 	if len(capabilities) == 0 {
-		_, err = tx.ExecContext(ctx, "DELETE FROM server_grants WHERE user_id = ? AND server_id = ?", userID, serverID)
-		capabilities = []Capability{}
+		// The removal records what was removed, which outlasts the grant's
+		// own entry in the audit log and says their access ended.
+		var removed string
+		err = tx.QueryRowContext(ctx, "DELETE FROM server_grants WHERE user_id = ? AND server_id = ? RETURNING capabilities_json", userID, serverID).Scan(&removed)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = nil
+		} else if err == nil {
+			details["removed"] = parseCapabilities(removed)
+		}
+		details["capabilities"] = []Capability{}
 	} else {
 		_, err = tx.ExecContext(ctx, `INSERT INTO server_grants (user_id, server_id, capabilities_json, updated_at)
       VALUES (?, ?, ?, ?) ON CONFLICT (user_id, server_id) DO UPDATE SET capabilities_json = excluded.capabilities_json,
@@ -520,5 +621,5 @@ func (s *Service) ShareIn(ctx context.Context, tx *sql.Tx, adminID, userID, serv
 		return err
 	}
 	return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: adminID, Action: "server.sharing.updated", TargetType: "server",
-		TargetID: serverID, Details: map[string]any{"userId": userID, "capabilities": capabilities}})
+		TargetID: serverID, Details: details})
 }

@@ -117,11 +117,11 @@ test("changing someone's access and stopping sharing from the server's page", as
   await expect(shareRow(sharing, "pal")).toHaveCount(0);
   await expect(sharing.locator("form.share-form").getByLabel("Person").locator("option", { hasText: "pal" })).toHaveCount(1);
   await pal.locator(".section-tabs").getByRole("link", { name: "Activity" }).click();
-  await expect(pal.getByText("Server not found")).toBeVisible();
+  await expect(pal.getByText("Your access to this server ended")).toBeVisible();
   await pal.goto("/");
   await expect(pal.getByText("No servers shared with you yet")).toBeVisible();
   await pal.goto(survivalURL);
-  await expect(pal.getByText("Server not found")).toBeVisible();
+  await expect(pal.getByText("Your access to this server ended")).toBeVisible();
   await admin.goto("/users");
   await expect(user).toContainText("Nothing shared yet");
 

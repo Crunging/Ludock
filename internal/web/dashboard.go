@@ -45,6 +45,15 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 		all, _ = s.App.Servers.ListSaved(ctx, request.User())
 	}
 	list.Total = len(all)
+	if !list.Admin {
+		paused, err := s.App.Authz.Paused(ctx, request.User())
+		if err != nil {
+			log.Warn("Could not list paused servers")
+		}
+		for _, server := range paused {
+			list.Paused = append(list.Paused, authz.PausedMessage(server.DisplayName)+".")
+		}
+	}
 	down := s.downServers(ctx, all)
 	search := strings.ToLower(strings.TrimSpace(list.Search))
 	states := map[string]bool{}

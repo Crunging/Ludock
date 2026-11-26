@@ -13,6 +13,8 @@ import (
 
 // FilesView is the file browser for one folder.
 type FilesView struct {
+	// Hidden is the refusal that hides the server, which the page fails with.
+	Hidden               error
 	ServerID, ServerName string
 	State, Health        string
 	Exit                 *servers.Exit

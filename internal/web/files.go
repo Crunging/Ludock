@@ -109,6 +109,9 @@ func (s *Server) filesView(r *http.Request, request *Request) views.FilesView {
 	snapshot, err := s.App.Servers.Summary(r.Context(), request.User(), f.ServerID)
 	if err != nil {
 		f.Error = publicMessage(err)
+		if authz.Hidden(err) {
+			f.Hidden = err
+		}
 		return f
 	}
 	view := snapshot.Server
@@ -165,6 +168,10 @@ func (s *Server) filesView(r *http.Request, request *Request) views.FilesView {
 
 func (s *Server) filesPage(w http.ResponseWriter, r *http.Request, request *Request) {
 	f := s.filesView(r, request)
+	if f.Hidden != nil {
+		s.fail(w, r, request, f.Hidden)
+		return
+	}
 	title := f.ServerName
 	if title == "" {
 		title = "Server files"
@@ -194,7 +201,11 @@ func (s *Server) filesList(w http.ResponseWriter, r *http.Request, request *Requ
 		}
 		w.Header().Set("HX-Replace-Url", "/files/"+f.ServerID+"?"+values.Encode())
 	}
-	render(w, r, http.StatusOK, views.FileList(f))
+	status := http.StatusOK
+	if public, ok := apperr.As(f.Hidden); ok {
+		status = public.Status
+	}
+	render(w, r, status, views.FileList(f))
 }
 
 func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Request) {
