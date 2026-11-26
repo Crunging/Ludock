@@ -519,11 +519,19 @@ func settings10(t *testing.T, i *installed10) {
 	settings := &advanced.Service{DB: i.jobs.DB, ClientIP: &auth.ClientIP{}}
 	limit, _ := settings.UploadLimit(ctx)
 	choices, err := i.jobs.Identity.Choices(ctx)
+	// The service reports a deadline only until it passes, so the saved one
+	// is read as it is stored.
+	var logging struct {
+		VerboseUntil int64 `json:"verboseUntil"`
+	}
+	if _, readErr := db.ReadSetting(ctx, i.jobs.DB, "advanced.verbose-logging", &logging); readErr != nil {
+		t.Fatal(readErr)
+	}
 	if !ntfy.Ready() || ntfy.Config.URL != "https://ntfy.example.invalid" || !ntfy.Saved["topic"] || i.jobs.Servers.ConnectionHost(ctx) != "play.example.invalid" ||
-		limit != 512<<20 || settings.Logging(ctx).VerboseUntil != 1795770861010 || settings.Proxies(ctx).Trusted != "10.0.0.0/8" ||
+		limit != 512<<20 || logging.VerboseUntil != 1795770861010 || settings.Proxies(ctx).Trusted != "10.0.0.0/8" ||
 		err != nil || !maps.Equal(choices, map[string]identity.Choice{"standalone:not-a-game": {}}) {
 		t.Fatalf("ntfy %+v, host %q, upload %d, logging %+v, proxies %+v, choices %v %v", ntfy, i.jobs.Servers.ConnectionHost(ctx), limit,
-			settings.Logging(ctx), settings.Proxies(ctx), choices, err)
+			logging, settings.Proxies(ctx), choices, err)
 	}
 }
 
