@@ -362,6 +362,8 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 		}
 		return err
 	}
+	// Only live data needs watching: the game never reads a stage folder.
+	watch := j.moveWatch(server, job)
 	var blocked error
 	for position := len(entries) - 1; position >= 0; position-- {
 		entry := entries[position]
@@ -380,7 +382,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 		// What is live then is set aside, never removed: nothing tells the
 		// backup's copy apart from what another program wrote into it.
 		if entry.Phase == "old_moved" || entry.Phase == "replaced" {
-			cleaned, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, helper.RestoreSetAside, live)
+			cleaned, err := j.watchedStep(ctx, data, rootPath, entry.Item, job, helper.RestoreSetAside, live, watch)
 			if err != nil {
 				return err
 			}
@@ -398,7 +400,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 			if blocked = j.assertStopped(ctx, server, job); blocked != nil {
 				continue
 			}
-			returned, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, helper.RestoreRollbackOld, live)
+			returned, err := j.watchedStep(ctx, data, rootPath, entry.Item, job, helper.RestoreRollbackOld, live, watch)
 			if err != nil {
 				return err
 			}
@@ -618,20 +620,22 @@ func (r *restoreRun) stillSafe() error {
 
 var errWriterStarted = fail("EXTERNAL_WRITER_STARTED", "Another container that can write to this server’s data started meanwhile. Check it before trying again.")
 
-// notStarted stops a move once something outside Ludock starts the server,
-// it is no longer the server this restore stopped, or another container
-// that can write to its data starts, so nothing runs on data still moving.
-// A check that can't run waits for the one after the move.
-func (r *restoreRun) notStarted(ctx context.Context) error {
-	err := r.j.assertStillStopped(ctx, r.server, r.job)
-	if errors.Is(err, errServerChanged) || apperr.Is(err, "SERVER_BINDING_CHANGED") || apperr.Is(err, "SERVER_BINDING_UNAVAILABLE") ||
-		apperr.Is(err, "SERVER_NOT_FOUND") {
-		return err
+// moveWatch stops a move, forward or back, once something outside Ludock
+// starts the server, it is no longer the server job stopped, or another
+// container that can write to its data starts, so nothing runs on data
+// still moving. A check that can't run waits for the one after the move.
+func (j *Jobs) moveWatch(server *servers.Context, job *ops.Context) func(context.Context) error {
+	return func(ctx context.Context) error {
+		err := j.assertStillStopped(ctx, server, job)
+		if errors.Is(err, errServerChanged) || apperr.Is(err, "SERVER_BINDING_CHANGED") || apperr.Is(err, "SERVER_BINDING_UNAVAILABLE") ||
+			apperr.Is(err, "SERVER_NOT_FOUND") {
+			return err
+		}
+		if apperr.Is(j.Backups.AssertNoOtherWriters(ctx, server, job.Job.Recovery.DataHelperID), "SHARED_DATA_WRITER") {
+			return errWriterStarted
+		}
+		return nil
 	}
-	if apperr.Is(r.j.Backups.AssertNoOtherWriters(ctx, r.server, r.job.Job.Recovery.DataHelperID), "SHARED_DATA_WRITER") {
-		return errWriterStarted
-	}
-	return nil
 }
 
 func (r *restoreRun) warn() error {
@@ -813,7 +817,7 @@ func (r *restoreRun) replace(index int, root backups.Root) error {
 	if err := persistJournal(r.job, index, "moving_old"); err != nil {
 		return err
 	}
-	if _, err := r.j.watchedStep(r.ctx, r.data, destination, r.item, r.job, helper.RestoreMoveOld, r.assertAccess, r.notStarted); err != nil {
+	if _, err := r.j.watchedStep(r.ctx, r.data, destination, r.item, r.job, helper.RestoreMoveOld, r.assertAccess, r.j.moveWatch(r.server, r.job)); err != nil {
 		return err
 	}
 	if err := persistJournal(r.job, index, "old_moved"); err != nil {
@@ -824,7 +828,7 @@ func (r *restoreRun) replace(index int, root backups.Root) error {
 	if err := r.stillSafe(); err != nil {
 		return err
 	}
-	if _, err := r.j.watchedStep(r.ctx, r.data, destination, r.item, r.job, helper.RestoreMoveNew, r.assertAccess, r.notStarted); err != nil {
+	if _, err := r.j.watchedStep(r.ctx, r.data, destination, r.item, r.job, helper.RestoreMoveNew, r.assertAccess, r.j.moveWatch(r.server, r.job)); err != nil {
 		return err
 	}
 	return persistJournal(r.job, index, "replaced")

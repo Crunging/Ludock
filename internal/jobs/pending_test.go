@@ -390,3 +390,48 @@ func TestUndoKeepsWhatAnotherWriterWrote(t *testing.T) {
 		}
 	}
 }
+
+// Something outside Ludock starts the server while an undo of a stopped
+// restore clears the live folder or returns the previous data. The undo's
+// helper stops within about a second, the restore stays pending, and the
+// undo says the server was started. Whichever finishes it next, Undo, the
+// next backup, or startup with the server stopped, puts the previous data
+// back and keeps what the game wrote.
+func TestUndoStopsWhenStarted(t *testing.T) {
+	for _, step := range []string{helper.RestoreSetAside, helper.RestoreRollbackOld} {
+		for _, finish := range []string{"undo", "backup", "startup"} {
+			t.Run(step+" "+finish, func(t *testing.T) {
+				f := setup(t)
+				restore, _ := f.stoppedRestore(t)
+				startedDuring(step, "world")(t, f)
+				undo := f.run(t, ops.KindUndoRestore, nil)
+				if undo.Status != ops.Failed || !strings.Contains(undo.Error, "started or changed the server meanwhile") || !f.running() {
+					t.Fatalf("%s %q, running %v", undo.Status, undo.Error, f.running())
+				}
+				if pending, _ := f.jobs.pendingRestores(ctx, f.serverID); len(pending) != 1 {
+					t.Fatalf("pending %v, journal %s", pending, f.savedJournal(restore.ID))
+				}
+				var later *ops.Job
+				switch finish {
+				case "startup":
+					f.runner.Stop()
+					if err := f.jobs.Docker.Stop(ctx, f.game, nil); err != nil {
+						t.Fatal(err)
+					}
+					if err := f.runner.Start(ctx, nil); err != nil {
+						t.Fatal(err)
+					}
+					later = undo
+				default:
+					if later = f.run(t, map[string]string{"undo": ops.KindUndoRestore, "backup": "backup"}[finish], nil); later.Status != ops.Succeeded {
+						t.Fatalf("%+v", later)
+					}
+				}
+				if f.savedJournal(restore.ID) != "rolled_back put back kept" || read(t, filepath.Join(f.data, "world", "large.dat")) != "changed" ||
+					read(t, filepath.Join(f.data, "world", helper.SetAsideName(restore.ID), "generated.dat")) != "generated" {
+					t.Errorf("journal %s", f.savedJournal(restore.ID))
+				}
+			})
+		}
+	}
+}
