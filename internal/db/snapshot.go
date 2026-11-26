@@ -179,10 +179,10 @@ func settleOperations(ctx context.Context, path string) error {
 	_, err = conn.ExecContext(ctx, `UPDATE operations SET recovery_json=json_set(json_remove(recovery_json,'$.dataUnsafe'),'$.restore',json('{"status":"unknown"}')),
     result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'`+GuidancePath+`',?||id||?)
     WHERE kind='restore' AND json_valid(recovery_json) AND json_extract(recovery_json,'$.restore.status') IN ('staging','replacing','rolling_back','committed')`,
-		"Ludock’s data was saved before this restore finished, so this copy doesn’t know how it ended, and Ludock won’t change the server’s data for it. "+
+		"Ludock’s data was saved before this restore finished, so Ludock doesn’t know how it ended and won’t change the server’s data for it. "+
 			"If one of the server’s data folders still has a folder named .ludock-restore-",
-		", it holds what the restore was moving: the server’s previous data in its old folder and the backup’s in new. "+
-			"New backups leave that folder out, so they don’t keep that previous data: copy out or put back what you need, then delete the folder on the host.")
+		", copy out or put back what you need from it, then delete it on the host: its old folder holds the server’s previous data and new the backup’s, "+
+			"and new backups leave it out.")
 	return err
 }
 

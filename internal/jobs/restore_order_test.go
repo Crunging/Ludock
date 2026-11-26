@@ -590,7 +590,7 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 		undone   = "The restore was undone: the server’s data is as it was."
 		finished = "Ludock restarted while this ran, after the restore had finished: what it restored is in place."
 		// A return under way may have finished unheard.
-		pending = "The restore was stopped partway while its previous data was being put back, so Ludock can’t confirm where all of it is: look in the server’s data and in the folder " + helper.StagePrefix + "%s. An administrator can undo the restore from Needs attention; otherwise Ludock undoes it the next time it stops the server for a backup, a restore or an update."
+		pending = "The restore was stopped partway while its previous data was being put back. An administrator can undo the restore from Needs attention to finish that; otherwise Ludock does it the next time it stops the server for a backup, a restore or an update. Until then Ludock can’t confirm where all of it is: look in the server’s data and in the folder " + helper.StagePrefix + "%s."
 		// Where live data had moved, Activity names the set-aside folder.
 		aside = " Anything Ludock moved out of the way of the server’s previous data went to the folder ludock-set-aside-%s in its data."
 	)

@@ -66,7 +66,7 @@ func journalMatches(entries []journal, server *servers.Context) bool {
 	return true
 }
 
-var errPendingBlocked = fail("RESTORE_UNDO_BLOCKED", "An earlier restore of this server stopped partway, and the server’s data folders or game have changed since, so Ludock can’t undo it safely and went no further. Put them back as they were where the server is defined, such as in Compose, then undo the restore. That restore’s Activity says where the server’s previous data is.")
+var errPendingBlocked = fail("RESTORE_UNDO_BLOCKED", "Ludock can’t safely undo an earlier restore of this server that stopped partway, because the server’s data folders or game have changed since. Put them back as they were where the server is defined, such as in Compose, then undo the restore. That restore’s Activity says where the server’s previous data is.")
 
 // finishPendingRestores finishes, as startup recovery would, every restore
 // of the server that ended partway, newest first, once the server is

@@ -106,7 +106,7 @@ func StageInside(folder string) *apperr.Error {
 	if folder != "" {
 		where = "The folder " + folder
 	}
-	return fail("RESTORE_FOLDER_INSIDE", where+" holds a hidden .ludock-restore-… folder, where an earlier restore keeps a server’s previous data, so this restore was stopped before moving it. "+
+	return fail("RESTORE_FOLDER_INSIDE", "This restore was stopped before moving anything: "+strings.ToLower(where[:1])+where[1:]+" holds a hidden .ludock-restore-… folder, where an earlier restore keeps a server’s previous data. "+
 		"Undo or finish that restore from Needs attention; if no restore needs the folder, copy out what you need from it and delete it on the host, then try again.")
 }
 
@@ -295,9 +295,9 @@ var helperErrors = &launch.ExecErrors{Timeout: errTimeout, Failed: errFailed, Un
 // file, or a file with a second name.
 // ErrUndoClashUnsafe is what undoing the restore would refuse to move found
 // once the server stopped, as opposed to a check that couldn't run.
-var ErrUndoClashUnsafe = fail("RESTORE_UNDO_IN_THE_WAY", "Undoing the restore would have to move something in the server’s data that is a link, a special file, a file with a second name elsewhere, or on another disk, so Ludock went no further. That restore’s Activity says where the server’s previous data is.")
+var ErrUndoClashUnsafe = fail("RESTORE_UNDO_IN_THE_WAY", "Ludock stopped undoing the restore because something it would have to move can’t be moved safely: a link, a special file, a file with a second name elsewhere, or something on another disk. Deal with it on the host, then undo the restore again. That restore’s Activity says where the server’s previous data is.")
 
-var ErrUndoEntryUnsafe = fail("RESTORE_UNDO_UNSAFE", "Undoing the restore would have to move something in the server’s data that is a link, a special file, or a file with a second name elsewhere, so Ludock went no further. That restore’s Activity says where the server’s previous data is.")
+var ErrUndoEntryUnsafe = fail("RESTORE_UNDO_UNSAFE", "Ludock stopped undoing the restore because something it would have to move can’t be moved safely: a link, a special file, or a file with a second name elsewhere. Deal with it on the host, then undo the restore again. That restore’s Activity says where the server’s previous data is.")
 
 // IsRunning reports whether a reused restore helper is still running.
 func (h *Helpers) IsRunning(ctx context.Context, id string) (bool, error) {

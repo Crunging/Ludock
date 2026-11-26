@@ -357,6 +357,14 @@ free space left. Under **Settings → Advanced → Backup folder and limits**:
 Once these settings are saved, Ludock never changes them by itself. To turn
 backups off completely, set `LUDOCK_BACKUP_ROOTS` to empty.
 
+### How backup space is counted
+
+A backup without room for even empty data folders, under the total limit or
+above the free space kept, is refused before the server stops. A backup whose
+archive is gone or damaged doesn't count toward the total limit, so it never
+stops new backups. One in a folder Ludock can't reach counts toward the limit
+for new backups, but never makes Ludock remove others.
+
 ### Backups on another disk
 
 Replace the `ludock-backups` volume in `compose.yaml` with a folder on that disk,
@@ -460,21 +468,14 @@ Recreate it without `--rm` to manage it fully.
   mounts, links, and special files are refused; other extended attributes
   (such as SELinux labels and file capabilities), sparse files, setuid, and
   files' setgid aren't kept.
-- **ACLs in the archive:** each file's and folder's access ACL, and each
-  folder's default ACL, are stored as GNU tar and bsdtar store them with
-  `--acls`: in `SCHILY.acl.access` and `SCHILY.acl.default` records, as
-  `user::rw-,user:1001:rw-,group::r--,mask::rw-,other::---`, with numeric
-  user and group IDs, since names differ between the host and containers. The
-  mode in the archive gives no one more than the ACL did: the owning group
-  gets only what it and every user the ACL names may do, and others only what
-  every named user and group may do. So a tool that ignores ACLs, or storage
-  that can't hold them, restores a file with the same permissions or fewer,
-  never more; only the entries for specific users and groups are lost then. A
-  restore onto such storage says so in its **Activity** entry. An entry
-  without an ACL record had none, and restores without one, whatever the data
-  folder's default ACL would give a new file. A data folder itself keeps the
-  ACL it has now; only its owner and permissions come back. An ACL of more
-  than 1024 entries stops the backup.
+- **ACLs in the archive:** each file's and folder's ACL, and each folder's
+  default ACL, are kept with numeric user and group IDs, in the standard
+  `SCHILY.acl.access` and `SCHILY.acl.default` records that GNU tar and bsdtar
+  read with `--acls`. A tool or storage that ignores ACLs restores the same
+  permissions or fewer, never more; only the entries for specific users and
+  groups are lost, and a restore onto such storage says so in **Activity**. A
+  file that had no ACL comes back without one, a data folder keeps the ACL it
+  has now, and an ACL of more than 1024 entries stops the backup.
 
 ## Ludock itself
 
@@ -885,6 +886,42 @@ answering". [Cancelling](GUIDE.md#stopping-and-restarting) a scheduled run
 doesn't pause its schedule, and **Show → Everything** also records cancelling
 a run that waited for players to leave.
 
+### Warnings that can't go out
+
+If the game's console or Docker doesn't answer when it's time to warn, Ludock
+keeps trying for a minute (**Warning players** in **Activity**) and gives
+players a full minute from when the warning goes out; if it never goes out, the
+work goes ahead and **Activity** says Ludock couldn't warn players. If Ludock
+restarts during the minute, it finishes the wait afterwards; if it was down for
+more than five minutes past the time players were given, it leaves the server
+alone and says so in **Activity**.
+
+### Files: permissions and protected folders
+
+Uploads and files saved in the editor get one exception to keeping what a
+file had: where a file's group, others, or ACL would give its owner more than
+the owner's own permissions, they are cut to those, unless the owner is root.
+
+A folder holding a restore's hidden `.ludock-restore-*` folder can't be
+deleted, renamed, or moved in Files, since that folder can be the only copy of
+the server's previous data, and a restore of that folder or the whole server
+is refused until it is dealt with: undo or finish the restore it belongs to,
+or, if none needs it, copy out what you need and delete it on the host.
+
+### How outages are timed
+
+**Outage since** is the stop Docker reports even if Ludock wasn't watching
+then, but the wait before alerting counts from when Ludock noticed. A
+stop through Ludock after a server was reported down doesn't end that outage:
+once the server runs again, you hear that it's back up. A game still starting,
+or whose status check is off or wrong, never counts as not answering. Ludock
+remembers that a game answered, so one that hangs while Ludock itself restarts
+is still caught; the wait starts again when Ludock is back, unless the alert
+was already sent. A server that keeps restarting is one outage, timed from
+when Ludock first sees it restarting, even if it was stopped through Ludock
+before. A run after it, even one you start, ends it only once the game answers
+or the run has stayed up for **Wait before alerting**.
+
 ### After an interruption
 
 Work is recorded before it runs. When Ludock starts after a crash or restart,
@@ -933,59 +970,50 @@ resumed or checked on the next start.
 
 ### A restore that stopped partway
 
-A restore that stops partway, because something outside Ludock started the
-server or a step failed, always ends in one of these states, which its entry
-in **Activity** names. While a restore or its undo moves data, Ludock checks
-about once a second whether the server or another container that can write to
-its data was started, and stops moving it as soon as it sees that; an undo
-stopped that way stays to be finished later:
+A restore stops partway when a step fails, or when something outside Ludock
+starts the server or another container that can write to its data. While a
+restore or its undo moves data, Ludock checks for such a start about once a
+second and stops moving data as soon as it sees one. The restore's
+**Activity** entry names the state it left:
 
 | Where it stopped | What it leaves | How it is finished |
 | --- | --- | --- |
 | Before any data moved (staging, unpacking) | Nothing: the unpacked copy is removed even if the server is running | Nothing to finish |
 | After data moved, with the server stopped and nothing else writing to its data | The restore undone; anything in the place of the previous data, such as the backup's copy, in `ludock-set-aside-<id>` | Nothing to finish |
-| After data moved, with the server, or another container that can write to its data, started elsewhere | The previous data, or the part of it that had moved, in the root's `.ludock-restore-<id>/old`, not in place; the server left as it is | See below |
+| After data moved, with the server, or another container that can write to its data, started elsewhere | The previous data, or the part of it that had moved, in the root's `.ludock-restore-<id>/old`, not in place; the server left as it is | Undo the restore |
 | After the backup's data was in place, cleanup failing | The data it replaced in `.ludock-restore-<id>` | Removed at the next backup, restore, or update |
 
-A restore left with previous data out of place is listed in **Needs
-attention** for administrators. **Undo the restore** stops the server, the one
-case where a data operation stops a server another manager started; it warns
-players first when anyone is online and the game can be messaged. It refuses
-while another container that can write to the data runs, so stop that first.
-Ludock moves whatever is in the data folder now into `ludock-set-aside-<id>` beside it,
-returns the previous data, and starts the server again if it was running. A
-restore stopped while it was still moving data out left some of the previous
-data in place, so only what the game made in place of the rest moves there; a
-name already in that folder gets a number, such as `world (2)`. If
-no one does that, the next backup, restore, update, or restart with a backup
-first finishes the undo the same way before its own work, and so does Ludock's
-next start if the server is stopped then. If the `.ludock-restore-<id>` folder
-is gone, there is nothing to put back: the data is left as it is and the
-entry says so. A state Ludock can't finish safely, such as data folders that
-changed since or another restore's `.ludock-restore-<id>` folder inside the
-data, makes that work refuse instead, and a running server it stopped
-for the undo starts again (for a restart with a backup first, once its backup
-is taken) unless the undo had begun moving data.
+**Undo the restore**, in **Needs attention** for administrators, puts the
+previous data back. Stop any other container that can write to the data
+first: the undo refuses while one runs. It warns players when anyone is online
+and the game can be messaged, then stops the server, the one case where a data
+operation stops a server another manager started. It moves whatever is in the
+way into `ludock-set-aside-<id>` beside the data (a name already there gets a
+number, such as `world (2)`), puts the previous data back, and starts the
+server again if it was running. If no one undoes it, the next backup, restore,
+update, or restart with a backup first does before its own work, and so does
+Ludock's next start if the server is stopped then; an undo that stopped
+partway itself is finished the same way. If `.ludock-restore-<id>` is gone,
+there is nothing to put back: the data is left as it is and the entry says so.
 
-Anything in the way of the previous data during an undo moves to
-`ludock-set-aside-<id>`. On filesystems that can rename without replacing, as
-most local Linux filesystems can, restoring and undoing never overwrite a file
-a game creates at the same moment. On filesystems that can't, such as NFS,
-restoring and undoing, of the whole data or of one file or folder, check that
-each name is free and then use a plain rename, so a file created in the
-instant between that check and the move can be replaced. The server is stopped
-for those moves and Ludock watches for it or another container that can write
-its data starting, but a program already running on the host can still write
-in that instant.
+Ludock refuses to finish an undo when it can't tell where the previous data
+belongs: the server's data folders or game changed where it is defined, such
+as in Compose, or another restore's `.ludock-restore-<id>` folder is inside
+the data. The undo, backups, restores, updates, and restarts with a backup
+first, scheduled ones included, are then refused without stopping the server,
+and the server's page and list stop offering them. A server stopped for an
+undo that hadn't begun moving data starts again (for a restart with a backup
+first, once its backup is taken). Put the definition back as it was, then
+choose **Undo the restore**.
 
-If the server's data folders or game change where it is defined, such as in
-Compose, while such a restore waits to be undone, Ludock can't tell where the
-previous data belongs. The undo, backups, restores, updates, and restarts
-with a backup first are refused with that reason, scheduled ones included,
-without stopping the server. The server's page says so, and neither it nor
-the server list offers backups, restores, updates, or a backup first on
-restart; a new schedule doesn't back up first unless you choose it. Put them
-back as they were, then choose **Undo the restore**.
+On most local Linux filesystems, restoring and undoing never overwrite a file
+a game creates at the same moment. On storage that can't rename without
+replacing, such as NFS, Ludock checks that each name is free and then moves
+data there with a plain rename, so a file created in that instant can be
+replaced. Ludock stops the server for these moves and watches for it or
+another container starting, but not for a program already running on the
+host: stop anything on the host that writes to the server's data before a
+restore or an undo.
 
 ### When Docker restarts
 
