@@ -650,6 +650,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		return bounded
 	}
 	spec, err := s.Docker.InspectSpec(ctx, HelperName(record.ID))
+	noHelper := docker.IsNotFound(err)
 	if !stuck && (err != nil && !docker.IsNotFound(err) || err == nil && (spec.State.Running || spec.State.Restarting)) {
 		return false
 	}
@@ -676,7 +677,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	// Only a container of this update, by its label, is left over.
 	replacement, err := s.Docker.InspectSpec(ctx, servers.ReplacementName(record.Name, record.ID))
 	// Nothing changed only once Docker showed whether one is left.
-	known := err == nil || docker.IsNotFound(err)
+	known, noReplacement := err == nil || docker.IsNotFound(err), docker.IsNotFound(err)
 	if err == nil && replacement.ID != own.ID && operationOf(replacement) == record.ID {
 		record.Leftover = strings.TrimPrefix(replacement.Name, "/")
 	}
@@ -686,11 +687,12 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	if ownReplacement && own.Name != "/"+record.Name && (gone == nil || docker.IsNotFound(gone)) {
 		record.Leftover, record.OnLeftover, record.OriginalGone = strings.TrimPrefix(own.Name, "/"), true, docker.IsNotFound(gone)
 	}
-	// An original running since before the update was never stopped, so
-	// its data is as it was; a new container the helper left unstarted
+	// An original running since before the update was never stopped, nor
+	// was one restarted before the update had a helper or a new container,
+	// so its data is as it was; a new container the helper left unstarted
 	// goes.
 	started, _ := time.Parse(time.RFC3339Nano, own.State.StartedAt)
-	untouched := original && started.Before(time.UnixMilli(record.StartedAt))
+	untouched := original && (started.Before(time.UnixMilli(record.StartedAt)) || noHelper && noReplacement)
 	// So does one after the helper said nothing changed: it never ran.
 	if (untouched || original && code == ExitUnchanged) && record.Leftover != "" && !replacement.State.Running {
 		if err := s.Docker.Remove(call(), replacement.ID, true, true); err == nil || docker.IsNotFound(err) {

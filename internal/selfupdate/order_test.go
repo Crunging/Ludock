@@ -442,6 +442,12 @@ func TestSelfUpdateOrder(t *testing.T) {
 		}, trace: join(swap, []string{"stop new", "remove new", "start old", "start old", "remove helper", "policy old"}), image: oldImage,
 			state: selfupdate.StatePutBack, data: selfupdate.DataRestored, probe: "before",
 			reason: "Docker couldn’t start the new container, for example because its port was still in use"},
+		{name: "Ludock restarted before it made the helper", arrange: func(g *rig) { g.fail["create helper"] = 500 },
+			duringCopy: func(t *testing.T, g *rig, p *process) {
+				g.client.Stop(context.Background(), g.old, nil)
+				g.client.Start(context.Background(), g.old)
+			}, trace: []string{"pull", "create helper", "stop old", "start old", "policy old"}, image: oldImage,
+			state: selfupdate.StateFailed, reason: "the update stopped before Ludock was replaced, so nothing was changed", probe: "after"},
 		{name: "the helper killed after it took the original's restart policy, before it stopped it", arrange: func(g *rig) {
 			g.at["stop old"] = g.killHelper
 			g.fail["stop old"] = 500
