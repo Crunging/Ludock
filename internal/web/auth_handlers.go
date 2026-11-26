@@ -8,6 +8,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/auth"
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -155,7 +156,10 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) logout(w http.ResponseWriter, r *http.Request, request *Request) {
 	// Keep the cookie until the session is gone, so a failed sign-out can be
 	// retried from this browser instead of leaving a live session behind.
-	if err := s.Auth.Logout(r.Context(), request.Principal.Token, request.Client); err != nil {
+	if err := s.Auth.Logout(r.Context(), request.Principal.Token, request.Client); errors.Is(err, db.ErrLudockUpdating) {
+		s.fail(w, r, request, err)
+		return
+	} else if err != nil {
 		log.Error("Could not end a session")
 		s.fail(w, r, request, apperr.New("LOGOUT_FAILED", 503, "Ludock could not end this session. Try signing out again."))
 		return

@@ -186,6 +186,9 @@ func (d *DB) UpdateUserAccess(ctx context.Context, id string, role Role, disable
 // and revokes every session.
 func (d *DB) UpdateUserPassword(ctx context.Context, id, passwordHash string, audit AuditEntry) error {
 	return d.Tx(ctx, func(tx *sql.Tx) error {
+		if err := RefuseWhileUpdating(ctx, tx); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
 			passwordHash, Now(), id); err != nil {
 			return err

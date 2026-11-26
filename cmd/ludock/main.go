@@ -241,6 +241,10 @@ func recoverAccount(args []string) int {
 	}
 	defer database.Close()
 	user, err := auth.RecoverPassword(context.Background(), database, username, password)
+	if errors.Is(err, db.ErrLudockUpdating) {
+		fmt.Fprintln(os.Stderr, "Ludock is updating itself, and putting the old version back would undo this. Start Ludock and let the update finish, then run this again.")
+		return 1
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, startupError(err, "Could not reset the password."))
 		return 1

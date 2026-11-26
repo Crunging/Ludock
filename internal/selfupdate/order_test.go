@@ -428,6 +428,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 				_, used := p.d.UseAccountLink(ctx, db.LinkUse{TokenHash: "link", UserID: "admin", PasswordHash: "y", Session: db.SessionInput{CreatedAt: now}})
 				for change, err := range map[string]error{
 					"reset link":   cmp.Or(link, used),
+					"recovery":     p.d.UpdateUserPassword(ctx, "admin", "y", db.AuditEntry{Action: "user.password.recovered"}),
 					"two-factor":   p.d.ChangeTwoFactor(ctx, db.TwoFactorChange{UserID: "admin", TokenHash: g.session, Session: db.SessionInput{CreatedAt: now}}),
 					"admin change": p.d.AdminMutation(ctx, "admin", g.session, now, func(*sql.Tx) error { return nil }),
 					"sign-out":     p.d.Logout(ctx, g.session, db.AuditEntry{Action: "auth.logout"}),
