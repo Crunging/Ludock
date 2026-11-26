@@ -271,7 +271,7 @@ test("finding a newer Ludock and updating it", async ({ page }) => {
 
     await notice.getByRole("button", { name: "Update Ludock" }).click();
     const confirm = page.getByRole("dialog", { name: "Update Ludock?" });
-    await expect(confirm).toContainText("Your game servers keep running, and this page comes back by itself in about a minute.");
+    await expect(confirm).toContainText("Your game servers keep running, and this page comes back by itself once it has, usually within a few minutes.");
     await confirm.getByRole("button", { name: "Update Ludock" }).click();
     await expect(notice).toContainText("Ludock is updating.");
     await expect(notice.locator("[data-await-restart]")).toBeAttached();

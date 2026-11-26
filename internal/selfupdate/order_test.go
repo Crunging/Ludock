@@ -4,7 +4,10 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/ops"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -276,8 +279,9 @@ func health(g *rig, c *fakedocker.Container, status string) {
 }
 
 var (
-	swap    = []string{"pull", "create helper", "start helper", "create new", "policy old", "stop old", "start new"}
-	putBack = []string{"stop new", "remove new", "start old", "policy old", "remove helper"}
+	swap = []string{"pull", "create helper", "start helper", "create new", "policy old", "stop old", "start new"}
+	// The original, started again, restores its own restart policy.
+	putBack = []string{"stop new", "remove new", "start old", "remove helper", "policy old"}
 )
 
 func join(parts ...[]string) []string { return slices.Concat(parts...) }
@@ -307,6 +311,11 @@ func TestSelfUpdateOrder(t *testing.T) {
 		// not Ludock's.
 		settler              string
 		noPolicy, onLeftover bool
+		// duringCopy runs once the copy is written, in the Ludock that
+		// wrote it.
+		duringCopy func(t *testing.T, g *rig, p *process)
+		// refusesData: the Ludock that comes up can't open the data.
+		refusesData bool
 	}{
 		{name: "success", trace: join(swap, []string{"policy new", "remove old", "rename new", "remove helper"}),
 			image: newImage, state: selfupdate.StateSucceeded, probe: "after"},
@@ -350,7 +359,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 		}, trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataKept,
 			reason: "Docker couldn’t start the new container, for example because its port was still in use", probe: "after"},
 		{name: "Docker refuses to create the new container", arrange: func(g *rig) { g.fail["create new"] = 400 },
-			trace: []string{"pull", "create helper", "start helper", "create new", "remove helper"}, image: oldImage,
+			trace: []string{"pull", "create helper", "start helper", "create new", "remove helper", "policy old"}, image: oldImage,
 			state: selfupdate.StateFailed, reason: "Docker couldn’t create Ludock’s new container, so nothing was changed", probe: "after"},
 		{name: "the pull fails", arrange: func(g *rig) { g.fail["pull"] = 500 }, trace: []string{"pull"}, image: oldImage,
 			state: selfupdate.StateFailed, reason: "Docker couldn’t download Ludock’s new image. Check the machine’s internet connection; for a private registry, set LUDOCK_DOCKER_CONFIG.",
@@ -361,7 +370,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 		}, after: func(g *rig) string {
 			g.client.Start(context.Background(), g.old)
 			return "ludock"
-		}, trace: join(swap, []string{"start old", "remove helper"}), image: oldImage, state: selfupdate.StateInterrupted,
+		}, trace: join(swap, []string{"start old", "remove helper", "policy old"}), image: oldImage, state: selfupdate.StateInterrupted,
 			reason: "the update stopped partway", probe: "after", copy: true},
 		{name: "the helper killed mid-swap, then docker compose pull and up -d", arrange: func(g *rig) {
 			g.at["start new"] = g.killHelper
@@ -376,6 +385,58 @@ func TestSelfUpdateOrder(t *testing.T) {
 			return "ludock"
 		}, trace: join(swap, []string{"start new", "remove helper"}), image: newImage, state: selfupdate.StateInterrupted,
 			reason: "the update stopped partway", probe: "after"},
+		{name: "work asked for after the copy is refused, so a put-back can't forget it", arrange: func(g *rig) { g.fail["start new"] = 500 },
+			duringCopy: func(t *testing.T, g *rig, p *process) {
+				store := identity.Store{DB: p.d}
+				games, err := store.Reconcile(context.Background(), []identity.Observation{{ContainerID: g.game, Name: "game", DisplayName: "game", GameType: "minecraft"}}, "", 0)
+				if err == nil {
+					_, err = (&ops.Runner{DB: p.d, Locks: p.svc.Locks}).Enqueue(context.Background(), nil,
+						ops.EnqueueOptions{ServerID: games[0].ID, ActorID: ops.RecoveryActor, Kind: ops.KindRestart})
+				}
+				if !errors.Is(err, ops.ErrLudockUpdating) {
+					t.Errorf("work was accepted: %v", err)
+				}
+			}, trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored,
+			reason: "Docker couldn’t start the new container, for example because its port was still in use", probe: "before"},
+		{name: "the helper killed after the new version changed the data, then docker compose up -d", arrange: func(g *rig) {
+			g.onStart = func(c *fakedocker.Container) {
+				if isNew(c) {
+					g.migrate()
+					health(g, c, "starting")
+					g.killHelper()
+				}
+			}
+		}, after: func(g *rig) string {
+			for _, id := range g.engine.SortedIDs() {
+				if info := g.engine.Container(id); info != nil && info.Image == newImage {
+					g.engine.RemoveContainer(id)
+				}
+			}
+			g.client.Start(context.Background(), g.old)
+			return "ludock"
+		}, refusesData: true},
+		{name: "Docker stops the original but its answer is lost", arrange: func(g *rig) {
+			g.at["stop old"] = func() { g.engine.Exit(g.old, 0) }
+			g.fail["stop old"] = 500
+		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "stop old", "remove new", "start old", "remove helper", "policy old"},
+			image: oldImage, state: selfupdate.StateFailed, reason: "Docker couldn’t create Ludock’s new container, so nothing was changed", probe: "after"},
+		{name: "Docker starts the original again but its answer is lost", arrange: func(g *rig) {
+			g.fail["start new"] = 500
+			g.at["start old"] = func() { g.client.Start(context.Background(), g.old) }
+			g.fail["start old"] = 500
+		}, trace: join(swap, []string{"stop new", "remove new", "start old", "start old", "remove helper", "policy old"}), image: oldImage,
+			state: selfupdate.StatePutBack, data: selfupdate.DataRestored, probe: "before",
+			reason: "Docker couldn’t start the new container, for example because its port was still in use"},
+		{name: "the helper killed after it took the original's restart policy, before it stopped it", arrange: func(g *rig) {
+			g.at["stop old"] = g.killHelper
+			g.fail["stop old"] = 500
+		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "stop old", "remove helper", "remove new", "policy old"},
+			image: oldImage, state: selfupdate.StateFailed, reason: "the update stopped before Ludock was replaced, so nothing was changed", probe: "after"},
+		{name: "a health check of the container's own", arrange: func(g *rig) {
+			g.engine.Update(g.old, func(c *fakedocker.Container) {
+				c.ExtraConfig = map[string]any{"Healthcheck": map[string]any{"Test": []string{"CMD-SHELL", "nc -z localhost 3000"}}}
+			})
+		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
 		{name: "work holds its locks", before: func(g *rig, p *process) {
 			if _, err := p.svc.Locks.Acquire([]string{"server:x"}, nil); err != nil {
 				t.Fatal(err)
@@ -385,11 +446,12 @@ func TestSelfUpdateOrder(t *testing.T) {
 			g.engine.SetImageConfig(oldImage, map[string]any{})
 			g.engine.Update(g.old, func(c *fakedocker.Container) { c.ExtraConfig = map[string]any{} })
 		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
-		{name: "data kept inside the container rather than a volume or mounted folder", arrange: func(g *rig) {
+		{name: "data kept inside the container, which is said before any other reason", arrange: func(g *rig) {
 			g.engine.Update(g.old, func(c *fakedocker.Container) {
 				c.Mounts = []docker.MountPoint{{Type: "bind", Source: g.engine.Socket, Destination: socket}}
+				c.ExtraConfig = map[string]any{"Healthcheck": map[string]any{"Test": []string{"NONE"}}}
 			})
-		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
+		}, refused: "LUDOCK_UPDATE_UNAVAILABLE", reason: "Ludock keeps its data inside its own container"},
 		{name: "the data copy an earlier update kept is still there", arrange: func(g *rig) {
 			os.WriteFile(filepath.Join(g.dataDir, selfupdate.CopyName), []byte("kept"), 0o600)
 		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
@@ -408,13 +470,18 @@ func TestSelfUpdateOrder(t *testing.T) {
 			started := g.engine.Container(g.game).State.StartedAt
 			p := g.boot(g.old, oldImage)
 			// A write after the copy, which putting the old version back undoes.
-			g.at["create helper"] = func() { p.d.SetSetting(ctx, nil, "probe", "after") }
+			g.at["create helper"] = func() {
+				p.d.SetSetting(ctx, nil, "probe", "after")
+				if c.duringCopy != nil {
+					c.duringCopy(t, g, p)
+				}
+			}
 			if c.before != nil {
 				c.before(g, p)
 			}
 			err := p.svc.Start(ctx, "admin", g.session, "")
 			if c.refused != "" {
-				if !apperr.Is(err, c.refused) || len(g.lines()) != 0 {
+				if message, _ := apperr.Public(err); !apperr.Is(err, c.refused) || len(g.lines()) != 0 || !strings.HasPrefix(message, c.reason) {
 					t.Fatalf("Start: %v, trace %q", err, g.lines())
 				}
 				return
@@ -430,6 +497,17 @@ func TestSelfUpdateOrder(t *testing.T) {
 					t.Fatal("the helper was never killed")
 				}
 				name = c.after(g)
+			}
+			if c.refusesData {
+				time.Sleep(50 * time.Millisecond)
+				if d, err := db.Open(filepath.Join(g.dataDir, "ludock.db")); err == nil {
+					d.Close()
+					t.Error("the data opened")
+				}
+				if _, err := os.Stat(filepath.Join(g.dataDir, selfupdate.CopyName)); err != nil || selfupdate.Unfinished(g.dataDir) == "" {
+					t.Error("the refusal doesn't say the update didn't finish", err)
+				}
+				return
 			}
 			after, running := g.settle(name)
 			if got := g.lines(); !slices.Equal(got, c.trace) {
@@ -483,4 +561,33 @@ func (g *rig) killHelper() {
 	kill()
 	g.engine.Exit(g.helper(), 137)
 	close(g.killed)
+}
+
+// A helper Docker can't say anything about, long after any swap would have
+// ended, is given up on: work is let go and Settings says the update didn't
+// finish, with the commands.
+func TestSelfUpdateGivesUpOnAnUnreadableHelper(t *testing.T) {
+	ctx := context.Background()
+	g := newRig(t)
+	p := g.boot(g.old, oldImage)
+	record := selfupdate.Record{ID: identity.NewUUID(), State: selfupdate.StateUpdating, Container: g.old, Name: "ludock",
+		StartedAt: time.Now().Add(-time.Hour).UnixMilli()}
+	if err := p.d.SetSetting(ctx, nil, "ludock.update", record); err != nil {
+		t.Fatal(err)
+	}
+	g.engine.Intercept = func(r *http.Request) int {
+		if strings.Contains(r.URL.Path, selfupdate.HelperName(record.ID)) {
+			return 500
+		}
+		return 0
+	}
+	p.svc.Recover(ctx, ctx)
+	for deadline := time.Now().Add(5 * time.Second); p.svc.Updating(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("work is still held back")
+		}
+	}
+	if last := p.svc.Last(ctx); last.State != selfupdate.StateInterrupted {
+		t.Errorf("recorded %+v", last)
+	}
 }

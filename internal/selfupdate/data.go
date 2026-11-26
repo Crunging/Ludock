@@ -58,7 +58,7 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 				break
 			}
 			if err == nil && !spec.State.Running && !spec.State.Restarting {
-				if reason, _ := putBackReason(spec.State.ExitCode); reason < 0 {
+				if putBackReason(spec.State.ExitCode) < 0 {
 					return ""
 				}
 				if err := putDataBack(dataDir); errors.Is(err, os.ErrNotExist) {
@@ -76,6 +76,15 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 		}
 	}
 	return ""
+}
+
+// Unfinished is what to add to Ludock's refusal of data a newer version
+// changed when its update's copy is still there: that update didn't finish.
+func Unfinished(dataDir string) string {
+	if _, err := os.Lstat(filepath.Join(dataDir, CopyName)); err != nil {
+		return ""
+	}
+	return " An update of Ludock to a newer version didn’t finish. In the folder with its compose.yaml, run docker compose pull ludock, then docker compose up -d ludock."
 }
 
 // ours reports whether a helper replaces container.

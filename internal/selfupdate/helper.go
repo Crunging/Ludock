@@ -24,22 +24,16 @@ const (
 	// the new container.
 	ExitUnchanged = 10
 	// ExitPutBack, plus a Reason's index: the original runs again, and puts
-	// the data copy back as it starts. ExitPutBackNoPolicy is the same with
-	// the original's restart policy not restored.
-	ExitPutBack         = 20
-	ExitPutBackNoPolicy = 40
+	// the data copy back as it starts.
+	ExitPutBack = 20
 )
 
-// putBackReason is the Reason of a put-back's exit code, and whether the
-// original's restart policy was restored, or -1.
-func putBackReason(code int) (reason int, policy bool) {
-	switch {
-	case code >= ExitPutBack && code < ExitPutBack+len(Reasons):
-		return code - ExitPutBack, true
-	case code >= ExitPutBackNoPolicy && code < ExitPutBackNoPolicy+len(Reasons):
-		return code - ExitPutBackNoPolicy, false
+// putBackReason is the Reason of a put-back's exit code, or -1.
+func putBackReason(code int) int {
+	if code >= ExitPutBack && code < ExitPutBack+len(Reasons) {
+		return code - ExitPutBack
 	}
-	return -1, false
+	return -1
 }
 
 // Reasons the new version was put back, by index into the exit code.
@@ -127,8 +121,10 @@ func (h *Helper) Run(ctx context.Context) int {
 		return ExitUnchanged
 	}
 	if err := h.Docker.Stop(ctx, old.ID, nil); err != nil && docker.StatusCode(err) != 304 {
+		// A lost answer may hide a stop that happened; starting a running
+		// container does nothing.
 		h.Docker.Remove(ctx, id, true, true)
-		h.Docker.SetRestartPolicy(ctx, old.ID, policy)
+		h.Docker.Start(ctx, old.ID)
 		return ExitUnchanged
 	}
 	reason := reasonStart
@@ -149,25 +145,23 @@ func (h *Helper) Run(ctx context.Context) int {
 		}
 		return ExitUpdated
 	}
-	return h.putBack(ctx, old, id, policy, reason)
+	return h.putBack(ctx, old, id, reason)
 }
 
-// putBack removes the new container and starts the original again with
-// its restart policy.
-func (h *Helper) putBack(ctx context.Context, old *docker.ContainerSpec, id string, policy json.RawMessage, reason int) int {
+// putBack removes the new container and starts the original again, which
+// restores its own restart policy and data.
+func (h *Helper) putBack(ctx context.Context, old *docker.ContainerSpec, id string, reason int) int {
 	h.Docker.Stop(ctx, id, nil)
 	if err := h.Docker.Remove(ctx, id, true, true); err != nil && !docker.IsNotFound(err) {
 		log.Error("Ludock's update couldn't remove the new container", logging.Cause(err, docker.StatusCode(err))...)
 		return 1
 	}
 	if err := h.Docker.Start(ctx, old.ID); err != nil && docker.StatusCode(err) != 304 {
-		log.Error("Ludock's update couldn't start the previous container; start it with docker compose up -d", logging.Cause(err, docker.StatusCode(err))...)
-		return 1
-	}
-	// Started, the original is put back, whatever its policy.
-	if err := h.Docker.SetRestartPolicy(ctx, old.ID, policy); err != nil {
-		log.Error("Ludock's update couldn't restore the previous container's restart policy", logging.Cause(err, docker.StatusCode(err))...)
-		return ExitPutBackNoPolicy + reason
+		// The answer may be lost after it started.
+		if spec, inspectErr := h.Docker.Inspect(ctx, old.ID); inspectErr != nil || !spec.State.Running {
+			log.Error("Ludock's update couldn't start the previous container; start it with docker compose up -d", logging.Cause(err, docker.StatusCode(err))...)
+			return 1
+		}
 	}
 	return ExitPutBack + reason
 }

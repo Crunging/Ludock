@@ -334,7 +334,7 @@ templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 		if offer.Updating {
 			<div class="alert alert--info" role="status" data-await-restart hx-get="/fragments/settings/ludock-update" hx-trigger="every 3s" hx-target="#ludock-notice" hx-swap="outerHTML">
 				<div>
-					<p><strong>Ludock is updating.</strong> It restarts on the new version while your game servers keep running. This page comes back by itself in about a minute.</p>
+					<p><strong>Ludock is updating.</strong> It restarts on the new version while your game servers keep running. This page comes back by itself once it has, usually within a few minutes; downloading a large image can take longer.</p>
 				</div>
 			</div>
 		} else {
@@ -343,17 +343,23 @@ templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 					<div>
 						<p><strong>{ ludockFailed(*failed) }</strong></p>
 						if failed.State == selfupdate.StateInterrupted {
-							if failed.OnLeftover {
-								<p>This Ludock runs in the new container, still under its temporary name { failed.Leftover }. The commands below remove it and start Ludock again under its own name, on the new version; this page is away for a moment meanwhile.</p>
-							}
-							<p>In the folder with its compose.yaml, run:</p>
-							<pre><code>
-								docker compose pull ludock{ "\n" }
-								if failed.Leftover != "" {
-									docker rm -f { failed.Leftover }{ "\n" }
+							if failed.OnLeftover && failed.OriginalGone {
+								// Removing it could orphan an anonymous volume that holds the data.
+								<p>This Ludock runs in the new container, still under its temporary name { failed.Leftover }. Give it Ludock’s name:</p>
+								<pre><code>docker rename { failed.Leftover } { failed.Name }</code></pre>
+							} else {
+								if failed.OnLeftover {
+									<p>This Ludock runs in the new container, still under its temporary name { failed.Leftover }. The commands below remove it and start Ludock again under its own name, on the new version; this page is away for a moment meanwhile.</p>
 								}
-								docker compose up -d ludock
-							</code></pre>
+								<p>In the folder with its compose.yaml, run:</p>
+								<pre><code>
+									docker compose pull ludock{ "\n" }
+									if failed.Leftover != "" {
+										docker rm -f { failed.Leftover }{ "\n" }
+									}
+									docker compose up -d ludock
+								</code></pre>
+							}
 							if failed.Copy {
 								<p class="muted">The copy of its data from before the update, { selfupdate.CopyName }, is beside its database.</p>
 							}
@@ -386,16 +392,20 @@ templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 									hx-target="#ludock-notice"
 									hx-swap="outerHTML"
 									hx-confirm="Update Ludock?"
-									data-confirm-detail="Ludock downloads the new version and restarts on it. Your game servers keep running, and this page comes back by itself in about a minute. If the new version doesn’t start properly, Ludock puts this one back, with its data as it was just before: a setting or sign-in changed in those last seconds is undone."
+									data-confirm-detail="Ludock downloads the new version and restarts on it. Your game servers keep running, and this page comes back by itself once it has, usually within a few minutes. If the new version doesn’t start properly, Ludock puts this one back, with its data as it was just before: a setting or sign-in changed in those last seconds is undone."
 									data-confirm-action="Update Ludock"
 									data-busy-label="Starting…"
 								>Update Ludock</button>
 							</div>
 						} else {
-							<p><strong>A newer Ludock is available.</strong> Where you started it, in the folder with its compose.yaml, run:</p>
-							<pre><code>docker compose pull ludock{ "\n" }docker compose up -d ludock</code></pre>
-							if offer.Reason != "" {
-								<p class="muted">{ offer.Reason }</p>
+							if offer.Unmounted {
+								<p><strong>A newer Ludock is available.</strong> { offer.Reason }</p>
+							} else {
+								<p><strong>A newer Ludock is available.</strong> Where you started it, in the folder with its compose.yaml, run:</p>
+								<pre><code>docker compose pull ludock{ "\n" }docker compose up -d ludock</code></pre>
+								if offer.Reason != "" {
+									<p class="muted">{ offer.Reason }</p>
+								}
 							}
 						}
 					</div>

@@ -400,9 +400,9 @@ func ludockFailed(record selfupdate.Record) string {
 	case record.State == selfupdate.StatePutBack:
 		return put + ", with its data as it was." + policy
 	case record.State == selfupdate.StateInterrupted:
-		return "Ludock’s update didn’t finish: it stopped partway, so Ludock may be on either version. Finish it from a terminal with the commands below."
+		return "Ludock’s update didn’t finish: it stopped partway, so Ludock may be on either version. Finish it from a terminal with the commands below." + policy
 	}
-	return "Ludock couldn’t update itself: " + reason + ". It is still on version " + record.From + "."
+	return "Ludock couldn’t update itself: " + reason + ". It is still on version " + record.From + "." + policy
 }
 
 func dismissValues(id string) string {

@@ -207,8 +207,8 @@ limits are in [Updates](REFERENCE.md#updates).
 
 When a newer Ludock is out, **Settings** says so at the top. Choose **Update
 Ludock** and confirm. Ludock downloads the new version and restarts on it
-while your game servers keep running; the page comes back by itself in about
-a minute.
+while your game servers keep running; the page comes back by itself once it
+has, usually within a few minutes.
 
 If the new version doesn't start properly, Ludock puts the version you had
 back, with its data as it was just before the update. A setting or sign-in

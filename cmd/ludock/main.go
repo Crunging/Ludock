@@ -101,7 +101,7 @@ func serve() int {
 	putBack := selfupdate.BeforeOpen(ctx, docker.New(cfg.DockerSocket), cfg.MountID, cfg.DataDir, time.Minute)
 	database, err := db.Open(cfg.DBPath())
 	if apperr.Is(err, "DATABASE_INCOMPATIBLE") {
-		return refuse(ctx, cfg.Listen, startupError(err, ""))
+		return refuse(ctx, cfg.Listen, startupError(err, "")+selfupdate.Unfinished(cfg.DataDir))
 	}
 	if err != nil {
 		log.Error(startupError(err, "Could not open the database. Check that LUDOCK_DATA_DIR exists and is writable."))
