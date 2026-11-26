@@ -82,6 +82,12 @@ const RestoreClashUnsafe = 21
 
 var errClashUnsafe = errors.New("an undo would refuse to move an entry")
 
+// RestoreProbeFailed is the exit code for an undo that couldn't make the
+// scratch folder it finds out about RENAME_NOREPLACE in.
+const RestoreProbeFailed = 22
+
+var errProbeFailed = errors.New("an undo couldn't make its scratch folder")
+
 // RestoreClashNeedsNoReplace is the exit code for something in the way of
 // what an undo returns on a filesystem that can't move it aside safely.
 const RestoreClashNeedsNoReplace = 23
@@ -301,28 +307,29 @@ func (h *restoreHelper) knowNoReplace(root, stage fd) error {
 		return errUnsafe
 	}
 	scratch := "probe-" + hex.EncodeToString(random)
+	// A folder that can't be made, as on a full disk, says so.
 	if err := unix.Mkdirat(int(stage), scratch, 0o700); err != nil {
-		return errUnsafe
+		return errProbeFailed
 	}
 	defer unix.Unlinkat(int(stage), scratch, unix.AT_REMOVEDIR)
 	dir, err := h.t.openAt(stage, scratch, directoryFlags, 0)
 	if err != nil {
 		return errUnsafe
 	}
-	err = unix.Mkdirat(int(dir), "from", 0o700)
-	if err == nil {
-		err = renameat2(int(dir), "from", int(dir), "to", unix.RENAME_NOREPLACE)
-		switch {
-		case err == nil:
-			h.noReplace = noReplaceWorks
-		case unsupported(err):
-			h.noReplace, err = noReplaceMissing, nil
-		}
-		// Removing only empty folders can't take anything another writer
-		// put at either name; whatever stays goes with the stage.
-		unix.Unlinkat(int(dir), "from", unix.AT_REMOVEDIR)
-		unix.Unlinkat(int(dir), "to", unix.AT_REMOVEDIR)
+	if err := unix.Mkdirat(int(dir), "from", 0o700); err != nil {
+		return errProbeFailed
 	}
+	err = renameat2(int(dir), "from", int(dir), "to", unix.RENAME_NOREPLACE)
+	switch {
+	case err == nil:
+		h.noReplace = noReplaceWorks
+	case unsupported(err):
+		h.noReplace, err = noReplaceMissing, nil
+	}
+	// Removing only empty folders can't take anything another writer put at
+	// either name; whatever stays goes with the stage.
+	unix.Unlinkat(int(dir), "from", unix.AT_REMOVEDIR)
+	unix.Unlinkat(int(dir), "to", unix.AT_REMOVEDIR)
 	if err != nil {
 		h.noReplace = noReplaceUnknown
 		return errUnsafe
@@ -1523,6 +1530,8 @@ func RunRestore(argument string, stdout, stderr io.Writer) int {
 			return RestoreUnsafeEntry
 		case errors.Is(err, errClashUnsafe):
 			return RestoreClashUnsafe
+		case errors.Is(err, errProbeFailed):
+			return RestoreProbeFailed
 		case errors.Is(err, errClashNeedsNoReplace):
 			return RestoreClashNeedsNoReplace
 		}

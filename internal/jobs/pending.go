@@ -113,12 +113,16 @@ func (j *Jobs) finishPending(ctx context.Context, server *servers.Context, job, 
 		return err
 	}
 	live, missing, moved := false, false, false
+	// A folder an earlier attempt put back counts as returned; checkUndo
+	// marks one whose stage is gone rolled back too, without putting it back.
+	earlier := slices.ContainsFunc(state.Roots, func(entry journal) bool { return entry.Phase == "rolled_back" })
 	// What Activity says comes from the final journal, which also covers
 	// roots an earlier attempt finished.
 	note := func(final restoreRecovery) string {
 		var note string
 		aside := helper.SetAsideName(restore.Job.ID)
-		returned, missingAny := live || final.PutBack, missing || final.StageMissing
+		returned := live || final.PutBack || earlier
+		missingAny := missing || final.StageMissing
 		switch {
 		case state.Status == "committed":
 			note = "Ludock removed the folder " + stageName(restore) + " that a finished restore left, which held the data it replaced."
@@ -413,8 +417,19 @@ func (j *Jobs) runUndoRestore(ctx context.Context, job *ops.Context) (*ops.Resul
 		// Stopping the server finishes the undo, which a forced stop doesn't
 		// affect.
 		if err := j.stopForData(ctx, server, job); err != nil && !apperr.Is(err, "UNCLEAN_SHUTDOWN") {
+			j.sayWhereRefused(ctx, job)
 			return nil, err
 		}
 		return withSave(job, &ops.Result{}), nil
 	})
+}
+
+// sayWhereRefused has an Undo refused before anything moved say, as the
+// restore does, where its data is.
+func (j *Jobs) sayWhereRefused(ctx context.Context, job *ops.Context) {
+	pending, err := j.pendingRestores(ctx, job.Job.ServerID)
+	if result := job.Job.Result; err == nil && len(pending) > 0 && result.UndoNote == "" && pending[0].Job.Result.Guidance != "" {
+		result.UndoNote = pending[0].Job.Result.Guidance
+		job.Progress(job.Job.Phase, nil, &result)
+	}
 }

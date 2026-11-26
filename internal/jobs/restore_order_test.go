@@ -755,8 +755,8 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 		mounted, refusal string
 		// afterStop: a live entry in the way, which the running game may
 		// still change, is refused once the server stops, and the server
-		// starts again.
-		afterStop bool
+		// starts again. warn: the undo warns players first.
+		afterStop, warn bool
 		// failStep fails the undo at that step, and guidance is part of what
 		// the restore's Activity then says.
 		failStep, guidance string
@@ -902,6 +902,18 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				os.WriteFile(filepath.Join(f.data, "server.properties"), []byte("new run"), 0o644)
 				os.Link(filepath.Join(f.data, "server.properties"), filepath.Join(f.data, "linked"))
 			}, refusal: backups.ErrUndoClashUnsafe.Message, afterStop: true},
+		// A staged original that is a link is refused before the stop, and
+		// before players are warned.
+		{name: "staged link", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
+				os.Symlink("server.properties", filepath.Join(stage, "old", "latest"))
+			}, refusal: backups.ErrUndoEntryUnsafe.Message},
+		{name: "staged link, warned first", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
+			arrange: func(t *testing.T, f *fixture, stage, _ string) {
+				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
+				os.Symlink("server.properties", filepath.Join(stage, "old", "latest"))
+			}, refusal: backups.ErrUndoEntryUnsafe.Message, warn: true},
 		{name: "hard-linked until the game stops", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
 			arrange: func(t *testing.T, f *fixture, stage, _ string) {
 				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
@@ -1165,11 +1177,15 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 					mountinfo.Table = func() ([]byte, error) { return []byte("40 22 0:45 / " + mount + " rw - nfs4 server:/share rw\n"), nil }
 				}
 				before, journal, live := len(f.engine.Requests), f.savedJournal(job.ID), liveFiles(t, f.data)
-				undo := f.run(t, ops.KindUndoRestore, nil)
+				undo := f.run(t, ops.KindUndoRestore, map[string]any{WarnInput: c.warn})
 				stopped := slices.ContainsFunc(f.engine.Requests[before:], func(request string) bool { return strings.Contains(request, f.game+"/stop") })
 				if undo.Status != ops.Failed || undo.Error != c.refusal || stopped != c.afterStop || !f.running() ||
 					f.savedJournal(job.ID) != journal || !maps.Equal(liveFiles(t, f.data), live) {
 					t.Errorf("%s %q, stopped %v, running %v, journal %s", undo.Status, undo.Error, stopped, f.running(), f.savedJournal(job.ID))
+				}
+				// The refused undo says, as the restore does, where the data is.
+				if restore, _ := f.runner.Get(ctx, job.ID); restore.Result.Guidance == "" || !strings.Contains(undo.Result.UndoNote, restore.Result.Guidance) {
+					t.Errorf("the undo says %q, the restore %q", undo.Result.UndoNote, restore.Result.Guidance)
 				}
 				return
 			}

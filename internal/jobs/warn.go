@@ -49,6 +49,9 @@ type runFunc = func(ctx context.Context, job *ops.Context) (*ops.Result, error)
 func (j *Jobs) warnedFirst(capability authz.Capability, run runFunc) runFunc {
 	return func(ctx context.Context, job *ops.Context) (*ops.Result, error) {
 		if err := j.warnFirst(ctx, job, capability, false); err != nil {
+			if job.Job.Kind == ops.KindUndoRestore {
+				j.sayWhereRefused(ctx, job)
+			}
 			return nil, calledOff(job, err)
 		}
 		// Past the wait, an interruption is recovered like any other, which
