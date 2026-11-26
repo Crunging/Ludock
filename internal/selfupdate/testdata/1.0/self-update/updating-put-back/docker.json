@@ -1,0 +1,335 @@
+[
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb8e37e972fb01",
+    "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "Name": "/ludock",
+    "Created": "2026-11-26T09:27:27.228250211Z",
+    "Config": {
+      "Image": "ghcr.io/crunging/ludock:1",
+      "Labels": {
+        "com.docker.compose.project": "ludock",
+        "com.docker.compose.service": "ludock"
+      },
+      "Env": [
+        "LUDOCK_DATA_DIR=/var/tmp/ludock-1.0-self-update/updating-put-back/data"
+      ],
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "2026-11-26T09:27:27.265151912Z",
+      "FinishedAt": "2026-11-26T09:27:27.261862037Z",
+      "Health": {
+        "Status": "healthy",
+        "Log": [
+          {
+            "End": "2026-11-26T09:27:27.265151912Z",
+            "ExitCode": 0
+          }
+        ]
+      }
+    },
+    "RestartCount": 0,
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-self-update/updating-put-back/docker/docker.sock",
+        "Destination": "/var/run/docker.sock",
+        "RW": false
+      },
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-self-update/updating-put-back/data",
+        "Destination": "/var/tmp/ludock-1.0-self-update/updating-put-back/data",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": ""
+    },
+    "ExtraConfig": {
+      "Healthcheck": {
+        "Test": [
+          "CMD",
+          "/usr/local/bin/ludock",
+          "healthcheck"
+        ]
+      }
+    },
+    "HostConfig": {
+      "Binds": [
+        "/var/tmp/ludock-1.0-self-update/updating-put-back/docker/docker.sock:/var/run/docker.sock:ro",
+        "/var/tmp/ludock-1.0-self-update/updating-put-back/data:/var/tmp/ludock-1.0-self-update/updating-put-back/data"
+      ],
+      "NetworkMode": "bridge",
+      "PortBindings": {
+        "3000/tcp": [
+          {
+            "HostIp": "",
+            "HostPort": "3000"
+          }
+        ]
+      },
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "no"
+      }
+    },
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  },
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb8e37e9739fa8",
+    "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "Name": "/valheim",
+    "Created": "2026-11-26T09:27:27.228290006Z",
+    "Config": {
+      "Image": "lloesche/valheim-server",
+      "Labels": {},
+      "Env": null,
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 0,
+      "StartedAt": "2026-11-26T09:27:27.228290006Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "RestartCount": 0,
+    "Mounts": null,
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": ""
+    },
+    "ExtraConfig": null,
+    "HostConfig": null,
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  },
+  {
+    "Id": "00000000000000000000000000000000000000000000000018eb8e37eb4365cd",
+    "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "Name": "/ludock-self-update-a1061b4f-aad8-417e-9c61-bb53d6701558",
+    "Created": "2026-11-26T09:27:27.258692291Z",
+    "Config": {
+      "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "Labels": {
+        "ludock.enable": "false",
+        "ludock.internal": "self-update"
+      },
+      "Env": [
+        "LUDOCK_DOCKER_SOCKET=/var/run/docker.sock"
+      ],
+      "OpenStdin": false,
+      "StdinOnce": false,
+      "Tty": false
+    },
+    "State": {
+      "Status": "exited",
+      "Running": false,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "ExitCode": 22,
+      "StartedAt": "2026-11-26T09:27:27.25890004Z",
+      "FinishedAt": "2026-11-26T09:27:27.265237238Z"
+    },
+    "RestartCount": 0,
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/var/tmp/ludock-1.0-self-update/updating-put-back/docker/docker.sock",
+        "Destination": "/var/run/docker.sock",
+        "RW": false,
+        "Name": "/var/tmp/ludock-1.0-self-update/updating-put-back/docker/docker.sock"
+      }
+    ],
+    "NetworkSettings": {
+      "Ports": null,
+      "Networks": null
+    },
+    "CreateRequest": {
+      "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "Healthcheck": {
+        "Test": [
+          "NONE"
+        ]
+      },
+      "Entrypoint": [
+        "/usr/local/bin/ludock"
+      ],
+      "Cmd": [
+        "self-update",
+        "00000000000000000000000000000000000000000000000018eb8e37e972fb01",
+        "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "a1061b4f-aad8-417e-9c61-bb53d6701558"
+      ],
+      "Env": [
+        "LUDOCK_DOCKER_SOCKET=/var/run/docker.sock"
+      ],
+      "Labels": {
+        "ludock.enable": "false",
+        "ludock.internal": "self-update"
+      },
+      "HostConfig": {
+        "Mounts": [
+          {
+            "Type": "bind",
+            "Source": "/var/tmp/ludock-1.0-self-update/updating-put-back/docker/docker.sock",
+            "Target": "/var/run/docker.sock",
+            "ReadOnly": true
+          }
+        ],
+        "NetworkMode": "none",
+        "ReadonlyRootfs": true,
+        "CapDrop": [
+          "ALL"
+        ],
+        "SecurityOpt": [
+          "no-new-privileges:true"
+        ]
+      }
+    },
+    "ExtraConfig": {
+      "Cmd": [
+        "self-update",
+        "00000000000000000000000000000000000000000000000018eb8e37e972fb01",
+        "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "a1061b4f-aad8-417e-9c61-bb53d6701558"
+      ],
+      "Entrypoint": [
+        "/usr/local/bin/ludock"
+      ],
+      "Env": [
+        "LUDOCK_DOCKER_SOCKET=/var/run/docker.sock"
+      ],
+      "ExposedPorts": {},
+      "Healthcheck": {
+        "Test": [
+          "NONE"
+        ]
+      },
+      "Image": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "Labels": {
+        "ludock.enable": "false",
+        "ludock.internal": "self-update"
+      },
+      "User": "",
+      "Volumes": {}
+    },
+    "HostConfig": {
+      "CapAdd": null,
+      "CapDrop": [
+        "ALL"
+      ],
+      "GroupAdd": null,
+      "Mounts": [
+        {
+          "ReadOnly": true,
+          "Source": "/var/tmp/ludock-1.0-self-update/updating-put-back/docker/docker.sock",
+          "Target": "/var/run/docker.sock",
+          "Type": "bind"
+        }
+      ],
+      "NetworkMode": "none",
+      "ReadonlyRootfs": true,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ]
+    },
+    "Networks": null,
+    "ImageManifestDescriptor": null,
+    "Platform": "",
+    "Logs": null,
+    "Stats": {
+      "cpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0,
+        "online_cpus": 0
+      },
+      "precpu_stats": {
+        "cpu_usage": {
+          "total_usage": 0
+        },
+        "system_cpu_usage": 0
+      },
+      "memory_stats": {
+        "usage": 0,
+        "limit": 0
+      }
+    },
+    "Stdin": null,
+    "Files": null,
+    "IgnoresStop": false
+  }
+]
