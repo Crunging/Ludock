@@ -741,8 +741,34 @@ func TestRenamesNeverClobber(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "a.txt")); !os.IsNotExist(err) {
 		t.Fatal("source still present")
 	}
-	if err := renameNoReplace(parent, "folder", parent, "moved", stat("folder")); err == nil {
-		t.Fatal("renamed a folder without an atomic no-replace rename")
+	// A folder moves by a plain rename to a name still free just before it,
+	// which can replace only an empty folder.
+	os.Mkdir(filepath.Join(dir, "empty"), 0o755)
+	for _, taken := range []string{"taken.txt", "empty"} {
+		if err := renameNoReplace(parent, "folder", parent, taken, stat("folder")); !errors.Is(err, unix.EEXIST) {
+			t.Fatal("renamed a folder onto", taken, err)
+		}
+	}
+	if err := renameNoReplace(parent, "folder", parent, "moved", stat("folder")); err != nil {
+		t.Fatal(err)
+	}
+	// So Files can unpack an archive, and rename and move a folder, there.
+	files, _ := dataRoot(t)
+	if result, code := unpackFile(t, files, "mods.tar", tarArchive(t, []archived{{name: "a.jar", body: "a"}, {name: "b.jar", body: "b"}})); code != 0 || result.Name != "mods" {
+		t.Fatal("unpack", result, code)
+	}
+	if _, code := runFile(t, FileRequest{Operation: "rename", Root: files, Path: "world", Destination: "mods"}, nil); code != FileNameTaken {
+		t.Fatal("renamed a folder onto a taken name", code)
+	}
+	for _, request := range []FileRequest{{Operation: "rename", Root: files, Path: "world", Destination: "world-old"},
+		{Operation: "rename", Root: files, Path: "server.properties", Destination: "server.properties.bak"},
+		{Operation: "move", Root: files, Paths: []string{"world-old"}, Destination: "mods"}} {
+		if _, code := runFile(t, request, nil); code != 0 {
+			t.Fatal(request.Operation, request.Path, request.Paths, code)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(files, "mods", "world-old", "level.dat")); err != nil {
+		t.Fatal("folder not moved", listTree(t, files))
 	}
 	// With RENAME_NOREPLACE, a file made at the name between the check and
 	// the move is kept.
