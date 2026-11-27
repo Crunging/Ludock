@@ -32,7 +32,7 @@ const (
 func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir string, wait time.Duration) string {
 	// With no copy beside the database there is nothing to put back, so a
 	// start doesn't wait for Docker.
-	if _, err := os.Lstat(filepath.Join(dataDir, CopyName)); container == "" || err != nil {
+	if _, err := os.Lstat(filepath.Join(dataDir, CopyName)); container == "" || errors.Is(err, os.ErrNotExist) {
 		return ""
 	}
 	// Docker not answering is waited out as a running helper is.

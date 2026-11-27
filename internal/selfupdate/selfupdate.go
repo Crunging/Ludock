@@ -567,8 +567,11 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 	written.Copy = true
 	if err := s.DB.SelfUpdateMutation(ctx, record.ActorID, tokenHash, db.Now(), func(tx *sql.Tx) error {
 		return s.DB.SetSetting(ctx, tx, recordSetting, written)
-	}); err != nil {
+	}); errors.Is(err, db.ErrSessionGone) || errors.Is(err, db.ErrNotAdmin) {
 		failed(errNoLongerAdmin)
+		return
+	} else if err != nil {
+		failed(errSave)
 		return
 	}
 	if err := s.startHelper(ctx, record, own); errors.Is(err, errUncertain) {
