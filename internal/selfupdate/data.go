@@ -45,7 +45,7 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 			return "", nil, err
 		}
 		if ok {
-			if restore, err = decide(ctx, client, container, record, wait); err != nil {
+			if restore, err = decide(ctx, client, container, dataDir, record, wait); err != nil {
 				return "", nil, err
 			}
 		}
@@ -82,7 +82,15 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 
 // decide reports whether container, starting, puts the update's copy back.
 // It doesn't open or restore anything, so BeforeOpen's check covers it.
-func decide(ctx context.Context, client *docker.Client, container string, record Record, wait time.Duration) (bool, error) {
+//
+// Any conclusion that stops another container or restores the copy is drawn
+// from the record as it is after the last look at the helper, never from one
+// read before a wait: the new version may have settled the update meanwhile
+// and accepted changes since. Ludock removes a helper only once an outcome is
+// saved, or one that never ran, so a helper gone while the record still says
+// updating means the update is unsettled, and its new version has accepted
+// nothing.
+func decide(ctx context.Context, client *docker.Client, container, dataDir string, record Record, wait time.Duration) (bool, error) {
 	if record.Container != container {
 		return false, nil
 	}
@@ -124,6 +132,10 @@ func decide(ctx context.Context, client *docker.Client, container string, record
 	if code == ExitUpdated || code == ExitUnchanged {
 		return false, nil
 	}
+	record, unsettled, err := still(dataDir, record.ID)
+	if err != nil || !unsettled {
+		return false, err
+	}
 	// Only this update's own copy goes back. Its helper, whose name carries
 	// the operation, exists only once the copy was written, and the live
 	// record says so just after; with neither, nothing was swapped, and a
@@ -140,8 +152,19 @@ func decide(ctx context.Context, client *docker.Client, container string, record
 		if err != nil && !docker.IsNotFound(err) && docker.StatusCode(err) != 304 {
 			return false, errBeside
 		}
+		// Stopped, it can't settle any more, but may have just before.
+		if _, unsettled, err = still(dataDir, record.ID); err != nil || !unsettled {
+			return false, err
+		}
 	}
 	return true, nil
+}
+
+// still reads the record in dataDir again and reports whether it is update
+// id, still in progress.
+func still(dataDir, id string) (Record, bool, error) {
+	record, ok, err := saved(dataDir)
+	return record, err == nil && ok && record.ID == id && record.State == StateUpdating, err
 }
 
 // alone confirms that no container of record's update but container runs:
