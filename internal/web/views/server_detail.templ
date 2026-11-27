@@ -903,6 +903,12 @@ templ ActivityPanel(a ActivityView) {
 		}
 		<noscript><button class="secondary-btn" type="submit">Apply filters</button></noscript>
 	</form>
+	// Outages Ludock logs are in the audit log, which only administrators read.
+	if a.Admin {
+		<p class="section-note">
+			<a class="text-link" href={ templ.SafeURL("/activity?" + url.Values{"show": {ShowEverything}, "serverId": {a.ServerID}, "action": {"outage"}}.Encode()) }>Outages Ludock noticed</a>
+		</p>
+	}
 	@ActivityList(a)
 }
 
