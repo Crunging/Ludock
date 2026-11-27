@@ -465,6 +465,19 @@ func (c *Client) Rename(ctx context.Context, id, name string) error {
 	return c.empty(ctx, http.MethodPost, path, url.Values{"name": {name}})
 }
 
+// Tag points reference, a repository and tag, at image id, as docker tag
+// does.
+func (c *Client) Tag(ctx context.Context, id, reference string) error {
+	repository, tag := reference, "latest"
+	if slash, colon := strings.LastIndex(reference, "/"), strings.LastIndex(reference, ":"); colon > slash {
+		repository, tag = reference[:colon], reference[colon+1:]
+	}
+	if id == "" || repository == "" || strings.Contains(reference, "@") {
+		return errors.New("invalid Docker image reference")
+	}
+	return c.empty(ctx, http.MethodPost, "/images/"+url.PathEscape(id)+"/tag", url.Values{"repo": {repository}, "tag": {tag}})
+}
+
 // SetRestartPolicy replaces a container's restart policy, given as Docker
 // reports it in HostConfig.RestartPolicy.
 func (c *Client) SetRestartPolicy(ctx context.Context, id string, policy json.RawMessage) error {

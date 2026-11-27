@@ -39,9 +39,9 @@ func exists(path string) (os.FileInfo, bool) {
 	return info, err == nil
 }
 
-// inspect validates an existing file before WAL, chmod, migrations, or any
-// other writes.
-func inspect(path string) error {
+// Inspect validates an existing file before WAL, chmod, migrations, or any
+// other writes: its error is why Open would refuse the file.
+func Inspect(path string) error {
 	canonical, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return err
@@ -89,7 +89,7 @@ func Open(path string) (result *DB, err error) {
 	memory := path == ":memory:"
 	if !memory {
 		if info, ok := exists(path); ok && info.Size() > 0 {
-			if err := inspect(path); err != nil {
+			if err := Inspect(path); err != nil {
 				return nil, err
 			}
 		}

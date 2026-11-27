@@ -154,11 +154,13 @@ var errBeside = apperr.New("LUDOCK_UPDATE_CUT_OFF", 503,
 	"Ludock’s update didn’t finish, and Docker didn’t confirm its other container stopped, so this one won’t start beside it.")
 
 // saved is the update the database in dataDir records, read without opening
-// it for writing. Only a missing database or record means none.
+// it for writing. A missing or empty database, or one without the table, has
+// none. When it can't be read and db.Open would refuse it, db.Open says why;
+// any other failure to read it stops the start.
 func saved(dataDir string) (Record, bool, error) {
 	var record Record
 	path := filepath.Join(dataDir, "ludock.db")
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+	if info, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) || err == nil && info.Size() == 0 {
 		return record, false, nil
 	}
 	d, err := sql.Open("sqlite", db.FileURI(path, url.Values{"mode": {"ro"}}))
@@ -166,9 +168,18 @@ func saved(dataDir string) (Record, bool, error) {
 		return record, false, err
 	}
 	defer d.Close()
+	var tables int
+	err = d.QueryRow("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'settings'").Scan(&tables)
 	var value []byte
-	switch err := d.QueryRow("SELECT value_json FROM settings WHERE key = ?", recordSetting).Scan(&value); {
+	if err == nil && tables == 0 {
+		return record, false, nil
+	} else if err == nil {
+		err = d.QueryRow("SELECT value_json FROM settings WHERE key = ?", recordSetting).Scan(&value)
+	}
+	switch {
 	case errors.Is(err, sql.ErrNoRows):
+		return record, false, nil
+	case err != nil && db.Inspect(path) != nil:
 		return record, false, nil
 	case err != nil:
 		return record, false, err

@@ -748,6 +748,48 @@ func TestSelfUpdateOrder(t *testing.T) {
 			g.restartOld()
 		}, trace: []string{"pull", "create helper", "stop old", "start old", "stop new", "policy old"}, image: oldImage, restarts: 1,
 			state: selfupdate.StateFailed, reason: "the update stopped before Ludock was replaced, so nothing was changed", probe: "live"},
+		{name: "the helper killed during the health check, then the old one started by hand, which takes the owner's policy", arrange: func(g *rig) {
+			g.onStart = func(c *fakedocker.Container) {
+				if isNew(c) {
+					health(g, c, "starting")
+					g.killHelper()
+				}
+			}
+		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
+			policyOf := func(id string) string {
+				var policy struct{ Name string }
+				if spec, err := g.client.InspectSpec(ctx, id); err == nil {
+					json.Unmarshal(spec.HostConfig["RestartPolicy"], &policy)
+				}
+				return policy.Name
+			}
+			g.client.Stop(ctx, running.ID, nil)
+			g.client.Start(ctx, g.old)
+			old := g.process(g.old)
+			for deadline := time.Now().Add(3 * time.Second); policyOf(g.old) != "unless-stopped" && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			}
+			if old == nil || policyOf(g.old) != "unless-stopped" || policyOf(running.ID) != "no" {
+				t.Fatalf("the old one has %q and the new one %q", policyOf(g.old), policyOf(running.ID))
+			}
+			// The next update keeps the owner's policy, whatever this
+			// container was left with.
+			g.client.SetRestartPolicy(ctx, g.old, json.RawMessage(`{"Name":"no"}`))
+			g.engine.RemoveContainer(running.ID)
+			g.mu.Lock()
+			g.fail["pull"] = 500
+			g.mu.Unlock()
+			if err := old.svc.Start(ctx, "admin", g.session, ""); err != nil {
+				t.Fatal(err)
+			}
+			for deadline := time.Now().Add(3 * time.Second); old.svc.Last(ctx).InProgress() && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			}
+			var policy struct{ Name string }
+			json.Unmarshal(old.svc.Last(ctx).Policy, &policy)
+			if policy.Name != "unless-stopped" {
+				t.Errorf("the next update recorded the owner's policy as %q", policy.Name)
+			}
+		}, reboot: true, image: newImage, settler: "ludock-ludock-update-",
+			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
 		{name: "a put-back without the data copy keeps the newer data, and says so", arrange: func(g *rig) {
 			g.fail["start new"] = 500
 			g.at["stop new"] = func() { os.Remove(filepath.Join(g.dataDir, selfupdate.CopyName)) }
@@ -1017,6 +1059,13 @@ func TestSelfUpdateOrder(t *testing.T) {
 			if want := cmp.Or(c.policy, "unless-stopped"); (running.ID == g.old || running.Config.Labels[update.OperationLabel] != "") && !c.noPolicy && policy.Name != want {
 				t.Errorf("Ludock's restart policy is %q, want %q", policy.Name, want)
 			}
+			// One that pulled and ends on the old version leaves Ludock's tag on
+			// it, so docker compose up doesn't start the rejected image.
+			if record := after.svc.Last(ctx); running.Image == oldImage && record.Target != "" && record.Target != record.Previous {
+				if id, _ := g.client.InspectImage(ctx, tag); id != oldImage {
+					t.Errorf("Ludock's tag points at %s", id)
+				}
+			}
 			if game := g.engine.Container(g.game); game.State.StartedAt != started || !game.State.Running {
 				t.Error("the game was touched")
 			}
@@ -1221,5 +1270,30 @@ func TestSelfUpdateGivesUpOnAnUnreadableHelper(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(g.dataDir, selfupdate.CopyName)); started == nil || err != nil {
 		t.Error("the copy went", started == nil, err)
+	}
+}
+
+// A database db.Open would start afresh or refuse never stops the start
+// before it: an empty file holds no update, and one db.Open refuses gets
+// db.Open's own message, not a failure to look for an update.
+func TestBeforeOpenLeavesNewAndRefusedDataToOpen(t *testing.T) {
+	ctx := context.Background()
+	for name, content := range map[string][]byte{"empty": nil, "refused": []byte(strings.Repeat("not a database ", 20))} {
+		dataDir := t.TempDir()
+		path := filepath.Join(dataDir, "ludock.db")
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		client := docker.New(filepath.Join(dataDir, "no-docker.sock"))
+		if putBack, err := selfupdate.BeforeOpen(ctx, client, "ludock", dataDir, time.Second); err != nil || putBack != "" {
+			t.Errorf("%s: BeforeOpen %q %v", name, putBack, err)
+		}
+		d, err := db.Open(path)
+		if (err == nil) != (name == "empty") {
+			t.Errorf("%s: db.Open %v", name, err)
+		}
+		if d != nil {
+			d.Close()
+		}
 	}
 }

@@ -391,6 +391,9 @@ func ludockFailed(record selfupdate.Record) string {
 	if record.NoPolicy {
 		policy = " Ludock’s restart policy isn’t back to yours yet; run docker compose up -d ludock in the folder with its compose.yaml to set it."
 	}
+	if record.TagLeft {
+		policy += " Docker kept the new version under Ludock’s tag, so a docker compose up -d of Ludock would start it without a check; run docker compose pull ludock before one."
+	}
 	switch {
 	case record.State == selfupdate.StatePutBack && record.Data == selfupdate.DataKept:
 		return put + ", but found no copy of its data to put back with it, so it kept the newer data." + policy

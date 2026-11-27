@@ -175,6 +175,12 @@ test("Ludock updates itself, and puts itself back when the new version fails", a
     expect(inspect(kept).State.Running).toBe(true);
     expect(inspect(gameContainer()).State.StartedAt).toBe(gameStarted);
     expect(docker("ps", "--all", "--quiet", "--filter", "name=ludock-self-update-")).toBe("");
+    // The rejected image doesn't stay under Ludock's tag, so a plain
+    // docker compose up -d leaves Ludock on this version.
+    expect(JSON.parse(docker("image", "inspect", `${registry}:e2e`))[0].Id).toBe(nextID);
+    const replan = spawnSync("docker", [...ludock(), "-f", override, "up", "--detach", "--dry-run", "ludock"], { encoding: "utf8" });
+    expect(replan.status).toBe(0);
+    expect(replan.stdout + replan.stderr).not.toMatch(/Recreat/);
     await page.goto("/");
     await expect(page.locator(".needs-attention__list li", { hasText: "Ludock’s update didn’t finish" }))
       .toContainText("The new version reported itself unhealthy. Ludock is still on version e2e-next");

@@ -580,7 +580,14 @@ helper, the two commands above start it on the new version with its data.
 Whichever Ludock records how the update ended first sets the other
 container's restart policy to `no`, then gets back the one Ludock had before
 the update, so a reboot starts at most one of them, and with an owner's `no`,
-neither. If Docker won't, Settings says so. The copy of the data from
+neither. So does whichever starts after an update that stopped partway,
+however it was started, and a later update keeps that policy as yours. If
+Docker won't, Settings says so.
+
+An update that downloaded a new image and didn't succeed points Ludock's tag
+back at the image it runs, so a later `docker compose up -d` keeps that
+version; `docker compose pull ludock` or **Update Ludock** fetches the newer
+one again. If Docker won't, Settings says so. The copy of the data from
 before the update stays beside the database when an update didn't finish;
 the next update replaces it, and its confirmation says so.
 
