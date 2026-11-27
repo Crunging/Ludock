@@ -78,7 +78,7 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 			return "", nil, err
 		}
 		if restore = unsettled; !restore {
-			onNewer(container, record)
+			onNewer(ctx, client, container, record)
 		}
 	}
 	if !restore {
@@ -108,7 +108,7 @@ func decide(ctx context.Context, client *docker.Client, container, dataDir strin
 	if record.Container != container {
 		return false, nil
 	}
-	if onNewer(container, record) || record.State != StateUpdating {
+	if onNewer(ctx, client, container, record) || record.State != StateUpdating {
 		return false, nil
 	}
 
@@ -121,6 +121,7 @@ func decide(ctx context.Context, client *docker.Client, container, dataDir strin
 		if docker.IsNotFound(err) {
 			break
 		}
+		running := err == nil
 		// Only Docker showing it proves this update's copy was written.
 		helper = helper || err == nil
 		if err == nil && !spec.State.Running && !spec.State.Restarting {
@@ -135,7 +136,10 @@ func decide(ctx context.Context, client *docker.Client, container, dataDir strin
 		case <-time.After(time.Second):
 		}
 		if time.Now().After(deadline) {
-			return false, errBeside
+			if running {
+				return false, apperr.Newf(cutOffCode, 503, "Ludock’s update is still running in its helper %s, so this one won’t start until it ends.", HelperName(record.ID))
+			}
+			return false, unconfirmed(HelperName(record.ID))
 		}
 	}
 	if code == ExitUpdated || code == ExitUnchanged {
@@ -143,7 +147,7 @@ func decide(ctx context.Context, client *docker.Client, container, dataDir strin
 	}
 	record, unsettled, err := still(dataDir, record.ID)
 	if err != nil || !unsettled {
-		onNewer(container, record)
+		onNewer(ctx, client, container, record)
 		return false, err
 	}
 	// Only this update's own copy goes back. Its helper, whose name carries
@@ -158,17 +162,18 @@ func decide(ctx context.Context, client *docker.Client, container, dataDir strin
 		// the new version wasn't accepted; until the update settles it
 		// accepted no work and no changes, so stopping it and putting the
 		// copy back loses nothing.
-		spec, err := madeBy(ctx, client, servers.ReplacementName(record.Name, record.ID), record.ID)
+		name := servers.ReplacementName(record.Name, record.ID)
+		spec, err := madeBy(ctx, client, name, record.ID)
 		if err == nil {
 			err = client.Stop(ctx, spec.ID, nil)
 		}
 		if err != nil && !docker.IsNotFound(err) && docker.StatusCode(err) != 304 {
-			return false, errBeside
+			return false, unconfirmed(name)
 		}
 		// Stopped, it can't settle any more, but may have just before.
 		if record, unsettled, err = still(dataDir, record.ID); err != nil || !unsettled {
 			// Too late: it had settled, and this one starts in its place.
-			onNewer(container, record)
+			onNewer(ctx, client, container, record)
 			return false, err
 		}
 	}
@@ -176,13 +181,30 @@ func decide(ctx context.Context, client *docker.Client, container, dataDir strin
 }
 
 // onNewer reports, and logs, that container is the original starting after
-// the new version took over an update that stopped partway.
-func onNewer(container string, record Record) bool {
+// the new version took over an update that stopped partway. It names the new
+// container only as Docker shows it, made by the update.
+func onNewer(ctx context.Context, client *docker.Client, container string, record Record) bool {
 	if record.Container != container || record.State != StateInterrupted || !record.OnLeftover {
 		return false
 	}
-	log.Warn("Ludock's last update stopped partway with Ludock running in its new container. This is the old container: it starts on the data as the new version left it, once that one has stopped, and Settings says what is left. If that data is too new for this version, it stops without changing anything: start the new container instead.",
-		logging.F("newContainer", record.Leftover))
+	unknown := false
+	for index, name := range []string{record.Leftover, servers.ReplacementName(record.Name, record.ID)} {
+		if name == "" || index > 0 && name == record.Leftover {
+			continue
+		}
+		spec, err := madeBy(ctx, client, name, record.ID)
+		if err == nil {
+			log.Warn("Ludock's last update stopped partway with Ludock running in its new container. This is the old container: it starts on the data as the new version left it, once that one has stopped, and Settings says what is left. If that data is too new for this version, it stops without changing anything: start the new container instead.",
+				logging.F("newContainer", strings.TrimPrefix(spec.Name, "/")))
+			return true
+		}
+		unknown = unknown || !docker.IsNotFound(err)
+	}
+	if unknown {
+		log.Warn("Ludock's last update stopped partway with Ludock running in its new container, which Docker couldn't show just now. This is the old container: it starts on the data as the new version left it, and Settings says what is left. If that data is too new for this version, it stops without changing anything: start the new container if it is still there, or run docker compose pull ludock and then docker compose up -d ludock to start the new version.")
+	} else {
+		log.Warn("Ludock's last update stopped partway with Ludock running in its new container, which is gone now. This is the old container: it starts on the data as the new version left it, and Settings says what is left. If that data is too new for this version, it stops without changing anything: run docker compose pull ludock and then docker compose up -d ludock to start the new version.")
+	}
 	return true
 }
 
@@ -201,19 +223,27 @@ func alone(ctx context.Context, client *docker.Client, container string, record 
 			continue
 		}
 		spec, err := inspect(ctx, client, other, index == 0, record.ID)
+		if index == 0 {
+			other = record.Name
+		}
 		switch {
 		case docker.IsNotFound(err):
 		case err != nil:
-			return errBeside
+			return unconfirmed(other)
 		case spec.ID != container && !strings.HasPrefix(spec.ID, container) && (spec.State.Running || spec.State.Restarting):
-			return errBeside
+			return apperr.Newf(cutOffCode, 503, "Docker shows Ludock running in its container %s, after an update that didn’t finish, so this one won’t start beside it.",
+				strings.TrimPrefix(spec.Name, "/"))
 		}
 	}
 	return nil
 }
 
-var errBeside = apperr.New("LUDOCK_UPDATE_CUT_OFF", 503,
-	"Ludock’s update didn’t finish, and Docker didn’t confirm its other container stopped, so this one won’t start beside it.")
+const cutOffCode = "LUDOCK_UPDATE_CUT_OFF"
+
+// unconfirmed: Docker gave no answer, or an error, about container.
+func unconfirmed(container string) error {
+	return apperr.Newf(cutOffCode, 503, "Ludock’s update didn’t finish, and Docker couldn’t confirm that its container %s stopped, so this one won’t start beside it.", container)
+}
 
 // saved is the update the database in dataDir records, read without opening
 // it for writing. A missing or empty database, or one without the table, has
