@@ -206,7 +206,7 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 		// as it was read: a stop or pause recorded since ends it.
 		saved := encode(state)
 		changed, err := s.apply(ctx, []alert{{"recovery-gave-up:" + server.ID + ":" + strconv.FormatInt(state.SilentSince, 10),
-			server.DisplayName + ": the game stopped answering again. Ludock already tried restarting it 3 times in 6 hours, so it won’t restart it again for now; it needs a look."}},
+			server.DisplayName + ": the game stopped answering again. Ludock already tried restarting it 3 times in 6 hours, so it won’t restart it again for now; it needs a look.", nil}},
 			"UPDATE availability SET recovery_json=? WHERE server_id=? AND policy_json=? AND recovery_json IS ? AND "+asRead,
 			append([]any{saved, server.ID, r.policy, r.recovery}, r.asRead()...)...)
 		if err != nil {
@@ -245,7 +245,7 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 		if _, err = tx.ExecContext(ctx, "UPDATE availability SET recovery_json=? WHERE server_id=?", saved, server.ID); err != nil {
 			return err
 		}
-		restarting = []alert{{"recovery:" + job.ID, server.DisplayName + ": the game stopped answering, so Ludock is restarting it."}}
+		restarting = []alert{{"recovery:" + job.ID, server.DisplayName + ": the game stopped answering, so Ludock is restarting it.", nil}}
 		return s.queueIn(ctx, tx, restarting)
 	})
 	if err != nil {
@@ -349,7 +349,7 @@ func (s *Service) trackRecovery(ctx context.Context, server identity.Server, con
 	}
 	var alerts []alert
 	if message != "" {
-		alerts = []alert{{"recovery-" + next.Last + ":" + next.OperationID, message}}
+		alerts = []alert{{"recovery-" + next.Last + ":" + next.OperationID, message, nil}}
 	}
 	if !s.saveRecovery(ctx, server.ID, r, next, alerts...) {
 		return

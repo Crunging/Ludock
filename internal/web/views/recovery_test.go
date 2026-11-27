@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/servers"
 )
 
 // A recovery restart whose outcome Ludock stopped waiting for, because the
@@ -40,6 +42,33 @@ func TestRecoveryStatusExitedServer(t *testing.T) {
 		if text := out.String(); strings.Contains(text, "Not needed") || strings.Contains(text, "Waiting") || !strings.Contains(text, "On while the server runs") ||
 			strings.Contains(text, "restart policy") {
 			t.Fatal(text)
+		}
+	}
+}
+
+// A server that stopped outside Ludock is offered what the viewer can do
+// there: Start, and reading its logs, each only with access to it. A share
+// with the game console but not the logs isn't sent to them.
+func TestOutageAdviceFollowsAccess(t *testing.T) {
+	for _, c := range []struct {
+		permissions []authz.Capability
+		canStart    bool
+		want        string
+	}{
+		{[]authz.Capability{authz.ServerStart, authz.LogsRead}, true, "Ludock didn’t stop it. Start it here, or read its logs to see why."},
+		{[]authz.Capability{authz.ConsoleExecute}, false, "Ludock didn’t stop it.</p>"},
+		{[]authz.Capability{authz.LogsRead}, false, "Ludock didn’t stop it. Read its logs to see why."},
+	} {
+		d := ServerDetail{Row: ServerRow{Server: servers.View{Permissions: c.permissions, BindingStatus: "active",
+			Container: servers.Container{State: "exited"}}, CanStart: c.canStart, ConsoleLabel: "Console"},
+			Availability: &monitor.Availability{Policy: monitor.Policy{Enabled: true},
+				State: monitor.State{OutageStartedAt: 1, Since: 1, Notified: true, LastState: "exited"}}, Now: 1_000_000}
+		var out strings.Builder
+		if err := AvailabilityStatus(d).Render(context.Background(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if text := out.String(); !strings.Contains(text, c.want) {
+			t.Errorf("%v: %s", c.permissions, text)
 		}
 	}
 }

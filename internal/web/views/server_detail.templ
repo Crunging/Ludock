@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/history"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/monitor"
@@ -743,12 +744,14 @@ func outageAdvice(row ServerRow) string {
 	default:
 		return ""
 	}
+	// The console can be shared without the logs.
+	logs := row.Server.Can(authz.LogsRead)
 	switch {
-	case act != "" && row.ConsoleLabel != "":
+	case act != "" && logs:
 		return what + " " + act + then
 	case act != "":
 		return what + " " + act + "."
-	case row.ConsoleLabel != "":
+	case logs:
 		return what + " Read its logs to see why."
 	}
 	return what

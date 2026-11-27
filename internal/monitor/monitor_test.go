@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -98,7 +99,8 @@ func TestClearedOutageUpdatesPagesWithoutAnAlert(t *testing.T) {
 // turning watching off, or pausing it for maintenance, ends it, so it is
 // alerted again once watched. A server that stopped long before Ludock first
 // looked shows as down since Docker's time for its stop, but waits and
-// alerts from when Ludock looked.
+// alerts from when Ludock looked. Each alert is also logged for Activity,
+// with when the outage began or how long it lasted.
 func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 	const down, back = "Minecraft: the server is down.", "Minecraft: the server is running again."
 	for _, c := range []struct {
@@ -148,6 +150,18 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 			}
 			s.Check(ctx, state("running", "starting"), 135_000)
 			s.Check(ctx, state("running", ""), 140_000)
+			var logged []string
+			rows, _ := s.DB.Query("SELECT action, details_json FROM audit_log WHERE target_id=? ORDER BY id", server.ID)
+			for rows.Next() {
+				var action, details string
+				rows.Scan(&action, &details)
+				logged = append(logged, action+" "+details)
+			}
+			rows.Close()
+			if since := cmp.Or(c.stopped, c.start); len(logged) != len(c.want) || logged[len(logged)-2] != fmt.Sprintf(`server.outage.alerted {"game":false,"since":%d}`, since) ||
+				logged[len(logged)-1] != fmt.Sprintf(`server.outage.ended {"downFor":%d,"game":false}`, 140_000-since) {
+				t.Fatal(logged)
+			}
 			s.Check(ctx, state("running", ""), 150_000)
 			if !slices.Equal(events.events, c.want) {
 				t.Fatal(events.events)
@@ -191,6 +205,7 @@ func TestMonitorSuppression(t *testing.T) {
 // not one that skipped it as busy, or a minute later if none has.
 func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 	const down, silent, back = "Minecraft: the server is down.", "Minecraft: running, but the game stopped answering.", "Minecraft: the server is running again."
+	const answering = "Minecraft: the game is answering again."
 	start := func(s *Service, id string) { s.Suppress(ctx, id, nil); s.SetIntentionalStop(ctx, id, false) }
 	restart := func(s *Service, id string) {
 		s.Suppress(ctx, id, nil)
@@ -226,7 +241,7 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 		{name: "started but unhealthy", alerted: true, act: start, after: "running", health: "unhealthy", want: []string{down}, stillDown: true},
 		{name: "restarted", silent: true, alerted: true, act: restart, after: "running", game: GameWaiting, want: []string{silent},
 			stillDown: true, answersBack: true},
-		{name: "restarted and answering", silent: true, alerted: true, act: restart, after: "running", game: GameAnswering, want: []string{silent, back}},
+		{name: "restarted and answering", silent: true, alerted: true, act: restart, after: "running", game: GameAnswering, want: []string{silent, answering}},
 		{name: "left stopped by other work", alerted: true, act: func(s *Service, id string) { s.Suppress(ctx, id, nil); s.Suppress(ctx, id, nil) },
 			after: "exited", want: []string{down}, stillDown: true},
 		{name: "stopped", silent: true, alerted: true, after: "exited", want: []string{silent}, startsBack: true, act: stop},
@@ -342,14 +357,14 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 				game = GameAnswering
 				s.Check(ctx, state(c.after, ""), now+210_000)
 				s.Check(ctx, state(c.after, ""), now+220_000)
-				c.want = append(c.want, back)
+				c.want = append(c.want, answering)
 			}
 			if c.startsBack {
 				game = GameAnswering
 				s.Check(ctx, state("running", ""), now+210_000)
 				s.Check(ctx, state("running", ""), now+220_000)
 				if c.alerted {
-					c.want = append(c.want, back)
+					c.want = append(c.want, answering)
 				}
 			}
 			if !slices.Equal(events.events, c.want) {
@@ -608,8 +623,19 @@ func TestSilentGameOutage(t *testing.T) {
 	game = GameAnswering
 	s.Check(ctx, state("running", "healthy"), 80_000)
 	if len(events.events) != 2 || events.events[0] != "Minecraft: running, but the game stopped answering." ||
-		events.events[1] != "Minecraft: the server is running again." {
+		events.events[1] != "Minecraft: the game is answering again." {
 		t.Fatal(events.events)
+	}
+	var logged []string
+	rows, _ := s.DB.Query("SELECT details_json FROM audit_log WHERE target_id=? ORDER BY id", server.ID)
+	for rows.Next() {
+		var details string
+		rows.Scan(&details)
+		logged = append(logged, details)
+	}
+	rows.Close()
+	if !slices.Equal(logged, []string{`{"game":true,"since":2000}`, `{"downFor":78000,"game":true}`}) {
+		t.Fatal(logged)
 	}
 }
 
@@ -633,7 +659,7 @@ func TestSilentOutageSurvivesDockerOutage(t *testing.T) {
 	game = GameAnswering
 	s.Check(ctx, state("running", "healthy"), 90_000)
 	if len(events.events) != 2 || events.events[0] != "Minecraft: running, but the game stopped answering." ||
-		events.events[1] != "Minecraft: the server is running again." {
+		events.events[1] != "Minecraft: the game is answering again." {
 		t.Fatal(events.events)
 	}
 }

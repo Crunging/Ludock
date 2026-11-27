@@ -300,6 +300,8 @@ var auditLabels = map[string]string{
 	"schedule.resumed":                   "Resumed a schedule",
 	"schedule.wait.cancelled":            "Cancelled a scheduled run waiting for players to leave",
 	"server.added":                       "Added a server",
+	"server.outage.alerted":              "Server down",
+	"server.outage.ended":                "Server running again",
 	"server.start":                       "Started the server",
 	"server.stop":                        "Stopped the server",
 	"server.restart":                     "Restarted the server",
@@ -438,7 +440,32 @@ func entryLabel(entry history.AuditEntry) string {
 	if strings.HasPrefix(entry.Action, "ludock.update.") && details != nil {
 		return ludockUpdateLabel(entry.Action, details)
 	}
+	// An outage of a game that stopped answering while its server ran.
+	game, _ := details["game"].(bool)
+	if entry.Action == "server.outage.alerted" && game {
+		return "Game not answering"
+	}
+	if down, _ := details["downFor"].(float64); entry.Action == "server.outage.ended" && down > 0 {
+		minutes, unit := max(1, int((down+30_000)/60_000)), " minutes"
+		if minutes == 1 {
+			unit = " minute"
+		}
+		if game {
+			return "Game answering again after " + strconv.Itoa(minutes) + unit
+		}
+		return "Server running again after " + strconv.Itoa(minutes) + unit + " down"
+	}
 	return AuditLabel(entry.Action)
+}
+
+// outageSince is when the outage an entry announced began, or 0.
+func outageSince(entry history.AuditEntry) int64 {
+	details, _ := entry.Details.(map[string]any)
+	since, _ := details["since"].(float64)
+	if entry.Action != "server.outage.alerted" {
+		return 0
+	}
+	return int64(since)
 }
 
 // addedContainer is the container an added server came from; the entry is
@@ -458,6 +485,9 @@ templ auditList(h HistoryView) {
 			<article class="audit-entry">
 				<div>
 					<strong>{ entryLabel(entry) }</strong>
+					if since := outageSince(entry); since > 0 {
+						<span>Since @Time(since, "", "")</span>
+					}
 					<span>{ auditActor(entry) }</span>
 					if by := cancelledBy(entry, h.Users); by != "" {
 						<span>Cancelled by { by }</span>

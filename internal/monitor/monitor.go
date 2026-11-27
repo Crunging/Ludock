@@ -533,7 +533,11 @@ func (s *Service) announceAt(serverID string, deadline int64) {
 }
 
 // alert is a server problem to queue with the state that raises it.
-type alert struct{ key, message string }
+// alert is a notification; audit, when set, is written with it.
+type alert struct {
+	key, message string
+	audit        *db.AuditEntry
+}
 
 // apply runs an UPDATE of availability and, only if it changed exactly one
 // row, queues alerts in the same transaction. It reports whether it changed.
@@ -558,8 +562,13 @@ func (s *Service) apply(ctx context.Context, alerts []alert, query string, args 
 
 func (s *Service) queueIn(ctx context.Context, tx *sql.Tx, alerts []alert) error {
 	for _, a := range alerts {
+		if a.audit != nil {
+			if err := s.DB.WriteAudit(ctx, tx, *a.audit); err != nil {
+				return err
+			}
+		}
 		if s.Queue == nil {
-			return nil
+			continue
 		}
 		if _, err := s.Queue(ctx, tx, notify.ServerProblems, a.key, a.message); err != nil {
 			return err
@@ -796,7 +805,12 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			} else if silent {
 				message = server.DisplayName + ": running, but the game stopped answering."
 			}
-			down = []alert{{"outage:" + server.ID + ":" + strconv.FormatInt(started, 10), message}}
+			since := started
+			if r.outage.Valid {
+				since = s.shownSince(server.ID, r)
+			}
+			down = []alert{{"outage:" + server.ID + ":" + strconv.FormatInt(started, 10), message,
+				&db.AuditEntry{Action: "server.outage.alerted", TargetType: "server", TargetID: server.ID, Details: map[string]any{"since": since, "game": silent}}}}
 		}
 		changed := false
 		if !(r.outage.Valid && r.outage.Int64 == started && r.notified == notified && r.lastState.String == lastState) {
@@ -918,7 +932,13 @@ const whileIdle = " AND NOT EXISTS(SELECT 1 FROM operations WHERE operations.ser
 func (s *Service) recovered(ctx context.Context, server identity.Server, container servers.Container, r *row, now int64) (bool, error) {
 	var back []alert
 	if r.notified == 1 {
-		back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), server.DisplayName + ": the server is running again."}}
+		// A game that stopped answering ran all along.
+		game, message := r.lastState.String == NotAnswering, server.DisplayName+": the server is running again."
+		if game {
+			message = server.DisplayName + ": the game is answering again."
+		}
+		back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), message,
+			&db.AuditEntry{Action: "server.outage.ended", TargetType: "server", TargetID: server.ID, Details: map[string]any{"downFor": now - s.shownSince(server.ID, r), "game": game}}}}
 	}
 	changed, err := s.transitionIf(ctx, server.ID, r, back, whileIdle, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
 	if changed {
