@@ -42,6 +42,14 @@ func TestServerDetailFollowsGrants(t *testing.T) {
 			t.Error("admin page lacks", want)
 		}
 	}
+	// Outages Ludock logged are under Everything, which only administrators
+	// open; their server's Activity links there.
+	outages := `href="/activity?action=outage&amp;serverId=` + p.server + `&amp;show=everything"`
+	for user, want := range map[*auth.Principal]bool{viewer: false, p.admin: true} {
+		if body := p.do("GET", "/servers/"+p.server+"?tab=activity", user, nil, nil).Body.String(); strings.Contains(body, outages) != want {
+			t.Error(user.User.Username, want, body)
+		}
+	}
 }
 
 // Monitoring settings need an administrator.

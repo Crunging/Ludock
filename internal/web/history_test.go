@@ -127,4 +127,12 @@ func TestActivitySearchMatchesShownNames(t *testing.T) {
 			t.Error(search, body)
 		}
 	}
+	// "outage", which a server's Activity links to, finds all three kinds.
+	body := p.do("GET", "/activity?show=everything&action=outage", p.admin, nil, nil).Body.String()
+	for _, row := range []string{"Server down", "Server running again", "Game not answering", "Game answering again",
+		"Can’t reach Docker", "Docker reachable again; the server is running"} {
+		if !strings.Contains(body, "<strong>"+row+"</strong>") || strings.Contains(body, "<strong>Signed in") {
+			t.Error("outage:", row, body)
+		}
+	}
 }

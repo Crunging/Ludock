@@ -374,6 +374,9 @@ func AuditKeys(text string) []string {
 			keys = append(keys, "server.player-action#"+action)
 		}
 	}
+	if strings.Contains("outage", text) {
+		keys = append(keys, outages...)
+	}
 	slices.Sort(keys)
 	return keys
 }
@@ -447,8 +450,12 @@ func entryLabel(entry history.AuditEntry) string {
 	return AuditLabel(entry.Action)
 }
 
-// outageStarts are the actions Ludock logs as an outage is alerted.
-var outageStarts = []string{"server.outage.alerted", "server.silence.alerted", "server.unreachable.alerted"}
+// outageStarts are the actions Ludock logs as an outage is alerted;
+// outages, all it logs about outages, which a search for "outage" finds.
+var (
+	outageStarts = []string{"server.outage.alerted", "server.silence.alerted", "server.unreachable.alerted"}
+	outages      = append(slices.Clone(outageStarts), "server.outage.ended", "server.silence.ended", "server.unreachable.ended")
+)
 
 // outageSince is when the outage an entry announced began, or 0.
 func outageSince(entry history.AuditEntry) int64 {
