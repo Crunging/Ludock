@@ -270,15 +270,16 @@ test("finding a newer Ludock and updating it", async ({ page }) => {
     await expect(form.locator(".alert--success")).toHaveText("Image update checks turned on.");
     await expect(check).toContainText("A newer Ludock is available.");
 
-    // A copy an earlier update left is said alone: the commands would
-    // replace it too.
+    // A copy an earlier update left is replaced by the next one, which its
+    // confirmation says.
     const copy = join(process.env.LUDOCK_E2E_DIR, "data", "ludock.db.before-update");
     writeFileSync(copy, "kept");
     try {
       await page.reload();
-      await expect(notice).toContainText("is still beside its database. Move it somewhere safe, then update again.");
-      await expect(notice.locator("pre")).toHaveCount(0);
-      await expect(notice.getByRole("button", { name: "Update Ludock" })).toHaveCount(0);
+      await notice.getByRole("button", { name: "Update Ludock" }).click();
+      const replacing = page.getByRole("dialog", { name: "Update Ludock?" });
+      await expect(replacing).toContainText("It replaces the copy of Ludock’s data an earlier update left, ludock.db.before-update.");
+      await replacing.getByRole("button", { name: "Cancel" }).click();
     } finally {
       rmSync(copy);
     }
@@ -322,9 +323,11 @@ test("finding a newer Ludock and updating it", async ({ page }) => {
     await checkLudock("A newer Ludock is available.");
     await notice.getByRole("button", { name: "Update Ludock" }).click();
     await page.getByRole("dialog", { name: "Update Ludock?" }).getByRole("button", { name: "Update Ludock" }).click();
-    const failure = "Ludock’s update didn’t finish: the new version reported itself unhealthy, as one whose image is older than this Ludock’s data does. Ludock put version dev back, with its data as it was.";
+    const failure = "Ludock’s update didn’t finish: the new version reported itself unhealthy. Ludock put version dev back, with its data as it was.";
     await expect(notice.locator(".alert--error")).toContainText(failure, { timeout: 30_000 });
-    await expect(notice.locator("pre")).toHaveText("docker compose pull ludock\ndocker compose up -d ludock");
+    // Updating from a terminal would skip the put-back, so it isn't advised.
+    await expect(notice.locator("pre")).toHaveCount(0);
+    await expect(notice.getByRole("link", { name: "report it" })).toHaveAttribute("href", "https://github.com/Crunging/Ludock/issues");
     await expect.poll(() => hook.all().filter((body) => body.message.startsWith("Ludock couldn’t update itself:")).length, { timeout: 30_000 }).toBe(1);
     await page.goto("/activity?show=everything&action=Updated Ludock");
     await expect(entry).toContainText("Updated Ludock from version dev, put back: the new version reported itself unhealthy");
@@ -332,7 +335,9 @@ test("finding a newer Ludock and updating it", async ({ page }) => {
     await expect(entry).toContainText(admin.username);
     await page.goto("/");
     const item = page.locator(".needs-attention__list li", { hasText: "Ludock’s update didn’t finish" });
-    await expect(item).toContainText("The new version reported itself unhealthy, as one whose image is older than this Ludock’s data does. Ludock is still on version dev.");
+    await expect(item).toContainText("The new version reported itself unhealthy. Ludock is still on version dev.");
+    await expect(item).not.toContainText("from a terminal");
+    await expect(item.getByRole("link", { name: "report it" })).toHaveAttribute("href", "https://github.com/Crunging/Ludock/issues");
     await item.getByRole("link", { name: /^Open Settings/ }).click();
     // While a copy an earlier update left is there, the failure's own
     // commands are held back too.

@@ -28,7 +28,9 @@ type DB struct {
 	key  []byte
 }
 
-func fileURI(path string, query url.Values) string {
+// FileURI is path as an SQLite file URI with query, escaped so a folder
+// named with ? or # still names that file.
+func FileURI(path string, query url.Values) string {
 	return "file:" + (&url.URL{Path: path}).EscapedPath() + "?" + query.Encode()
 }
 
@@ -37,9 +39,9 @@ func exists(path string) (os.FileInfo, bool) {
 	return info, err == nil
 }
 
-// inspect validates an existing file before WAL, chmod, migrations, or any
-// other writes.
-func inspect(path string) error {
+// Inspect validates an existing file before WAL, chmod, migrations, or any
+// other writes: its error is why Open would refuse the file.
+func Inspect(path string) error {
 	canonical, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return err
@@ -64,7 +66,7 @@ func inspect(path string) error {
 	if !hasJournal {
 		query.Set("immutable", "1")
 	}
-	existing, err := sql.Open("sqlite", fileURI(canonical, query))
+	existing, err := sql.Open("sqlite", FileURI(canonical, query))
 	if err != nil {
 		return err
 	}
@@ -87,7 +89,7 @@ func Open(path string) (result *DB, err error) {
 	memory := path == ":memory:"
 	if !memory {
 		if info, ok := exists(path); ok && info.Size() > 0 {
-			if err := inspect(path); err != nil {
+			if err := Inspect(path); err != nil {
 				return nil, err
 			}
 		}
@@ -103,7 +105,7 @@ func Open(path string) (result *DB, err error) {
 	if memory {
 		dsn = "file::memory:?" + query.Encode()
 	} else {
-		dsn = fileURI(path, query)
+		dsn = FileURI(path, query)
 	}
 	pool := sql.OpenDB(statementConnector{driver: &sqlite.Driver{}, dsn: dsn})
 	var key []byte

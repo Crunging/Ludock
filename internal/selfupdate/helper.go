@@ -40,7 +40,7 @@ func putBackReason(code int) int {
 var Reasons = []string{
 	"Docker couldn’t start the new container, for example because its port was still in use",
 	"the new version stopped right after it started",
-	"the new version reported itself unhealthy, as one whose image is older than this Ludock’s data does",
+	"the new version reported itself unhealthy",
 	"the new version didn’t report healthy within 3 minutes",
 	"the new image has no health check, so Ludock couldn’t confirm it works",
 	"Docker couldn’t give the new container Ludock’s restart policy",
@@ -76,8 +76,11 @@ type Helper struct {
 	Docker    *docker.Client
 	Container string
 	// Image is the pulled image the new container runs.
-	Image      string
-	Operation  string
+	Image     string
+	Operation string
+	// Policy is the owner's restart policy, as the update recorded it; the
+	// original's own may be a leftover "no".
+	Policy     json.RawMessage
 	HealthWait time.Duration
 	Poll       time.Duration
 }
@@ -90,6 +93,9 @@ func (h *Helper) Run(ctx context.Context) int {
 		return ExitUnchanged
 	}
 	policy := old.HostConfig["RestartPolicy"]
+	if len(h.Policy) > 0 {
+		policy = h.Policy
+	}
 	plan, err := (&update.Service{Docker: h.Docker}).CheckContainer(ctx, old.ID, false)
 	var image *docker.ImageInspect
 	if err == nil {
@@ -116,9 +122,11 @@ func (h *Helper) Run(ctx context.Context) int {
 		h.Docker.Remove(ctx, id, true, true)
 		return ExitUnchanged
 	}
-	// From here until the swap settles the original doesn't restart by
-	// itself, so a reboot can't run both.
-	if err := h.Docker.SetRestartPolicy(ctx, old.ID, noRestart); err != nil {
+	// At most one of the two containers has a restart policy, so a reboot
+	// starts one Ludock. Until the new one is accepted that is the original,
+	// which Docker starts again after a reboot even though it is stopped,
+	// and which then puts the update back.
+	if err := h.Docker.SetRestartPolicy(ctx, old.ID, alwaysRestart); err != nil {
 		h.Docker.Remove(ctx, id, true, true)
 		return ExitUnchanged
 	}
@@ -133,9 +141,9 @@ func (h *Helper) Run(ctx context.Context) int {
 	if err := h.Docker.Start(ctx, id); err == nil {
 		reason = h.awaitHealthy(ctx, id)
 	}
-	// The new one runs with the original's restart policy before the
-	// original goes, which it does only once the new one passed.
-	if reason < 0 && h.Docker.SetRestartPolicy(ctx, id, policy) != nil {
+	// Once the new one passed it takes the policy, after the original gives
+	// it up, and only then does the original go.
+	if reason < 0 && (h.Docker.SetRestartPolicy(ctx, old.ID, noRestart) != nil || h.Docker.SetRestartPolicy(ctx, id, policy) != nil) {
 		reason = reasonPolicy
 	}
 	if reason < 0 {
@@ -168,7 +176,10 @@ func (h *Helper) putBack(ctx context.Context, old *docker.ContainerSpec, id stri
 	return ExitPutBack + reason
 }
 
-var noRestart = json.RawMessage(`{"Name":"no","MaximumRetryCount":0}`)
+var (
+	noRestart     = json.RawMessage(`{"Name":"no","MaximumRetryCount":0}`)
+	alwaysRestart = json.RawMessage(`{"Name":"always","MaximumRetryCount":0}`)
+)
 
 // awaitHealthy waits for the new container's own health check, from its
 // start, and returns -1 or why it failed.

@@ -78,9 +78,17 @@ type Record struct {
 	OriginalGone bool `json:"originalGone,omitempty"`
 	// Policy is Ludock's restart policy as the update began; NoPolicy, that
 	// the original couldn't get it back.
-	Policy    json.RawMessage `json:"policy,omitempty"`
-	NoPolicy  bool            `json:"noPolicy,omitempty"`
-	Dismissed bool            `json:"dismissed,omitempty"`
+	Policy   json.RawMessage `json:"policy,omitempty"`
+	NoPolicy bool            `json:"noPolicy,omitempty"`
+	// TagLeft: Docker kept the new image under Ludock's tag.
+	TagLeft   bool `json:"tagLeft,omitempty"`
+	Dismissed bool `json:"dismissed,omitempty"`
+	// Finished, read from Docker as an interrupted update is shown: nothing
+	// it left is there any more, with Running the version that runs now.
+	Finished bool   `json:"-"`
+	Running  string `json:"-"`
+	// Unchecked: Docker couldn't say whether the original still exists.
+	Unchecked bool `json:"-"`
 }
 
 func (r *Record) InProgress() bool { return r != nil && r.State == StateUpdating }
@@ -145,8 +153,8 @@ var (
 		"Docker picks Ludock’s port each time its container starts, so this page wouldn’t come back at the same address. Publish a fixed port, such as 3000:3000, or use the commands below.")
 	errNoDataMount = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
 		"Ludock keeps its data inside its own container rather than in a volume or mounted folder, so recreating it would lose its data. Move its data to a volume or mounted folder first, then update.")
-	errCopyLeft = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
-		"The copy of Ludock’s data from an earlier update, "+CopyName+", is still beside its database. Move it somewhere safe, then update again.")
+	errEarlier = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
+		"An earlier update of Ludock didn’t finish. Finish it as shown above, then update again.")
 	errPull = apperr.New("PULL_FAILED", 409,
 		"Docker couldn’t download Ludock’s new image. Check the machine’s internet connection; for a private registry, set LUDOCK_DOCKER_CONFIG.")
 	errSave = apperr.New("LUDOCK_UPDATE_SAVE", 409,
@@ -159,6 +167,7 @@ var (
 
 const (
 	reasonUnchanged   = "Docker couldn’t swap in Ludock’s new container, so nothing was changed"
+	reasonCutOff      = "the update was cut off, for example by a restart, before the new version was accepted"
 	reasonNotReplaced = "the update stopped before Ludock was replaced, so nothing was changed"
 	reasonInterrupted = "the update stopped partway"
 )
@@ -185,10 +194,50 @@ func (s *Service) Failed(ctx context.Context) *Record {
 	last := s.Last(ctx)
 	// One that stopped partway stays until dismissed, whichever version
 	// the owner then started.
-	if !last.Failed() || last.Dismissed || (last.From != s.Version && last.State != StateInterrupted) {
+	if !last.Failed() || (last.From != s.Version && last.State != StateInterrupted) {
+		return nil
+	}
+	if last.State == StateInterrupted {
+		s.present(ctx, last)
+	}
+	// One that left something behind shows until that is gone.
+	if last.Dismissed && (last.State != StateInterrupted || last.Finished) {
 		return nil
 	}
 	return last
+}
+
+// present drops from an interrupted update what the owner has since
+// finished: a leftover container gone, as after docker rm or a rename, and
+// the copy moved.
+func (s *Service) present(ctx context.Context, record *Record) {
+	// Nothing is left only once Docker shows this update's new container
+	// gone, whatever was recorded.
+	replacement, err := s.Docker.InspectSpec(ctx, servers.ReplacementName(record.Name, record.ID))
+	gone := docker.IsNotFound(err)
+	if gone {
+		record.Leftover, record.OnLeftover, record.OriginalGone = "", false, false
+	} else if err == nil && operationOf(replacement) == record.ID {
+		record.Leftover = strings.TrimPrefix(replacement.Name, "/")
+	}
+	// Whether Ludock runs in the new container is which container this
+	// one is now, whatever was recorded: the original may run again.
+	if own, err := s.current(ctx); err == nil && own.ID == record.Container {
+		record.OnLeftover, record.OriginalGone = false, false
+	} else if err == nil && record.Leftover != "" && strings.TrimPrefix(own.Name, "/") == record.Leftover {
+		record.OnLeftover = true
+	}
+	// Removing the container this Ludock runs in is advised only while
+	// Docker shows the original, which may hold an anonymous data volume.
+	// Only Docker showing it gone counts; while it can't say, no command.
+	if record.OnLeftover {
+		_, err := s.Docker.InspectSpec(ctx, record.Container)
+		record.OriginalGone, record.Unchecked = docker.IsNotFound(err), err != nil && !docker.IsNotFound(err)
+	}
+	_, err = os.Lstat(filepath.Join(s.DataDir, CopyName))
+	record.Copy = err == nil
+	_, helper := s.Docker.InspectSpec(ctx, HelperName(record.ID))
+	record.Finished, record.Running = gone && docker.IsNotFound(helper), s.Version
 }
 
 var errNothingToDismiss = apperr.New("NOT_FOUND", 404, "There is no failed update of Ludock to dismiss.")
@@ -214,8 +263,11 @@ type Offer struct {
 	// commands that recreate it would lose its data or interrupt work now.
 	// Refused: a click on Update Ludock failed for Reason.
 	Pinned, NoCommands, Refused bool
-	Updating                    bool
-	Last                        *Record
+	// CopyLeft: an earlier update's copy of the data, which this one
+	// replaces, is beside the database.
+	CopyLeft bool
+	Updating bool
+	Last     *Record
 	// Failed is a failed update an administrator hasn't dismissed.
 	Failed *Record
 }
@@ -245,7 +297,10 @@ func (s *Service) Offer(ctx context.Context) Offer {
 		offer.Reason, offer.NoCommands = errBusy.Message, true
 		return offer
 	}
-	offer.Available = true
+	// A copy an interrupted update left is no longer needed by a Ludock
+	// that opened its data and settled it, so the next update replaces it.
+	_, err = os.Lstat(filepath.Join(s.DataDir, CopyName))
+	offer.Available, offer.CopyLeft = true, err == nil
 	return offer
 }
 
@@ -256,7 +311,7 @@ func (o *Offer) Refuse(err error) {
 }
 
 func noCommands(err error) bool {
-	return errors.Is(err, errNoDataMount) || errors.Is(err, errCopyLeft) || errors.Is(err, errBusy)
+	return errors.Is(err, errNoDataMount) || errors.Is(err, errBusy) || errors.Is(err, errEarlier)
 }
 
 type queryer interface {
@@ -295,6 +350,13 @@ func (s *Service) check(ctx context.Context, dependents bool) (*docker.Container
 	if dataDir, err := filepath.Abs(s.DataDir); err != nil || !mounted(own, dataDir) {
 		return own, nil, errNoDataMount
 	}
+	// Another update would replace the record of one whose leftovers
+	// Settings still says how to finish.
+	if last := s.Last(ctx); last != nil && last.State == StateInterrupted {
+		if s.present(ctx, last); !last.Finished {
+			return own, nil, errEarlier
+		}
+	}
 	plan, err := s.Updates.CheckContainer(ctx, own.ID, dependents)
 	switch {
 	case apperr.Is(err, "UNSUPPORTED_IMAGE"):
@@ -322,10 +384,6 @@ func (s *Service) check(ctx context.Context, dependents bool) (*docker.Container
 	}
 	if s.socket(plan.Spec) == nil {
 		return own, nil, errNoSocket
-	}
-	// An update would replace the copy an earlier one kept.
-	if _, err := os.Lstat(filepath.Join(s.DataDir, CopyName)); err == nil {
-		return own, nil, errCopyLeft
 	}
 	if relabelled(own, s.Socket) {
 		return own, nil, errSocketLabel
@@ -445,7 +503,7 @@ func (s *Service) Start(ctx context.Context, adminID, tokenHash, ip string) erro
 	}
 	record := Record{ID: identity.NewUUID(), State: StateUpdating, ActorID: adminID, From: s.Version,
 		Container: own.ID, Name: strings.TrimPrefix(own.Name, "/"), Previous: own.Image, StartedAt: db.Now(),
-		Policy: plan.RestartPolicy()}
+		Policy: ownerPolicy(s.Last(ctx), own, plan.RestartPolicy())}
 	err = s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
 		var current Record
 		if _, err := db.ReadSetting(ctx, tx, recordSetting, &current); err != nil {
@@ -487,11 +545,19 @@ func (s *Service) background() context.Context {
 // from Ludock's own image. Ludock stopping meanwhile leaves the record for
 // the next start to settle.
 func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerInspect, plan *update.Plan, tokenHash string) {
+	// A copy an earlier update left stays until this one writes its own.
+	_, copyErr := os.Lstat(filepath.Join(s.DataDir, CopyName))
+	earlier := copyErr == nil
+	ended := func(state, reason string) {
+		kept := record
+		kept.Copy = earlier
+		s.settle(ctx, kept, state, reason)
+	}
 	failed := func(err error) {
 		// A Ludock stopping meanwhile leaves the update to the next one.
 		if ctx.Err() == nil {
 			message, _ := apperr.Public(err)
-			s.settle(ctx, record, StateFailed, message)
+			ended(StateFailed, message)
 		}
 	}
 	auth, err := s.Updates.RegistryAuth(plan)
@@ -519,7 +585,7 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 		s.Checks.ForgetSelf()
 	}
 	if target == record.Previous {
-		s.settle(ctx, record, StateCurrent, "")
+		ended(StateCurrent, "")
 		return
 	}
 	image, err := s.Docker.InspectImageConfig(ctx, target)
@@ -560,6 +626,7 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 		failed(errSave)
 		return
 	}
+	earlier = false
 	// The copy can take a while too. The live database's record then says
 	// the copy was written, and the copy's own doesn't, so a Ludock put back
 	// can tell which one it opened.
@@ -574,6 +641,12 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 		failed(errSave)
 		return
 	}
+	// The copy now beside the database is this update's: from here a
+	// put-back restores it, and an ending that keeps nothing removes it.
+	// Until this record was saved, a restart restores nothing and leaves the
+	// copy there, which is safe: the helper hasn't started, so nothing was
+	// swapped.
+	record.Copy = true
 	if err := s.startHelper(ctx, record, own); errors.Is(err, errUncertain) {
 		// The helper may be swapping already; watch, or the Ludock that runs
 		// next, finds out.
@@ -583,6 +656,27 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 		return
 	}
 	s.watch(ctx, record)
+}
+
+// ownerPolicy is the restart policy a new update keeps as the owner's: the
+// one an update that stopped partway recorded, which a leftover "no" on one
+// of its containers can't have overwritten, or else the container's own, as
+// for one Compose made since.
+func ownerPolicy(last *Record, own *docker.ContainerInspect, current json.RawMessage) json.RawMessage {
+	if last != nil && last.State == StateInterrupted && len(last.Policy) > 0 && last.owes(own) {
+		return last.Policy
+	}
+	return current
+}
+
+// owes reports whether own, one of an interrupted update's containers, still
+// waits for the owner's restart policy. The one Ludock runs in holds it once
+// it was put back (OnLeftover says which, NoPolicy whether it was); from then
+// on its policy is the owner's own, to change as they like.
+func (r *Record) owes(own *docker.ContainerInspect) bool {
+	original, replacement := own.ID == r.Container, own.Config.Labels[update.OperationLabel] == r.ID
+	holds := original && !r.OnLeftover || replacement && r.OnLeftover
+	return (original || replacement) && (!holds || r.NoPolicy)
 }
 
 // HelperName names the update's helper.
@@ -604,7 +698,7 @@ func (s *Service) startHelper(ctx context.Context, record Record, own *docker.Co
 	var host struct{ GroupAdd, CapAdd []string }
 	json.Unmarshal(encode(spec.HostConfig), &host)
 	body := map[string]any{"Image": own.Image, "Entrypoint": []string{helper.Binary},
-		"Cmd":  []string{"self-update", record.Container, record.Target, record.ID},
+		"Cmd":  []string{"self-update", record.Container, record.Target, record.ID, string(record.Policy)},
 		"Env":  []string{"LUDOCK_DOCKER_SOCKET=" + socket.Destination},
 		"User": config.User, "Labels": launch.HelperLabels(helperKind), "Healthcheck": map[string]any{"Test": []string{"NONE"}},
 		"HostConfig": map[string]any{"NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": []string{"ALL"},
@@ -699,7 +793,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		return bounded
 	}
 	spec, err := s.Docker.InspectSpec(ctx, HelperName(record.ID))
-	noHelper := docker.IsNotFound(err)
+	noHelper, helperShown := docker.IsNotFound(err), err == nil
 	if !stuck && (err != nil && !docker.IsNotFound(err) || err == nil && (spec.State.Running || spec.State.Restarting)) {
 		return false
 	}
@@ -716,6 +810,11 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	// An exited helper's code is the evidence, so it goes only once the
 	// outcome is saved: a restart in between finds it again.
 	settle := func(state, reason string) bool {
+		// A copy this update can't be shown to have written, as one an
+		// earlier update left, is never removed, as it is never restored.
+		if !live && !helperShown {
+			record.Copy = copyErr == nil
+		}
 		if !s.settle(ctx, record, state, reason) {
 			return false
 		}
@@ -732,8 +831,28 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		}
 		return false
 	}
-	_, gone := s.Docker.InspectSpec(ctx, record.Container)
+	first, gone := s.Docker.InspectSpec(ctx, record.Container)
 	original, ownReplacement := own.ID == record.Container, own.Config.Labels[update.OperationLabel] == record.ID
+	putBack := putBackReason(code)
+	verdict := code == ExitUpdated || code == ExitUnchanged || putBack >= 0
+	// An original running again with no word from the helper puts the
+	// update back and stops this one first, so it waits.
+	if ownReplacement && !verdict && !stuck && gone == nil && first.State.Running {
+		return false
+	}
+	// One Docker started again after its original went, before its rename,
+	// waits for its health check to settle, as the helper would have.
+	if ownReplacement && own.Name != "/"+record.Name && docker.IsNotFound(gone) && own.State.Health != nil &&
+		own.State.Health.Status == "starting" && !stuck {
+		return false
+	}
+	// One under its temporary name takes Ludock's name once Docker shows its
+	// original gone: the helper removes that only after the new one passed.
+	renamed := ownReplacement && own.Name != "/"+record.Name && docker.IsNotFound(gone) && own.State.Health != nil &&
+		own.State.Health.Status == "healthy" && s.Docker.Rename(call(), own.ID, record.Name) == nil
+	if renamed {
+		own.Name = "/" + record.Name
+	}
 	// Only a container of this update, by its label, is left over.
 	replacement, err := s.Docker.InspectSpec(ctx, servers.ReplacementName(record.Name, record.ID))
 	// Nothing changed only once Docker showed whether one is left.
@@ -744,7 +863,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	// This Ludock may be that container, not yet under Ludock's name; its
 	// removal is advised only with the original shown to exist, since it
 	// may be the last container naming an anonymous data volume.
-	if ownReplacement && own.Name != "/"+record.Name && (gone == nil || docker.IsNotFound(gone)) {
+	if ownReplacement && own.Name != "/"+record.Name {
 		record.Leftover, record.OnLeftover, record.OriginalGone = strings.TrimPrefix(own.Name, "/"), true, docker.IsNotFound(gone)
 	}
 	// An original running since before the update was never stopped, nor
@@ -753,25 +872,41 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	// goes.
 	started, _ := time.Parse(time.RFC3339Nano, own.State.StartedAt)
 	untouched := original && (started.Before(time.UnixMilli(record.StartedAt)) || noHelper && noReplacement)
-	// So does one after the helper said nothing changed: it never ran.
-	if (untouched || original && code == ExitUnchanged) && record.Leftover != "" && !replacement.State.Running {
+	// An original started again with no word from the helper, as after a
+	// reboot, put the update back as it started: it stopped the new one.
+	cutOff := original && !verdict && !untouched
+	// So does one after the helper said nothing changed, or that was cut
+	// off: it never ran, or no longer does.
+	if (untouched || original && code == ExitUnchanged || cutOff) && record.Leftover != "" && !replacement.State.Running {
 		if err := s.Docker.Remove(call(), replacement.ID, true, true); err == nil || docker.IsNotFound(err) {
 			record.Leftover = ""
 		}
 	}
 	log.Info("Ludock's update helper ended", logging.F("exitCode", code))
-	putBack := putBackReason(code)
-	// The original, whatever happened, gets back the restart policy it had
-	// as the update began, which the helper took away before it stopped it.
-	if original && len(record.Policy) > 0 && s.Docker.SetRestartPolicy(call(), own.ID, record.Policy) != nil {
-		record.NoPolicy = true
+	succeeded := ownReplacement && own.Name == "/"+record.Name && docker.IsNotFound(gone)
+	// At most one of the two containers has a restart policy, so a reboot
+	// starts one Ludock. Whichever settles an update the helper didn't
+	// finish first takes the other's away, whatever its own will be, then
+	// takes the one Ludock had as it began. While Docker can't say whether
+	// the other is there, it takes only an owner's "no", and says so.
+	if (original || ownReplacement && (!succeeded || renamed)) && len(record.Policy) > 0 {
+		var policy struct{ Name string }
+		json.Unmarshal(record.Policy, &policy)
+		other := ""
+		if original && record.Leftover != "" {
+			other = record.Leftover
+		} else if ownReplacement && gone == nil {
+			other = record.Container
+		}
+		unknown := ownReplacement && gone != nil && !docker.IsNotFound(gone) || original && !known
+		cleared := !unknown && (other == "" || s.Docker.SetRestartPolicy(call(), other, noRestart) == nil)
+		if cleared || policy.Name == "no" {
+			cleared = s.Docker.SetRestartPolicy(call(), own.ID, record.Policy) == nil && cleared
+		}
+		record.NoPolicy = !cleared
 	}
-	switch {
-	case !original && !ownReplacement:
-		// The owner started Ludock from a terminal, on the data as it is.
-		record.Copy = false
-		return settle(StateInterrupted, reasonInterrupted)
-	case original && putBack >= 0:
+	// How a put-back left the data.
+	data := func() {
 		switch {
 		case s.PutBack == DataRestored:
 			record.Data = DataRestored
@@ -789,11 +924,22 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		default:
 			record.Data = DataKept
 		}
+	}
+	switch {
+	case !original && !ownReplacement:
+		// The owner started Ludock from a terminal, on the data as it is.
+		record.Copy = false
+		return settle(StateInterrupted, reasonInterrupted)
+	case original && putBack >= 0:
+		data()
 		return settle(StatePutBack, Reasons[putBack])
+	case cutOff:
+		data()
+		return settle(StatePutBack, reasonCutOff)
 	case original && code == ExitUnchanged && known && record.Leftover == "":
 		record.Copy = false
 		return settle(StateFailed, reasonUnchanged)
-	case ownReplacement && own.Name == "/"+record.Name && docker.IsNotFound(gone):
+	case succeeded:
 		record.To, record.Copy = s.Version, false
 		// Its name, which Ludock may find itself by, is the new container's.
 		s.Own.Forget()
@@ -809,6 +955,18 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 // lets work start again. The data copy stays only for an update that
 // didn't finish.
 func (s *Service) settle(ctx context.Context, record Record, state, reason string) bool {
+	// An update that pulled a new image and didn't succeed leaves Ludock's
+	// tag on the image it runs, as before: otherwise any docker compose up
+	// would start the rejected one, with nothing to put it back.
+	// A restart between the pull and the record leaves Target empty, but the
+	// tag may have moved; one the owner moved since, to another image, stays.
+	if state != StateSucceeded && state != StateCurrent {
+		if own, err := s.current(ctx); err == nil && own.Image == record.Previous {
+			if tagged, err := s.Docker.InspectImage(ctx, own.Config.Image); err == nil && tagged != record.Previous && (record.Target == "" || tagged == record.Target) {
+				record.TagLeft = s.Docker.Tag(ctx, record.Previous, own.Config.Image) != nil
+			}
+		}
+	}
 	for {
 		settled, err := s.record(ctx, record, state, reason)
 		if err == nil {
@@ -899,6 +1057,15 @@ func (s *Service) Recover(ctx, base context.Context) {
 	s.mu.Unlock()
 	record := s.Last(ctx)
 	if !record.InProgress() {
+		// No update starts while it takes over: one beginning meanwhile
+		// could have its reboot protection undone.
+		if record != nil && record.State == StateInterrupted && len(record.Policy) > 0 {
+			lift := s.Locks.Hold(errUpdating)
+			go func() {
+				defer lift()
+				s.takeOver(base, *record)
+			}()
+		}
 		// One whose removal failed after its update was recorded goes now.
 		if record != nil && record.ID != "" {
 			go func() {
@@ -914,6 +1081,54 @@ func (s *Service) Recover(ctx, base context.Context) {
 	s.lift = lift
 	s.mu.Unlock()
 	go s.watch(base, *record)
+}
+
+// takeOver is rule 1 for a Ludock that starts after its update stopped
+// partway, however it was started: the update's other containers give up
+// their restart policy, then this one, if it is one of them, takes the
+// owner's; one Compose made itself keeps its own. It says so only if Docker
+// refuses.
+func (s *Service) takeOver(ctx context.Context, record Record) {
+	own, err := s.current(ctx)
+	if err != nil {
+		return
+	}
+	ours := own.ID == record.Container || own.Config.Labels[update.OperationLabel] == record.ID
+	// One that holds the owner's policy, put back, is left as the owner keeps it.
+	if ours && !record.owes(own) {
+		return
+	}
+	refused := false
+	for _, other := range []string{record.Container, servers.ReplacementName(record.Name, record.ID)} {
+		spec, err := s.Docker.InspectSpec(ctx, other)
+		if docker.IsNotFound(err) || err == nil && spec.ID == own.ID {
+			continue
+		}
+		if err != nil || s.Docker.SetRestartPolicy(ctx, spec.ID, noRestart) != nil {
+			refused = true
+		}
+	}
+	var policy struct{ Name string }
+	json.Unmarshal(record.Policy, &policy)
+	// The owner's "no" enables nothing, so it is taken whatever the others did.
+	if ours && (!refused || policy.Name == "no") {
+		refused = s.Docker.SetRestartPolicy(ctx, own.ID, record.Policy) != nil || refused
+	}
+	// Ludock now runs, and holds the policy, in this container.
+	onLeftover := record.OnLeftover
+	if ours {
+		onLeftover = own.ID != record.Container
+	}
+	if refused != record.NoPolicy || onLeftover != record.OnLeftover {
+		s.DB.Tx(ctx, func(tx *sql.Tx) error {
+			var current Record
+			if found, err := db.ReadSetting(ctx, tx, recordSetting, &current); err != nil || !found || current.ID != record.ID {
+				return err
+			}
+			current.NoPolicy, current.OnLeftover = refused, onLeftover
+			return s.DB.SetSetting(ctx, tx, recordSetting, current)
+		})
+	}
 }
 
 func cmpErr(err, fallback error) error {

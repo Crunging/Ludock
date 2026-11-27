@@ -706,7 +706,9 @@ templ attentionDetail(item attention.Item) {
 		case "ludock":
 			<span class="muted">
 				@Time(item.Since, "", "")
-				if item.Interrupted {
+				if item.Interrupted && item.Finished {
+					<span>· It was cut off partway, and nothing is left to do. Settings says which version runs.</span>
+				} else if item.Interrupted {
 					<span>· It stopped partway. Settings says how to finish it from a terminal.</span>
 				} else {
 					<span>· { Capitalize(strings.TrimSuffix(item.Reason, ".")) }. Ludock is still on version { item.Version }.</span>
@@ -716,7 +718,7 @@ templ attentionDetail(item attention.Item) {
 						case selfupdate.DataNotRestored:
 							<span>It couldn’t put the copy of its data from before the update back, so it runs on the newer data. The copy, { selfupdate.CopyName }, is beside its database.</span>
 					}
-					<span>Try again later. To see what goes wrong, update it from a terminal with <code>docker compose pull ludock</code> and <code>docker compose up -d ludock</code>, then read <code>docker compose logs ludock</code>.</span>
+					<span>Try again later. If it keeps failing, <a href="https://github.com/Crunging/Ludock/issues">report it</a>.</span>
 				}
 			</span>
 		case "operation":

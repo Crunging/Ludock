@@ -4,6 +4,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/Crunging/Ludock/internal/identity"
@@ -66,12 +67,16 @@ func main() {
 // the pulled image, from a container of Ludock's own image, and exits with
 // how it ended.
 func selfUpdate(args []string) int {
-	if len(args) != 3 || !identity.ValidID(args[2]) {
+	if len(args) != 3 && len(args) != 4 || !identity.ValidID(args[2]) || len(args) == 4 && !json.Valid([]byte(args[3])) {
 		log.Error("Ludock's update helper got arguments it can't read")
 		return 2
 	}
 	socket := cmp.Or(os.Getenv("LUDOCK_DOCKER_SOCKET"), config.DefaultDockerSocket)
-	return (&selfupdate.Helper{Docker: docker.New(socket), Container: args[0], Image: args[1], Operation: args[2]}).Run(context.Background())
+	helper := &selfupdate.Helper{Docker: docker.New(socket), Container: args[0], Image: args[1], Operation: args[2]}
+	if len(args) == 4 {
+		helper.Policy = json.RawMessage(args[3])
+	}
+	return helper.Run(context.Background())
 }
 
 // loadConfig reads the environment, reporting every invalid setting.
@@ -98,7 +103,14 @@ func serve() int {
 
 	// An update's helper that put this container back left the data copy
 	// for it to restore before it opens the database.
-	putBack := selfupdate.BeforeOpen(ctx, docker.New(cfg.DockerSocket), cfg.MountID, cfg.DataDir, time.Minute)
+	putBack, held, err := selfupdate.BeforeOpen(ctx, docker.New(cfg.DockerSocket), cfg.MountID, cfg.DataDir, time.Minute)
+	if held != nil {
+		defer held.Close()
+	}
+	if err != nil {
+		log.Error(startupError(err, "Could not read Ludock's data to check for an unfinished update."))
+		return 1
+	}
 	database, err := db.Open(cfg.DBPath())
 	if apperr.Is(err, "DATABASE_INCOMPATIBLE") {
 		return refuse(ctx, cfg.Listen, startupError(err, "")+selfupdate.Unfinished(cfg.DataDir))

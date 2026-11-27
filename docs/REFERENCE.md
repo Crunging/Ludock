@@ -490,10 +490,11 @@ tag, and an administrator can choose **Update Ludock**:
    starts a short-lived helper container from its own image, with only the
    Docker socket.
 3. The helper creates the new container from Ludock's definition, under a
-   temporary name, stops Ludock, and starts the new one. Ludock doesn't
-   restart by itself meanwhile.
-4. Once the new version's health check passes, the helper removes the old
-   container and gives the new one Ludock's name and restart policy.
+   temporary name, stops Ludock, and starts the new one. Meanwhile only the
+   old container has a restart policy, so a reboot starts the old version.
+4. Once the new version's health check passes, the helper gives it Ludock's
+   restart policy, taken from the old container first, removes the old
+   container, and gives the new one Ludock's name.
 
 Game servers keep running throughout, and the page comes back by itself on
 the new version. **Settings → System** shows the version, and **Activity →
@@ -502,8 +503,11 @@ Everything** records who updated Ludock and how it ended.
 If the new container doesn't start, stops, reports unhealthy (as an image
 older than Ludock's data does), or isn't healthy within 3 minutes, the helper
 removes it and starts the old container again. That Ludock puts the copy of
-its data back before it opens it, so the old version never meets data the
-new one changed; only a sign-in after the copy is undone.
+its data back before it opens it, so a version put back opens its data as it
+was just before the update; only a sign-in after the copy is undone. The one
+exception is the old container started by hand after the new version took
+over an update that stopped partway: it starts on the data as the new
+version left it, and says so in its log.
 **Settings** and **Needs attention** say why, until an administrator
 dismisses it.
 
@@ -512,7 +516,7 @@ restart someone asks for or one a schedule or automatic restart would queue,
 and no change a put-back would undo, whoever makes it: to settings,
 accounts, sharing or schedules, a sign-out, a password change or reset, or
 turning two-factor sign-in on or off. Signing in still works. Schedules try
-again once it is back.
+again once it is back, and alerts wait until it ends.
 
 It isn't offered, and **Settings** gives only the reason, when:
 
@@ -520,8 +524,6 @@ It isn't offered, and **Settings** gives only the reason, when:
   mounted folder: move the data to one first, since recreating the container
   would lose it.
 - Work is queued or running: wait for it.
-- The copy an earlier update kept is still beside its database: move it
-  somewhere safe first.
 
 It isn't offered, and **Settings** gives the reason with the commands below,
 when Ludock:
@@ -546,17 +548,51 @@ middle of is recovered at the next start. These and the other commands
 Settings shows assume a `compose.yaml` with the service named `ludock`; use
 your own service name, or your own tool, if yours differ.
 
-If an update is cut off partway, for example by a reboot, Ludock may be left
-stopped, or the new container may be left under its temporary name
-(`ludock-ludock-update-…`). Run the two commands above; the Ludock that
-starts says the update didn't finish and what else to run, if anything: the
-`docker rm -f` command for a container left behind, or, when Ludock itself
-runs in the new container under its temporary name with the old one gone, a
-`docker rename` to give it Ludock's name. If the new version changed the data
-before it was cut off and the old version can't open it, the old version
-says so on its address and gives the two commands. The copy of the data from
-before the update stays beside the database until then. A Ludock put back
-sets its own restart policy back, and says so if Docker won't.
+If an update is cut off partway, by a reboot, a restart of Docker, or its
+helper being stopped, Ludock finishes it by itself where it can. Only one of
+its two containers ever has a restart policy:
+
+- Until the new version has passed its health check, that is the old
+  container, so after a reboot or a restart of Docker, Docker starts the old
+  version. It stops the new one, puts its copy of the data back, removes the
+  new container, and says the update was cut off. Starting the old container
+  by hand does the same. While the helper still runs, the old version waits
+  for it, and it never starts beside a new version Docker can't confirm
+  stopped: Docker starts it again a little later. Nor does any Ludock start on a data
+  folder another Ludock runs on, in whatever container: it says so and
+  stops.
+- Once the new version has passed, that is the new container, so Docker
+  starts the new version. If the old container is gone, it gives itself
+  Ludock's name, and the update has succeeded.
+
+What can be left to you is the new version running under its temporary name,
+`<Ludock's container name>-ludock-update-<id>`, after the helper was stopped
+while it ran. **Settings** then says what to run: a `docker rename` that
+gives it Ludock's name if the old container is gone, or else the two
+commands above with a `docker rm -f` of the new container between them,
+which start Ludock again under its own name on the new version. While Docker
+can't say which containers are left, it gives no command. With a restart
+policy of `no`, a reboot before you run them starts neither container: start
+the new one with `docker start` and its temporary name, or run the commands. Until what the
+update left is gone, a new update isn't offered; then **Settings** says
+nothing is left to do and which version runs, until an administrator
+dismisses it. If Ludock was stopped by hand before it handed over to the
+helper, the two commands above start it on the new version with its data.
+
+Whichever Ludock records how the update ended first sets the other
+container's restart policy to `no`, then gets back the one Ludock had before
+the update, so a reboot starts at most one of them, and with an owner's `no`,
+neither. So does whichever starts after an update that stopped partway,
+however it was started. Until that policy is back, a later update keeps it
+as yours; once it is, it is yours to change, and Ludock leaves it. If Docker
+won't, Settings says so.
+
+An update that downloaded a new image and didn't succeed points Ludock's tag
+back at the image it runs, so a later `docker compose up -d` keeps that
+version; `docker compose pull ludock` or **Update Ludock** fetches the newer
+one again. If Docker won't, Settings says so. The copy of the data from
+before the update stays beside the database when an update didn't finish;
+the next update replaces it, and its confirmation says so.
 
 `latest` follows every release. Each release is also published under its
 version, such as `1.2.3`, and moves the shorter tags `1.2` and `1`. To stay

@@ -17,6 +17,7 @@ var (
 	execPath     = regexp.MustCompile(`^/exec/([^/]+)/(start|json)$`)
 	volume       = regexp.MustCompile(`^/volumes/([^/]+)$`)
 	image        = regexp.MustCompile(`^/images/(.+)/json$`)
+	imageTag     = regexp.MustCompile(`^/images/(.+)/tag$`)
 	distribution = regexp.MustCompile(`^/distribution/(.+)/json$`)
 )
 
@@ -133,6 +134,22 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(204)
 		} else {
 			writeJSON(w, 200, info)
+		}
+	case imageTag.MatchString(path) && r.Method == "POST":
+		reference, query := imageTag.FindStringSubmatch(path)[1], r.URL.Query()
+		e.mu.Lock()
+		id, ok := e.images[reference]
+		if !ok && strings.HasPrefix(reference, "sha256:") {
+			id, ok = reference, true
+		}
+		if ok {
+			e.images[query.Get("repo")+":"+query.Get("tag")] = id
+		}
+		e.mu.Unlock()
+		if !ok {
+			fail(w, 404)
+		} else {
+			w.WriteHeader(201)
 		}
 	case image.MatchString(path):
 		reference := image.FindStringSubmatch(path)[1]

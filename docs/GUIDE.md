@@ -219,10 +219,12 @@ then say why.
 When Ludock can't update itself in your setup, **Settings** says why, and
 shows two commands to run instead where running them now is safe. They
 assume a `compose.yaml` with the service named `ludock`; use your own service
-name, or your own tool, if yours differ. If an update is cut off partway, for example
-because the machine restarted, Ludock may be stopped. Run the same two
-commands; **Settings** then says the update didn't finish, and what else to
-do if anything. Details are in [Update Ludock](REFERENCE.md#update-ludock).
+name, or your own tool, if yours differ. If an update is cut off partway,
+for example by a reboot, Ludock puts the version you had back by itself, with
+its data. If the new version keeps running under a temporary name,
+**Settings** says what is left and the command for it, and once nothing is
+left, which version runs. Details are in
+[Update Ludock](REFERENCE.md#update-ludock).
 
 ### Restart a game that hangs
 

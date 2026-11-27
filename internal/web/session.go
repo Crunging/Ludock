@@ -232,12 +232,16 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, request *Request, 
 		views.Alert("error", public.Message).Render(r.Context(), w)
 		return
 	}
-	title := "Something went wrong"
-	if public.Code == "SERVER_PAUSED" {
-		title = "Server paused"
+	// A refusal that says what is happening names the tab after it too.
+	title, tab := "Something went wrong", "Error"
+	switch public.Code {
+	case "SERVER_PAUSED":
+		title, tab = "Server paused", "Server paused"
+	case "LUDOCK_UPDATING":
+		title, tab = "Ludock is updating", "Ludock is updating"
 	}
 	w.WriteHeader(public.Status)
-	views.ErrorPage(s.page(r, request, "Error"), title, public.Message).Render(r.Context(), w)
+	views.ErrorPage(s.page(r, request, tab), title, public.Message).Render(r.Context(), w)
 }
 
 func render(w http.ResponseWriter, r *http.Request, status int, components ...templ.Component) {
