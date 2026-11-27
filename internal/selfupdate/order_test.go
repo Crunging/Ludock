@@ -71,6 +71,11 @@ type rig struct {
 	restarts int
 	// hidden, set by unreadable, is what Docker won't show.
 	hidden string
+	// retries counts the restarts Docker gave a Ludock that refused to start.
+	retries int
+	// done: the case has ended, and boots are the Ludocks still starting.
+	done  bool
+	boots sync.WaitGroup
 }
 
 type process struct {
@@ -91,6 +96,13 @@ func newRig(t *testing.T) *rig {
 	if err := os.Mkdir(g.dataDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// Before the data folder goes, every Ludock still starting has stopped.
+	t.Cleanup(func() {
+		g.mu.Lock()
+		g.done = true
+		g.mu.Unlock()
+		g.boots.Wait()
+	})
 	d, err := db.Open(filepath.Join(g.dataDir, "ludock.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +140,16 @@ func newRig(t *testing.T) *rig {
 			if c.Image == newImage && c.State.Health == nil {
 				health(g, c, "healthy")
 			}
-			go g.boot(c.ID, c.Image, c.State.StartedAt)
+			// None starts once the case ends; those starting are waited for.
+			g.mu.Lock()
+			if !g.done {
+				g.boots.Add(1)
+				go func() {
+					defer g.boots.Done()
+					g.boot(c.ID, c.Image, c.State.StartedAt)
+				}()
+			}
+			g.mu.Unlock()
 		}
 	}
 	engine.OnStop = func(c *fakedocker.Container) {
@@ -230,10 +251,20 @@ func (g *rig) role(reference string) string {
 func (g *rig) boot(container, image string, run ...string) *process {
 	ctx, cancel := context.WithCancel(context.Background())
 	g.t.Cleanup(cancel)
+	ended := func() bool {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		return g.done
+	}
 	// The helper exits just after it starts the original, which under -race
 	// on a loaded machine can take seconds.
 	putBack, err := selfupdate.BeforeOpen(ctx, g.client, container, g.dataDir, 10*time.Second)
 	if err != nil {
+		cancel()
+		g.refused(container)
+		return nil
+	}
+	if ended() {
 		cancel()
 		return nil
 	}
@@ -641,7 +672,16 @@ func TestSelfUpdateOrder(t *testing.T) {
 			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
 		{name: "the helper said updated but couldn't remove the original, which, started by hand beside the new version, refuses", arrange: func(g *rig) {
 			g.fail["remove old"] = 500
-			g.at["rename new"] = func() { g.client.Start(context.Background(), g.old) }
+			// Once the new version's Ludock is up, as it is long before the
+			// rename in a real update, and while the helper still runs.
+			g.at["rename new"] = func() {
+				for _, id := range g.engine.SortedIDs() {
+					if info := g.engine.Container(id); info != nil && info.Image == newImage && info.Config.Labels["ludock.internal"] == "" {
+						g.process(id)
+					}
+				}
+				g.client.Start(context.Background(), g.old)
+			}
 		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
 			g.mu.Lock()
 			beside := g.processes[g.old]
@@ -996,6 +1036,31 @@ func (g *rig) reboot() {
 		if policy.Name != "" && policy.Name != "no" {
 			g.client.Start(ctx, id)
 		}
+	}
+}
+
+// refused ends a Ludock that wouldn't start, as cmd/ludock exits with 1, so
+// its container stops; Docker then starts it again if its restart policy
+// says so, after a delay that grows, as it does.
+func (g *rig) refused(container string) {
+	g.engine.Exit(container, 1)
+	var policy struct{ Name string }
+	if spec, err := g.client.InspectSpec(context.Background(), container); err == nil {
+		json.Unmarshal(spec.HostConfig["RestartPolicy"], &policy)
+	}
+	g.mu.Lock()
+	g.retries++
+	tries := g.retries
+	g.mu.Unlock()
+	if policy.Name != "" && policy.Name != "no" && tries <= 8 {
+		time.AfterFunc(time.Duration(10<<tries)*time.Millisecond, func() {
+			g.mu.Lock()
+			done := g.done
+			g.mu.Unlock()
+			if !done {
+				g.client.Start(context.Background(), container)
+			}
+		})
 	}
 }
 
