@@ -34,8 +34,14 @@ test("an update recreates the server with its settings and unnamed volume", asyn
     if (await checkAgain.count()) await checkAgain.click();
     await expect(form).toContainText(gameImage, { timeout: 2_000 });
   }).toPass();
-  await form.locator("summary", { hasText: "Advanced" }).click();
-  await form.getByLabel("Update even if the image is already up to date").check();
+  // Until a check finds a newer image, the form is folded away, under
+  // Update without checking or, once current, Reinstall this version.
+  const folded = page.locator("#update-anyway:not([open]) > summary");
+  if (await folded.count()) await folded.click();
+  const anyway = form.getByLabel("Update even if the image is already up to date");
+  // Reinstalling opens Advanced with this ticked already.
+  if (!(await anyway.isVisible())) await form.locator("summary", { hasText: "Advanced" }).click();
+  await anyway.check();
   await form.getByLabel("Back up first").uncheck();
   await form.getByLabel(/Type Test Game to skip the backup/).fill("Test Game");
   await form.getByRole("button").last().click();
