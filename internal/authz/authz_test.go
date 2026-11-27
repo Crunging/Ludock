@@ -142,11 +142,11 @@ func TestStaleActorsAreRechecked(t *testing.T) {
 	s, servers := setup(t)
 	id := servers[0].ID
 	setGrant(t, s, operator.ID, id, ServerView, ServerStop)
-	s.DB.UpdateUserAccess(ctx, operator.ID, db.RoleMember, true)
+	dbtest.UpdateUserAccess(ctx, s.DB, operator.ID, db.RoleMember, true)
 	if got := effective(t, s, operator, id); len(got) != 0 {
 		t.Fatal("disabled user kept access")
 	}
-	s.DB.UpdateUserAccess(ctx, operator.ID, db.RoleMember, false)
+	dbtest.UpdateUserAccess(ctx, s.DB, operator.ID, db.RoleMember, false)
 	if ok, _ := s.Has(ctx, operator, id, ServerStop); !ok {
 		t.Fatal("re-enabled user lost stop")
 	}
@@ -154,7 +154,7 @@ func TestStaleActorsAreRechecked(t *testing.T) {
 	if got := effective(t, s, operator, id); len(got) != 0 {
 		t.Fatal("revoked grant kept access")
 	}
-	s.DB.UpdateUserAccess(ctx, admin.ID, db.RoleMember, false)
+	dbtest.UpdateUserAccess(ctx, s.DB, admin.ID, db.RoleMember, false)
 	if _, err := s.AssertAdministrator(ctx, admin); !apperr.Is(err, "FORBIDDEN") {
 		t.Fatal(err)
 	}

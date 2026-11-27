@@ -166,22 +166,6 @@ func (d *DB) CountEnabledAdmins(ctx context.Context) (int, error) {
 	return count, err
 }
 
-// UpdateUserAccess changes a role and disabled flag. Disabling signs the
-// account out everywhere.
-func (d *DB) UpdateUserAccess(ctx context.Context, id string, role Role, disabled bool) error {
-	return d.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "UPDATE users SET role = ?, disabled = ?, updated_at = ? WHERE id = ?",
-			string(role), boolInt(disabled), Now(), id); err != nil {
-			return err
-		}
-		if disabled {
-			_, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", id)
-			return err
-		}
-		return nil
-	})
-}
-
 // UpdateUserPassword replaces a password, turns off two-factor sign-in,
 // and revokes every session.
 func (d *DB) UpdateUserPassword(ctx context.Context, id, passwordHash string, audit AuditEntry) error {

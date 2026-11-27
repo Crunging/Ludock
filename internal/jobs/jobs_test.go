@@ -233,12 +233,12 @@ func TestBackupSettingsNeedAdminSession(t *testing.T) {
 // leaves outage tracking as it was.
 func TestRevokedOwnerCannotRun(t *testing.T) {
 	f := setup(t)
-	f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, true)
+	dbtest.UpdateUserAccess(ctx, f.jobs.DB, "admin", db.RoleAdmin, true)
 	job := f.run(t, "stop", nil)
 	if job.Status != ops.Failed || job.Error != "The person who asked for this can no longer use the server" || !f.running() {
 		t.Fatalf("%+v", job)
 	}
-	f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, false)
+	dbtest.UpdateUserAccess(ctx, f.jobs.DB, "admin", db.RoleAdmin, false)
 	backup := f.run(t, "backup", nil)
 	f.jobs.DB.Exec("DELETE FROM availability")
 	f.jobs.Authz.Rechecking = func(tx *sql.Tx) { tx.Exec("UPDATE users SET disabled=1 WHERE id='admin'") }
@@ -414,7 +414,7 @@ func TestUpdateStopsOnLostAuthority(t *testing.T) {
 	}()
 	<-started
 	// The owner is demoted while Compose is running.
-	if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleMember, false); err != nil {
+	if err := dbtest.UpdateUserAccess(ctx, f.jobs.DB, "admin", db.RoleMember, false); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -480,7 +480,7 @@ func TestAuthorityLostAsCommandEnds(t *testing.T) {
 	job := &ops.Context{Job: &ops.Job{ID: "update", ServerID: f.serverID, ActorID: "admin", Kind: "update"}}
 	// The command finishes as the watcher sees the owner demoted.
 	err := f.jobs.whileAuthorized(ctx, job, authz.ServerUpdate, func(ctx context.Context) error {
-		if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleMember, false); err != nil {
+		if err := dbtest.UpdateUserAccess(ctx, f.jobs.DB, "admin", db.RoleMember, false); err != nil {
 			t.Fatal(err)
 		}
 		<-ctx.Done()
@@ -490,9 +490,9 @@ func TestAuthorityLostAsCommandEnds(t *testing.T) {
 		t.Fatal("reported", err, "for a command whose owner lost authority")
 	}
 	// Or the owner is demoted after the last poll.
-	f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, false)
+	dbtest.UpdateUserAccess(ctx, f.jobs.DB, "admin", db.RoleAdmin, false)
 	err = f.jobs.whileAuthorized(ctx, job, authz.ServerUpdate, func(context.Context) error {
-		return f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleMember, false)
+		return dbtest.UpdateUserAccess(ctx, f.jobs.DB, "admin", db.RoleMember, false)
 	})
 	if _, public := apperr.As(err); !public {
 		t.Fatal("reported", err, "after a loss since the last poll")
@@ -551,7 +551,7 @@ func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 	job := &ops.Context{Job: &ops.Job{ID: "stop", ServerID: f.serverID, ActorID: "admin", Kind: "stop",
 		BindingRevision: logical.BindingRevision, Recovery: ops.Recovery{ContainerID: logical.ContainerID,
 			StopStarted: true, StopRecoveryDeadlineAt: deadline.UnixMilli(), LockKeys: []string{locks.ServerKey(f.serverID)}}}}
-	if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, true); err != nil {
+	if err := dbtest.UpdateUserAccess(ctx, f.jobs.DB, "admin", db.RoleAdmin, true); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)

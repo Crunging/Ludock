@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/db/dbtest"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
@@ -61,7 +62,7 @@ func (f *fixture) startedAt() string { return f.engine.Container(f.game).State.S
 func TestRecoveryRestartRunsOnTheServersSetting(t *testing.T) {
 	f := setup(t)
 	f.setRecovery(t, true)
-	if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleMember, false); err != nil {
+	if err := dbtest.UpdateUserAccess(ctx, f.jobs.DB, "admin", db.RoleMember, false); err != nil {
 		t.Fatal(err)
 	}
 	before := f.startedAt()

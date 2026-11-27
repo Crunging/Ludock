@@ -50,6 +50,15 @@ func TestCancelNeedsTheStartCapability(t *testing.T) {
 	if current, _ := p.app.Runner.Get(ctx, job.ID); current.Status != ops.Queued {
 		t.Fatal(current.Status)
 	}
+	// While Ludock updates itself, the cancel waits too.
+	p.app.DB.SetSetting(ctx, nil, "ludock.update", map[string]string{"id": "update", "state": "updating"})
+	if code := cancel(runner); code != http.StatusConflict {
+		t.Fatal("during an update", code)
+	}
+	if current, _ := p.app.Runner.Get(ctx, job.ID); current.Status != ops.Queued {
+		t.Fatal(current.Status)
+	}
+	p.app.DB.Exec("DELETE FROM settings WHERE key = 'ludock.update'")
 	if code := cancel(runner); code != http.StatusOK {
 		t.Fatal("runner", code)
 	}

@@ -28,9 +28,11 @@ const (
 // renames the data copy over the database, so the version that wrote the
 // copy is the one that restores it. A helper still running after wait, or
 // one whose end Docker can't say, leaves the data as it is and the copy
-// beside it. It returns DataRestored, DataKept, or "".
+// beside it. It returns DataRestored or "".
 func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir string, wait time.Duration) string {
-	if container == "" {
+	// With no copy beside the database there is nothing to put back, so a
+	// start doesn't wait for Docker.
+	if _, err := os.Lstat(filepath.Join(dataDir, CopyName)); container == "" || errors.Is(err, os.ErrNotExist) {
 		return ""
 	}
 	// Docker not answering is waited out as a running helper is.
@@ -66,9 +68,7 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 				if putBackReason(spec.State.ExitCode) < 0 {
 					return ""
 				}
-				if err := putDataBack(dataDir); errors.Is(err, os.ErrNotExist) {
-					return DataKept
-				} else if err != nil {
+				if err := putDataBack(dataDir); err != nil {
 					log.Error("Ludock couldn't put back the copy of its data from before the update, so it starts on the newer data")
 					return ""
 				}

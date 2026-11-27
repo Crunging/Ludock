@@ -560,9 +560,18 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 		failed(errSave)
 		return
 	}
-	// The copy can take a while too.
-	if err := s.DB.SelfUpdateMutation(ctx, record.ActorID, tokenHash, db.Now(), func(*sql.Tx) error { return nil }); err != nil {
+	// The copy can take a while too. The live database's record then says
+	// the copy was written, and the copy's own doesn't, so a Ludock put back
+	// can tell which one it opened.
+	written := record
+	written.Copy = true
+	if err := s.DB.SelfUpdateMutation(ctx, record.ActorID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		return s.DB.SetSetting(ctx, tx, recordSetting, written)
+	}); errors.Is(err, db.ErrSessionGone) || errors.Is(err, db.ErrNotAdmin) {
 		failed(errNoLongerAdmin)
+		return
+	} else if err != nil {
+		failed(errSave)
 		return
 	}
 	if err := s.startHelper(ctx, record, own); errors.Is(err, errUncertain) {
@@ -652,13 +661,34 @@ func (s *Service) watch(ctx context.Context, record Record) {
 }
 
 // judge records how the update ended, by the helper's exit code and what
-// Docker shows. It reports false while the helper runs or Docker can't say.
-// A Ludock that is neither the original nor its replacement, as after the
-// owner ran the update's commands, keeps the data as it is.
+// Docker shows, in this order; it reports false while it can't yet tell.
+//
+//	observed                                          concluded
+//	helper running, or Docker can't say (< 30 min)    not yet
+//	helper never started and Docker won't remove it   not yet
+//	(< 30 min)
+//	this Ludock's container unreadable                not yet; interrupted after 30 min
+//	this Ludock is neither original nor new container interrupted: the owner started it; copy goes
+//	original, helper exited "put back"                put back: data restored (now, or by an
+//	                                                  earlier start: the record lacks Copy),
+//	                                                  not restored (copy still there), or kept
+//	original, helper exited "unchanged", none left    failed, nothing changed; copy goes
+//	new container under Ludock's name, original gone  succeeded; copy goes
+//	original never stopped (started before the        failed, stopped before Ludock was
+//	update), or no helper and no new container,       replaced; copy goes
+//	and none left
+//	anything else                                     interrupted: finish from a terminal
+//
+// "None left" means Docker showed no new container of this update, after
+// removing one that never ran. An exited helper is removed only once the
+// outcome is saved, so a restart in between finds the same evidence; the
+// next start removes one Docker refused to remove then.
 func (s *Service) judge(ctx context.Context, record Record) bool {
 	// A helper still running, or Docker unable to say, long after any swap
 	// would have ended is given up on: the owner finishes from a terminal.
 	stuck := time.Since(time.UnixMilli(record.StartedAt)) > 30*time.Minute
+	// Saved, Copy says this Ludock opened the live database, not the copy.
+	live := record.Copy
 	// The copy stays whenever how it ended is uncertain.
 	_, copyErr := os.Lstat(filepath.Join(s.DataDir, CopyName))
 	record.Copy = copyErr == nil
@@ -673,21 +703,32 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	if !stuck && (err != nil && !docker.IsNotFound(err) || err == nil && (spec.State.Running || spec.State.Restarting)) {
 		return false
 	}
-	code := -1
-	if err == nil {
-		if spec.State.Status == "exited" {
-			code = spec.State.ExitCode
-		}
+	code, exited := -1, err == nil && spec.State.Status == "exited"
+	if exited {
+		code = spec.State.ExitCode
+	} else if err == nil {
 		// One still created may be starting as a lost start answer lands:
 		// unforced, Docker refuses to remove it once it runs.
 		if err := s.Docker.Remove(call(), spec.ID, spec.State.Status != "created", true); err != nil && !docker.IsNotFound(err) && !stuck {
 			return false
 		}
 	}
+	// An exited helper's code is the evidence, so it goes only once the
+	// outcome is saved: a restart in between finds it again.
+	settle := func(state, reason string) bool {
+		if !s.settle(ctx, record, state, reason) {
+			return false
+		}
+		// A Ludock stopping may not have saved it.
+		if exited && ctx.Err() == nil {
+			s.Docker.Remove(call(), spec.ID, false, true)
+		}
+		return true
+	}
 	own, err := s.current(ctx)
 	if err != nil {
 		if stuck {
-			return s.settle(ctx, record, StateInterrupted, reasonInterrupted)
+			return settle(StateInterrupted, reasonInterrupted)
 		}
 		return false
 	}
@@ -729,7 +770,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	case !original && !ownReplacement:
 		// The owner started Ludock from a terminal, on the data as it is.
 		record.Copy = false
-		return s.settle(ctx, record, StateInterrupted, reasonInterrupted)
+		return settle(StateInterrupted, reasonInterrupted)
 	case original && putBack >= 0:
 		switch {
 		case s.PutBack == DataRestored:
@@ -741,23 +782,27 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		case record.Copy:
 			// It is there, but this Ludock couldn't put it back.
 			record.Data = DataNotRestored
+		case !live:
+			// An earlier start of this Ludock put the copy back, and this
+			// one opened it.
+			record.Data = DataRestored
 		default:
 			record.Data = DataKept
 		}
-		return s.settle(ctx, record, StatePutBack, Reasons[putBack])
+		return settle(StatePutBack, Reasons[putBack])
 	case original && code == ExitUnchanged && known && record.Leftover == "":
 		record.Copy = false
-		return s.settle(ctx, record, StateFailed, reasonUnchanged)
+		return settle(StateFailed, reasonUnchanged)
 	case ownReplacement && own.Name == "/"+record.Name && docker.IsNotFound(gone):
 		record.To, record.Copy = s.Version, false
 		// Its name, which Ludock may find itself by, is the new container's.
 		s.Own.Forget()
-		return s.settle(ctx, record, StateSucceeded, "")
+		return settle(StateSucceeded, "")
 	case untouched && known && record.Leftover == "":
 		record.Copy = false
-		return s.settle(ctx, record, StateFailed, reasonNotReplaced)
+		return settle(StateFailed, reasonNotReplaced)
 	}
-	return s.settle(ctx, record, StateInterrupted, reasonInterrupted)
+	return settle(StateInterrupted, reasonInterrupted)
 }
 
 // settle records the outcome until it is recorded or Ludock stops, then
@@ -854,6 +899,14 @@ func (s *Service) Recover(ctx, base context.Context) {
 	s.mu.Unlock()
 	record := s.Last(ctx)
 	if !record.InProgress() {
+		// One whose removal failed after its update was recorded goes now.
+		if record != nil && record.ID != "" {
+			go func() {
+				if spec, err := s.Docker.InspectSpec(base, HelperName(record.ID)); err == nil && spec.State.Status == "exited" {
+					s.Docker.Remove(base, spec.ID, false, true)
+				}
+			}()
+		}
 		return
 	}
 	lift := s.Locks.Hold(errUpdating)

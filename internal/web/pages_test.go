@@ -241,6 +241,18 @@ func TestFailedSignOutKeepsTheCookie(t *testing.T) {
 	if principal, _ := p.app.Auth.Session(context.Background(), admin.Token); principal == nil {
 		t.Fatal("failed sign-out ended the session")
 	}
+	// While Ludock updates itself, a sign-out is refused and says why,
+	// since putting the old version back would revive the session.
+	p.app.DB.Exec("DROP TRIGGER no_logout_audit")
+	p.app.DB.SetSetting(context.Background(), nil, "ludock.update", map[string]string{"id": "update", "state": "updating"})
+	response = logout()
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "Ludock is updating itself") ||
+		strings.Contains(response.Header().Get("Set-Cookie"), auth.SessionCookie) {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	if principal, _ := p.app.Auth.Session(context.Background(), admin.Token); principal == nil {
+		t.Fatal("refused sign-out ended the session")
+	}
 }
 
 func TestDiscoveryIsNotPermission(t *testing.T) {
