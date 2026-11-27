@@ -124,6 +124,7 @@
     var show = field.type === "password";
     field.type = show ? "text" : "password";
     toggle.setAttribute("aria-pressed", show ? "true" : "false");
+    toggle.textContent = show ? "Hide what you typed" : "Show what you typed";
   });
 
   // data-dialog-close closes its native dialog.

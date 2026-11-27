@@ -55,11 +55,11 @@ func TestOutageAdviceFollowsAccess(t *testing.T) {
 		canStart    bool
 		want        string
 	}{
-		{[]authz.Capability{authz.ServerStart, authz.LogsRead}, true, "Ludock didn’t stop it. Start it here, or read its logs to see why."},
+		{[]authz.Capability{authz.ServerStart, authz.LogsRead}, true, "Ludock didn’t stop it. Start it here, or <a class=\"text-link\" href=\"/console/s1?mode=logs\">read its logs</a> to see why."},
 		{[]authz.Capability{authz.ConsoleExecute}, false, "Ludock didn’t stop it.</p>"},
-		{[]authz.Capability{authz.LogsRead}, false, "Ludock didn’t stop it. Read its logs to see why."},
+		{[]authz.Capability{authz.LogsRead}, false, "Ludock didn’t stop it. <a class=\"text-link\" href=\"/console/s1?mode=logs\">Read its logs</a> to see why."},
 	} {
-		d := ServerDetail{Row: ServerRow{Server: servers.View{Permissions: c.permissions, BindingStatus: "active",
+		d := ServerDetail{Row: ServerRow{Server: servers.View{ID: "s1", Permissions: c.permissions, BindingStatus: "active",
 			Container: servers.Container{State: "exited"}}, CanStart: c.canStart, ConsoleLabel: "Console"},
 			Availability: &monitor.Availability{Policy: monitor.Policy{Enabled: true},
 				State: monitor.State{OutageStartedAt: 1, Since: 1, Notified: true, LastState: "exited"}}, Now: 1_000_000}

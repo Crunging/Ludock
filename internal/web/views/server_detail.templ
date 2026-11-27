@@ -724,7 +724,12 @@ templ AvailabilityStatus(d ServerDetail) {
 				} else if a.State.LastState == monitor.NotAnswering {
 					The server is running, but the game stopped answering. Check its logs and console; a restart may bring it back.
 				} else {
-					{ outageAdvice(d.Row) }
+					{{ lead, logs, tail := outageAdvice(d.Row) }}
+					if logs != "" {
+						{ lead }<a class="text-link" href={ templ.SafeURL("/console/" + d.Row.Server.ID + "?mode=logs") }>{ logs }</a>{ tail }
+					} else {
+						{ lead }
+					}
 				}
 			</p>
 		}
@@ -732,18 +737,18 @@ templ AvailabilityStatus(d ServerDetail) {
 }
 
 // outageAdvice says what the viewer can do on this page about an outage,
-// by the server's state now.
-func outageAdvice(row ServerRow) string {
-	what, act, then := "Ludock didn’t stop it.", "Start it here", ", or read its logs to see why."
+// by the server's state now: lead, then logs linked to its logs, then tail.
+func outageAdvice(row ServerRow) (lead, logs, tail string) {
+	what, act, join := "Ludock didn’t stop it.", "Start it here", ", or"
 	switch row.Server.State {
 	case "running":
 		// The outage lasts until a run shows the server stays up.
 		if row.Server.Health != "starting" && row.Server.Health != "unhealthy" {
-			return "It’s running again. Ludock is waiting to see that it stays up."
+			return "It’s running again. Ludock is waiting to see that it stays up.", "", ""
 		}
 		what, act = "It’s running, but its health check hasn’t passed.", ""
 	case "restarting":
-		what, act, then = "It keeps stopping and starting again.", "Stop it here", ", then read its logs to see why."
+		what, act, join = "It keeps stopping and starting again.", "Stop it here", ", then"
 		if !row.CanStop {
 			act = ""
 		}
@@ -752,23 +757,22 @@ func outageAdvice(row ServerRow) string {
 			act = ""
 		}
 	case "missing", "ambiguous":
-		return BindingNote(row.Server.State)
+		return BindingNote(row.Server.State), "", ""
 	case "unknown", "":
-		return "Ludock can’t read its state from Docker right now."
+		return "Ludock can’t read its state from Docker right now.", "", ""
 	default:
 		what, act = "Docker shows it as "+strings.ToLower(ServerStatus(row.Server.State, "", nil).Label)+".", ""
 	}
 	// The console can be shared without the logs.
-	logs := row.Server.Can(authz.LogsRead)
-	switch {
-	case act != "" && logs:
-		return what + " " + act + then
+	switch canLogs := row.Server.Can(authz.LogsRead); {
+	case act != "" && canLogs:
+		return what + " " + act + join + " ", "read its logs", " to see why."
 	case act != "":
-		return what + " " + act + "."
-	case logs:
-		return what + " Read its logs to see why."
+		return what + " " + act + ".", "", ""
+	case canLogs:
+		return what + " ", "Read its logs", " to see why."
 	}
-	return what
+	return what, "", ""
 }
 
 // RecoveryStatus says what automatic restarts last did.

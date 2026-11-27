@@ -281,6 +281,13 @@ the warned run as it was says nothing.
 
 ### Servers and their state
 
+A server Compose made is called by its service's name, such as `minecraft`.
+When two servers would be called the same, Ludock adds the project's name,
+`minecraft (survival)`, for as long as the other one is there, so alerts and
+**Activity** can show it both ways. To give a server a name that never
+changes, label it `ludock.name` where it is defined and recreate it. Any
+other server is called by its container's name.
+
 States follow Docker. A server with a health check shows **Starting** until it
 passes and **Unhealthy** while it fails. A stopped server shows **Crashed**
 after an error exit, **Out of memory** when the kernel killed it, and

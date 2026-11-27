@@ -33,9 +33,12 @@ async function checkNow(page, text) {
   }).toPass({ timeout: 30_000, intervals: [1_000, 3_000] });
 }
 
-/** Starts an update without a backup, confirming in the dialog. */
+/** Starts an update without a backup, confirming in the dialog. Until a check finds a newer image, the form is folded away. */
 async function startUpdate(page, server) {
   const form = page.locator("#update-panel form");
+  await expect(form).toBeAttached();
+  const folded = page.locator("#update-anyway:not([open]) > summary");
+  if (await folded.count()) await folded.click();
   await form.getByLabel("Back up first").uncheck();
   await form.getByLabel(`Type ${server} to skip the backup`).fill(server);
   await form.getByRole("button", { name: "Update server" }).click();
@@ -52,7 +55,11 @@ async function update(page, server) {
 test("updating a server's image, then finding it current", async ({ page, ownServer }) => {
   await openServer(page, ownServer.name);
   await page.locator(".section-tabs").getByRole("link", { name: "Update" }).click();
+  // Not checked yet, nothing says an update is waiting.
+  await expect(page.locator("#image-check")).toContainText("Ludock hasn’t checked the registry for a newer image yet.");
   const form = page.locator("#update-panel form");
+  await expect(form.getByRole("button", { name: "Update server" })).toBeHidden();
+  await page.getByText("Update without checking", { exact: true }).click();
   await expect(form.locator(".metadata-list")).toContainText(ownServer.image);
   await form.getByText("What gets replaced").click();
   await expect(form.locator(".disclosure").first()).toContainText("including unnamed ones");

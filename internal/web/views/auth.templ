@@ -82,12 +82,18 @@ templ loginPage(form LoginForm) {
 				}
 				if form.Setup && form.SetupCodeNeeded {
 					<label class="login-card__label" for="bootstrap-code">Setup code</label>
-					<input id="bootstrap-code" name="bootstrapCode" class="login-card__input" type="password" data-password autocomplete="off" autocapitalize="none" spellcheck="false" minlength="32" maxlength="128" aria-describedby="bootstrap-code-hint" required autofocus/>
+					// A code from the log is pasted once, so it shows; one the owner
+					// chose stays hidden. Ludock itself says when a code is wrong.
+					if form.SetupCodeSet {
+						<input id="bootstrap-code" name="bootstrapCode" class="login-card__input" type="password" data-password autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="128" aria-describedby="bootstrap-code-hint" required autofocus/>
+					} else {
+						<input id="bootstrap-code" name="bootstrapCode" class="login-card__input" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="128" aria-describedby="bootstrap-code-hint" required autofocus/>
+					}
 					<p class="login-card__hint" id="bootstrap-code-hint">
 						if form.SetupCodeSet {
 							Enter the setup code you chose for Ludock with LUDOCK_SETUP_CODE.
 						} else {
-							Ludock started more than 10 minutes ago, so setup now needs the code from its log: run <code>docker compose logs ludock</code> on the Docker host and use the last one.
+							Ludock started more than 10 minutes ago, so setup now needs the code from its log: run <code>docker compose logs ludock</code> on the Docker host and use the last one. Or restart Ludock to open setup without a code for another 10 minutes.
 						}
 					</p>
 				} else if form.Setup {

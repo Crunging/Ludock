@@ -37,11 +37,14 @@ func (p *pages) managed() int {
 
 // Adding a server is for administrators only, and a forged request can't
 // add a container the panel never offers: one its owner opted out, one that
-// controls Docker, or Ludock's own.
+// controls Docker, or Ludock's own. Activity calls an added server by its
+// name, not its container's.
 func TestAddServerRefusesForgedRequests(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	game := p.engine.AddContainer(fakedocker.GameOptions{Name: "satisfactory", Image: "ich777/steamcmd:satisfactory"})
+	game := p.engine.AddContainer(fakedocker.GameOptions{Name: "games-satisfactory-1", Image: "ich777/steamcmd:satisfactory",
+		Labels: map[string]string{"com.docker.compose.project": "games", "com.docker.compose.service": "satisfactory",
+			"com.docker.compose.container-number": "1"}})
 	optedOut := p.engine.AddContainer(fakedocker.GameOptions{Name: "old", Image: "ich777/steamcmd:valheim",
 		Labels: map[string]string{"ludock.enable": "false"}})
 	tool := p.engine.AddContainer(fakedocker.GameOptions{Name: "portainer", Image: "portainer/portainer-ce",
@@ -74,6 +77,11 @@ func TestAddServerRefusesForgedRequests(t *testing.T) {
 	}
 	if response := p.addServer(p.admin, game, "valheim"); response.Header.Get("HX-Trigger") != "servers-changed" || p.managed() != 2 {
 		t.Fatal(response.StatusCode)
+	}
+	// Activity calls it what the server is called, its Compose service.
+	if page := p.do("GET", "/activity?show=everything", p.admin, nil, nil).Body.String(); !strings.Contains(page, "<span>satisfactory</span>") ||
+		strings.Contains(page, "games-satisfactory-1") {
+		t.Fatal(page)
 	}
 	// A new server is hidden from everyone else until it is shared.
 	if page := p.do("GET", "/fragments/servers", operator, nil, map[string]string{"HX-Request": "true"}); strings.Contains(page.Body.String(), "satisfactory") {
