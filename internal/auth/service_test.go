@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -159,7 +160,7 @@ func TestSetupCodeThrottling(t *testing.T) {
 			code = wrong
 		}
 		_, err := s.CompleteSetup(ctx, "x", "short", code, Client{IP: "192.0.2.10"})
-		if !apperr.Is(err, "SETUP_AUTHORIZATION_REQUIRED") || err.Error() != "That setup code didn’t work. Use the latest one in Ludock’s log, or the one you set as LUDOCK_SETUP_CODE." {
+		if !apperr.Is(err, "SETUP_AUTHORIZATION_REQUIRED") || code == wrong && err.Error() != "That setup code didn’t work. Use the latest one in Ludock’s log, or the one you set as LUDOCK_SETUP_CODE." {
 			t.Fatal(err)
 		}
 	}
@@ -200,6 +201,87 @@ func TestSetupStaysOpenUntilCompleted(t *testing.T) {
 	}
 	if state, _ := s.SetupState(ctx); state.Required {
 		t.Fatalf("%+v", state)
+	}
+}
+
+// An unowned Ludock can be set up without the code for its first ten
+// minutes of elapsed time, unless the owner set LUDOCK_SETUP_CODE. A code
+// that is sent must match, the window is judged again as the account is
+// created, a wall clock set back after start doesn't keep it open, and once
+// an administrator exists nothing makes another.
+func TestSetupOpenWindow(t *testing.T) {
+	wrong := "fixture-incorrect-code-0123456789abcdef"
+	for _, tc := range []struct {
+		name       string
+		configured bool
+		// after is the time elapsed before the attempt; closesDuring passes
+		// while the password is hashed. wallBack sets the wall clock back an
+		// hour after start.
+		after, closesDuring time.Duration
+		wallBack            bool
+		code                string
+		want                string
+	}{
+		{name: "no code inside the window", after: 10*time.Minute - time.Millisecond},
+		{name: "right code inside the window", code: "right"},
+		{name: "wrong code inside the window", code: wrong, want: "SETUP_AUTHORIZATION_REQUIRED"},
+		{name: "no code after the window", after: 10 * time.Minute, want: "SETUP_AUTHORIZATION_REQUIRED"},
+		{name: "wrong code after the window", after: 10 * time.Minute, code: wrong, want: "SETUP_AUTHORIZATION_REQUIRED"},
+		{name: "right code after the window", after: 10 * time.Minute, code: "right"},
+		{name: "window closes while hashing", after: 10*time.Minute - time.Millisecond, closesDuring: time.Millisecond, want: "SETUP_AUTHORIZATION_REQUIRED"},
+		{name: "wall clock set back an hour", after: 10 * time.Minute, wallBack: true, want: "SETUP_AUTHORIZATION_REQUIRED"},
+		{name: "no code with a configured code", configured: true, want: "SETUP_AUTHORIZATION_REQUIRED"},
+		{name: "configured code", configured: true, code: "right"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, c, h := newService(t, nil)
+			code := setupCode
+			if !tc.configured {
+				s.Setup, _ = NewSetup("")
+			}
+			c.now = 24 * time.Hour.Milliseconds()
+			start, elapsed := time.Now(), time.Duration(0)
+			s.Setup.Now = func() time.Time { return start.Add(elapsed) }
+			pass := func(d time.Duration) {
+				elapsed += d
+				c.now += d.Milliseconds()
+			}
+			var console string
+			s.OpenSetup(ctx, "http://localhost:3000", func(text string) { console += text })
+			if !tc.configured {
+				code = console[strings.LastIndex(console, " ")+1 : len(console)-1]
+				if !strings.Contains(console, "http://localhost:3000 for 10 minutes") {
+					t.Fatal(console)
+				}
+			} else if console != "" {
+				t.Fatal("configured code printed")
+			}
+			if tc.code == "right" {
+				tc.code = code
+			}
+			if tc.wallBack {
+				c.now -= time.Hour.Milliseconds()
+			}
+			pass(tc.after)
+			h.beforeHash = func() { pass(tc.closesDuring) }
+			_, err := s.CompleteSetup(ctx, "first-admin", password, tc.code, Client{IP: "192.0.2.10"})
+			count, _ := s.DB.CountUsers(ctx)
+			if tc.want != "" {
+				if !apperr.Is(err, tc.want) || count != 0 {
+					t.Fatalf("err = %v, users %d", err, count)
+				}
+				return
+			}
+			if err != nil || count != 1 {
+				t.Fatalf("err = %v, users %d", err, count)
+			}
+			s.OpenSetup(ctx, "http://localhost:3000", func(string) {})
+			for _, again := range []string{"", code} {
+				if _, err := s.CompleteSetup(ctx, "second-admin", password, again, Client{IP: "192.0.2.11"}); !apperr.Is(err, "SETUP_COMPLETE") {
+					t.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

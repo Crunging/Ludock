@@ -66,7 +66,7 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 	if next != "" {
 		next = safeNext(next)
 	}
-	views.LoginPage(views.LoginForm{Setup: state.Required, Next: next}).Render(r.Context(), w)
+	views.LoginPage(views.LoginForm{Setup: state.Required, SetupCodeNeeded: state.CodeNeeded, SetupCodeSet: state.CodeSet, Next: next}).Render(r.Context(), w)
 }
 
 func (s *Server) renderLogin(w http.ResponseWriter, r *http.Request, form views.LoginForm, err error) {
@@ -133,20 +133,26 @@ func (s *Server) loginCode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	form := views.LoginForm{Setup: true}
-	if err := readForm(w, r); err != nil {
+	// The form is shown as setup stands after the attempt, so one sent as the
+	// time without a code ran out comes back asking for the code.
+	render := func(err error) {
+		form.SetupCodeNeeded, form.SetupCodeSet = s.Auth.SetupCode()
 		s.renderLogin(w, r, form, err)
+	}
+	if err := readForm(w, r); err != nil {
+		render(err)
 		return
 	}
 	form.Username = strings.TrimSpace(r.PostFormValue("username"))
 	password := r.PostFormValue("password")
 	if password != r.PostFormValue("confirmation") {
 		form.ConfirmationError = true
-		s.renderLogin(w, r, form, apperr.New("PASSWORD_MISMATCH", 400, "Passwords do not match."))
+		render(apperr.New("PASSWORD_MISMATCH", 400, "Passwords do not match."))
 		return
 	}
 	principal, err := s.Auth.CompleteSetup(r.Context(), r.PostFormValue("username"), password, r.PostFormValue("bootstrapCode"), s.client(r))
 	if err != nil {
-		s.renderLogin(w, r, form, err)
+		render(err)
 		return
 	}
 	setSessionCookie(w, r, principal.Token)

@@ -144,9 +144,10 @@ func serve() int {
 		ReadHeaderTimeout: 30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	log.Info("Ludock listening", logging.F("address", "http://localhost:"+strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)),
+	address := "http://localhost:" + strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	log.Info("Ludock listening", logging.F("address", address),
 		logging.F("logLevel", logging.CurrentLevel().String()), logging.F("version", version))
-	accounts.LogSetupInstructions(ctx, func(text string) { os.Stdout.WriteString(text) })
+	accounts.OpenSetup(ctx, address, func(text string) { os.Stdout.WriteString(text) })
 
 	services.Start(ctx)
 	// Ludock keeps running so its pages can tell the owner too.

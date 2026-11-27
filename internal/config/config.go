@@ -185,6 +185,11 @@ func Load() (Config, error) {
 	} else if len(dev) == 1 {
 		c.DevCopyRoot = dev[0]
 	}
+	// An empty code, such as an unset Compose variable, would open setup
+	// without one.
+	if _, set := os.LookupEnv("LUDOCK_SETUP_CODE"); set && c.SetupCode == "" {
+		problems = append(problems, errors.New("LUDOCK_SETUP_CODE is empty; set a code of 32 to 128 characters, or remove it"))
+	}
 	if c.DockerConfig != "" && !strings.HasPrefix(c.DockerConfig, "/") {
 		problems = append(problems, errors.New("LUDOCK_DOCKER_CONFIG must be an absolute path"))
 	}

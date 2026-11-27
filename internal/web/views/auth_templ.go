@@ -13,9 +13,13 @@ import "strconv"
 
 // LoginForm is the sign-in or first-administrator form.
 type LoginForm struct {
-	Setup    bool
-	Username string
-	Error    string
+	Setup bool
+	// SetupCodeNeeded asks for the setup code; SetupCodeSet says the owner
+	// chose it.
+	SetupCodeNeeded bool
+	SetupCodeSet    bool
+	Username        string
+	Error           string
 	// ConfirmationError marks a password mismatch.
 	ConfirmationError bool
 	Next              string
@@ -123,7 +127,7 @@ func codePage(form LoginForm) templ.Component {
 				var templ_7745c5c3_Var4 string
 				templ_7745c5c3_Var4, templ_7745c5c3_Err = templruntime.NewAttributeExpression(form.Next).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 43, Col: 55}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 47, Col: 55}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var4)
 				if templ_7745c5c3_Err != nil {
@@ -146,7 +150,7 @@ func codePage(form LoginForm) templ.Component {
 				var templ_7745c5c3_Var5 string
 				templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(form.Error)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 48, Col: 78}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 52, Col: 78}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 				if templ_7745c5c3_Err != nil {
@@ -215,7 +219,7 @@ func loginPage(form LoginForm) templ.Component {
 			var templ_7745c5c3_Var8 string
 			templ_7745c5c3_Var8, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL(map[bool]string{true: "/setup", false: "/login"}[form.Setup])).ResolveURL(ctx)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 61, Col: 126}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 65, Col: 126}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 			if templ_7745c5c3_Err != nil {
@@ -263,7 +267,7 @@ func loginPage(form LoginForm) templ.Component {
 				var templ_7745c5c3_Var9 string
 				templ_7745c5c3_Var9, templ_7745c5c3_Err = templruntime.NewAttributeExpression(form.Next).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 77, Col: 55}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 81, Col: 55}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
 				if templ_7745c5c3_Err != nil {
@@ -274,205 +278,235 @@ func loginPage(form LoginForm) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			if form.Setup {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "<label class=\"login-card__label\" for=\"bootstrap-code\">Setup code</label> <input id=\"bootstrap-code\" name=\"bootstrapCode\" class=\"login-card__input\" type=\"password\" data-password autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" minlength=\"32\" maxlength=\"128\" aria-describedby=\"bootstrap-code-hint\" required autofocus><p class=\"login-card__hint\" id=\"bootstrap-code-hint\">Ludock prints a new one each time it starts: run <code>docker compose logs ludock</code> on the Docker host and use the last one. A code you set yourself in Ludock’s Compose file isn’t printed; enter that instead.</p>")
+			if form.Setup && form.SetupCodeNeeded {
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "<label class=\"login-card__label\" for=\"bootstrap-code\">Setup code</label> <input id=\"bootstrap-code\" name=\"bootstrapCode\" class=\"login-card__input\" type=\"password\" data-password autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" minlength=\"32\" maxlength=\"128\" aria-describedby=\"bootstrap-code-hint\" required autofocus><p class=\"login-card__hint\" id=\"bootstrap-code-hint\">")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				if form.SetupCodeSet {
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "Enter the setup code you chose for Ludock with LUDOCK_SETUP_CODE.")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+				} else {
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "Ludock started more than 10 minutes ago, so setup now needs the code from its log: run <code>docker compose logs ludock</code> on the Docker host and use the last one.")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "</p>")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+			} else if form.Setup {
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<p class=\"login-card__hint\">For the first 10 minutes after Ludock starts, anyone who can open this page can set it up.</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<label class=\"login-card__label\" for=\"username\">Username</label> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "<label class=\"login-card__label\" for=\"username\">Username</label> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if form.Setup {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "<input id=\"username\" name=\"username\" class=\"login-card__input\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "<input id=\"username\" name=\"username\" class=\"login-card__input\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var10 string
 				templ_7745c5c3_Var10, templ_7745c5c3_Err = templruntime.NewAttributeExpression(form.Username).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 88, Col: 89}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 98, Col: 89}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "\" autocomplete=\"username\" autocapitalize=\"none\" spellcheck=\"false\" minlength=\"3\" maxlength=\"32\" pattern=\"[a-zA-Z0-9._\\-]+\" aria-describedby=\"username-hint\" required><p class=\"login-card__hint\" id=\"username-hint\">3–32 characters: letters, numbers, periods, hyphens, or underscores.</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "\" autocomplete=\"username\" autocapitalize=\"none\" spellcheck=\"false\" minlength=\"3\" maxlength=\"32\" pattern=\"[a-zA-Z0-9._\\-]+\" aria-describedby=\"username-hint\" required")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				if !form.SetupCodeNeeded {
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, " autofocus")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "><p class=\"login-card__hint\" id=\"username-hint\">3–32 characters: letters, numbers, periods, hyphens, or underscores.</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<input id=\"username\" name=\"username\" class=\"login-card__input\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "<input id=\"username\" name=\"username\" class=\"login-card__input\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var11 string
 				templ_7745c5c3_Var11, templ_7745c5c3_Err = templruntime.NewAttributeExpression(form.Username).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 91, Col: 89}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 101, Col: 89}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "\" autocomplete=\"username\" autocapitalize=\"none\" spellcheck=\"false\" minlength=\"3\" maxlength=\"32\" required autofocus> ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "\" autocomplete=\"username\" autocapitalize=\"none\" spellcheck=\"false\" minlength=\"3\" maxlength=\"32\" required autofocus> ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "<label class=\"login-card__label\" for=\"password\">Password</label> <input id=\"password\" name=\"password\" class=\"login-card__input\" type=\"password\" data-password autocomplete=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "<label class=\"login-card__label\" for=\"password\">Password</label> <input id=\"password\" name=\"password\" class=\"login-card__input\" type=\"password\" data-password autocomplete=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var12 string
 			templ_7745c5c3_Var12, templ_7745c5c3_Err = templruntime.NewAttributeExpression(map[bool]string{true: "new-password", false: "current-password"}[form.Setup]).Resolve(ctx)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 94, Col: 188}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 104, Col: 188}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var12)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "\" minlength=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "\" minlength=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var13 string
 			templ_7745c5c3_Var13, templ_7745c5c3_Err = templruntime.NewAttributeExpression(strconv.Itoa(passwordMin)).Resolve(ctx)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 94, Col: 228}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 104, Col: 228}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var13)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "\" maxlength=\"128\" required> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\" maxlength=\"128\" required> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if form.Setup {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "<p class=\"login-card__hint\" id=\"password-hint\">Use at least ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "<p class=\"login-card__hint\" id=\"password-hint\">Use at least ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var14 string
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(passwordMin))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 96, Col: 92}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 106, Col: 92}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, " characters. A few words work well.</p><label class=\"login-card__label\" for=\"confirm-password\">Confirm password</label> <input id=\"confirm-password\" name=\"confirmation\" class=\"login-card__input\" type=\"password\" data-password autocomplete=\"new-password\" minlength=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, " characters. A few words work well.</p><label class=\"login-card__label\" for=\"confirm-password\">Confirm password</label> <input id=\"confirm-password\" name=\"confirmation\" class=\"login-card__input\" type=\"password\" data-password autocomplete=\"new-password\" minlength=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var15 string
 				templ_7745c5c3_Var15, templ_7745c5c3_Err = templruntime.NewAttributeExpression(strconv.Itoa(passwordMin)).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 98, Col: 175}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 108, Col: 175}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var15)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "\" maxlength=\"128\" aria-invalid=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "\" maxlength=\"128\" aria-invalid=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var16 string
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templruntime.NewAttributeExpression(map[bool]string{true: "true"}[form.ConfirmationError]).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 98, Col: 262}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 108, Col: 262}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var16)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "\" required> ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "\" required> ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "<label class=\"login-card__visibility\"><input type=\"checkbox\" data-show-passwords> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "<label class=\"login-card__visibility\"><input type=\"checkbox\" data-show-passwords> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if form.Setup {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "Show passwords")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "Show passwords")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "Show password")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, "Show password")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "</label> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, "</label> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if form.Error != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "<div class=\"login-card__error\" id=\"login-error\" role=\"alert\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "<div class=\"login-card__error\" id=\"login-error\" role=\"alert\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var17 string
 				templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(form.Error)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 109, Col: 78}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 119, Col: 78}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "</div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "</div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "<button class=\"login-card__submit\" type=\"submit\" data-busy-label=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "<button class=\"login-card__submit\" type=\"submit\" data-busy-label=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var18 string
 			templ_7745c5c3_Var18, templ_7745c5c3_Err = templruntime.NewAttributeExpression(map[bool]string{true: "Creating administrator...", false: "Signing in..."}[form.Setup]).Resolve(ctx)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 111, Col: 157}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `auth.templ`, Line: 121, Col: 157}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var18)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if form.Setup {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, "Create administrator")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "Create administrator")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, "Sign in")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "Sign in")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "</button> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 52, "</button> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if !form.Setup {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "<p class=\"login-card__account-help\">Need an account or a password reset? Ask the person who runs this Ludock panel.</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "<p class=\"login-card__account-help\">Need an account or a password reset? Ask the person who runs this Ludock panel.</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "</form></main>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 54, "</form></main>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

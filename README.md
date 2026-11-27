@@ -22,16 +22,11 @@ You need Docker Engine 25 or later with Compose, on Linux (AMD64 or ARM64).
    docker compose up -d
    ```
 
-2. Get the setup code from its log. Until setup is done, restarting Ludock
-   prints a new one.
+2. Within 10 minutes, open `http://<your-host>:3000` and create your account.
+   Took longer? The page then asks for the setup code from
+   `docker compose logs ludock`, or restart Ludock for another 10 minutes.
 
-   ```bash
-   docker compose logs ludock
-   ```
-
-3. Open `http://<your-host>:3000`, enter the code, and create your account.
-
-4. Follow the short **Finish setting up** list on the first page. It helps you
+3. Follow the short **Finish setting up** list on the first page. It helps you
    set up alerts, and turns on nightly backups and automatic restarts in a click
    each.
 

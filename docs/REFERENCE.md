@@ -773,10 +773,14 @@ its database in `/data` and backups in `/backups`, in separate volumes.
   later (Engine API 1.44). Remote Docker connections aren't supported. For
   [rootless Docker](https://docs.docker.com/engine/security/rootless/tips/),
   mount its socket at `/var/run/docker.sock`.
-- **Setup code:** until the first administrator exists, the setup page asks for
-  the one-time code Ludock prints to its log at startup. A new code is printed
-  at each restart until setup is done. A code set with `LUDOCK_SETUP_CODE`
-  isn't printed and stays the same. Failed attempts are limited per address.
+- **Setup code:** until the first administrator exists, anyone who can open
+  the setup page can create that account for the first 10 minutes after
+  Ludock starts. After that, the page asks for the one-time code Ludock prints
+  to its log at startup. Each restart opens setup for another 10 minutes and
+  prints a new code, until setup is done. Failed attempts are limited per
+  address. If you start Ludock where others can reach it, set
+  `LUDOCK_SETUP_CODE`: setup then needs that code from the first second, and
+  it isn't printed.
 - **Existing data:** Ludock refuses data it [can't use](#update-ludock).
 
 ### Remote access
@@ -813,7 +817,7 @@ Advanced**; a value set here wins, and the panel shows it as fixed.
 | `LUDOCK_TRUSTED_PROXIES` | None | Reverse proxies, as addresses or ranges separated by commas |
 | `LUDOCK_BACKUP_ROOTS` | `/backups`, plus `/backups-copy` when mounted | Approved backup folders, separated by `:`; empty turns backups off |
 | `LUDOCK_SELF_CONTAINER` | Detected | Ludock's own container name or ID, if Ludock says it can't find it. Ludock needs it to find its image and to keep its own folders out of **Files** |
-| `LUDOCK_SETUP_CODE` | Printed at start | Your own setup code, 32 to 128 characters; remove it after setup |
+| `LUDOCK_SETUP_CODE` | Printed at start, needed after 10 minutes | Your own setup code, 32 to 128 characters, needed from the start; remove it after setup |
 | `LUDOCK_DOCKER_CONFIG` | None | A folder with a Docker `config.json` for [private registries](#private-registries) |
 | `LUDOCK_SENSITIVE_PATHS` | None | More container or host paths to block in file access, separated by `:`; `/` blocks every folder |
 | `LUDOCK_DOCKER_SOCKET` | `/var/run/docker.sock` | The Docker socket's path inside Ludock |

@@ -18,6 +18,7 @@ func clearEnv(t *testing.T) {
 	t.Setenv("HOSTNAME", "ludock-1")
 	mountinfo.Table = func() ([]byte, error) { return nil, os.ErrNotExist }
 	os.Unsetenv("LUDOCK_TRUSTED_PROXIES")
+	os.Unsetenv("LUDOCK_SETUP_CODE")
 }
 
 func TestDefaults(t *testing.T) {
@@ -79,6 +80,10 @@ func TestValuesAndErrors(t *testing.T) {
 	}
 	if err != nil && (strings.Contains(err.Error(), "secret-value") || strings.Contains(err.Error(), "relative/stacks")) {
 		t.Fatal("error leaks a value")
+	}
+	t.Setenv("LUDOCK_SETUP_CODE", " ")
+	if _, err = Load(); err == nil || !strings.Contains(err.Error(), "LUDOCK_SETUP_CODE") {
+		t.Fatalf("empty setup code not reported: %v", err)
 	}
 }
 

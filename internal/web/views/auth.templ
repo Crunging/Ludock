@@ -4,8 +4,12 @@ import "strconv"
 
 // LoginForm is the sign-in or first-administrator form.
 type LoginForm struct {
-	Setup    bool
-	Username string
+	Setup bool
+	// SetupCodeNeeded asks for the setup code; SetupCodeSet says the owner
+	// chose it.
+	SetupCodeNeeded bool
+	SetupCodeSet    bool
+	Username        string
 	Error    string
 	// ConfirmationError marks a password mismatch.
 	ConfirmationError bool
@@ -76,16 +80,22 @@ templ loginPage(form LoginForm) {
 				if form.Next != "" {
 					<input type="hidden" name="next" value={ form.Next }/>
 				}
-				if form.Setup {
+				if form.Setup && form.SetupCodeNeeded {
 					<label class="login-card__label" for="bootstrap-code">Setup code</label>
 					<input id="bootstrap-code" name="bootstrapCode" class="login-card__input" type="password" data-password autocomplete="off" autocapitalize="none" spellcheck="false" minlength="32" maxlength="128" aria-describedby="bootstrap-code-hint" required autofocus/>
 					<p class="login-card__hint" id="bootstrap-code-hint">
-						Ludock prints a new one each time it starts: run <code>docker compose logs ludock</code> on the Docker host and use the last one. A code you set yourself in Ludock’s Compose file isn’t printed; enter that instead.
+						if form.SetupCodeSet {
+							Enter the setup code you chose for Ludock with LUDOCK_SETUP_CODE.
+						} else {
+							Ludock started more than 10 minutes ago, so setup now needs the code from its log: run <code>docker compose logs ludock</code> on the Docker host and use the last one.
+						}
 					</p>
+				} else if form.Setup {
+					<p class="login-card__hint">For the first 10 minutes after Ludock starts, anyone who can open this page can set it up.</p>
 				}
 				<label class="login-card__label" for="username">Username</label>
 				if form.Setup {
-					<input id="username" name="username" class="login-card__input" value={ form.Username } autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="32" pattern="[a-zA-Z0-9._\-]+" aria-describedby="username-hint" required/>
+					<input id="username" name="username" class="login-card__input" value={ form.Username } autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="32" pattern="[a-zA-Z0-9._\-]+" aria-describedby="username-hint" required autofocus?={ !form.SetupCodeNeeded }/>
 					<p class="login-card__hint" id="username-hint">3–32 characters: letters, numbers, periods, hyphens, or underscores.</p>
 				} else {
 					<input id="username" name="username" class="login-card__input" value={ form.Username } autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="32" required autofocus/>
