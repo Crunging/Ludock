@@ -81,6 +81,10 @@ type Record struct {
 	Policy    json.RawMessage `json:"policy,omitempty"`
 	NoPolicy  bool            `json:"noPolicy,omitempty"`
 	Dismissed bool            `json:"dismissed,omitempty"`
+	// Finished, read from Docker as an interrupted update is shown: nothing
+	// it left is there any more, with Running the version that runs now.
+	Finished bool   `json:"-"`
+	Running  string `json:"-"`
 }
 
 func (r *Record) InProgress() bool { return r != nil && r.State == StateUpdating }
@@ -145,8 +149,6 @@ var (
 		"Docker picks Ludock’s port each time its container starts, so this page wouldn’t come back at the same address. Publish a fixed port, such as 3000:3000, or use the commands below.")
 	errNoDataMount = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
 		"Ludock keeps its data inside its own container rather than in a volume or mounted folder, so recreating it would lose its data. Move its data to a volume or mounted folder first, then update.")
-	errCopyLeft = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
-		"The copy of Ludock’s data from an earlier update, "+CopyName+", is still beside its database. Move it somewhere safe, then update again.")
 	errPull = apperr.New("PULL_FAILED", 409,
 		"Docker couldn’t download Ludock’s new image. Check the machine’s internet connection; for a private registry, set LUDOCK_DOCKER_CONFIG.")
 	errSave = apperr.New("LUDOCK_UPDATE_SAVE", 409,
@@ -188,7 +190,25 @@ func (s *Service) Failed(ctx context.Context) *Record {
 	if !last.Failed() || last.Dismissed || (last.From != s.Version && last.State != StateInterrupted) {
 		return nil
 	}
+	if last.State == StateInterrupted {
+		s.present(ctx, last)
+	}
 	return last
+}
+
+// present drops from an interrupted update what the owner has since
+// finished: a leftover container gone, as after docker rm or a rename, and
+// the copy moved.
+func (s *Service) present(ctx context.Context, record *Record) {
+	if record.Leftover != "" {
+		if _, err := s.Docker.InspectSpec(ctx, record.Leftover); docker.IsNotFound(err) {
+			record.Leftover, record.OnLeftover, record.OriginalGone = "", false, false
+		}
+	}
+	_, err := os.Lstat(filepath.Join(s.DataDir, CopyName))
+	record.Copy = err == nil
+	_, helper := s.Docker.InspectSpec(ctx, HelperName(record.ID))
+	record.Finished, record.Running = record.Leftover == "" && docker.IsNotFound(helper), s.Version
 }
 
 var errNothingToDismiss = apperr.New("NOT_FOUND", 404, "There is no failed update of Ludock to dismiss.")
@@ -214,8 +234,11 @@ type Offer struct {
 	// commands that recreate it would lose its data or interrupt work now.
 	// Refused: a click on Update Ludock failed for Reason.
 	Pinned, NoCommands, Refused bool
-	Updating                    bool
-	Last                        *Record
+	// CopyLeft: an earlier update's copy of the data, which this one
+	// replaces, is beside the database.
+	CopyLeft bool
+	Updating bool
+	Last     *Record
 	// Failed is a failed update an administrator hasn't dismissed.
 	Failed *Record
 }
@@ -245,7 +268,10 @@ func (s *Service) Offer(ctx context.Context) Offer {
 		offer.Reason, offer.NoCommands = errBusy.Message, true
 		return offer
 	}
-	offer.Available = true
+	// A copy an interrupted update left is no longer needed by a Ludock
+	// that opened its data and settled it, so the next update replaces it.
+	_, err = os.Lstat(filepath.Join(s.DataDir, CopyName))
+	offer.Available, offer.CopyLeft = true, err == nil
 	return offer
 }
 
@@ -256,7 +282,7 @@ func (o *Offer) Refuse(err error) {
 }
 
 func noCommands(err error) bool {
-	return errors.Is(err, errNoDataMount) || errors.Is(err, errCopyLeft) || errors.Is(err, errBusy)
+	return errors.Is(err, errNoDataMount) || errors.Is(err, errBusy)
 }
 
 type queryer interface {
@@ -322,10 +348,6 @@ func (s *Service) check(ctx context.Context, dependents bool) (*docker.Container
 	}
 	if s.socket(plan.Spec) == nil {
 		return own, nil, errNoSocket
-	}
-	// An update would replace the copy an earlier one kept.
-	if _, err := os.Lstat(filepath.Join(s.DataDir, CopyName)); err == nil {
-		return own, nil, errCopyLeft
 	}
 	if relabelled(own, s.Socket) {
 		return own, nil, errSocketLabel
@@ -761,9 +783,11 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	}
 	log.Info("Ludock's update helper ended", logging.F("exitCode", code))
 	putBack := putBackReason(code)
-	// The original, whatever happened, gets back the restart policy it had
-	// as the update began, which the helper took away before it stopped it.
-	if original && len(record.Policy) > 0 && s.Docker.SetRestartPolicy(call(), own.ID, record.Policy) != nil {
+	succeeded := ownReplacement && own.Name == "/"+record.Name && docker.IsNotFound(gone)
+	// Whichever Ludock settles an update that didn't succeed gets the
+	// restart policy Ludock had as it began: the helper gave the original
+	// and the new container none, so a reboot would leave either stopped.
+	if (original || ownReplacement && !succeeded) && len(record.Policy) > 0 && s.Docker.SetRestartPolicy(call(), own.ID, record.Policy) != nil {
 		record.NoPolicy = true
 	}
 	switch {
@@ -793,7 +817,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	case original && code == ExitUnchanged && known && record.Leftover == "":
 		record.Copy = false
 		return settle(StateFailed, reasonUnchanged)
-	case ownReplacement && own.Name == "/"+record.Name && docker.IsNotFound(gone):
+	case succeeded:
 		record.To, record.Copy = s.Version, false
 		// Its name, which Ludock may find itself by, is the new container's.
 		s.Own.Forget()

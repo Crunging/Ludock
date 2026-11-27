@@ -180,7 +180,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 		}
 		return &attention.Item{ID: "ludock:" + failed.ID, Kind: "ludock", Since: failed.FinishedAt, Reason: failed.Reason, Version: failed.From,
 			Data: failed.Data, Leftover: failed.Leftover, Unchanged: failed.State == selfupdate.StateFailed,
-			Interrupted: failed.State == selfupdate.StateInterrupted}
+			Interrupted: failed.State == selfupdate.StateInterrupted, Finished: failed.Finished}
 	}
 	return a, nil
 }

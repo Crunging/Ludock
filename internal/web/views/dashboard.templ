@@ -706,7 +706,9 @@ templ attentionDetail(item attention.Item) {
 		case "ludock":
 			<span class="muted">
 				@Time(item.Since, "", "")
-				if item.Interrupted {
+				if item.Interrupted && item.Finished {
+					<span>· It was cut off partway, and nothing is left to do. Settings says which version runs.</span>
+				} else if item.Interrupted {
 					<span>· It stopped partway. Settings says how to finish it from a terminal.</span>
 				} else {
 					<span>· { Capitalize(strings.TrimSuffix(item.Reason, ".")) }. Ludock is still on version { item.Version }.</span>

@@ -40,7 +40,7 @@ func putBackReason(code int) int {
 var Reasons = []string{
 	"Docker couldn’t start the new container, for example because its port was still in use",
 	"the new version stopped right after it started",
-	"the new version reported itself unhealthy, as one whose image is older than this Ludock’s data does",
+	"the new version reported itself unhealthy",
 	"the new version didn’t report healthy within 3 minutes",
 	"the new image has no health check, so Ludock couldn’t confirm it works",
 	"Docker couldn’t give the new container Ludock’s restart policy",

@@ -166,7 +166,7 @@ test("Ludock updates itself, and puts itself back when the new version fails", a
     docker("push", `${registry}:unhealthy`);
     await publish("unhealthy");
     const failing = await updateLudock(page);
-    await expect(failing).toContainText("Ludock’s update didn’t finish: the new version reported itself unhealthy, as one whose image is older than this Ludock’s data does. Ludock put version e2e-next back, with its data as it was.",
+    await expect(failing).toContainText("Ludock’s update didn’t finish: the new version reported itself unhealthy. Ludock put version e2e-next back, with its data as it was.",
       { timeout: 180_000 });
     const [kept, ...extra] = ludockContainers();
     expect(extra).toEqual([]);
@@ -177,7 +177,7 @@ test("Ludock updates itself, and puts itself back when the new version fails", a
     expect(docker("ps", "--all", "--quiet", "--filter", "name=ludock-self-update-")).toBe("");
     await page.goto("/");
     await expect(page.locator(".needs-attention__list li", { hasText: "Ludock’s update didn’t finish" }))
-      .toContainText("The new version reported itself unhealthy, as one whose image is older than this Ludock’s data does. Ludock is still on version e2e-next");
+      .toContainText("The new version reported itself unhealthy. Ludock is still on version e2e-next");
   } catch (error) {
     diagnose(eventsFile);
     throw error;

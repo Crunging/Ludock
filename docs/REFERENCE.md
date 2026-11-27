@@ -520,8 +520,6 @@ It isn't offered, and **Settings** gives only the reason, when:
   mounted folder: move the data to one first, since recreating the container
   would lose it.
 - Work is queued or running: wait for it.
-- The copy an earlier update kept is still beside its database: move it
-  somewhere safe first.
 
 It isn't offered, and **Settings** gives the reason with the commands below,
 when Ludock:
@@ -546,17 +544,32 @@ middle of is recovered at the next start. These and the other commands
 Settings shows assume a `compose.yaml` with the service named `ludock`; use
 your own service name, or your own tool, if yours differ.
 
-If an update is cut off partway, for example by a reboot, Ludock may be left
-stopped, or the new container may be left under its temporary name
-(`ludock-ludock-update-…`). Run the two commands above; the Ludock that
-starts says the update didn't finish and what else to run, if anything: the
-`docker rm -f` command for a container left behind, or, when Ludock itself
-runs in the new container under its temporary name with the old one gone, a
-`docker rename` to give it Ludock's name. If the new version changed the data
-before it was cut off and the old version can't open it, the old version
-says so on its address and gives the two commands. The copy of the data from
-before the update stays beside the database until then. A Ludock put back
-sets its own restart policy back, and says so if Docker won't.
+If an update is cut off partway, for example because its helper was
+stopped, what to do depends on what it left:
+
+- Ludock runs in the new container, still under its temporary name
+  `<Ludock's container name>-ludock-update-<id>`, and the old container is
+  gone: **Settings** gives a `docker rename` that gives it Ludock's name.
+- Ludock runs there and the old container is still present: **Settings**
+  gives the two commands above with a `docker rm -f` of the new container
+  between them, which start Ludock again under its own name on the new
+  version.
+- Ludock was stopped before it handed over, so its page doesn't answer: the
+  two commands above start it on the new version with its data.
+
+Whichever Ludock records how the update ended sets Ludock's restart policy
+back, so the next reboot starts it, and says so if Docker won't. Once nothing
+the update left is there any more, **Settings** says so and which version
+runs, until an administrator dismisses it. If the new version changed the
+data before it was cut off and the old version can't open it, the old
+version says so on its address and gives the two commands. The copy of the
+data from before the update stays beside the database; the next update
+replaces it, and its confirmation says so.
+
+A reboot during an update isn't recovered yet. Every container the update
+uses has no restart policy meanwhile, so after the reboot Ludock is stopped,
+and with its old and new containers both stopped, `docker compose up -d`
+removes the old one and starts nothing.
 
 `latest` follows every release. Each release is also published under its
 version, such as `1.2.3`, and moves the shorter tags `1.2` and `1`. To stay

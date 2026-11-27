@@ -399,10 +399,20 @@ func ludockFailed(record selfupdate.Record) string {
 			selfupdate.CopyName + ", is beside its database." + policy
 	case record.State == selfupdate.StatePutBack:
 		return put + ", with its data as it was." + policy
+	case record.State == selfupdate.StateInterrupted && record.Finished:
+		return "Ludock’s update was cut off partway. Nothing is left to do: Ludock runs version " + record.Running + "." + policy
 	case record.State == selfupdate.StateInterrupted:
 		return "Ludock’s update didn’t finish: it stopped partway, so Ludock may be on either version. Finish it from a terminal with the commands below." + policy
 	}
 	return "Ludock couldn’t update itself: " + reason + ". It is still on version " + record.From + "." + policy
+}
+
+func confirmUpdate(offer selfupdate.Offer) string {
+	detail := "Ludock downloads the new version and restarts on it. Your game servers keep running, and this page comes back by itself once it has, usually within a few minutes. If the new version doesn’t start properly, Ludock puts this one back, with its data as it was just before. Until it is back, Ludock refuses changes, such as to settings, accounts or schedules, so none is lost; someone who signs in meanwhile may need to sign in again."
+	if offer.CopyLeft {
+		detail += " It replaces the copy of Ludock’s data an earlier update left, " + selfupdate.CopyName + "."
+	}
+	return detail
 }
 
 // offerReason is why Update Ludock isn't offered, unless a refused click

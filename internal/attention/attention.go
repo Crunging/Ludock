@@ -69,7 +69,9 @@ type Item struct {
 	Version                string
 	Data                   string
 	Unchanged, Interrupted bool
-	Leftover               string
+	// Finished: an interrupted update left nothing to do.
+	Finished bool
+	Leftover string
 }
 
 type Result struct {

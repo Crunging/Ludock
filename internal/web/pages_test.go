@@ -246,7 +246,8 @@ func TestFailedSignOutKeepsTheCookie(t *testing.T) {
 	p.app.DB.Exec("DROP TRIGGER no_logout_audit")
 	p.app.DB.SetSetting(context.Background(), nil, "ludock.update", map[string]string{"id": "update", "state": "updating"})
 	response = logout()
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "Ludock is updating itself") ||
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `<h1 class="page__title">Ludock is updating</h1>`) ||
+		!strings.Contains(response.Body.String(), "Ludock is updating itself") ||
 		strings.Contains(response.Header().Get("Set-Cookie"), auth.SessionCookie) {
 		t.Fatal(response.Code, response.Body.String())
 	}

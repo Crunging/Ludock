@@ -233,8 +233,11 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, request *Request, 
 		return
 	}
 	title := "Something went wrong"
-	if public.Code == "SERVER_PAUSED" {
+	switch public.Code {
+	case "SERVER_PAUSED":
 		title = "Server paused"
+	case "LUDOCK_UPDATING":
+		title = "Ludock is updating"
 	}
 	w.WriteHeader(public.Status)
 	views.ErrorPage(s.page(r, request, "Error"), title, public.Message).Render(r.Context(), w)

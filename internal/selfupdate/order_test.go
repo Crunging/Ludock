@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/Crunging/Ludock/internal/identity"
@@ -328,6 +329,9 @@ func TestSelfUpdateOrder(t *testing.T) {
 		refusesData bool
 		// restarts is how often restartOld restarts the original first.
 		restarts int
+		// then is what the owner does once it is recorded, after which
+		// Settings says nothing is left to do.
+		then func(g *rig, running *docker.ContainerInspect)
 	}{
 		{name: "success", trace: join(swap, []string{"policy new", "remove old", "rename new", "remove helper"}),
 			image: newImage, state: selfupdate.StateSucceeded, probe: "after"},
@@ -339,7 +343,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 				}
 			}
 		}, trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored,
-			reason: "the new version reported itself unhealthy, as one whose image is older than this Ludock’s data does", probe: "before"},
+			reason: "the new version reported itself unhealthy", probe: "before"},
 		{name: "an earlier update's helper left behind doesn't hide this one's put-back", arrange: func(g *rig) {
 			g.onStart = func(c *fakedocker.Container) {
 				if isNew(c) {
@@ -353,7 +357,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 				c.Created, c.State.ExitCode = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), selfupdate.ExitUnchanged
 			})
 		}, trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored,
-			reason: "the new version reported itself unhealthy, as one whose image is older than this Ludock’s data does", probe: "before"},
+			reason: "the new version reported itself unhealthy", probe: "before"},
 		{name: "the new container fails to start", arrange: func(g *rig) { g.fail["start new"] = 500 },
 			trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored,
 			reason: "Docker couldn’t start the new container, for example because its port was still in use", probe: "before"},
@@ -374,10 +378,26 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 			g.at["start old"] = func() { g.fail["policy old"] = 500 }
 		}, trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored, noPolicy: true,
-			reason: "the new version reported itself unhealthy, as one whose image is older than this Ludock’s data does", probe: "before"},
+			reason: "the new version reported itself unhealthy", probe: "before"},
 		{name: "the original can't be removed, so the new version runs under its temporary name and says how to finish", arrange: func(g *rig) {
 			g.fail["remove old"] = 500
-		}, trace: join(swap, []string{"policy new", "remove old", "rename new", "remove helper"}), image: newImage,
+		}, trace: join(swap, []string{"policy new", "remove old", "rename new", "policy new", "remove helper"}), image: newImage,
+			settler: "ludock-ludock-update-", state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
+		{name: "the helper killed while the new version waits on its health check, which then keeps Ludock's restart policy", arrange: func(g *rig) {
+			g.onStart = func(c *fakedocker.Container) {
+				if isNew(c) {
+					health(g, c, "starting")
+					g.killHelper()
+				}
+			}
+		}, trace: join(swap, []string{"policy new", "remove helper"}), image: newImage, settler: "ludock-ludock-update-",
+			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
+		{name: "the helper killed before it gave the new version Ludock's name, which the owner then does", arrange: func(g *rig) {
+			g.fail["rename new"] = 500
+			g.at["rename new"] = g.killHelper
+		}, then: func(g *rig, running *docker.ContainerInspect) {
+			g.client.Rename(context.Background(), running.ID, "ludock")
+		}, trace: join(swap, []string{"policy new", "remove old", "rename new", "policy new", "remove helper"}), image: newImage,
 			settler: "ludock-ludock-update-", state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
 		{name: "a put-back without the data copy keeps the newer data, and says so", arrange: func(g *rig) {
 			g.fail["start new"] = 500
@@ -541,9 +561,14 @@ func TestSelfUpdateOrder(t *testing.T) {
 				c.ExtraConfig = map[string]any{"Healthcheck": map[string]any{"Test": []string{"NONE"}}}
 			})
 		}, refused: "LUDOCK_UPDATE_UNAVAILABLE", reason: "Ludock keeps its data inside its own container"},
-		{name: "the data copy an earlier update kept is still there", arrange: func(g *rig) {
+		{name: "the next update replaces a data copy an earlier one left, and its confirmation says so", arrange: func(g *rig) {
 			os.WriteFile(filepath.Join(g.dataDir, selfupdate.CopyName), []byte("kept"), 0o600)
-		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
+		}, before: func(g *rig, p *process) {
+			if offer := p.svc.Offer(ctx); !offer.Available || !offer.CopyLeft {
+				t.Errorf("offer %+v", offer)
+			}
+		}, trace: join(swap, []string{"policy new", "remove old", "rename new", "remove helper"}), image: newImage,
+			state: selfupdate.StateSucceeded, probe: "after"},
 		{name: "a host port Docker picks while work runs, which Settings gives as the reason, without the commands", arrange: func(g *rig) {
 			g.engine.Update(g.old, func(c *fakedocker.Container) {
 				c.HostConfig["PortBindings"] = map[string]any{"3000/tcp": []any{map[string]any{"HostIp": "", "HostPort": "3000-3005"}}}
@@ -629,6 +654,15 @@ func TestSelfUpdateOrder(t *testing.T) {
 			if running.Image != c.image {
 				t.Errorf("Ludock runs %s", running.Image)
 			}
+			// Whichever of Ludock's containers runs has its restart policy
+			// back, so a reboot starts it.
+			var policy struct{ Name string }
+			if spec, err := g.client.InspectSpec(ctx, running.ID); err == nil {
+				json.Unmarshal(spec.HostConfig["RestartPolicy"], &policy)
+			}
+			if (running.ID == g.old || running.Config.Labels[update.OperationLabel] != "") && (policy.Name == "no") != c.noPolicy {
+				t.Errorf("Ludock's restart policy is %q", policy.Name)
+			}
 			if game := g.engine.Container(g.game); game.State.StartedAt != started || !game.State.Running {
 				t.Error("the game was touched")
 			}
@@ -646,6 +680,12 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 			if g.helper() != "" {
 				t.Error("the helper is left")
+			}
+			if c.then != nil {
+				c.then(g, running)
+				if failed := after.svc.Failed(ctx); failed == nil || !failed.Finished || failed.Running != "1.1.0" {
+					t.Errorf("after the owner finished it, Settings shows %+v", failed)
+				}
 			}
 			// One that didn't succeed alerts as Restores and updates.
 			g.mu.Lock()
