@@ -513,7 +513,7 @@ restart someone asks for or one a schedule or automatic restart would queue,
 and no change a put-back would undo, whoever makes it: to settings,
 accounts, sharing or schedules, a sign-out, a password change or reset, or
 turning two-factor sign-in on or off. Signing in still works. Schedules try
-again once it is back.
+again once it is back, and alerts wait until it ends.
 
 It isn't offered, and **Settings** gives only the reason, when:
 
@@ -553,7 +553,9 @@ its two containers ever has a restart policy:
   container, so after a reboot or a restart of Docker, Docker starts the old
   version. It stops the new one, puts its copy of the data back, removes the
   new container, and says the update was cut off. Starting the old container
-  by hand does the same.
+  by hand does the same. While the helper still runs, the old version waits
+  for it, and it never starts beside a new version Docker can't confirm
+  stopped: Docker starts it again a little later.
 - Once the new version has passed, that is the new container, so Docker
   starts the new version. If the old container is gone, it gives itself
   Ludock's name, and the update has succeeded.

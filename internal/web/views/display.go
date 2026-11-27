@@ -389,7 +389,7 @@ func ludockFailed(record selfupdate.Record) string {
 	put := "Ludock’s update didn’t finish: " + reason + ". Ludock put version " + record.From + " back"
 	policy := ""
 	if record.NoPolicy {
-		policy = " Docker didn’t set Ludock’s restart policy back; run docker compose up -d ludock in the folder with its compose.yaml to set it again."
+		policy = " Ludock’s restart policy isn’t back to yours yet; run docker compose up -d ludock in the folder with its compose.yaml to set it."
 	}
 	switch {
 	case record.State == selfupdate.StatePutBack && record.Data == selfupdate.DataKept:

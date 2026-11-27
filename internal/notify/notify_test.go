@@ -228,6 +228,13 @@ func TestPausedDestinationDoesNotBlockOthers(t *testing.T) {
 	}
 	setEnabled(t, s, false)
 	s.Notify(ServerProblems, "late", "Creative is unavailable.")
+	// While Ludock updates itself they wait, since a put-back would queue
+	// what was sent again.
+	s.DB.SetSetting(ctx, nil, "ludock.update", map[string]string{"id": "update", "state": "updating"})
+	if err := s.Deliver(ctx); err != nil || calls != 0 {
+		t.Fatal("sent during an update:", calls, err)
+	}
+	s.DB.Exec("DELETE FROM settings WHERE key = 'ludock.update'")
 	if err := s.Deliver(ctx); err != nil {
 		t.Fatal(err)
 	}

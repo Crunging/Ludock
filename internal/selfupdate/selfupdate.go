@@ -799,6 +799,12 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	if ownReplacement && !verdict && !stuck && gone == nil && first.State.Running {
 		return false
 	}
+	// One Docker started again after its original went, before its rename,
+	// waits for its health check to settle, as the helper would have.
+	if ownReplacement && own.Name != "/"+record.Name && docker.IsNotFound(gone) && own.State.Health != nil &&
+		own.State.Health.Status == "starting" && !stuck {
+		return false
+	}
 	// One under its temporary name takes Ludock's name once Docker shows its
 	// original gone: the helper removes that only after the new one passed.
 	renamed := ownReplacement && own.Name != "/"+record.Name && docker.IsNotFound(gone) && own.State.Health != nil &&
@@ -816,7 +822,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	// This Ludock may be that container, not yet under Ludock's name; its
 	// removal is advised only with the original shown to exist, since it
 	// may be the last container naming an anonymous data volume.
-	if ownReplacement && own.Name != "/"+record.Name && (gone == nil || docker.IsNotFound(gone)) {
+	if ownReplacement && own.Name != "/"+record.Name {
 		record.Leftover, record.OnLeftover, record.OriginalGone = strings.TrimPrefix(own.Name, "/"), true, docker.IsNotFound(gone)
 	}
 	// An original running since before the update was never stopped, nor
@@ -827,7 +833,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	untouched := original && (started.Before(time.UnixMilli(record.StartedAt)) || noHelper && noReplacement)
 	// An original started again with no word from the helper, as after a
 	// reboot, put the update back as it started: it stopped the new one.
-	cutOff := original && !noHelper && !verdict && !untouched
+	cutOff := original && !verdict && !untouched
 	// So does one after the helper said nothing changed, or that was cut
 	// off: it never ran, or no longer does.
 	if (untouched || original && code == ExitUnchanged || cutOff) && record.Leftover != "" && !replacement.State.Running {
@@ -841,14 +847,20 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	// starts one Ludock. Whichever settles an update the helper didn't
 	// finish takes the one Ludock had as it began, the owner's even if
 	// "no", once the other has none; if that fails it takes none.
+	// While Docker can't say whether the other is there, it takes none; the
+	// owner's "no" it takes at once, as that enables nothing.
 	if (original || ownReplacement && (!succeeded || renamed)) && len(record.Policy) > 0 {
+		var policy struct{ Name string }
+		json.Unmarshal(record.Policy, &policy)
 		other := ""
 		if original && record.Leftover != "" {
 			other = record.Leftover
 		} else if ownReplacement && gone == nil {
 			other = record.Container
 		}
-		if other != "" && s.Docker.SetRestartPolicy(call(), other, noRestart) != nil || s.Docker.SetRestartPolicy(call(), own.ID, record.Policy) != nil {
+		unknown := ownReplacement && gone != nil && !docker.IsNotFound(gone) || original && !known
+		if policy.Name != "no" && (unknown || other != "" && s.Docker.SetRestartPolicy(call(), other, noRestart) != nil) ||
+			s.Docker.SetRestartPolicy(call(), own.ID, record.Policy) != nil {
 			record.NoPolicy = true
 		}
 	}

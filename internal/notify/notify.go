@@ -566,8 +566,11 @@ func (s *Service) Deliver(ctx context.Context) error {
 	for _, d := range ready {
 		args = append(args, string(d))
 	}
+	// Alerts wait while Ludock updates itself: one a new version sent, a
+	// put-back would queue again.
 	rows, err := s.DB.QueryContext(ctx, `SELECT id FROM notification_deliveries
     WHERE state='queued' AND next_attempt_at<=? AND destination IN (?`+strings.Repeat(",?", len(ready)-1)+`)
+      AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'ludock.update' AND json_extract(value_json, '$.state') = 'updating')
     ORDER BY created_at, rowid LIMIT 10`, args...)
 	if err != nil {
 		return err
