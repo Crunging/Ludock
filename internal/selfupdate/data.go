@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -31,13 +33,17 @@ const (
 // so the version that wrote the copy restores it. It returns DataRestored or
 // "", and an error when this Ludock must not start: two would serve.
 func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir string, wait time.Duration) (string, error) {
-	record, ok := saved(dataDir)
-	if container == "" || !ok || record.Container != container {
+	if container == "" {
 		return "", nil
 	}
-	// The new version took over when the update stopped partway, and runs.
+	record, ok, err := saved(dataDir)
+	if err != nil || !ok || record.Container != container {
+		return "", err
+	}
+	// The new version took over when the update stopped partway: this one
+	// starts only once Docker shows that one stopped or gone.
 	if record.State == StateInterrupted && record.OnLeftover {
-		if spec, err := client.InspectSpec(ctx, record.Leftover); err == nil && spec.State.Running {
+		if spec, err := client.InspectSpec(ctx, record.Leftover); !docker.IsNotFound(err) && (err != nil || spec.State.Running || spec.State.Restarting) {
 			return "", errBeside
 		}
 		return "", nil
@@ -78,9 +84,10 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 		// accepted no work and no changes, so stopping it and putting the
 		// copy back loses nothing.
 		own, err := client.InspectSpec(ctx, container)
-		if err == nil {
-			err = client.Stop(ctx, servers.ReplacementName(strings.TrimPrefix(own.Name, "/"), record.ID), nil)
+		if err != nil {
+			return "", errBeside
 		}
+		err = client.Stop(ctx, servers.ReplacementName(strings.TrimPrefix(own.Name, "/"), record.ID), nil)
 		if err != nil && !docker.IsNotFound(err) && docker.StatusCode(err) != 304 {
 			return "", errBeside
 		}
@@ -99,19 +106,26 @@ var errBeside = apperr.New("LUDOCK_UPDATE_CUT_OFF", 503,
 	"Ludock’s update didn’t finish, and Docker didn’t confirm its new version stopped, so this one won’t start beside it.")
 
 // saved is the update the database in dataDir records, read without opening
-// it for writing.
-func saved(dataDir string) (Record, bool) {
+// it for writing. Only a missing database or record means none.
+func saved(dataDir string) (Record, bool, error) {
 	var record Record
-	d, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ludock.db")+"?mode=ro")
+	path := filepath.Join(dataDir, "ludock.db")
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return record, false, nil
+	}
+	d, err := sql.Open("sqlite", db.FileURI(path, url.Values{"mode": {"ro"}}))
 	if err != nil {
-		return record, false
+		return record, false, err
 	}
 	defer d.Close()
 	var value []byte
-	if d.QueryRow("SELECT value_json FROM settings WHERE key = ?", recordSetting).Scan(&value) != nil || json.Unmarshal(value, &record) != nil {
-		return record, false
+	switch err := d.QueryRow("SELECT value_json FROM settings WHERE key = ?", recordSetting).Scan(&value); {
+	case errors.Is(err, sql.ErrNoRows):
+		return record, false, nil
+	case err != nil:
+		return record, false, err
 	}
-	return record, true
+	return record, true, json.Unmarshal(value, &record)
 }
 
 // Unfinished is what to add to Ludock's refusal of data a newer version

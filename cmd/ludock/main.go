@@ -100,7 +100,7 @@ func serve() int {
 	// for it to restore before it opens the database.
 	putBack, err := selfupdate.BeforeOpen(ctx, docker.New(cfg.DockerSocket), cfg.MountID, cfg.DataDir, time.Minute)
 	if err != nil {
-		log.Error(startupError(err, ""))
+		log.Error(startupError(err, "Could not read Ludock's data to check for an unfinished update."))
 		return 1
 	}
 	database, err := db.Open(cfg.DBPath())

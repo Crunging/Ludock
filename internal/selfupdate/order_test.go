@@ -69,6 +69,8 @@ type rig struct {
 	alerts []notify.Alert
 	// restarts counts restartOld's restarts.
 	restarts int
+	// hidden, set by unreadable, is what Docker won't show.
+	hidden string
 }
 
 type process struct {
@@ -83,8 +85,12 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { engine.Close() })
-	g := &rig{t: t, engine: engine, client: docker.New(engine.Socket), dataDir: t.TempDir(), fail: map[string]int{},
+	g := &rig{t: t, engine: engine, client: docker.New(engine.Socket), dataDir: filepath.Join(t.TempDir(), "data?#1"), fail: map[string]int{},
 		at: map[string]func(){}, processes: map[string]*process{}, killed: make(chan struct{})}
+	// Named with ? and #, which a file URI must escape.
+	if err := os.Mkdir(g.dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	d, err := db.Open(filepath.Join(g.dataDir, "ludock.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +155,21 @@ var (
 	verbs         = map[string]string{"/start": "start", "/stop": "stop", "/update": "policy", "/rename": "rename", "": "remove"}
 )
 
+// unreadable makes Docker answer 500 to inspecting any container whose
+// reference contains part, until it is called again with "".
+func (g *rig) unreadable(part string) {
+	g.mu.Lock()
+	g.hidden = part
+	g.mu.Unlock()
+}
+
 func (g *rig) intercept(r *http.Request) int {
+	g.mu.Lock()
+	hidden := g.hidden
+	g.mu.Unlock()
+	if hidden != "" && r.Method == http.MethodGet && strings.Contains(r.URL.Path, hidden) {
+		return 500
+	}
 	path := r.URL.Path
 	if match := versioned.FindStringSubmatch(path); match != nil {
 		path = match[1]
@@ -401,17 +421,11 @@ func TestSelfUpdateOrder(t *testing.T) {
 			// isn't advised any more.
 			// While Docker can't say whether the original is there, it gives
 			// no command at all.
-			intercept := g.engine.Intercept
-			g.engine.Intercept = func(r *http.Request) int {
-				if r.Method == http.MethodGet && strings.Contains(r.URL.Path, g.old) {
-					return 500
-				}
-				return intercept(r)
-			}
+			g.unreadable(g.old)
 			if failed := p.svc.Failed(ctx); failed == nil || !failed.Unchecked || failed.OriginalGone {
 				t.Errorf("while Docker can't show the original, Settings shows %+v", failed)
 			}
-			g.engine.Intercept = intercept
+			g.unreadable("")
 			g.engine.RemoveContainer(g.old)
 			if failed := p.svc.Failed(ctx); failed == nil || !failed.OnLeftover || !failed.OriginalGone {
 				t.Errorf("after the original went, Settings shows %+v", failed)
@@ -434,17 +448,27 @@ func TestSelfUpdateOrder(t *testing.T) {
 				c.ExtraConfig = map[string]any{"Cmd": []string{"self-update", g.old, newImage, record.ID}}
 				c.State.ExitCode = 137
 			})
+			beside := func() bool {
+				g.mu.Lock()
+				defer g.mu.Unlock()
+				return g.processes[g.old] != nil
+			}
 			g.client.Start(ctx, g.old)
 			time.Sleep(200 * time.Millisecond)
+			if beside() {
+				t.Error("the original's Ludock started beside the new one")
+			}
+			g.client.Stop(ctx, g.old, nil)
+			// Nor when Docker can't say whether the new one runs.
+			g.unreadable("/ludock-ludock-update-")
+			g.client.Start(ctx, g.old)
+			time.Sleep(200 * time.Millisecond)
+			g.unreadable("")
 			if !g.engine.Container(running.ID).State.Running || p.svc.Last(ctx).State != selfupdate.StateInterrupted {
 				t.Error("a start of the original after the update settled put it back")
 			}
-			// Nor does its Ludock serve beside the new one.
-			g.mu.Lock()
-			beside := g.processes[g.old]
-			g.mu.Unlock()
-			if beside != nil {
-				t.Error("the original's Ludock started beside the new one")
+			if beside() {
+				t.Error("the original's Ludock started while Docker couldn't show the new one")
 			}
 		}, trace: join(swap, []string{"policy old", "policy new", "remove helper"}), image: newImage, settler: "ludock-ludock-update-",
 			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
@@ -509,13 +533,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 				if isNew(c) {
 					health(g, c, "starting")
 					g.killHelper()
-					intercept := g.engine.Intercept
-					g.engine.Intercept = func(r *http.Request) int {
-						if r.Method == http.MethodGet && strings.Contains(r.URL.Path, g.old) {
-							return 500
-						}
-						return intercept(r)
-					}
+					g.unreadable(g.old)
 				}
 			}
 		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
@@ -722,13 +740,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 		{name: "a new container left over that Docker can't show isn't called nothing changed", arrange: func(g *rig) {
 			g.fail["policy old"] = 500
 			g.fail["remove new"] = 500
-			intercept := g.engine.Intercept
-			g.engine.Intercept = func(r *http.Request) int {
-				if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/ludock-ludock-update-") {
-					return 500
-				}
-				return intercept(r)
-			}
+			g.unreadable("/ludock-ludock-update-")
 		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "remove new", "remove helper"}, image: oldImage,
 			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, noPolicy: true,
 			then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {

@@ -167,7 +167,7 @@ const GuidancePath = "$.guidance"
 // remove the data it left in place. The copy also leaves WAL mode, so the
 // database is one file.
 func settleOperations(ctx context.Context, path string) error {
-	conn, err := sql.Open("sqlite", fileURI(path, nil))
+	conn, err := sql.Open("sqlite", FileURI(path, nil))
 	if err != nil {
 		return err
 	}
@@ -387,7 +387,7 @@ func syncPath(path string) error {
 // checks that this version can open it, that it is intact, and that key is
 // its key.
 func checkRestored(path string, key []byte) error {
-	restored, err := sql.Open("sqlite", fileURI(path, url.Values{"mode": {"ro"}, "immutable": {"1"}}))
+	restored, err := sql.Open("sqlite", FileURI(path, url.Values{"mode": {"ro"}, "immutable": {"1"}}))
 	if err != nil {
 		return err
 	}

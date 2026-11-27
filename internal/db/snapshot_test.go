@@ -87,7 +87,7 @@ func TestSnapshotConsistentWhileWriting(t *testing.T) {
 		if _, err := RestoreSnapshot(path, filepath.Join(folder, "ludock.db")); err != nil {
 			t.Fatal(err)
 		}
-		restored, err := sql.Open("sqlite", fileURI(filepath.Join(folder, "ludock.db"), map[string][]string{"mode": {"ro"}}))
+		restored, err := sql.Open("sqlite", FileURI(filepath.Join(folder, "ludock.db"), map[string][]string{"mode": {"ro"}}))
 		if err != nil {
 			t.Fatal(err)
 		}
