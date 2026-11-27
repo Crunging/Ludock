@@ -560,8 +560,14 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 		failed(errSave)
 		return
 	}
-	// The copy can take a while too.
-	if err := s.DB.SelfUpdateMutation(ctx, record.ActorID, tokenHash, db.Now(), func(*sql.Tx) error { return nil }); err != nil {
+	// The copy can take a while too. The live database's record then says
+	// the copy was written, and the copy's own doesn't, so a Ludock put back
+	// can tell which one it opened.
+	written := record
+	written.Copy = true
+	if err := s.DB.SelfUpdateMutation(ctx, record.ActorID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		return s.DB.SetSetting(ctx, tx, recordSetting, written)
+	}); err != nil {
 		failed(errNoLongerAdmin)
 		return
 	}
@@ -652,13 +658,31 @@ func (s *Service) watch(ctx context.Context, record Record) {
 }
 
 // judge records how the update ended, by the helper's exit code and what
-// Docker shows. It reports false while the helper runs or Docker can't say.
-// A Ludock that is neither the original nor its replacement, as after the
-// owner ran the update's commands, keeps the data as it is.
+// Docker shows, in this order; it reports false while it can't yet tell.
+//
+//	observed                                          concluded
+//	helper running, or Docker can't say (< 30 min)    not yet
+//	helper ended but Docker won't remove it (< 30 min) not yet
+//	this Ludock's container unreadable                not yet; interrupted after 30 min
+//	this Ludock is neither original nor new container interrupted: the owner started it; copy goes
+//	original, helper exited "put back"                put back: data restored (now, or by an
+//	                                                  earlier start: the record lacks Copy),
+//	                                                  not restored (copy still there), or kept
+//	original, helper exited "unchanged", none left    failed, nothing changed; copy goes
+//	new container under Ludock's name, original gone  succeeded; copy goes
+//	original never stopped (started before the        failed, stopped before Ludock was
+//	update), or no helper and no new container,       replaced; copy goes
+//	and none left
+//	anything else                                     interrupted: finish from a terminal
+//
+// "None left" means Docker showed no new container of this update, after
+// removing one that never ran.
 func (s *Service) judge(ctx context.Context, record Record) bool {
 	// A helper still running, or Docker unable to say, long after any swap
 	// would have ended is given up on: the owner finishes from a terminal.
 	stuck := time.Since(time.UnixMilli(record.StartedAt)) > 30*time.Minute
+	// Saved, Copy says this Ludock opened the live database, not the copy.
+	live := record.Copy
 	// The copy stays whenever how it ended is uncertain.
 	_, copyErr := os.Lstat(filepath.Join(s.DataDir, CopyName))
 	record.Copy = copyErr == nil
@@ -741,6 +765,10 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		case record.Copy:
 			// It is there, but this Ludock couldn't put it back.
 			record.Data = DataNotRestored
+		case !live:
+			// An earlier start of this Ludock put the copy back, and this
+			// one opened it.
+			record.Data = DataRestored
 		default:
 			record.Data = DataKept
 		}

@@ -287,12 +287,12 @@ func TestScheduleAuthorityChanges(t *testing.T) {
 		t.Fatal(schedule)
 	}
 	f.grant(t, authz.ServerView, authz.ServerStart, authz.SchedulesManage)
-	f.s.DB.UpdateUserAccess(ctx, friend.ID, db.RoleMember, true)
+	dbtest.UpdateUserAccess(ctx, f.s.DB, friend.ID, db.RoleMember, true)
 	f.s.Run(ctx, due+86400_000)
 	if f.operations(t) != 0 || f.first(t, admin).NextRunUnavailableReason != OwnerDisabled {
 		t.Fatal(f.first(t, admin))
 	}
-	f.s.DB.UpdateUserAccess(ctx, friend.ID, db.RoleMember, false)
+	dbtest.UpdateUserAccess(ctx, f.s.DB, friend.ID, db.RoleMember, false)
 	// A material change pauses the friend's schedule until an administrator
 	// confirms it, and the same schedule then runs again.
 	changed := f.obs

@@ -320,7 +320,7 @@ func TestLoginDuringAccountChange(t *testing.T) {
 				hash, _ := Argon2{}.Hash("reset-password-123")
 				s.DB.UpdateUserPassword(ctx, adminID, hash, resetAudit)
 			} else {
-				s.DB.UpdateUserAccess(ctx, adminID, db.RoleAdmin, true)
+				dbtest.UpdateUserAccess(ctx, s.DB, adminID, db.RoleAdmin, true)
 			}
 		}
 		if user, err := s.Authenticate(ctx, "admin", original); user != nil || err != nil {
@@ -339,7 +339,7 @@ func TestSessionRequiresTheVerifiedPassword(t *testing.T) {
 			hash, _ := Argon2{}.Hash("reset-password-123")
 			s.DB.UpdateUserPassword(ctx, adminID, hash, resetAudit)
 		case "disable":
-			s.DB.UpdateUserAccess(ctx, adminID, db.RoleAdmin, true)
+			dbtest.UpdateUserAccess(ctx, s.DB, adminID, db.RoleAdmin, true)
 		}
 		_, err := s.createSession(ctx, db.SessionUser{ID: adminID, Username: "admin", Role: db.RoleAdmin}, Client{IP: "127.0.0.1"},
 			record.PasswordHash, nil)
@@ -365,7 +365,7 @@ func TestHashUpgradeDoesNotOverwriteReset(t *testing.T) {
 
 func TestLoginReturnsCurrentRole(t *testing.T) {
 	s, h, _ := racingService(t)
-	h.beforeVerify = func() { s.DB.UpdateUserAccess(ctx, adminID, db.RoleMember, false) }
+	h.beforeVerify = func() { dbtest.UpdateUserAccess(ctx, s.DB, adminID, db.RoleMember, false) }
 	if user, _ := s.Authenticate(ctx, "admin", original); user == nil || user.Role != db.RoleMember {
 		t.Fatal(user)
 	}
@@ -380,7 +380,7 @@ func TestAdminChangesAfterDemotion(t *testing.T) {
 		s, h, principal := racingService(t)
 		h.beforeHash = func() {
 			if c.change == "demote" {
-				s.DB.UpdateUserAccess(ctx, adminID, db.RoleMember, false)
+				dbtest.UpdateUserAccess(ctx, s.DB, adminID, db.RoleMember, false)
 			} else {
 				dbtest.DeleteUserSessions(ctx, s.DB, adminID)
 			}

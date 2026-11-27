@@ -192,7 +192,7 @@ func TestEventsRecheckAccess(t *testing.T) {
 	if len(socket.events()) != 0 {
 		t.Fatal(socket.events())
 	}
-	f.authz.DB.UpdateUserAccess(ctx, "friend", db.RoleMember, true)
+	dbtest.UpdateUserAccess(ctx, f.authz.DB, "friend", db.RoleMember, true)
 	f.hub.dispatch(ctx, []change{{"start", "first", 1}})
 	if !socket.closed {
 		t.Fatal("disabled account not closed")

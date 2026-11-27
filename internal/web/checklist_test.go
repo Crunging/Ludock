@@ -11,6 +11,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/db/dbtest"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/monitor"
@@ -171,7 +172,7 @@ func TestChecklistBackupsSkipSuspendedSchedules(t *testing.T) {
 	if body := checklist(); strings.Contains(body, "Back up your servers") {
 		t.Fatal(body)
 	}
-	if err := p.app.DB.UpdateUserAccess(ctx, other.User.ID, db.RoleAdmin, true); err != nil {
+	if err := dbtest.UpdateUserAccess(ctx, p.app.DB, other.User.ID, db.RoleAdmin, true); err != nil {
 		t.Fatal(err)
 	}
 	if page := p.do("GET", "/servers/"+p.server+"?tab=schedules", p.admin, nil, nil).Body.String(); !strings.Contains(page, "Suspended") {

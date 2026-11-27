@@ -3,6 +3,7 @@ package dbtest
 
 import (
 	"context"
+	"database/sql"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -111,4 +112,25 @@ func DeleteUser(ctx context.Context, d *db.DB, id string) error {
 func DeleteUserSessions(ctx context.Context, d *db.DB, userID string) error {
 	_, err := d.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", userID)
 	return err
+}
+
+// UpdateUserAccess changes a role and disabled flag, without the
+// administrator recheck a real change has. Disabling signs the account out
+// everywhere.
+func UpdateUserAccess(ctx context.Context, d *db.DB, id string, role db.Role, disabled bool) error {
+	return d.Tx(ctx, func(tx *sql.Tx) error {
+		value := 0
+		if disabled {
+			value = 1
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET role = ?, disabled = ?, updated_at = ? WHERE id = ?",
+			string(role), value, db.Now(), id); err != nil {
+			return err
+		}
+		if disabled {
+			_, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", id)
+			return err
+		}
+		return nil
+	})
 }

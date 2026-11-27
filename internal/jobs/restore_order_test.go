@@ -14,6 +14,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/db/dbtest"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
@@ -123,7 +124,7 @@ func (f *fixture) startElsewhere() {
 }
 
 func (f *fixture) revoke(t *testing.T) {
-	if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleMember, false); err != nil {
+	if err := dbtest.UpdateUserAccess(ctx, f.jobs.DB, "admin", db.RoleMember, false); err != nil {
 		t.Error(err)
 	}
 }

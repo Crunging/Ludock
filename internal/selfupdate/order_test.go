@@ -380,6 +380,16 @@ func TestSelfUpdateOrder(t *testing.T) {
 			g.at["stop new"] = func() { os.Remove(filepath.Join(g.dataDir, selfupdate.CopyName)) }
 		}, trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataKept,
 			reason: "Docker couldn’t start the new container, for example because its port was still in use", probe: "after"},
+		{name: "the original restarted after it put its data back, before it removed the helper, still says it did", arrange: func(g *rig) {
+			g.fail["start new"] = 500
+			g.fail["remove helper"] = 500
+			g.at["remove helper"] = func() {
+				g.client.Stop(context.Background(), g.old, nil)
+				g.client.Start(context.Background(), g.old)
+			}
+		}, trace: join(swap, []string{"stop new", "remove new", "start old", "remove helper", "stop old", "start old", "remove helper", "policy old"}),
+			image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored, probe: "before",
+			reason: "Docker couldn’t start the new container, for example because its port was still in use"},
 		{name: "Docker refuses to create the new container", arrange: func(g *rig) { g.fail["create new"] = 400 },
 			trace: []string{"pull", "create helper", "start helper", "create new", "remove helper", "policy old"}, image: oldImage,
 			state: selfupdate.StateFailed, reason: "Docker couldn’t swap in Ludock’s new container, so nothing was changed", probe: "after"},
@@ -427,13 +437,14 @@ func TestSelfUpdateOrder(t *testing.T) {
 				})
 				_, used := p.d.UseAccountLink(ctx, db.LinkUse{TokenHash: "link", UserID: "admin", PasswordHash: "y", Session: db.SessionInput{CreatedAt: now}})
 				for change, err := range map[string]error{
-					"reset link":       cmp.Or(link, used),
-					"recovery":         p.d.UpdateUserPassword(ctx, "admin", "y", db.AuditEntry{Action: "user.password.recovered"}),
-					"two-factor setup": p.d.SetPendingTwoFactor(ctx, "admin", g.session, "pending", db.Now),
-					"two-factor":       p.d.ChangeTwoFactor(ctx, db.TwoFactorChange{UserID: "admin", TokenHash: g.session, Session: db.SessionInput{CreatedAt: now}}),
-					"admin change":     p.d.AdminMutation(ctx, "admin", g.session, now, func(*sql.Tx) error { return nil }),
-					"sign-out":         p.d.Logout(ctx, g.session, db.AuditEntry{Action: "auth.logout"}),
-					"password":         p.d.ChangePassword(ctx, "admin", g.session, "x", "y", "", db.SessionInput{CreatedAt: now}, db.AuditEntry{Action: "auth.password.changed"}),
+					"reset link":                 cmp.Or(link, used),
+					"recovery":                   p.d.UpdateUserPassword(ctx, "admin", "y", db.AuditEntry{Action: "user.password.recovered"}),
+					"two-factor setup":           p.d.SetPendingTwoFactor(ctx, "admin", g.session, "pending", db.Now),
+					"two-factor setup cancelled": p.d.ClearPendingTwoFactor(ctx, "admin", g.session, db.Now),
+					"two-factor":                 p.d.ChangeTwoFactor(ctx, db.TwoFactorChange{UserID: "admin", TokenHash: g.session, Session: db.SessionInput{CreatedAt: now}}),
+					"admin change":               p.d.AdminMutation(ctx, "admin", g.session, now, func(*sql.Tx) error { return nil }),
+					"sign-out":                   p.d.Logout(ctx, g.session, db.AuditEntry{Action: "auth.logout"}),
+					"password":                   p.d.ChangePassword(ctx, "admin", g.session, "x", "y", "", db.SessionInput{CreatedAt: now}, db.AuditEntry{Action: "auth.password.changed"}),
 				} {
 					if !errors.Is(err, db.ErrLudockUpdating) {
 						t.Errorf("%s was accepted: %v", change, err)
@@ -523,6 +534,19 @@ func TestSelfUpdateOrder(t *testing.T) {
 		}, refused: "LUDOCK_UPDATE_UNAVAILABLE", reason: "Ludock keeps its data inside its own container"},
 		{name: "the data copy an earlier update kept is still there", arrange: func(g *rig) {
 			os.WriteFile(filepath.Join(g.dataDir, selfupdate.CopyName), []byte("kept"), 0o600)
+		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
+		{name: "a host port Docker picks while work runs, which Settings gives as the reason, without the commands", arrange: func(g *rig) {
+			g.engine.Update(g.old, func(c *fakedocker.Container) {
+				c.HostConfig["PortBindings"] = map[string]any{"3000/tcp": []any{map[string]any{"HostIp": "", "HostPort": "3000-3005"}}}
+			})
+		}, before: func(g *rig, p *process) {
+			games, err := (&identity.Store{DB: p.d}).Reconcile(ctx, []identity.Observation{{ContainerID: g.game, Name: "game", DisplayName: "game", GameType: "minecraft"}}, "", 0)
+			if err == nil {
+				_, err = (&ops.Runner{DB: p.d, Locks: p.svc.Locks}).Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: games[0].ID, ActorID: ops.RecoveryActor, Kind: ops.KindRestart})
+			}
+			if offer := p.svc.Offer(ctx); err != nil || !offer.NoCommands || !strings.HasPrefix(offer.Reason, "Wait for the work in progress") {
+				t.Errorf("offer %+v, %v", offer, err)
+			}
 		}, refused: "LUDOCK_UPDATE_UNAVAILABLE"},
 		{name: "a host port Docker picks", arrange: func(g *rig) {
 			g.engine.Update(g.old, func(c *fakedocker.Container) {
