@@ -300,6 +300,12 @@ var auditLabels = map[string]string{
 	"schedule.resumed":                   "Resumed a schedule",
 	"schedule.wait.cancelled":            "Cancelled a scheduled run waiting for players to leave",
 	"server.added":                       "Added a server",
+	"server.outage.alerted":              "Server down",
+	"server.outage.ended":                "Server running again",
+	"server.silence.alerted":             "Game not answering",
+	"server.silence.ended":               "Game answering again",
+	"server.unreachable.alerted":         "Can’t reach Docker",
+	"server.unreachable.ended":           "Docker reachable again; the server is running",
 	"server.start":                       "Started the server",
 	"server.stop":                        "Stopped the server",
 	"server.restart":                     "Restarted the server",
@@ -441,6 +447,19 @@ func entryLabel(entry history.AuditEntry) string {
 	return AuditLabel(entry.Action)
 }
 
+// outageStarts are the actions Ludock logs as an outage is alerted.
+var outageStarts = []string{"server.outage.alerted", "server.silence.alerted", "server.unreachable.alerted"}
+
+// outageSince is when the outage an entry announced began, or 0.
+func outageSince(entry history.AuditEntry) int64 {
+	details, _ := entry.Details.(map[string]any)
+	since, _ := details["since"].(float64)
+	if !slices.Contains(outageStarts, entry.Action) {
+		return 0
+	}
+	return int64(since)
+}
+
 // addedContainer is the container an added server came from; the entry is
 // written before the server has an ID.
 func addedContainer(entry history.AuditEntry) string {
@@ -458,6 +477,9 @@ templ auditList(h HistoryView) {
 			<article class="audit-entry">
 				<div>
 					<strong>{ entryLabel(entry) }</strong>
+					if since := outageSince(entry); since > 0 {
+						<span>Since @Time(since, "", "")</span>
+					}
 					<span>{ auditActor(entry) }</span>
 					if by := cancelledBy(entry, h.Users); by != "" {
 						<span>Cancelled by { by }</span>

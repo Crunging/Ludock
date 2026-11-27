@@ -533,7 +533,11 @@ func (s *Service) announceAt(serverID string, deadline int64) {
 }
 
 // alert is a server problem to queue with the state that raises it.
-type alert struct{ key, message string }
+// alert is a notification; audit, when set, is written with it.
+type alert struct {
+	key, message string
+	audit        *db.AuditEntry
+}
 
 // apply runs an UPDATE of availability and, only if it changed exactly one
 // row, queues alerts in the same transaction. It reports whether it changed.
@@ -552,14 +556,22 @@ func (s *Service) apply(ctx context.Context, alerts []alert, query string, args 
 	})
 	if err == nil && changed {
 		s.alerted(alerts)
+		// An audit entry written in the transaction leaves its pruning
+		// to here.
+		s.DB.PruneAuditIfNeeded(ctx)
 	}
 	return changed && err == nil, err
 }
 
 func (s *Service) queueIn(ctx context.Context, tx *sql.Tx, alerts []alert) error {
 	for _, a := range alerts {
+		if a.audit != nil {
+			if err := s.DB.WriteAudit(ctx, tx, *a.audit); err != nil {
+				return err
+			}
+		}
 		if s.Queue == nil {
-			return nil
+			continue
 		}
 		if _, err := s.Queue(ctx, tx, notify.ServerProblems, a.key, a.message); err != nil {
 			return err
@@ -796,7 +808,18 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			} else if silent {
 				message = server.DisplayName + ": running, but the game stopped answering."
 			}
-			down = []alert{{"outage:" + server.ID + ":" + strconv.FormatInt(started, 10), message}}
+			// As the page shows it, from the stop time this check has.
+			since, action := started, "server.outage.alerted"
+			if d := downs[server.ID]; !silent && !unavailable && d > ended[server.ID] && d < started {
+				since = d
+			}
+			if unavailable {
+				action = "server.unreachable.alerted"
+			} else if silent {
+				action = "server.silence.alerted"
+			}
+			down = []alert{{"outage:" + server.ID + ":" + strconv.FormatInt(started, 10), message,
+				&db.AuditEntry{Action: action, TargetType: "server", TargetID: server.ID, Details: map[string]int64{"since": since}}}}
 		}
 		changed := false
 		if !(r.outage.Valid && r.outage.Int64 == started && r.notified == notified && r.lastState.String == lastState) {
@@ -918,7 +941,17 @@ const whileIdle = " AND NOT EXISTS(SELECT 1 FROM operations WHERE operations.ser
 func (s *Service) recovered(ctx context.Context, server identity.Server, container servers.Container, r *row, now int64) (bool, error) {
 	var back []alert
 	if r.notified == 1 {
-		back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), server.DisplayName + ": the server is back up."}}
+		// A game that stopped answering ran all along, and a server Docker
+		// couldn't be asked about may have.
+		message, action := server.DisplayName+": the server is running again.", "server.outage.ended"
+		switch r.lastState.String {
+		case NotAnswering:
+			message, action = server.DisplayName+": the game is answering again.", "server.silence.ended"
+		case DockerUnavailable:
+			message, action = server.DisplayName+": Ludock can reach Docker again, and the server is running.", "server.unreachable.ended"
+		}
+		back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), message,
+			&db.AuditEntry{Action: action, TargetType: "server", TargetID: server.ID}}}
 	}
 	changed, err := s.transitionIf(ctx, server.ID, r, back, whileIdle, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
 	if changed {

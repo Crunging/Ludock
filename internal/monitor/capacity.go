@@ -332,7 +332,7 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 		for _, folder := range ended {
 			if folder.Notified {
 				alerts = append(alerts, alert{"disk-recovery:" + server.ID + ":" + folder.Path + ":" + strconv.FormatInt(folder.AlertSince, 10),
-					fmt.Sprintf("%s: the disk under %s has space again (%.0f%% full).", server.DisplayName, folder.Path, folder.Percent())})
+					fmt.Sprintf("%s: the disk under %s has space again (%.0f%% full).", server.DisplayName, folder.Path, folder.Percent()), nil})
 			}
 		}
 		for index := range next.Folders {
@@ -342,7 +342,7 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 			}
 			alerts = append(alerts, alert{"disk:" + server.ID + ":" + folder.Path + ":" + strconv.FormatInt(folder.AlertSince, 10),
 				fmt.Sprintf("%s: the disk under %s is %.0f%% full (%s free).", server.DisplayName, folder.Path, folder.Percent(),
-					datasize.Format(folder.AvailableBytes))})
+					datasize.Format(folder.AvailableBytes)), nil})
 			folder.Notified = true
 		}
 		if _, changed, err := s.saveState(ctx, server.ID, policy.row.policy, diskColumn, policy.row.disk, next, alerts...); err != nil || !changed {
@@ -412,12 +412,12 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 		// Like a disk alert, one that ends with its binding sends no recovery.
 		if ended && previous.Notified && previous.Revision == next.Revision {
 			alerts = append(alerts, alert{"memory-recovery:" + server.ID + ":" + strconv.FormatInt(previous.AlertSince, 10),
-				server.DisplayName + ": memory use is no longer near its limit."})
+				server.DisplayName + ": memory use is no longer near its limit.", nil})
 		}
 		raised := next.AlertSince != 0 && !next.Notified
 		if raised {
 			alerts = append(alerts, alert{"memory:" + server.ID + ":" + strconv.FormatInt(next.AlertSince, 10),
-				fmt.Sprintf("%s: over %d%% of its memory limit for %s.", server.DisplayName, policy.MemoryPercent, minutes(policy.MemoryMinutes))})
+				fmt.Sprintf("%s: over %d%% of its memory limit for %s.", server.DisplayName, policy.MemoryPercent, minutes(policy.MemoryMinutes)), nil})
 			next.Notified = true
 		}
 		if _, changed, err := s.saveState(ctx, server.ID, policy.row.policy, memoryColumn, policy.row.memory, next, alerts...); err != nil || !changed {

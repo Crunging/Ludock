@@ -102,4 +102,29 @@ func TestActivitySearchMatchesShownNames(t *testing.T) {
 		strings.Contains(body, "Sign-in failed") {
 		t.Fatal(body)
 	}
+	// Outages Ludock logged are found by what their rows say: a server that
+	// was down, a game that stopped answering, and Docker out of reach, each
+	// apart.
+	for _, entry := range []db.AuditEntry{{Action: "server.outage.alerted", Details: map[string]int64{"since": 1}},
+		{Action: "server.outage.ended"},
+		{Action: "server.silence.alerted", Details: map[string]int64{"since": 1}},
+		{Action: "server.silence.ended"},
+		{Action: "server.unreachable.alerted", Details: map[string]int64{"since": 1}},
+		{Action: "server.unreachable.ended"}} {
+		entry.TargetType, entry.TargetID = "server", p.server
+		if err := p.app.DB.WriteAudit(context.Background(), nil, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for search, rows := range map[string][2]string{"Server down": {"Server down", "Game not answering"},
+		"Server running again":   {"Server running again", "Game answering again"},
+		"Game not answering":     {"Game not answering", "Server down"},
+		"Game answering again":   {"Game answering again", "Server running again"},
+		"Can’t reach Docker":     {"Can’t reach Docker", "Server down"},
+		"Docker reachable again": {"Docker reachable again; the server is running", "Server running again"}} {
+		body := p.do("GET", "/activity?show=everything&action="+url.QueryEscape(search), p.admin, nil, nil).Body.String()
+		if !strings.Contains(body, "<strong>"+rows[0]+"</strong>") || strings.Contains(body, "<strong>"+rows[1]) {
+			t.Error(search, body)
+		}
+	}
 }
