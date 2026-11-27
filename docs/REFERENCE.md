@@ -467,7 +467,8 @@ Recreate it without `--rm` to manage it fully.
   gives each data folder its own owner and permissions back. Single-file
   mounts, links, and special files are refused; other extended attributes
   (such as SELinux labels and file capabilities), sparse files, setuid, and
-  files' setgid aren't kept.
+  files' setgid aren't kept. Storage that can't set file times at all, such
+  as some FUSE filesystems, restores the content with today's times.
 - **ACLs in the archive:** each file's and folder's ACL, and each folder's
   default ACL, are kept with numeric user and group IDs, in the standard
   `SCHILY.acl.access` and `SCHILY.acl.default` records that GNU tar and bsdtar

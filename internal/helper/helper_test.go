@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -149,6 +150,31 @@ func TestMutationsAndUploads(t *testing.T) {
 	if _, code := runFile(t, FileRequest{Operation: "delete", Root: root, Path: "world"}, nil); code != 0 {
 		t.Fatal("delete tree")
 	}
+	// On FUSE or NFS, a file the game has open stays, under a hidden name,
+	// when deleted, so its folder can't be removed: everything else goes,
+	// alone or in a selection, and the delete says why the folder is left.
+	unlinkFile = func(directory int, name string, flags int) error {
+		if name == "latest.log" {
+			return unix.Renameat(directory, name, directory, ".fuse_hidden0001")
+		}
+		return unix.Unlinkat(directory, name, flags)
+	}
+	defer func() { unlinkFile = unix.Unlinkat }()
+	for _, request := range []FileRequest{{Operation: "delete", Root: root, Path: "game"},
+		{Operation: "delete-paths", Root: root, Paths: []string{"game"}}} {
+		for _, name := range []string{"logs/latest.log", "logs/old.log.gz", "world/level.dat"} {
+			os.MkdirAll(filepath.Join(root, "game", filepath.Dir(name)), 0o755)
+			os.WriteFile(filepath.Join(root, "game", name), []byte(name), 0o644)
+		}
+		if _, code := runFile(t, request, nil); code != FileFolderInUse {
+			t.Fatal(request.Operation, "of a folder in use:", code)
+		}
+		if got := listTree(t, filepath.Join(root, "game")); !reflect.DeepEqual(got, []string{"logs", "logs/.fuse_hidden0001"}) {
+			t.Fatal(request.Operation, "left", got)
+		}
+		os.Remove(filepath.Join(root, "game", "logs", ".fuse_hidden0001"))
+	}
+	unlinkFile = unix.Unlinkat
 	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
 	size := int64(5)
 	upload := FileRequest{Operation: "upload", Root: root, Path: "server.properties", Size: &size, UploadID: id}
@@ -1141,15 +1167,42 @@ func TestExtractionKeepsReserve(t *testing.T) {
 	}
 }
 
-// A full disk during a write is reported as full.
-func TestExtractExitOnFullDisk(t *testing.T) {
+// A full disk during a write is reported as full, and storage that refuses
+// a write as that, apart from an unsafe archive or a changed folder. Storage
+// that can't set file times at all still restores, without them.
+func TestExtractExitSaysWhy(t *testing.T) {
 	for _, err := range []error{errFull, unix.ENOSPC, fmt.Errorf("sync: %w", unix.EDQUOT)} {
 		if status, message := extractExit(err); status != ExtractFullStatus || message != ExtractFull {
 			t.Error(err, status)
 		}
 	}
-	if status, _ := extractExit(errUnsafe); status != 1 {
-		t.Error("an unsafe archive reported as a full disk")
+	for _, err := range []error{unix.EIO, unix.EROFS, unix.EPERM, unix.EACCES, unix.ENOSYS, unix.EOPNOTSUPP} {
+		if status, message := extractExit(err); status != ExtractStorageStatus || message != ExtractStorage {
+			t.Error(err, status)
+		}
+	}
+	for _, err := range []error{errUnsafe, unix.ELOOP, unix.EEXIST, unix.ENOENT} {
+		if status, _ := extractExit(err); status != 1 {
+			t.Error(err, "reported as", status)
+		}
+	}
+	root := t.TempDir()
+	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
+	if _, code := restore(t, root, stage, RestoreStage); code != 0 {
+		t.Fatal("stage")
+	}
+	t.Cleanup(func() { setTimes = futimens })
+	argument, _ := json.Marshal(map[string]any{"root": root, "stage": stage, "maxBytes": 100, "reserveBytes": 0})
+	for index, test := range []struct {
+		errno unix.Errno
+		code  int
+	}{{unix.ENOSYS, 0}, {unix.EOPNOTSUPP, 0}, {unix.EROFS, ExtractStorageStatus}} {
+		setTimes = func(int, *[2]unix.Timespec) error { return test.errno }
+		record := `{"name":"f` + strconv.Itoa(index) + `","type":"file","size":1,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` +
+			strconv.Itoa(os.Getgid()) + `,"mode":420,"mtime":1700000000}`
+		if code := RunRestoreExtract(string(argument), strings.NewReader(record+"\nx"), io.Discard, io.Discard); code != test.code {
+			t.Error(test.errno, code)
+		}
 	}
 }
 

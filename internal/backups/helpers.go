@@ -695,6 +695,9 @@ type StageTarget struct {
 var (
 	errExtractCut = errors.New("restore extraction stream closed")
 	errExtraction = fail("RESTORE_EXTRACTION", "A folder in the server’s data changed, or isn’t safe to write to, while the backup was unpacking, so the restore was stopped.")
+	// errStorageRefused is storage that refused a write while unpacking,
+	// such as a read-only or failing disk.
+	errStorageRefused = fail("RESTORE_STORAGE_REFUSED", "The storage holding the server’s data refused a write while the backup was unpacking, so the restore was stopped. Check that it is writable and healthy, then try again.")
 	// errInputCut is a helper that saw its input end early, and errExitUnknown
 	// one whose exit Docker didn't report: neither refused anything.
 	errInputCut    = errors.New("restore extraction input ended early")
@@ -829,6 +832,8 @@ func (r *stageRun) collect(extraction *rootExtraction, execID string) {
 		err = errStagingCapacity
 	case *result.ExitCode == helper.ExtractCutStatus || (*result.ExitCode == 0 && err != nil):
 		err = errInputCut
+	case *result.ExitCode == helper.ExtractStorageStatus:
+		err = errStorageRefused
 	case *result.ExitCode != 0:
 		err = errExtraction
 	}
@@ -856,7 +861,7 @@ func (r *stageRun) wait() error {
 			switch {
 			case errors.Is(err, errStagingCapacity):
 				return 3
-			case errors.Is(err, errExtraction):
+			case errors.Is(err, errExtraction), errors.Is(err, errStorageRefused):
 				return 2
 			case err != nil:
 				return 1
@@ -970,7 +975,7 @@ func (r *stageRun) whyCut() error {
 	if r.expired() {
 		return context.Cause(r.deadline)
 	}
-	if errors.Is(extracted, errExtraction) {
+	if errors.Is(extracted, errExtraction) || errors.Is(extracted, errStorageRefused) {
 		return extracted
 	}
 	return cut(pingErr)

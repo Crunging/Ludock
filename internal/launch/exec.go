@@ -48,6 +48,7 @@ var fileErrors = &ExecErrors{Timeout: ErrTimeout, Failed: ErrFailed, Unsafe: Err
 	helper.FileACLNotKept:  apperr.New("ACL_NOT_KEPT", 409, "The file wasn’t replaced: Ludock couldn’t keep its access control list, so the new file would have had wider permissions."),
 	helper.FileNotFolder:   apperr.New("NOT_A_FOLDER", 409, "A file has the name of a folder this goes in, so it wasn’t uploaded."),
 	helper.FileIsFolder:    apperr.New("IS_A_FOLDER", 409, "A folder has this name, so the file wasn’t uploaded."),
+	helper.FileFolderInUse: apperr.New("FOLDER_IN_USE", 409, "The files were deleted, but a folder couldn’t be removed because something in it is still in use, usually by the running game. Stop the server, or delete it again later."),
 	helper.FileArchiveDeep: apperr.New("ARCHIVE_TOO_DEEP", 409, "The archive wasn’t unpacked: its files would sit deeper than Files can open. Move it to a folder nearer the top and unpack it there."),
 	// A 5xx status reports the result as unconfirmed.
 	helper.FilePartial:      apperr.New("FILE_PARTIAL", 500, "Only part of the selection was changed"),
