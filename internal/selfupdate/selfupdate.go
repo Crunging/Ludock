@@ -149,6 +149,8 @@ var (
 		"Docker picks Ludock’s port each time its container starts, so this page wouldn’t come back at the same address. Publish a fixed port, such as 3000:3000, or use the commands below.")
 	errNoDataMount = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
 		"Ludock keeps its data inside its own container rather than in a volume or mounted folder, so recreating it would lose its data. Move its data to a volume or mounted folder first, then update.")
+	errEarlier = apperr.New("LUDOCK_UPDATE_UNAVAILABLE", 409,
+		"An earlier update of Ludock didn’t finish. Finish it as shown above, then update again.")
 	errPull = apperr.New("PULL_FAILED", 409,
 		"Docker couldn’t download Ludock’s new image. Check the machine’s internet connection; for a private registry, set LUDOCK_DOCKER_CONFIG.")
 	errSave = apperr.New("LUDOCK_UPDATE_SAVE", 409,
@@ -187,11 +189,15 @@ func (s *Service) Failed(ctx context.Context) *Record {
 	last := s.Last(ctx)
 	// One that stopped partway stays until dismissed, whichever version
 	// the owner then started.
-	if !last.Failed() || last.Dismissed || (last.From != s.Version && last.State != StateInterrupted) {
+	if !last.Failed() || (last.From != s.Version && last.State != StateInterrupted) {
 		return nil
 	}
 	if last.State == StateInterrupted {
 		s.present(ctx, last)
+	}
+	// One that left something behind shows until that is gone.
+	if last.Dismissed && (last.State != StateInterrupted || last.Finished) {
+		return nil
 	}
 	return last
 }
@@ -200,15 +206,25 @@ func (s *Service) Failed(ctx context.Context) *Record {
 // finished: a leftover container gone, as after docker rm or a rename, and
 // the copy moved.
 func (s *Service) present(ctx context.Context, record *Record) {
-	if record.Leftover != "" {
-		if _, err := s.Docker.InspectSpec(ctx, record.Leftover); docker.IsNotFound(err) {
-			record.Leftover, record.OnLeftover, record.OriginalGone = "", false, false
-		}
+	// Nothing is left only once Docker shows this update's new container
+	// gone, whatever was recorded.
+	replacement, err := s.Docker.InspectSpec(ctx, servers.ReplacementName(record.Name, record.ID))
+	gone := docker.IsNotFound(err)
+	if gone {
+		record.Leftover, record.OnLeftover, record.OriginalGone = "", false, false
+	} else if err == nil && operationOf(replacement) == record.ID {
+		record.Leftover = strings.TrimPrefix(replacement.Name, "/")
 	}
-	_, err := os.Lstat(filepath.Join(s.DataDir, CopyName))
+	// Removing the container this Ludock runs in is advised only while
+	// Docker shows the original, which may hold an anonymous data volume.
+	if record.OnLeftover {
+		_, err := s.Docker.InspectSpec(ctx, record.Container)
+		record.OriginalGone = err != nil
+	}
+	_, err = os.Lstat(filepath.Join(s.DataDir, CopyName))
 	record.Copy = err == nil
 	_, helper := s.Docker.InspectSpec(ctx, HelperName(record.ID))
-	record.Finished, record.Running = record.Leftover == "" && docker.IsNotFound(helper), s.Version
+	record.Finished, record.Running = gone && docker.IsNotFound(helper), s.Version
 }
 
 var errNothingToDismiss = apperr.New("NOT_FOUND", 404, "There is no failed update of Ludock to dismiss.")
@@ -282,7 +298,7 @@ func (o *Offer) Refuse(err error) {
 }
 
 func noCommands(err error) bool {
-	return errors.Is(err, errNoDataMount) || errors.Is(err, errBusy)
+	return errors.Is(err, errNoDataMount) || errors.Is(err, errBusy) || errors.Is(err, errEarlier)
 }
 
 type queryer interface {
@@ -320,6 +336,13 @@ func (s *Service) check(ctx context.Context, dependents bool) (*docker.Container
 	// inside the container: a new one has it only from a volume or folder.
 	if dataDir, err := filepath.Abs(s.DataDir); err != nil || !mounted(own, dataDir) {
 		return own, nil, errNoDataMount
+	}
+	// Another update would replace the record of one whose leftovers
+	// Settings still says how to finish.
+	if last := s.Last(ctx); last != nil && last.State == StateInterrupted {
+		if s.present(ctx, last); !last.Finished {
+			return own, nil, errEarlier
+		}
 	}
 	plan, err := s.Updates.CheckContainer(ctx, own.ID, dependents)
 	switch {
@@ -509,11 +532,19 @@ func (s *Service) background() context.Context {
 // from Ludock's own image. Ludock stopping meanwhile leaves the record for
 // the next start to settle.
 func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerInspect, plan *update.Plan, tokenHash string) {
+	// A copy an earlier update left stays until this one writes its own.
+	_, copyErr := os.Lstat(filepath.Join(s.DataDir, CopyName))
+	earlier := copyErr == nil
+	ended := func(state, reason string) {
+		kept := record
+		kept.Copy = earlier
+		s.settle(ctx, kept, state, reason)
+	}
 	failed := func(err error) {
 		// A Ludock stopping meanwhile leaves the update to the next one.
 		if ctx.Err() == nil {
 			message, _ := apperr.Public(err)
-			s.settle(ctx, record, StateFailed, message)
+			ended(StateFailed, message)
 		}
 	}
 	auth, err := s.Updates.RegistryAuth(plan)
@@ -541,7 +572,7 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 		s.Checks.ForgetSelf()
 	}
 	if target == record.Previous {
-		s.settle(ctx, record, StateCurrent, "")
+		ended(StateCurrent, "")
 		return
 	}
 	image, err := s.Docker.InspectImageConfig(ctx, target)
@@ -582,6 +613,7 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 		failed(errSave)
 		return
 	}
+	earlier = false
 	// The copy can take a while too. The live database's record then says
 	// the copy was written, and the copy's own doesn't, so a Ludock put back
 	// can tell which one it opened.

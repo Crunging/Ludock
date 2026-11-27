@@ -374,9 +374,12 @@ templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 						} else {
 							<p>Try again later. If it keeps failing, <a href="https://github.com/Crunging/Ludock/issues">report it</a>.</p>
 						}
-						<div class="inline-actions">
-							<button class="secondary-btn" type="button" hx-post="/settings/ludock-update/dismiss" hx-vals={ dismissValues(failed.ID) } hx-target="#ludock-notice" hx-swap="outerHTML" data-busy-label="Dismissing…">Dismiss</button>
-						</div>
+						// One that left something behind shows until that is gone.
+						if failed.State != selfupdate.StateInterrupted || failed.Finished {
+							<div class="inline-actions">
+								<button class="secondary-btn" type="button" hx-post="/settings/ludock-update/dismiss" hx-vals={ dismissValues(failed.ID) } hx-target="#ludock-notice" hx-swap="outerHTML" data-busy-label="Dismissing…">Dismiss</button>
+							</div>
+						}
 					</div>
 				</div>
 			} else if last := offer.Last; updatedSince(last, check) {

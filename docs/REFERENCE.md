@@ -558,18 +558,21 @@ stopped, what to do depends on what it left:
   two commands above start it on the new version with its data.
 
 Whichever Ludock records how the update ended sets Ludock's restart policy
-back, so the next reboot starts it, and says so if Docker won't. Once nothing
-the update left is there any more, **Settings** says so and which version
+back, so the next reboot starts it, and says so if Docker won't. Until what
+the update left is gone, **Settings** keeps saying what to run, and a new
+update isn't offered. Then it says nothing is left to do and which version
 runs, until an administrator dismisses it. If the new version changed the
 data before it was cut off and the old version can't open it, the old
 version says so on its address and gives the two commands. The copy of the
 data from before the update stays beside the database; the next update
 replaces it, and its confirmation says so.
 
-A reboot during an update isn't recovered yet. Every container the update
-uses has no restart policy meanwhile, so after the reboot Ludock is stopped,
-and with its old and new containers both stopped, `docker compose up -d`
-removes the old one and starts nothing.
+A reboot during an update isn't recovered yet. Until the new version has
+passed its health check, no container the update uses has a restart policy,
+so after a reboot then, Ludock is stopped, and with its old and new
+containers both stopped, `docker compose up -d` removes the old one and
+starts nothing. After it passed, the new container has Ludock's restart
+policy, so a reboot starts it.
 
 `latest` follows every release. Each release is also published under its
 version, such as `1.2.3`, and moves the shorter tags `1.2` and `1`. To stay
