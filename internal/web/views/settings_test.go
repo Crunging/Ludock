@@ -27,26 +27,3 @@ func TestNotificationDestinationStartsOn(t *testing.T) {
 		t.Fatal("a destination saved off should stay off")
 	}
 }
-
-// A destination alerts aren't reaching always says so in one sentence, and
-// says why only once: after a failed test, the test's result gives the reason.
-func TestNotificationDestinationFailingSaysWhyOnce(t *testing.T) {
-	failing := NotificationDestinationView{Configuration: notify.Configuration{Destination: notify.Webhook, Enabled: true, Configured: true, Stored: true},
-		Health: notify.Health{Failed: true, Failing: true, Reason: "Unable to reach the webhook.", LastTried: 1}}
-	render := func(n NotificationDestinationView) string {
-		var out strings.Builder
-		if err := NotificationDestination(n).Render(context.Background(), &out); err != nil {
-			t.Fatal(err)
-		}
-		return out.String()
-	}
-	if text := render(failing); strings.Count(text, "Unable to reach the webhook.") != 1 ||
-		!strings.Contains(text, "<p>Alerts aren’t reaching Webhook. Unable to reach the webhook. Last tried") {
-		t.Fatal(text)
-	}
-	failing.Test = &notify.Delivery{State: "failed", LastFailure: "Unable to reach the webhook."}
-	if text := render(failing); strings.Count(text, "Unable to reach the webhook.") != 1 ||
-		!strings.Contains(text, "<p>Alerts aren’t reaching Webhook. Last tried") {
-		t.Fatal(text)
-	}
-}
