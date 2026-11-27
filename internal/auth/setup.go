@@ -33,19 +33,22 @@ type SetupState struct {
 // exists: without a code for SetupOpenFor after start, then with a one-time
 // code. The code is long and random; attempts are limited per source.
 type Setup struct {
+	// Now times the window. time.Now carries a monotonic reading, so a wall
+	// clock set back or forward after start doesn't move the deadline.
+	Now func() time.Time
+
 	mu            sync.Mutex
 	authorization [32]byte
 	generated     string
 	configured    bool
-	// openUntil ends the time without a code, in Unix milliseconds.
-	openUntil int64
-	completed bool
+	opened        time.Time
+	completed     bool
 }
 
 // NewSetup takes the configured code. An empty code generates one that is
 // printed to the console once.
 func NewSetup(code string) (*Setup, error) {
-	setup := &Setup{configured: code != ""}
+	setup := &Setup{Now: time.Now, configured: code != ""}
 	if code == "" {
 		var random [32]byte
 		if _, err := rand.Read(random[:]); err != nil {
@@ -76,12 +79,12 @@ func (w *Setup) assertOpen(required bool) error {
 
 // assertAuthorized accepts no code while setup is open without one; a code
 // that is sent must always match.
-func (w *Setup) assertAuthorized(required bool, candidate string, now int64) error {
+func (w *Setup) assertAuthorized(required bool, candidate string) error {
 	if err := w.assertOpen(required); err != nil {
 		return err
 	}
 	if candidate == "" {
-		if w.codeNeeded(now) {
+		if w.codeNeeded() {
 			return errSetupCodeMissing
 		}
 		return nil
@@ -97,18 +100,18 @@ func (w *Setup) assertAuthorized(required bool, candidate string, now int64) err
 }
 
 // open starts the time setup needs no code, unless the owner set one.
-func (w *Setup) open(now int64) {
+func (w *Setup) open() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if !w.configured && !w.completed {
-		w.openUntil = now + SetupOpenFor.Milliseconds()
+		w.opened = w.Now()
 	}
 }
 
-func (w *Setup) codeNeeded(now int64) bool {
+func (w *Setup) codeNeeded() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.completed || now >= w.openUntil
+	return w.completed || w.opened.IsZero() || w.Now().Sub(w.opened) >= SetupOpenFor
 }
 
 // TakeGeneratedCode returns a generated code once, for the console.
@@ -125,6 +128,6 @@ func (w *Setup) markCompleted() {
 	defer w.mu.Unlock()
 	w.generated = ""
 	w.completed = true
-	w.openUntil = 0
+	w.opened = time.Time{}
 	clear(w.authorization[:])
 }

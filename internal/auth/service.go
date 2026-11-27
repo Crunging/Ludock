@@ -137,7 +137,7 @@ func (s *Service) SetupState(ctx context.Context) (SetupState, error) {
 // SetupCode says whether setup needs the code now, and whether the owner set
 // it with LUDOCK_SETUP_CODE.
 func (s *Service) SetupCode() (needed, set bool) {
-	return s.Setup.codeNeeded(s.Now()), s.Setup.configured
+	return s.Setup.codeNeeded(), s.Setup.configured
 }
 
 // OpenSetup starts the time setup needs no code, if no administrator exists
@@ -146,7 +146,7 @@ func (s *Service) OpenSetup(ctx context.Context, address string, console func(st
 	if required, err := s.SetupRequired(ctx); err != nil || !required {
 		return
 	}
-	s.Setup.open(s.Now())
+	s.Setup.open()
 	if code := s.Setup.TakeGeneratedCode(); code != "" {
 		minutes := strconv.Itoa(int(SetupOpenFor.Minutes()))
 		console("Setup is open at " + address + " for " + minutes + " minutes: create the first administrator there.\n" +
@@ -202,7 +202,7 @@ func (s *Service) CompleteSetup(ctx context.Context, username, password, code st
 		}
 		return nil, busy(0)
 	}
-	if err := s.Setup.assertAuthorized(required, code, s.Now()); err != nil {
+	if err := s.Setup.assertAuthorized(required, code); err != nil {
 		if apperr.Is(err, "SETUP_AUTHORIZATION_REQUIRED") {
 			if _, recordErr := s.DB.RecordLoginFailure(ctx, sourceKey, s.Now(), loginWindowMs, setupSourceMax, 0); recordErr != nil {
 				return nil, recordErr
@@ -235,7 +235,7 @@ func (s *Service) CompleteSetup(ctx context.Context, username, password, code st
 	err = s.DB.CreateFirstUser(ctx, db.UserRecord{User: db.User{ID: user.ID, Username: user.Username, Role: user.Role,
 		CreatedAt: s.Now()}, PasswordHash: passwordHash},
 		db.AuditEntry{UserID: user.ID, Action: "auth.setup.completed", TargetType: "user", TargetID: user.ID, IPAddress: client.IP},
-		session, func() error { return s.Setup.assertAuthorized(true, code, s.Now()) })
+		session, func() error { return s.Setup.assertAuthorized(true, code) })
 	if errors.Is(err, db.ErrSetupComplete) {
 		return nil, errSetupComplete
 	}
