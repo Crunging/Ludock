@@ -1102,7 +1102,7 @@ func fleet(list ServerList) templ.Component {
 
 // filterAt is the number of servers worth a search box and state filter;
 // fewer fit at a glance.
-const filterAt = 4
+const filterAt = 8
 
 // filterable is a list long enough to filter, or already filtered.
 func (list ServerList) filterable() bool {

@@ -226,10 +226,13 @@ func (o *Observer) Managed(ctx context.Context, info *docker.ContainerInspect) (
 // Unmanaged is a container Ludock can see but doesn't manage, which an
 // administrator can add. Its text comes from Docker and is untrusted.
 type Unmanaged struct {
-	ID    string
-	Name  string
-	Image string
-	State string
+	ID   string
+	Name string
+	// DisplayName is what it would be called as a server, before telling it
+	// apart from others called the same.
+	DisplayName string
+	Image       string
+	State       string
 	// Ports are the published ports only.
 	Ports []Port
 	// Game is the suggested game type, or "unknown".
@@ -359,8 +362,11 @@ func (o *Observer) addable(ctx context.Context, id string, choices map[string]id
 	if err != nil {
 		return nil, errNotAddable
 	}
-	entry := &Unmanaged{ID: container.ID, Name: container.Name, Image: container.Image, State: container.State,
-		External: c.external()}
+	entry := &Unmanaged{ID: container.ID, Name: container.Name, DisplayName: container.DisplayName, Image: container.Image,
+		State: container.State, External: c.external()}
+	if name, ok := serviceName(info.Config.Labels); ok {
+		entry.DisplayName = name
+	}
 	for _, port := range container.Ports {
 		if port.Public > 0 {
 			entry.Ports = append(entry.Ports, port)
@@ -427,7 +433,7 @@ func (s *Service) Add(ctx context.Context, adminID, tokenHash, containerID, game
 	if game != games.InferGameType(entry.Image) {
 		choice.Game = game
 	}
-	audit.Action, audit.Details = "server.added", map[string]any{"container": entry.Name, "gameType": game}
+	audit.Action, audit.Details = "server.added", map[string]any{"container": entry.Name, "name": entry.DisplayName, "gameType": game}
 	if err := s.Identity.SetChoice(ctx, adminID, tokenHash, entry.External, choice, &audit, nil); err != nil {
 		return nil, err
 	}

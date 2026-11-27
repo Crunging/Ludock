@@ -896,14 +896,18 @@ templ UpdatePanel(u UpdateView) {
 				<div class="inline-actions">
 					@reloadUpdate(u.ServerID, "Check again")
 				</div>
-			} else if u.upToDate() && !u.Recreate {
+			} else if (u.upToDate() || u.unchecked()) && !u.Recreate {
 				@ImageCheck(u)
-				// Up to date, there is nothing to do; the form stays at hand for
-				// recreating the server anyway.
+				// Nothing is known to be waiting, so the form stays folded away: to
+				// reinstall a current server, or update one not checked yet.
 				{{ anyway := u }}
-				{{ anyway.Recreate = true }}
+				{{ anyway.Recreate = u.upToDate() }}
 				<details class="disclosure" id="update-anyway">
-					<summary>Reinstall this version</summary>
+					if u.upToDate() {
+						<summary>Reinstall this version</summary>
+					} else {
+						<summary>Update without checking</summary>
+					}
 					@UpdateForm(anyway)
 				</details>
 			} else {
@@ -916,6 +920,10 @@ templ UpdatePanel(u UpdateView) {
 
 func (u UpdateView) upToDate() bool {
 	return !u.ChecksOff && u.Check != nil && u.Check.State == update.CheckCurrent && !u.Check.Failed
+}
+
+func (u UpdateView) unchecked() bool {
+	return !u.ChecksOff && (u.Check == nil || u.Check.State == update.CheckPending && !u.Check.Failed)
 }
 
 // ImageCheck is what the background check last learned about a newer image.

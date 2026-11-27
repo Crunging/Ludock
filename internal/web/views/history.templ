@@ -467,12 +467,16 @@ func outageSince(entry history.AuditEntry) int64 {
 	return int64(since)
 }
 
-// addedContainer is the container an added server came from; the entry is
-// written before the server has an ID.
-func addedContainer(entry history.AuditEntry) string {
+// addedName is what an added server was called when it was added; the
+// entry is written before the server has an ID. Entries from before names
+// were recorded have only the container's.
+func addedName(entry history.AuditEntry) string {
 	details, _ := entry.Details.(map[string]any)
 	if entry.Action != "server.added" || details == nil {
 		return ""
+	}
+	if name, _ := details["name"].(string); name != "" {
+		return name
 	}
 	name, _ := details["container"].(string)
 	return name
@@ -520,7 +524,7 @@ templ auditList(h HistoryView) {
 						} else {
 							<span>A deleted user</span>
 						}
-					} else if name := addedContainer(entry); name != "" {
+					} else if name := addedName(entry); name != "" {
 						<span>{ name }</span>
 					} else {
 						<span>—</span>

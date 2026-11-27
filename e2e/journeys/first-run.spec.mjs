@@ -42,7 +42,7 @@ function item(page, title) {
   return page.locator("#checklist li", { has: page.getByText(title, { exact: true }) });
 }
 
-test("members never see the setup list, and a member with one server sees no filters", async ({ session }) => {
+test("members never see the setup list, and a short list shows no filters", async ({ session }) => {
   const admin = await adminPage(session);
   await createUser(admin, "friend", "friend password one");
   await admin.goto("/");
@@ -62,9 +62,10 @@ test("members never see the setup list, and a member with one server sees no fil
   await expect(member.getByLabel("State")).toBeHidden();
   await expect(member.getByRole("region", { name: "Needs attention" })).toHaveCount(0);
   await expect(member.getByRole("button", { name: "Refresh" })).toHaveCount(0);
-  // An administrator with more servers can filter them.
+  // Nor are a few servers worth filtering for an administrator.
   await admin.goto("/");
-  await expect(admin.getByPlaceholder("Find a server…")).toBeVisible();
+  await expect(admin.locator(".server-row").first()).toBeVisible();
+  await expect(admin.getByPlaceholder("Find a server…")).toBeHidden();
 });
 
 test("a new install lists what's left to set up, and does it in a click", async ({ session }) => {
@@ -92,8 +93,11 @@ test("a new install lists what's left to set up, and does it in a click", async 
     const address = webhook.getByLabel("Webhook URL");
     await address.fill(`http://127.0.0.1:${hooks.address().port}/hook`);
     // What is typed can be checked; what is saved is never shown.
-    await webhook.locator(".secret-field", { has: page.getByLabel("Webhook URL") }).getByRole("button", { name: "Show what you typed" }).click();
+    const reveal = webhook.locator(".secret-field", { has: page.getByLabel("Webhook URL") }).getByRole("button");
+    await expect(reveal).toHaveText("Show what you typed");
+    await reveal.click();
     await expect(address).toHaveAttribute("type", "text");
+    await expect(reveal).toHaveText("Hide what you typed");
     await webhook.getByLabel("Send alerts to the webhook").check();
     await webhook.getByRole("button", { name: "Save Webhook" }).click();
     await expect(webhook.locator("form .alert--success")).toHaveText("Webhook settings saved.");
