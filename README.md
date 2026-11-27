@@ -1,8 +1,5 @@
 # Ludock
 
-> **Beta:** expect bugs and changes. Keep your own backups of important game
-> data, and [report issues](https://github.com/Crunging/Ludock/issues).
-
 Ludock is a simple web panel for the Docker game servers you already run with
 Compose, Portainer, or the Docker CLI. It finds them by itself and knows games:
 who is online, saving before a stop, warning players before a restart, and

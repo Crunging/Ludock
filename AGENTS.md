@@ -43,10 +43,10 @@ htmx; the code is in `internal/`. `cmd/fakedocker` is an in-memory Docker
 Engine API for development and tests. Never point development or tests at a
 Docker daemon running real game servers.
 
-Version 1 in `internal/db/migrations.go` is the schema 1.0 ships with; until
-1.0 is tagged it may still change in place. After that, schema changes are new
-consecutive entries, a released entry is never edited, and data written by a
-released version must keep working. Beta data is refused, never migrated.
+Version 1 in `internal/db/migrations.go` is the schema 1.0 shipped with.
+Schema changes are new consecutive entries, a released entry is never edited,
+and data written by a released version must keep working. Beta data is
+refused, never migrated.
 `TestReadsDataWrittenBy10` in `internal/jobs` holds data a 1.0 install wrote;
 never regenerate its fixtures to make it pass.
 After editing `.templ` files, run `go tool templ generate -path
