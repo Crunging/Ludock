@@ -33,7 +33,8 @@ func TestFilesFollowGrants(t *testing.T) {
 		t.Fatal("hidden server named")
 	}
 	p.grant(viewer, authz.ServerView)
-	if page := p.do("GET", "/files/"+p.server, viewer, nil, nil).Body.String(); !strings.Contains(page, "You can’t open this server’s files.") {
+	if page := p.do("GET", "/files/"+p.server, viewer, nil, nil).Body.String(); !strings.Contains(page, "You can’t open this server’s files.") ||
+		strings.Contains(page, "Try again") {
 		t.Fatal(page)
 	}
 	operator := p.user("u-operator", "operator", db.RoleMember)

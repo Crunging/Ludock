@@ -74,9 +74,16 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   await rows.first().getByRole("link", { name: "Restore…" }).click();
   const restore = page.locator("form.danger-panel");
   await expect(restore).toContainText(`The data folder holds copies Ludock set aside earlier: ${aside}. They are replaced with everything else, and stay in the safety backup taken before the restore.`);
+  // Someone after one file is pointed to browsing this backup instead.
+  await expect(restore.getByRole("link", { name: "Browse this backup" })).toHaveAttribute("href", /tab=backups&browse=/);
   const submit = restore.getByRole("button", { name: "Restore game data" });
   await expect(submit).toBeDisabled();
-  await restore.getByLabel(`Type ${ownServer.name} to confirm`).fill(ownServer.name);
+  // A name typed differently says it must match.
+  const typed = restore.getByLabel(`Type ${ownServer.name} to confirm`);
+  await typed.fill(ownServer.name.toUpperCase());
+  await expect(restore.getByText("The name must match exactly, including capitals and spaces.")).toBeVisible();
+  await typed.fill(ownServer.name);
+  await expect(restore.getByText("The name must match exactly, including capitals and spaces.")).toBeHidden();
   await submit.click();
   await expect(page).toHaveURL(/\?tab=backups&operation=/);
   await expectOperationSucceeded(page);

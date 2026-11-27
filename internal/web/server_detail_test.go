@@ -154,7 +154,8 @@ func TestOperationLinkFallsBackToActivity(t *testing.T) {
 // The live header sends back the operation it showed and whether an undo
 // was blocked; once that work has ended or the undo's state changed, its
 // refresh tells paused tabs such as Backups to catch up, whatever operation
-// the page links to.
+// the page links to. While work runs, the header says why its controls are
+// greyed out.
 func TestLiveHeaderAnnouncesFinishedWork(t *testing.T) {
 	t.Parallel()
 	p := newDataPages(t)
@@ -184,6 +185,11 @@ func TestLiveHeaderAnnouncesFinishedWork(t *testing.T) {
 	p.app.DB.QueryRow("SELECT id FROM operations ORDER BY created_at DESC LIMIT 1").Scan(&running)
 	if trigger := live("tab=backups&active=" + running); trigger != "" {
 		t.Fatal("work still running:", trigger)
+	}
+	// Even on the page that shows the work's progress.
+	page := p.do("GET", "/servers/"+p.server+"?tab=backups&operation="+running, p.admin, nil, nil).Body.String()
+	if !strings.Contains(page, "Paused until the backup finishes.") {
+		t.Fatal(page)
 	}
 }
 

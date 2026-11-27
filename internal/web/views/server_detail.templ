@@ -240,6 +240,9 @@ templ DetailLive(d ServerDetail) {
 								<button type="button" class="secondary-btn" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/restart" } hx-target="#detail-status" data-busy-label="Working…" { LifecycleConfirm("restart", server.DisplayName, d.Row.CanBackup, d.Row.Warn, d.Row.Online)... }>Restart</button>
 							}
 						</div>
+						if operation := server.ActiveOperation; operation != nil {
+							<p class="detail-actions__reason muted" role="status">Paused until the { strings.ReplaceAll(operation.Kind, "_", " ") } finishes.</p>
+						}
 					}
 				</div>
 			}

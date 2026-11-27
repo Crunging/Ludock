@@ -855,7 +855,7 @@ func AddServers(v AddServersView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "<p class=\"muted add-servers__note\">Ludock itself, other tools that can control Docker or the host, Compose one-off containers, and containers labeled <code>ludock.enable: \"false\"</code> aren’t listed. Containers can also be added with a <code>ludock.enable: \"true\"</code> label where they are defined.</p></section>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "<p class=\"muted add-servers__note\">Not listed? <a class=\"text-link\" href=\"https://github.com/Crunging/Ludock/blob/main/docs/REFERENCE.md#which-containers-ludock-manages\" target=\"_blank\" rel=\"noreferrer\">See why</a></p></section>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

@@ -67,8 +67,15 @@ test("updating a server's image, then finding it current", async ({ page, ownSer
   await update(page, ownServer.name);
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeEnabled();
 
-  // The replacement is the same server, now running the pulled image.
-  await page.locator(".section-tabs").getByRole("link", { name: "Update" }).click();
+  // The replacement is the same server, now running the pulled image. Once
+  // it is current, the tab says so and folds the form away.
+  await checkNow(page, "This server is up to date.");
+  await expect(form.getByLabel("Back up first")).toBeHidden();
+  await page.getByText("Reinstall this version", { exact: true }).click();
+  const anyway = form.getByLabel("Update even if the image is already up to date");
+  await expect(anyway).toBeChecked();
+  // Unticked, the update finds nothing to do and offers to go ahead anyway.
+  await anyway.uncheck();
   await startUpdate(page, ownServer.name);
   await expect(page.locator("#selected-operation")).toContainText("Already up to date", { timeout: 45_000 });
   await page.getByRole("link", { name: "Update anyway" }).click();
@@ -151,7 +158,7 @@ test("finding a newer image, being told once, and updating to it", async ({ page
     await expect(serverRow(page, ownServer.name)).toBeVisible();
     await expect(page.getByRole("link", { name: "Update available" })).toHaveCount(0);
     await openServer(page, ownServer.name);
-    await checkNow(page, "This server runs the newest image its tag points to.");
+    await checkNow(page, "This server is up to date.");
     await expect(page.locator("#image-check .alert")).toHaveCount(0);
     // An update started in the panel shows its result there; only a failure
     // would be pushed.

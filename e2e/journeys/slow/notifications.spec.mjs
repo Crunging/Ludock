@@ -213,8 +213,10 @@ test("a failing webhook is called out until a delivery gets through, and then an
     await webhook.getByRole("button", { name: "Send test notification" }).click();
     await expect(webhook.locator(".notification-test-result")).toHaveText(`The test didn’t arrive. ${unavailable}`, { timeout: 30_000 });
     await expect(webhook.locator(":scope > summary")).toContainText("Failing");
+    // The card says alerts aren't getting through, and the test's result
+    // alone says why.
     await expect(webhook.locator(".notification-destination__health")).toContainText("Alerts aren’t reaching Webhook. Last tried");
-    await expect(webhook.locator(".notification-destination__health")).toContainText(unavailable);
+    await expect(webhook.locator(".notification-destination__health")).not.toContainText(unavailable);
 
     await page.goto("/");
     const attention = page.getByRole("region", { name: "Needs attention" });
@@ -237,7 +239,7 @@ test("a failing webhook is called out until a delivery gets through, and then an
     await page.getByRole("link", { name: "Check Webhook: Notifications, Alerts aren’t reaching Webhook" }).click();
     webhook = page.locator("#notification-webhook-card");
     await expect(webhook).toHaveAttribute("open", "");
-    await expect(webhook.locator(".notification-destination__health")).toContainText("Alerts aren’t reaching Webhook.");
+    await expect(webhook.locator(".notification-destination__health")).toContainText(`Alerts aren’t reaching Webhook. ${unavailable} Last tried`);
 
     // Recent deliveries reads each one back as sent.
     await openDeliveries(page);

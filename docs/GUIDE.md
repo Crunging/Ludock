@@ -139,15 +139,9 @@ To back up on a schedule, use **Back up every night** in
 Backups need nothing set up: the example `compose.yaml` mounts a
 `ludock-backups` volume at `/backups`, and Ludock turns storage on there by
 itself. **Settings → Backups** shows where backups go and how much space they
-use. Each server keeps the 3 newest backups plus the last of each of the 7
-most recent days, 4 weeks, and 6 months that have one; Ludock removes the rest
-after each new backup. Safety backups taken before a restore or update are
-counted apart: Ludock keeps the 3 newest of them, and they never take the
-place of your own backups. Only backups that can be restored count: one whose
-archive is gone from the backup folder or isn't the size it was saved at, with
-no second copy, stays listed as missing or damaged and takes no place, and while Ludock can't reach a backup's folder it
-removes none of the backups there. To keep one for good, choose **Keep…** from
-its menu. When the latest backup failed or was interrupted, the **Backups**
+use. Ludock keeps each server's recent backups and removes older ones by
+itself; [Backups](#backups) says which it keeps. To keep one for good, choose
+**Keep…** from its menu. When the latest backup failed or was interrupted, the **Backups**
 tab says so, with a link to what happened, until the next one succeeds.
 
 A server whose data isn't in a writable volume or bind mount can't be backed
@@ -210,21 +204,10 @@ Ludock** and confirm. Ludock downloads the new version and restarts on it
 while your game servers keep running; the page comes back by itself once it
 has, usually within a few minutes.
 
-If the new version doesn't start properly, Ludock puts the version you had
-back, with its data as it was just before the update. While it updates,
-Ludock refuses changes, such as to settings, accounts or schedules, so none is
-lost; someone who signs in meanwhile may need to sign in again. **Settings** and **Needs attention**
-then say why.
-
-When Ludock can't update itself in your setup, **Settings** says why, and
-shows two commands to run instead where running them now is safe. They
-assume a `compose.yaml` with the service named `ludock`; use your own service
-name, or your own tool, if yours differ. If an update is cut off partway,
-for example by a reboot, Ludock puts the version you had back by itself, with
-its data. If the new version keeps running under a temporary name,
-**Settings** says what is left and the command for it, and once nothing is
-left, which version runs. Details are in
-[Update Ludock](REFERENCE.md#update-ludock).
+If anything goes wrong, Ludock puts the version you had back by itself and
+**Settings** says what happened; if it can't update itself in your setup,
+**Settings** says why and what to run instead.
+[Update Ludock](REFERENCE.md#update-ludock) has the details.
 
 ### Restart a game that hangs
 
@@ -482,6 +465,13 @@ time limits are in the [reference](REFERENCE.md#limits).
   **Backups** tab says which.
   [Shared and nested mounts](REFERENCE.md#shared-and-nested-mounts) has the
   exact rule.
+- **Which are kept:** each server keeps the 3 newest backups plus the last of
+  each of the 7 most recent days, 4 weeks, and 6 months that have one, and any
+  you chose to keep; Ludock removes the rest after each new backup. Only
+  backups that can be restored count: one whose archive is gone from the
+  backup folder or isn't the size it was saved at, with no second copy, stays
+  listed as missing or damaged and takes no place. While Ludock can't reach a
+  backup's folder, it removes none of the backups there.
 - **Safety backups** taken before a restore or update are labeled in the
   list and counted apart: Ludock keeps the 3 newest of them, they never take
   the place of your own backups, and they are the first to go when space runs

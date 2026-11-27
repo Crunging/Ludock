@@ -74,10 +74,15 @@ test("a new install lists what's left to set up, and does it in a click", async 
     await expect(page).toHaveURL(/\/settings#notification-settings-title$/);
     const webhook = page.locator("#notification-webhook-card");
     await webhook.locator(":scope > summary").click();
-    await webhook.getByLabel("Webhook URL").fill(`http://127.0.0.1:${hooks.address().port}/hook`);
+    const address = webhook.getByLabel("Webhook URL");
+    await address.fill(`http://127.0.0.1:${hooks.address().port}/hook`);
+    // What is typed can be checked; what is saved is never shown.
+    await webhook.locator(".secret-field", { has: page.getByLabel("Webhook URL") }).getByRole("button", { name: "Show what you typed" }).click();
+    await expect(address).toHaveAttribute("type", "text");
     await webhook.getByLabel("Send alerts to the webhook").check();
     await webhook.getByRole("button", { name: "Save Webhook" }).click();
     await expect(webhook.locator("form .alert--success")).toHaveText("Webhook settings saved.");
+    await expect(address).toHaveValue("");
     await page.goto("/");
     await expect(checklist.locator("li strong")).toHaveText(["Back up your servers", "Restart servers that stop answering",
       "Check the address players use", "Add the servers Ludock didn’t find", "Protect your sign-in"]);

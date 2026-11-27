@@ -33,7 +33,9 @@ type FilesView struct {
 	Matched, Limit int
 	ListError      string
 	// Error replaces the browser when the server or access is unavailable.
-	Error        string
+	Error string
+	// Refused: Error is a refusal, which trying again can't change.
+	Refused      bool
 	CanManage    bool
 	Blocked      bool
 	MaxUpload    string
@@ -136,7 +138,12 @@ templ FilesPage(page Page, f FilesView) {
 			</div>
 			<div id="file-feedback" aria-live="polite"></div>
 			if f.Error != "" {
-				<div class="alert alert--error" role="alert"><span>{ f.Error }</span> <a class="text-link" href={ templ.SafeURL("/files/" + f.ServerID) }>Try again</a></div>
+				<div class="alert alert--error" role="alert">
+					<span>{ f.Error }</span>
+					if !f.Refused {
+						<a class="text-link" href={ templ.SafeURL("/files/" + f.ServerID) }>Try again</a>
+					}
+				</div>
 			} else if f.Root.ID == "" {
 				<div class="empty-state">
 					<h2 class="empty-state__title">No folders to show</h2>

@@ -57,6 +57,8 @@ test("adding a server Ludock doesn't recognize, from the server list", async ({ 
   for (const name of ["valheim-old", "portainer", "ludock-dev"]) {
     await expect(candidate(panel, name)).toHaveCount(0);
   }
+  // Why they aren't listed is one link away, not spelled out here.
+  await expect(panel.getByRole("link", { name: "See why" })).toHaveAttribute("href", /REFERENCE\.md#which-containers-ludock-manages$/);
 
   await satisfactory.getByRole("button", { name: "Add satisfactory" }).click();
   await expect(panel.getByRole("status")).toContainText("Added satisfactory.");
