@@ -503,8 +503,11 @@ Everything** records who updated Ludock and how it ended.
 If the new container doesn't start, stops, reports unhealthy (as an image
 older than Ludock's data does), or isn't healthy within 3 minutes, the helper
 removes it and starts the old container again. That Ludock puts the copy of
-its data back before it opens it, so the old version never meets data the
-new one changed; only a sign-in after the copy is undone.
+its data back before it opens it, so a version put back opens its data as it
+was just before the update; only a sign-in after the copy is undone. The one
+exception is the old container started by hand after the new version took
+over an update that stopped partway: it starts on the data as the new
+version left it, and says so in its log.
 **Settings** and **Needs attention** say why, until an administrator
 dismisses it.
 
@@ -566,14 +569,18 @@ while it ran. **Settings** then says what to run: a `docker rename` that
 gives it Ludock's name if the old container is gone, or else the two
 commands above with a `docker rm -f` of the new container between them,
 which start Ludock again under its own name on the new version. While Docker
-can't say which containers are left, it gives no command. Until what the
+can't say which containers are left, it gives no command. With a restart
+policy of `no`, a reboot before you run them starts neither container: start
+the new one with `docker start` and its temporary name, or run the commands. Until what the
 update left is gone, a new update isn't offered; then **Settings** says
 nothing is left to do and which version runs, until an administrator
 dismisses it. If Ludock was stopped by hand before it handed over to the
 helper, the two commands above start it on the new version with its data.
 
-Whichever Ludock records how the update ended gets back the restart policy
-Ludock had before it, and says so if Docker won't. The copy of the data from
+Whichever Ludock records how the update ended first sets the other
+container's restart policy to `no`, then gets back the one Ludock had before
+the update, so a reboot starts at most one of them, and with an owner's `no`,
+neither. If Docker won't, Settings says so. The copy of the data from
 before the update stays beside the database when an update didn't finish;
 the next update replaces it, and its confirmation says so.
 

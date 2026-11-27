@@ -718,7 +718,7 @@ templ attentionDetail(item attention.Item) {
 						case selfupdate.DataNotRestored:
 							<span>It couldn’t put the copy of its data from before the update back, so it runs on the newer data. The copy, { selfupdate.CopyName }, is beside its database.</span>
 					}
-					<span>Try again later. To see what goes wrong, update it from a terminal with <code>docker compose pull ludock</code> and <code>docker compose up -d ludock</code>, then read <code>docker compose logs ludock</code>.</span>
+					<span>Try again later. If it keeps failing, <a href="https://github.com/Crunging/Ludock/issues">report it</a>.</span>
 				}
 			</span>
 		case "operation":

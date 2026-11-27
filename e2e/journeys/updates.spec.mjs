@@ -336,6 +336,8 @@ test("finding a newer Ludock and updating it", async ({ page }) => {
     await page.goto("/");
     const item = page.locator(".needs-attention__list li", { hasText: "Ludock’s update didn’t finish" });
     await expect(item).toContainText("The new version reported itself unhealthy. Ludock is still on version dev.");
+    await expect(item).not.toContainText("from a terminal");
+    await expect(item.getByRole("link", { name: "report it" })).toHaveAttribute("href", "https://github.com/Crunging/Ludock/issues");
     await item.getByRole("link", { name: /^Open Settings/ }).click();
     // While a copy an earlier update left is there, the failure's own
     // commands are held back too.

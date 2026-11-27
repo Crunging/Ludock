@@ -218,6 +218,13 @@ func (s *Service) present(ctx context.Context, record *Record) {
 	} else if err == nil && operationOf(replacement) == record.ID {
 		record.Leftover = strings.TrimPrefix(replacement.Name, "/")
 	}
+	// Whether Ludock runs in the new container is which container this
+	// one is now, whatever was recorded: the original may run again.
+	if own, err := s.current(ctx); err == nil && own.ID == record.Container {
+		record.OnLeftover, record.OriginalGone = false, false
+	} else if err == nil && record.Leftover != "" && strings.TrimPrefix(own.Name, "/") == record.Leftover {
+		record.OnLeftover = true
+	}
 	// Removing the container this Ludock runs in is advised only while
 	// Docker shows the original, which may hold an anonymous data volume.
 	// Only Docker showing it gone counts; while it can't say, no command.
@@ -845,10 +852,9 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	succeeded := ownReplacement && own.Name == "/"+record.Name && docker.IsNotFound(gone)
 	// At most one of the two containers has a restart policy, so a reboot
 	// starts one Ludock. Whichever settles an update the helper didn't
-	// finish takes the one Ludock had as it began, the owner's even if
-	// "no", once the other has none; if that fails it takes none.
-	// While Docker can't say whether the other is there, it takes none; the
-	// owner's "no" it takes at once, as that enables nothing.
+	// finish first takes the other's away, whatever its own will be, then
+	// takes the one Ludock had as it began. While Docker can't say whether
+	// the other is there, it takes only an owner's "no", and says so.
 	if (original || ownReplacement && (!succeeded || renamed)) && len(record.Policy) > 0 {
 		var policy struct{ Name string }
 		json.Unmarshal(record.Policy, &policy)
@@ -859,10 +865,11 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 			other = record.Container
 		}
 		unknown := ownReplacement && gone != nil && !docker.IsNotFound(gone) || original && !known
-		if policy.Name != "no" && (unknown || other != "" && s.Docker.SetRestartPolicy(call(), other, noRestart) != nil) ||
-			s.Docker.SetRestartPolicy(call(), own.ID, record.Policy) != nil {
-			record.NoPolicy = true
+		cleared := !unknown && (other == "" || s.Docker.SetRestartPolicy(call(), other, noRestart) == nil)
+		if cleared || policy.Name == "no" {
+			cleared = s.Docker.SetRestartPolicy(call(), own.ID, record.Policy) == nil && cleared
 		}
+		record.NoPolicy = !cleared
 	}
 	// How a put-back left the data.
 	data := func() {

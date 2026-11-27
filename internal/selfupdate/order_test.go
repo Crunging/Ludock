@@ -571,7 +571,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 					g.mu.Unlock()
 				}
 			}
-		}, reboot: true, policy: "no", image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored,
+		}, reboot: true, policy: "no", noPolicy: true, image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored,
 			reason: "the update was cut off, for example by a restart, before the new version was accepted", probe: "before",
 			then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
 				var policy struct{ Name string }
@@ -601,6 +601,40 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 		}, trace: join(swap, []string{"policy old", "policy new", "remove old", "rename new", "rename new", "policy new", "remove helper"}), image: newImage,
 			state: selfupdate.StateSucceeded, probe: "after"},
+		{name: "the owner's policy no, the helper killed during the health check, then a reboot, which starts nothing", arrange: func(g *rig) {
+			g.engine.Update(g.old, func(c *fakedocker.Container) {
+				c.HostConfig["RestartPolicy"] = map[string]any{"Name": "no", "MaximumRetryCount": 0}
+			})
+			g.onStart = func(c *fakedocker.Container) {
+				if isNew(c) {
+					health(g, c, "starting")
+					g.killHelper()
+				}
+			}
+		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
+			g.reboot()
+			if g.engine.Container(g.old).State.Running || g.engine.Container(running.ID).State.Running {
+				t.Fatal("a reboot started a Ludock whose owner gave it no restart policy")
+			}
+			// The owner starts the new one, which comes up on its own data.
+			g.client.Start(ctx, running.ID)
+			var probe string
+			if started := g.process(running.ID); started == nil {
+				t.Fatal("the new version didn't start")
+			} else if started.d.Setting(ctx, "probe", &probe); probe != "after" {
+				t.Errorf("the new version runs on %q", probe)
+			}
+			// Started by hand once that one stopped, the old one runs on the
+			// data as it is, and Settings says this Ludock is the old one.
+			g.client.Stop(ctx, running.ID, nil)
+			g.client.Start(ctx, g.old)
+			if old := g.process(g.old); old == nil {
+				t.Error("the old version didn't start once the new one stopped")
+			} else if failed := old.svc.Failed(ctx); failed == nil || failed.OnLeftover || failed.Leftover != strings.TrimPrefix(running.Name, "/") {
+				t.Errorf("the old version's Settings shows %+v", failed)
+			}
+		}, image: newImage, settler: "ludock-ludock-update-", policy: "no", reboot: true,
+			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
 		{name: "a put-back without the data copy keeps the newer data, and says so", arrange: func(g *rig) {
 			g.fail["start new"] = 500
 			g.at["stop new"] = func() { os.Remove(filepath.Join(g.dataDir, selfupdate.CopyName)) }
@@ -947,6 +981,19 @@ func (g *rig) reboot() {
 			g.client.Start(ctx, id)
 		}
 	}
+}
+
+// process waits for the Ludock of container to start, or nil.
+func (g *rig) process(container string) *process {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		g.mu.Lock()
+		p := g.processes[container]
+		g.mu.Unlock()
+		if p != nil {
+			return p
+		}
+	}
+	return nil
 }
 
 // restartOld ends the original's Ludock as a crash would, so nothing it does

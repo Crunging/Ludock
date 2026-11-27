@@ -14,6 +14,7 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
+	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -46,6 +47,8 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 		if spec, err := client.InspectSpec(ctx, record.Leftover); !docker.IsNotFound(err) && (err != nil || spec.State.Running || spec.State.Restarting) {
 			return "", errBeside
 		}
+		log.Warn("Ludock's last update stopped partway with Ludock running in its new container, which has stopped. This is the old container: it starts on the data as the new version left it, and Settings says what is left.",
+			logging.F("newContainer", record.Leftover))
 		return "", nil
 	}
 	if record.State != StateUpdating {

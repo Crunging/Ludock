@@ -2488,7 +2488,7 @@ func attentionDetail(item attention.Item) templ.Component {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 185, " <span>Try again later. To see what goes wrong, update it from a terminal with <code>docker compose pull ludock</code> and <code>docker compose up -d ludock</code>, then read <code>docker compose logs ludock</code>.</span>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 185, " <span>Try again later. If it keeps failing, <a href=\"https://github.com/Crunging/Ludock/issues\">report it</a>.</span>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
