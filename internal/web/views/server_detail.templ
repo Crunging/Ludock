@@ -576,8 +576,11 @@ templ overviewDetails(d ServerDetail) {
 						None published
 					}
 				</dd>
-				<dt>Container</dt>
-				<dd><code>{ server.Name }</code></dd>
+				<dt>Name</dt>
+				<dd>
+					To call it something else, add a <code>ludock.name</code> label where it is defined and recreate it.
+					<small class="muted">Container <code>{ server.Name }</code></small>
+				</dd>
 				if server.Image != "" {
 					<dt>Image</dt>
 					<dd><code>{ server.Image }</code></dd>

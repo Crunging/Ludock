@@ -419,6 +419,19 @@ func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job 
 	return j.saveFinal(ctx, job, restoreRecovery{Status: "cleaned"}, finish)
 }
 
+// ConfirmedInput records that the page checked a name typed to confirm the
+// work against the name it showed. The work is pinned to that server's
+// binding, so a name changed since, as when another server comes to share
+// it, still confirms it.
+const ConfirmedInput = "confirmedByName"
+
+// confirmedByName reports whether input confirms work on server by its name.
+// Work queued by 1.0 holds only what was typed, which then was the container
+// name unless a label named the server.
+func confirmedByName(input map[string]any, typed string, server *servers.Context) bool {
+	return input[ConfirmedInput] == true || typed != "" && (typed == server.Container.DisplayName || typed == server.Container.Name)
+}
+
 // MovedInput confirms restoring a backup taken when the server's data lived
 // elsewhere on the host.
 const MovedInput = "dataMoved"
@@ -485,7 +498,7 @@ func (j *Jobs) planRestore(ctx context.Context, job *ops.Context) (*restoreRun, 
 	item, _ := text(job.Job.Input["item"])
 	rootID, _ := text(job.Job.Input["root"])
 	whole := rootID == "" && item == ""
-	if confirmation, _ := text(job.Job.Input["confirmation"]); whole && confirmation != server.Container.DisplayName {
+	if confirmation, _ := text(job.Job.Input["confirmation"]); whole && !confirmedByName(job.Job.Input, confirmation, server) {
 		return nil, fail("RESTORE_CONFIRMATION", "Type the server's display name to confirm this restore.")
 	}
 	backupID, _ := text(job.Job.Input["backupId"])

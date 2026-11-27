@@ -537,6 +537,7 @@ func (s *Service) verify(ctx context.Context, id string, expectedRevision int64,
 	if _, err := s.Identity.AssertObservedBinding(ctx, id, observed.Observation, logical.BindingRevision); err != nil {
 		return nil, err
 	}
+	observed.Rename(logical.DisplayName)
 	return &Context{Logical: logical, Container: observed.Container, Observation: observed.Observation,
 		LockKeys: LockKeys(id, observed.Observation)}, nil
 }
@@ -585,6 +586,7 @@ func (s *Service) Observe(ctx context.Context, server identity.Server) (observed
 	if _, err := s.Identity.AssertObservedBinding(ctx, server.ID, observed.Observation, server.BindingRevision); err != nil {
 		return nil, nil, err
 	}
+	observed.Rename(server.DisplayName)
 	return observed, func() error {
 		_, err := s.Identity.ResolveBinding(ctx, server.ID, server.BindingRevision)
 		return err

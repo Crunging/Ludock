@@ -495,16 +495,48 @@ templ RestoreForm(b BackupsView) {
 			</label>
 			<p class="muted check-help">{ option.Help }</p>
 		}
-		<label>
-			<span>Type <strong>{ b.ServerName }</strong> to confirm</span>
-			<input name="confirmation" autocomplete="off" required data-confirm-value={ b.ServerName }/>
-		</label>
+		@RestoreConfirmation(b.ServerName)
 		<div id="restore-status" aria-live="polite"></div>
 		<div class="inline-actions">
 			<button class="secondary-btn secondary-btn--danger" type="submit" data-busy-label="Working…">Restore game data</button>
 			<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups") } { inPage()... }>Cancel</a>
 		</div>
 	</form>
+}
+
+// shownName is the name a confirmation asked for, which tells a name typed
+// wrong from one the server lost after the page showed it.
+templ shownName(name string) {
+	<input type="hidden" name="shownName" value={ name }/>
+}
+
+templ RestoreConfirmation(name string) {
+	<label id="restore-confirmation">
+		<span>Type <strong>{ name }</strong> to confirm</span>
+		<input name="confirmation" autocomplete="off" required data-confirm-value={ name }/>
+		@shownName(name)
+	</label>
+}
+
+templ SkipBackupConfirmation(name string, noData, hidden bool) {
+	<label id="skip-backup-confirmation" data-hidden-by="update-backup" hidden?={ hidden }>
+		if noData {
+			<span>Type <strong>{ name }</strong> to update without a backup</span>
+		} else {
+			<span>Type <strong>{ name }</strong> to skip the backup</span>
+		}
+		<input name="skipBackupConfirmation" autocomplete="off"/>
+		@shownName(name)
+	</label>
+}
+
+// Renamed asks again for a name typed to confirm, which the page showed
+// before discovery renamed the server, with field asking for the new one.
+templ Renamed(name, target string, field templ.Component) {
+	@Alert("error", "This server is now called "+name+". Type its new name to confirm.")
+	@Partial(target, "outerHTML") {
+		@field
+	}
 }
 
 // BackupBrowser is one folder of a backup, for administrators.
@@ -973,14 +1005,7 @@ templ UpdateForm(u UpdateView) {
 			</label>
 			<p class="muted check-help">{ option.Help }</p>
 		}
-		<label data-hidden-by="update-backup" hidden?={ u.CanBackup }>
-			if u.NoData {
-				<span>Type <strong>{ u.ServerName }</strong> to update without a backup</span>
-			} else {
-				<span>Type <strong>{ u.ServerName }</strong> to skip the backup</span>
-			}
-			<input name="skipBackupConfirmation" autocomplete="off"/>
-		</label>
+		@SkipBackupConfirmation(u.ServerName, u.NoData, u.CanBackup)
 		<details class="disclosure" open?={ u.Recreate }>
 			<summary>Advanced</summary>
 			<div class="stack-form">

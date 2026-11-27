@@ -85,6 +85,16 @@ func seed(engine *fakedocker.Engine, dir, self, backups, data string, demo bool)
 			// Like Survival, its name in Ludock isn't its container's. A tag
 			// of its own keeps its image updates apart from Survival's.
 			minecraftServer(engine, dir, name, "itzg/minecraft-server:"+name, map[string]string{"ludock.name": "Realm " + name}, nil, nil)
+		case "minecraft-compose":
+			// Named as Compose names a service's first container,
+			// <project>-<service>-1, with Compose's labels and no name of its own.
+			project, rest, _ := strings.Cut(name, "-")
+			service, number, found := cutLast(rest, "-")
+			if !found || service == "" {
+				return false
+			}
+			minecraftServer(engine, dir, name, "itzg/minecraft-server:"+name, map[string]string{"com.docker.compose.project": project,
+				"com.docker.compose.service": service, "com.docker.compose.container-number": number}, nil, nil)
 		default:
 			return false
 		}
@@ -350,4 +360,12 @@ func seedDemo(engine *fakedocker.Engine, dir string) {
 	_, valheim := server("valheim", "Valheim co-op", "lloesche/valheim-server", "2456/udp", true, 27*time.Hour)
 	touchDirs(valheim, ago(4*time.Hour), "config", "worlds_local")
 	write(valheim, "config/adminlist.txt", "// Steam IDs of admins\n", ago(6*24*time.Hour))
+}
+
+func cutLast(value, separator string) (string, string, bool) {
+	index := strings.LastIndex(value, separator)
+	if index < 0 {
+		return value, "", false
+	}
+	return value[:index], value[index+len(separator):], true
 }

@@ -22,6 +22,9 @@ test("the overview leads with what a server is doing and who is on, with Docker'
   await expect(details).toContainText("25565/tcp");
   await expect(details).toContainText("100% is one core.");
   await expect(details).toContainText("Health check");
+  // How to call it something else, and the container it is, for finding it.
+  await expect(details).toContainText("To call it something else, add a ludock.name label where it is defined and recreate it.");
+  await expect(details).toContainText("Container minecraft");
   const refreshed = page.waitForResponse(/\/fragments\/servers\/[^/]+\/overview$/);
   await page.evaluate(() => document.body.dispatchEvent(new Event("availability-changed")));
   await refreshed;

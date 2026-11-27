@@ -507,7 +507,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if err := job.Progress("validating", nil, nil); err != nil {
 		return nil, err
 	}
-	if !request.CreateBackup && request.SkipBackupConfirmation != server.Container.DisplayName {
+	if !request.CreateBackup && !confirmedByName(job.Job.Input, request.SkipBackupConfirmation, server) {
 		return nil, apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping the backup")
 	}
 	if request.CreateBackup {

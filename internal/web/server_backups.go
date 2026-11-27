@@ -334,11 +334,15 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 	// the confirmation dialog, which can ask for a backup first.
 	if input == nil {
 		confirmation := r.PostFormValue("confirmation")
-		if confirmation != resolved.Container.DisplayName {
+		if name := resolved.Container.DisplayName; confirmation != name {
+			if renamed(r, confirmation, name) {
+				render(w, r, http.StatusBadRequest, views.Renamed(name, "#restore-confirmation", views.RestoreConfirmation(name)))
+				return
+			}
 			s.fail(w, r, request, apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm the restore"))
 			return
 		}
-		input = map[string]any{"confirmation": confirmation}
+		input = map[string]any{"confirmation": confirmation, jobs.ConfirmedInput: true}
 	} else if r.PostFormValue("createBackup") == "true" {
 		input["createBackup"] = true
 	}
@@ -350,6 +354,13 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 		input[jobs.MovedInput] = true
 	}
 	s.enqueue(w, r, request, resolved, user, ops.KindRestore, input)
+}
+
+// renamed reports a confirmation typed as the page asked, under a name the
+// server has lost since.
+func renamed(r *http.Request, typed, name string) bool {
+	shown := r.PostFormValue("shownName")
+	return isHTMX(r) && typed != "" && typed == shown && shown != name
 }
 
 func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request, request *Request) {
@@ -573,7 +584,12 @@ func (s *Server) queueUpdate(w http.ResponseWriter, r *http.Request, request *Re
 		s.fail(w, r, request, err)
 		return
 	}
-	if !createBackup && skip != resolved.Container.DisplayName {
+	if name := resolved.Container.DisplayName; !createBackup && skip != name {
+		if renamed(r, skip, name) {
+			noData := len(resolved.Container.FileRoots) == 0
+			render(w, r, http.StatusBadRequest, views.Renamed(name, "#skip-backup-confirmation", views.SkipBackupConfirmation(name, noData, false)))
+			return
+		}
 		s.fail(w, r, request, apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping backup"))
 		return
 	}
@@ -600,10 +616,11 @@ func (s *Server) queueUpdate(w http.ResponseWriter, r *http.Request, request *Re
 	}
 	s.audit(r, request, "server.update.confirmed", id, map[string]any{"createBackup": createBackup, "forceRecreate": forceRecreate})
 	updateRequest := map[string]any{"createBackup": createBackup, "forceRecreate": forceRecreate}
+	input := map[string]any{"request": updateRequest}
 	if !createBackup {
 		updateRequest["skipBackupConfirmation"] = skip
+		input[jobs.ConfirmedInput] = true
 	}
-	input := map[string]any{"request": updateRequest}
 	// Unlike a restart, an update asked to warn keeps that through an empty
 	// server: it stops later, after the download.
 	if r.PostFormValue(jobs.WarnInput) == "true" && warnOffer(resolved.Container) {

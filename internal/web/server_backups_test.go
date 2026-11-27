@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"database/sql"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -73,13 +74,21 @@ func TestRestoreChecksConfirmationAndBackup(t *testing.T) {
 	if response := restore(p.admin, "11111111-1111-4111-8111-111111111111", "Valheim"); response.StatusCode != http.StatusBadRequest {
 		t.Fatal("confirmation", response.StatusCode)
 	}
+	// A form opened before the server was renamed asks again for its new name.
+	stale := p.action("/servers/"+p.server+"/restores", p.admin, url.Values{"backupId": {"11111111-1111-4111-8111-111111111111"},
+		"confirmation": {"minecraft"}, "shownName": {"minecraft"}})
+	if body, _ := io.ReadAll(stale.Body); stale.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "This server is now called valheim.") ||
+		!strings.Contains(string(body), `data-confirm-value="valheim"`) {
+		t.Fatal("renamed", stale.StatusCode, string(body))
+	}
 	if response := restore(p.admin, "22222222-2222-4222-8222-222222222222", "valheim"); response.StatusCode != http.StatusConflict {
 		t.Fatal("missing", response.StatusCode)
 	}
 	if response := restore(p.admin, "11111111-1111-4111-8111-111111111111", "valheim"); response.StatusCode != http.StatusOK {
 		t.Fatal("restore", response.StatusCode)
 	}
-	if kind, input := p.queued(t); kind != "restore" || !strings.Contains(input, `"backupId":"11111111-1111-4111-8111-111111111111"`) {
+	if kind, input := p.queued(t); kind != "restore" || !strings.Contains(input, `"backupId":"11111111-1111-4111-8111-111111111111"`) ||
+		!strings.Contains(input, `"confirmedByName":true`) {
 		t.Fatal(kind, input)
 	}
 	// The form isn't offered while the restore is queued, and is once it ends.

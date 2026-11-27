@@ -165,6 +165,8 @@ func IsRunning(info *docker.ContainerInspect) bool {
 type Observed struct {
 	Container   Container
 	Observation identity.Observation
+	// byService: it is called by the Compose service that made it.
+	byService bool
 }
 
 func validContainerID(id string) (string, error) {
@@ -430,6 +432,7 @@ func (o *Observer) List(ctx context.Context) ([]Observed, error) {
 			observed = append(observed, *result)
 		}
 	}
+	nameApart(observed)
 	return observed, nil
 }
 
@@ -511,6 +514,66 @@ func (o *Observer) Inspect(ctx context.Context, id string) (*Observed, *docker.C
 	return observed, inspected, err
 }
 
+// serviceName is what a server Compose made and no label names is called:
+// its service, and the number of any replica after the first.
+func serviceName(labels map[string]string) (name string, ok bool) {
+	if labels[games.LabelName] != "" {
+		return "", false
+	}
+	_, service, number, ok := games.ComposeLabels(labels)
+	if !ok || service == "" {
+		return "", false
+	}
+	if number != "" && number != "1" {
+		return service + " " + number, true
+	}
+	return service, true
+}
+
+// nameApart tells apart servers a listing would call the same. A server named
+// by its Compose service adds its project where another server shares that
+// service's name, and its container name where even that is not unique. A
+// direct inspection can't see the others, so work on a saved server uses the
+// name discovery saved.
+func nameApart(servers []Observed) {
+	owners := map[string]map[string]bool{}
+	add := func(name, owner string) {
+		if owners[name] == nil {
+			owners[name] = map[string]bool{}
+		}
+		owners[name][owner] = true
+	}
+	for _, server := range servers {
+		if compose := server.Observation.Compose; server.byService {
+			// A service's replicas count as one.
+			add(compose.Service, "compose:"+compose.Project+"\x00"+compose.Service)
+		} else {
+			add(server.Container.DisplayName, "id:"+server.Container.ID)
+		}
+	}
+	for i := range servers {
+		if compose := servers[i].Observation.Compose; servers[i].byService && len(owners[compose.Service]) > 1 {
+			servers[i].Rename(servers[i].Container.DisplayName + " (" + compose.Project + ")")
+		}
+	}
+	called := map[string]int{}
+	for _, server := range servers {
+		called[server.Container.DisplayName]++
+	}
+	for i := range servers {
+		if servers[i].byService && called[servers[i].Container.DisplayName] > 1 {
+			servers[i].Rename(servers[i].Container.Name)
+		}
+	}
+}
+
+// Rename calls it by name, such as the one discovery saved for its server.
+func (o *Observed) Rename(name string) {
+	if name != "" {
+		o.Container.DisplayName, o.Observation.DisplayName = name, name
+	}
+}
+
 func observe(info *docker.ContainerInspect, choices map[string]identity.Choice, own self.Info) (*Observed, *docker.ContainerInspect, error) {
 	info, source := applyChoice(info, choices)
 	if err := assertEligible(info); err != nil {
@@ -520,8 +583,12 @@ func observe(info *docker.ContainerInspect, choices map[string]identity.Choice, 
 	if err != nil {
 		return nil, nil, err
 	}
+	name, byService := serviceName(info.Config.Labels)
+	if byService {
+		container.DisplayName = name
+	}
 	container.Source, container.ControlsHost = source, inspectCandidate(info).controlsHost()
-	return &Observed{Container: *container, Observation: toObservation(info, container)}, info, nil
+	return &Observed{Container: *container, Observation: toObservation(info, container), byService: byService}, info, nil
 }
 
 // Docker keeps the last check result after a container stops; only a

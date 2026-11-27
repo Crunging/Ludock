@@ -170,7 +170,7 @@ services:
 | Label | Purpose |
 | --- | --- |
 | `ludock.enable` | `"true"` adds the container, even one that can control the host; `"false"` leaves it out, whatever the panel says |
-| `ludock.name` | Display name; defaults to the container name |
+| `ludock.name` | Display name. Without it, a server Compose made is called by its service, such as `minecraft`, with its replica number after the first (`minecraft 2`) and its project added where another server would have the same name (`minecraft (survival)`); any other is called by its container name |
 | `ludock.game` | The game: its `ludock.game` value under [Supported games](#supported-games), or its name there, in any case. Any other value is shown as typed |
 | `ludock.address` | Exactly what players type to connect, such as `mc.example.com`, `play.example.com:30000`, or `[2001:db8::1]:2456` |
 | `ludock.console` | `minecraft-rcon`, `source-rcon`, `rust-webrcon`, `telnet-console`, or `stdin-console`; `disabled` or `none` turns commands off |

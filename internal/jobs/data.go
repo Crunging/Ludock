@@ -221,6 +221,7 @@ func (j *Jobs) current(ctx context.Context, server *servers.Context) (*servers.C
 	if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observed.Observation, server.Logical.BindingRevision); err != nil {
 		return nil, err
 	}
+	observed.Rename(server.Container.DisplayName)
 	current := *server
 	current.Container, current.Observation = observed.Container, observed.Observation
 	return &current, nil
@@ -458,7 +459,7 @@ func (j *Jobs) keepStopped(ctx context.Context, server *servers.Context, job *op
 		return err
 	}
 	j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, true))
-	j.notify(alert, "operation:"+job.Job.ID, observed.Container.DisplayName+": "+reason)
+	j.notify(alert, "operation:"+job.Job.ID, server.Container.DisplayName+": "+reason)
 	return nil
 }
 
@@ -515,6 +516,7 @@ func (j *Jobs) recoveryContext(ctx context.Context, job *ops.Context) (*servers.
 	if err != nil {
 		return nil, err
 	}
+	observed.Rename(logical.DisplayName)
 	return &servers.Context{Logical: logical, Container: observed.Container, Observation: observed.Observation,
 		LockKeys: servers.LockKeys(logical.ID, observed.Observation)}, nil
 }

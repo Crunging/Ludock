@@ -56,6 +56,16 @@ export const test = base.extend({
       await server.remove();
     }
   },
+  // composeServer is an ownServer that Compose made, with no name of its
+  // own, as most are.
+  composeServer: async ({}, use) => {
+    const server = await addServer({ compose: true });
+    try {
+      await use(server);
+    } finally {
+      await server.remove();
+    }
+  },
   // otherServer is a second server like ownServer, so a journey can let two
   // servers' timers run side by side instead of one after another.
   otherServer: async ({}, use) => {
@@ -210,9 +220,11 @@ export async function withGame(page, game, run) {
  * remove(), which takes it out of Ludock and then Docker, so nothing waits on
  * it as missing. A journey that renames it sets its container and id.
  */
-export async function addServer() {
-  const container = "mc-" + randomBytes(4).toString("hex");
-  const name = "Realm " + container;
+export async function addServer({ compose = false } = {}) {
+  const hex = randomBytes(4).toString("hex");
+  // A Compose server is called by its service, not its container.
+  const container = compose ? `worlds-mc-${hex}-1` : "mc-" + hex;
+  const name = compose ? "mc-" + hex : "Realm " + container;
   const data = join(process.env.LUDOCK_E2E_DIR, "docker", "data", container);
   const api = await playwrightRequest.newContext({ baseURL: process.env.LUDOCK_E2E_URL, storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
   const server = { name, container, image: "itzg/minecraft-server:" + container, id: undefined, data };
@@ -235,7 +247,7 @@ export async function addServer() {
     }
   };
   try {
-    await fake("/fake/game", { game: "minecraft", name: container });
+    await fake("/fake/game", { game: compose ? "minecraft-compose" : "minecraft", name: container });
     // Ludock finds it from Docker's events, shortly after.
     await expect.poll(async () => {
       const page = await (await api.get("/")).text();
