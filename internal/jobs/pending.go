@@ -200,6 +200,11 @@ func asideNote(restore *ops.Context) string {
 	return "Anything Ludock moved out of the way of the server’s previous data went to the folder " + helper.SetAsideName(restore.Job.ID) + " in its data."
 }
 
+// asideNextNote is asideNote before an undo has run.
+func asideNextNote(restore *ops.Context) string {
+	return "Undoing it moves anything in the way of the server’s previous data to the folder " + helper.SetAsideName(restore.Job.ID) + " in its data."
+}
+
 // sayEnded has a failed attempt at a restore whose live data had moved say
 // where the data is, on the restore and on the work that tried.
 func (j *Jobs) sayEnded(job, restore *ops.Context, state *restoreRecovery, moved bool) {

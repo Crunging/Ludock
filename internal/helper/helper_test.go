@@ -1238,7 +1238,7 @@ func TestRestoreItemWithoutNoReplace(t *testing.T) {
 		live, staged, kept string
 	}{
 		{name: "restore", steps: []string{RestoreMoveOld, RestoreMoveNew}, live: "backup", staged: "current"},
-		{name: "restore, something in the way", steps: []string{RestoreMoveOld, RestoreMoveNew}, inWay: "game made", code: 1, live: "game made", staged: "current"},
+		{name: "restore, something in the way", steps: []string{RestoreMoveOld, RestoreMoveNew}, inWay: "game made", code: RestoreNameTaken, live: "game made", staged: "current"},
 		{name: "undo", steps: []string{RestoreMoveOld, RestoreRollbackOld}, live: "current"},
 		{name: "undo, something in the way", steps: []string{RestoreMoveOld, RestoreRollbackOld}, inWay: "game made", live: "current", kept: "game made"},
 	} {

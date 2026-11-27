@@ -161,6 +161,8 @@ type restoreScenario struct {
 	kept     bool
 	// down: the data isn't safe, so the server stays stopped.
 	down bool
+	// err, when set, is the job's error.
+	err string
 }
 
 type afterHook = func(*fakedocker.Container, string, string, int) int
@@ -323,6 +325,16 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 				"cleanup world: rolling_back rolled_back,staging unsafe"})},
 		{name: "first move in fails", after: failedAt(helper.RestoreMoveNew, "world"), status: ops.Failed, journal: "rolled_back put back", kept: true,
 			trace: slices.Concat(worldSwapped, worldRolledBack)},
+		// Another program writes into the emptied world folder at a name the
+		// backup's data needs: the restore says so, and is undone.
+		{name: "name taken before the move in", status: ops.Failed, journal: "rolled_back put back", kept: true, guidance: restoreUndone,
+			err: backups.ErrRestoreNameTaken.Message, trace: slices.Concat(worldSwapped, worldRolledBack),
+			after: func(t *testing.T, f *fixture) afterHook {
+				return once(helper.RestoreMoveOld, "world", func(_ *fakedocker.Container, code int) int {
+					os.WriteFile(filepath.Join(f.data, "world", "large.dat"), []byte("written meanwhile"), 0o644)
+					return code
+				})
+			}},
 		// Something makes a file in the emptied world folder during the
 		// rollback, which sets it aside, but the rollback's result is lost.
 		{name: "rollback's result lost", status: ops.Failed, journal: "rolling_back rolling_back,staging unsafe", left: true, kept: true, down: true,
@@ -483,6 +495,9 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 				restored != scenario.restored || left != scenario.left {
 				t.Errorf("%s, %q, journal %q, restored %v, stage left %v", job.Status, job.Error, journal, restored, left)
 			}
+			if scenario.err != "" && job.Error != scenario.err {
+				t.Errorf("error %q", job.Error)
+			}
 			// A whole restore gives each root the backup's permissions as it
 			// commits, and every folder its setgid and sticky bits, but never
 			// sets setuid or a file's setgid; one that didn't restore, or
@@ -514,6 +529,18 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 			if guidance := job.Result.Guidance; !strings.HasPrefix(guidance, scenario.guidance) ||
 				strings.Contains(guidance, helper.SetAsideName(job.ID)) != scenario.kept {
 				t.Errorf("guidance %q", guidance)
+			}
+			// It says things went to the set-aside folder only once an undo has
+			// run, and before that what undoing will do.
+			if scenario.kept {
+				status, phases, _ := strings.Cut(scenario.journal, " ")
+				note := asideNextNote(&ops.Context{Job: job})
+				if status == "rolled_back" || strings.Contains(phases, "rolling_back") || strings.Contains(phases, "rolled_back") {
+					note = asideNote(&ops.Context{Job: job})
+				}
+				if !strings.Contains(job.Result.Guidance, note) {
+					t.Errorf("guidance %q, want %q", job.Result.Guidance, note)
+				}
 			}
 			if got := sortedExtracts(trace.lines()); !slices.Equal(got, scenario.trace) {
 				t.Errorf("trace:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(scenario.trace, "\n"))
@@ -753,8 +780,9 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 		checkFails, checkCut bool
 		// finalFails: the final journal's write fails; helperFails: no
 		// helper can start once the server stops; cutAfterFinal: startup is
-		// cut right after its final journal and runs again.
-		finalFails, helperFails, cutAfterFinal bool
+		// cut right after its final journal and runs again; notYet: the undo
+		// failed before it saved that it set anything aside.
+		finalFails, helperFails, cutAfterFinal, notYet bool
 		// recovered: the server stays stopped and startup recovers the cut
 		// restore, with no undo.
 		recovered bool
@@ -883,7 +911,7 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				relocate(t, filepath.Join(f.data, "world"), filepath.Join(stage, "old", "world"))
 				relocate(t, filepath.Join(f.data, "server.properties"), filepath.Join(stage, "old", "server.properties"))
 				os.MkdirAll(filepath.Join(stage, "new"), 0o700)
-			}, lostStep: helper.RestoreSetAside, guidance: "stopped partway"},
+			}, lostStep: helper.RestoreSetAside, guidance: "stopped partway", notYet: true},
 		// The return happens, but its helper is removed before Ludock hears:
 		// Activity doesn't claim the previous data is out of place.
 		{name: "return's helper lost", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "moving_old"}}},
@@ -1072,7 +1100,7 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				f.engine.AddFault(`^POST .*/containers/create`, 500, false, 0)
 				undo := f.run(t, ops.KindUndoRestore, nil)
 				restore, _ := f.runner.Get(ctx, job.ID)
-				if undo.Status != ops.Failed || !strings.Contains(restore.Result.Guidance, asideNote(&ops.Context{Job: restore})) ||
+				if undo.Status != ops.Failed || !strings.Contains(restore.Result.Guidance, asideNextNote(&ops.Context{Job: restore})) ||
 					!strings.Contains(undo.Result.UndoNote, restore.Result.Guidance) {
 					t.Errorf("%s %q, Activity says %q, the undo %q", undo.Status, undo.Error, restore.Result.Guidance, undo.Result.UndoNote)
 				}
@@ -1104,10 +1132,14 @@ func TestUndoAfterInterruptedMove(t *testing.T) {
 				}
 				undo := f.run(t, ops.KindUndoRestore, nil)
 				restore, _ := f.runner.Get(ctx, job.ID)
-				// It names the folder, and claims nothing about the stage folder
-				// it can't know.
+				// It names the folder, as where the undo moved things only once it
+				// had, and claims nothing about the stage folder it can't know.
+				note := asideNote(&ops.Context{Job: restore})
+				if c.notYet {
+					note = asideNextNote(&ops.Context{Job: restore})
+				}
 				if guidance := restore.Result.Guidance; undo.Status != ops.Failed || !strings.Contains(guidance, c.guidance) ||
-					!strings.Contains(guidance, asideNote(&ops.Context{Job: restore})) || strings.Contains(guidance, "still in") ||
+					!strings.Contains(guidance, note) || strings.Contains(guidance, "still in") ||
 					// The work that failed says the same.
 					!strings.Contains(undo.Result.UndoNote, guidance) {
 					t.Errorf("%s %q, Activity says %q", undo.Status, undo.Error, guidance)

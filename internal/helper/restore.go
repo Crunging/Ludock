@@ -74,6 +74,12 @@ const RestoreClashUnsafe = 21
 
 var errClashUnsafe = errors.New("an undo would refuse to move an entry")
 
+// RestoreNameTaken is moveNew's exit code for a name in the live data taken
+// while it moved the backup's data in: something else wrote there.
+const RestoreNameTaken = 22
+
+var errMoveTaken = errors.New("a name the move needed was taken")
+
 var errUnsafeEntry = errors.New("an entry an undo would move can't be moved")
 
 // StagePrefix starts the name of a restore's stage folder, which sits in the
@@ -191,11 +197,13 @@ func moveEntry(source, destination fd, name string, rename func(from fd, name st
 		return errUnsafe
 	}
 	if _, err := lstatAt(destination, name); err == nil {
-		return errUnsafe
+		return errMoveTaken
 	} else if !isNotExist(err) {
 		return err
 	}
-	if err := rename(source, name, destination, name); err != nil {
+	if err := rename(source, name, destination, name); errors.Is(err, unix.EEXIST) {
+		return errMoveTaken
+	} else if err != nil {
 		return err
 	}
 	moved, err := lstatAt(destination, name)
@@ -504,6 +512,12 @@ func (h *restoreHelper) run() (any, error) {
 	result, err := h.step()
 	if h.request.Operation == RestoreCheckReturn && errors.Is(err, errUnsafe) && !errors.Is(err, errUnsafeEntry) {
 		err = errClashUnsafe
+	}
+	// A name taken in the live data means another writer only on the move in.
+	if h.request.Operation == RestoreMoveNew && errors.Is(err, unix.EEXIST) {
+		err = errMoveTaken
+	} else if errors.Is(err, errMoveTaken) && h.request.Operation != RestoreMoveNew {
+		err = errUnsafe
 	}
 	return result, err
 }
@@ -1336,6 +1350,8 @@ func RunRestore(argument string, stdout, stderr io.Writer) int {
 			return RestoreUnsafeEntry
 		case errors.Is(err, errClashUnsafe):
 			return RestoreClashUnsafe
+		case errors.Is(err, errMoveTaken):
+			return RestoreNameTaken
 		}
 		return 1
 	}

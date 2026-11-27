@@ -297,13 +297,17 @@ func (h *Helpers) ExecWatching(ctx context.Context, id string, command []string,
 var helperErrors = &launch.ExecErrors{Timeout: errTimeout, Failed: errFailed, Unsafe: errFailed,
 	OutputLimit: fail("HELPER_OUTPUT", "Ludock’s helper sent back more than expected, so the work was stopped."),
 	Exits: map[int]*apperr.Error{helper.FileMounted: ErrHostMount, helper.RestoreHoldsStage: StageInside(""),
-		helper.RestoreUnsafeEntry: ErrUndoEntryUnsafe, helper.RestoreClashUnsafe: ErrUndoClashUnsafe}}
+		helper.RestoreUnsafeEntry: ErrUndoEntryUnsafe, helper.RestoreClashUnsafe: ErrUndoClashUnsafe, helper.RestoreNameTaken: ErrRestoreNameTaken}}
 
 // ErrUndoEntryUnsafe is an undo that would have to move a link, a special
 // file, or a file with a second name.
 // ErrUndoClashUnsafe is what undoing the restore would refuse to move found
 // once the server stopped, as opposed to a check that couldn't run.
 var ErrUndoClashUnsafe = fail("RESTORE_UNDO_IN_THE_WAY", "Ludock stopped undoing the restore because something it would have to move can’t be moved safely: a link, a special file, a file with a second name elsewhere, or something on another disk. Deal with it on the host, then undo the restore again. That restore’s Activity says where the server’s previous data is.")
+
+// ErrRestoreNameTaken is a name in the server's data taken while the
+// restore moved the backup's data in.
+var ErrRestoreNameTaken = fail("RESTORE_NAME_TAKEN", "Something else wrote into the server’s data while the restore was moving the backup in, so Ludock stopped the restore. Stop whatever writes to the server’s data, then restore again.")
 
 var ErrUndoEntryUnsafe = fail("RESTORE_UNDO_UNSAFE", "Ludock stopped undoing the restore because something it would have to move can’t be moved safely: a link, a special file, or a file with a second name elsewhere. Deal with it on the host, then undo the restore again. That restore’s Activity says where the server’s previous data is.")
 
