@@ -66,6 +66,8 @@ type rig struct {
 	killed chan struct{}
 	// alerts are the types of the alerts sent.
 	alerts []notify.Alert
+	// restarts counts restartOld's restarts.
+	restarts int
 }
 
 type process struct {
@@ -289,7 +291,7 @@ func health(g *rig, c *fakedocker.Container, status string) {
 var (
 	swap = []string{"pull", "create helper", "start helper", "create new", "policy old", "stop old", "start new"}
 	// The original, started again, restores its own restart policy.
-	putBack = []string{"stop new", "remove new", "start old", "remove helper", "policy old"}
+	putBack = []string{"stop new", "remove new", "start old", "policy old", "remove helper"}
 )
 
 func join(parts ...[]string) []string { return slices.Concat(parts...) }
@@ -324,6 +326,8 @@ func TestSelfUpdateOrder(t *testing.T) {
 		duringCopy func(t *testing.T, g *rig, p *process)
 		// refusesData: the Ludock that comes up can't open the data.
 		refusesData bool
+		// restarts is how often restartOld restarts the original first.
+		restarts int
 	}{
 		{name: "success", trace: join(swap, []string{"policy new", "remove old", "rename new", "remove helper"}),
 			image: newImage, state: selfupdate.StateSucceeded, probe: "after"},
@@ -380,18 +384,23 @@ func TestSelfUpdateOrder(t *testing.T) {
 			g.at["stop new"] = func() { os.Remove(filepath.Join(g.dataDir, selfupdate.CopyName)) }
 		}, trace: join(swap, putBack), image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataKept,
 			reason: "Docker couldn’t start the new container, for example because its port was still in use", probe: "after"},
-		{name: "the original restarted after it put its data back, before it removed the helper, still says it did", arrange: func(g *rig) {
+		{name: "the original restarted after it put its data back, before it saved how the update ended, still says it was put back with its data", arrange: func(g *rig) {
+			g.fail["start new"] = 500
+			// As the original sets its own restart policy back, before it
+			// saves how the update ended.
+			g.at["policy old"] = func() { g.at["policy old"] = g.restartOld }
+		}, trace: join(swap, []string{"stop new", "remove new", "start old", "policy old", "stop old", "start old", "policy old", "remove helper"}),
+			image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored, probe: "before", restarts: 1,
+			reason: "Docker couldn’t start the new container, for example because its port was still in use"},
+		{name: "a helper Docker won't remove once the outcome is saved goes at the next start", arrange: func(g *rig) {
 			g.fail["start new"] = 500
 			g.fail["remove helper"] = 500
-			g.at["remove helper"] = func() {
-				g.client.Stop(context.Background(), g.old, nil)
-				g.client.Start(context.Background(), g.old)
-			}
-		}, trace: join(swap, []string{"stop new", "remove new", "start old", "remove helper", "stop old", "start old", "remove helper", "policy old"}),
-			image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored, probe: "before",
+			g.at["remove helper"] = g.restartOld
+		}, trace: join(swap, []string{"stop new", "remove new", "start old", "policy old", "remove helper", "stop old", "start old", "remove helper"}),
+			image: oldImage, state: selfupdate.StatePutBack, data: selfupdate.DataRestored, probe: "before", restarts: 1,
 			reason: "Docker couldn’t start the new container, for example because its port was still in use"},
 		{name: "Docker refuses to create the new container", arrange: func(g *rig) { g.fail["create new"] = 400 },
-			trace: []string{"pull", "create helper", "start helper", "create new", "remove helper", "policy old"}, image: oldImage,
+			trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "remove helper"}, image: oldImage,
 			state: selfupdate.StateFailed, reason: "Docker couldn’t swap in Ludock’s new container, so nothing was changed", probe: "after"},
 		{name: "the pull fails", arrange: func(g *rig) { g.fail["pull"] = 500 }, trace: []string{"pull"}, image: oldImage,
 			state: selfupdate.StateFailed, reason: "Docker couldn’t download Ludock’s new image. Check the machine’s internet connection; for a private registry, set LUDOCK_DOCKER_CONFIG.",
@@ -402,7 +411,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 		}, after: func(g *rig) string {
 			g.client.Start(context.Background(), g.old)
 			return "ludock"
-		}, trace: join(swap, []string{"start old", "remove helper", "policy old"}), image: oldImage, state: selfupdate.StateInterrupted,
+		}, trace: join(swap, []string{"start old", "policy old", "remove helper"}), image: oldImage, state: selfupdate.StateInterrupted,
 			reason: "the update stopped partway", probe: "after", copy: true},
 		{name: "the helper killed mid-swap, then docker compose pull and up -d", arrange: func(g *rig) {
 			g.at["start new"] = g.killHelper
@@ -475,13 +484,13 @@ func TestSelfUpdateOrder(t *testing.T) {
 		{name: "Docker stops the original but its answer is lost", arrange: func(g *rig) {
 			g.at["stop old"] = func() { g.engine.Exit(g.old, 0) }
 			g.fail["stop old"] = 500
-		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "stop old", "remove new", "start old", "remove helper", "policy old"},
+		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "stop old", "remove new", "start old", "policy old", "remove helper"},
 			image: oldImage, state: selfupdate.StateFailed, reason: "Docker couldn’t swap in Ludock’s new container, so nothing was changed", probe: "after"},
 		{name: "Docker starts the original again but its answer is lost", arrange: func(g *rig) {
 			g.fail["start new"] = 500
 			g.at["start old"] = func() { g.client.Start(context.Background(), g.old) }
 			g.fail["start old"] = 500
-		}, trace: join(swap, []string{"stop new", "remove new", "start old", "start old", "remove helper", "policy old"}), image: oldImage,
+		}, trace: join(swap, []string{"stop new", "remove new", "start old", "start old", "policy old", "remove helper"}), image: oldImage,
 			state: selfupdate.StatePutBack, data: selfupdate.DataRestored, probe: "before",
 			reason: "Docker couldn’t start the new container, for example because its port was still in use"},
 		{name: "Ludock restarted before it made the helper", arrange: func(g *rig) { g.fail["create helper"] = 500 },
@@ -493,13 +502,13 @@ func TestSelfUpdateOrder(t *testing.T) {
 		{name: "the helper killed after it took the original's restart policy, before it stopped it", arrange: func(g *rig) {
 			g.at["stop old"] = g.killHelper
 			g.fail["stop old"] = 500
-		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "stop old", "remove helper", "remove new", "policy old"},
+		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "stop old", "remove new", "policy old", "remove helper"},
 			image: oldImage, state: selfupdate.StateFailed, reason: "the update stopped before Ludock was replaced, so nothing was changed", probe: "after"},
 		{name: "a new container nothing ran in, which Docker won't remove, isn't called nothing changed", arrange: func(g *rig) {
 			g.fail["policy old"] = 500
 			g.fail["remove new"] = 500
 			g.at["remove new"] = func() { g.fail["remove new"] = 500 }
-		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "remove new", "remove helper", "remove new", "policy old"}, image: oldImage, state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true},
+		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "remove new", "remove new", "policy old", "remove helper"}, image: oldImage, state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true},
 		{name: "a new container left over that Docker can't show isn't called nothing changed", arrange: func(g *rig) {
 			g.fail["policy old"] = 500
 			g.fail["remove new"] = 500
@@ -510,7 +519,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 				}
 				return intercept(r)
 			}
-		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "remove new", "remove helper", "policy old"}, image: oldImage,
+		}, trace: []string{"pull", "create helper", "start helper", "create new", "policy old", "remove new", "policy old", "remove helper"}, image: oldImage,
 			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true},
 		{name: "a health check of the container's own", arrange: func(g *rig) {
 			g.engine.Update(g.old, func(c *fakedocker.Container) {
@@ -602,7 +611,18 @@ func TestSelfUpdateOrder(t *testing.T) {
 				}
 				return
 			}
+			for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+				g.mu.Lock()
+				restarted := g.restarts >= c.restarts
+				g.mu.Unlock()
+				if restarted || time.Now().After(deadline) {
+					break
+				}
+			}
 			after, running := g.settle(name)
+			// A start removes a helper an earlier one couldn't, meanwhile.
+			for deadline := time.Now().Add(2 * time.Second); g.helper() != "" && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			}
 			if got := g.lines(); !slices.Equal(got, c.trace) {
 				t.Errorf("trace\n got %q\nwant %q", got, c.trace)
 			}
@@ -652,6 +672,20 @@ func (g *rig) helper() string {
 		}
 	}
 	return ""
+}
+
+// restartOld ends the original's Ludock as a crash would, so nothing it does
+// next is saved, and starts the original again.
+func (g *rig) restartOld() {
+	g.mu.Lock()
+	running := g.processes[g.old]
+	g.mu.Unlock()
+	running.d.Close()
+	g.client.Stop(context.Background(), g.old, nil)
+	g.client.Start(context.Background(), g.old)
+	g.mu.Lock()
+	g.restarts++
+	g.mu.Unlock()
 }
 
 // killHelper ends the helper's run as its host's end would.
