@@ -362,7 +362,7 @@ func TestAnnouncedHangKeepsItsRecoveryTiming(t *testing.T) {
 // Ludock ends just as it queues the alert that a server is down, and the
 // server is still down when it starts again: the outage is not saved as
 // alerted without its alert, so the next process queues it, before the one
-// saying the server is back up.
+// saying the server is running again.
 func TestOutageAlertSurvivesALudockRestart(t *testing.T) {
 	ctx := context.Background()
 	d := dbtest.Open(t)
@@ -419,7 +419,7 @@ func TestOutageAlertSurvivesALudockRestart(t *testing.T) {
 		rows.Scan(&message)
 		sent = append(sent, message)
 	}
-	if !slices.Equal(sent, []string{"Game: the server is down.", "Game: the server is back up."}) {
+	if !slices.Equal(sent, []string{"Game: the server is down.", "Game: the server is running again."}) {
 		t.Fatal(sent)
 	}
 }

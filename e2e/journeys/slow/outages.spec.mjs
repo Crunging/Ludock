@@ -119,6 +119,8 @@ test("an outage reaches an open server list when its grace period ends, and clea
     await expect(row.getByRole("button", { name: "Start" })).toHaveClass(/secondary-btn--accent/);
     await expect(row.getByRole("link", { name: "Logs" })).not.toHaveClass(/secondary-btn--accent/);
     await detail.reload();
+    // Monitoring says what can be done right here.
+    await expect(detail.getByRole("region", { name: "Monitoring" })).toContainText("Ludock didn’t stop it. Start it here, or read its logs to see why.");
     await expect(detail.locator(".detail-actions").getByRole("button", { name: "Start" })).toHaveClass(/primary-btn/);
     await expect(detail.locator(".detail-actions").getByRole("link", { name: "Logs" })).not.toHaveClass(/primary-btn/);
     await attention.getByRole("button", { name: "Start valheim" }).click();

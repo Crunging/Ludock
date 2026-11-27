@@ -29,15 +29,16 @@ func TestRecoveryStatusWaitsOnlyWhilePending(t *testing.T) {
 	}
 }
 
-// A server that exited isn't told automatic restart wasn't needed: it acts
-// only on a running game, and the owner's restart policy handles exits.
+// A server that exited isn't told automatic restart wasn't needed: it says
+// it acts only on a running game. The guide covers restart policies.
 func TestRecoveryStatusExitedServer(t *testing.T) {
 	for _, r := range []monitor.Recovery{{}, {Last: monitor.RecoveryRestarted, RestartedAt: 1_000, Pending: true}} {
 		var out strings.Builder
 		if err := RecoveryStatus(r, false).Render(context.Background(), &out); err != nil {
 			t.Fatal(err)
 		}
-		if text := out.String(); strings.Contains(text, "Not needed") || strings.Contains(text, "Waiting") || !strings.Contains(text, "restart policy") {
+		if text := out.String(); strings.Contains(text, "Not needed") || strings.Contains(text, "Waiting") || !strings.Contains(text, "On while the server runs") ||
+			strings.Contains(text, "restart policy") {
 			t.Fatal(text)
 		}
 	}

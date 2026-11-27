@@ -631,7 +631,7 @@ func describeAvailability(a *monitor.Availability, paused bool, now int64) avail
 	case paused:
 		result.Status = "Monitoring is paused while other work on the server runs."
 	case state.IntentionallyStopped && state.Notified:
-		result.Status = "Stopped. Once it’s running again, Ludock alerts that it’s back up."
+		result.Status = "Stopped. Ludock alerts once it’s running again."
 	case state.IntentionallyStopped:
 		result.Status = "Stopped. Alerts resume once the server is running again."
 	case suppressed:
@@ -717,17 +717,47 @@ templ AvailabilityStatus(d ServerDetail) {
 				} else if a.State.LastState == monitor.NotAnswering {
 					The server is running, but the game stopped answering. Check its logs and console; a restart may bring it back.
 				} else {
-					Check the server in the tool that runs it, such as Compose or Portainer. A running server can still be unhealthy or starting.
+					{ outageAdvice(d.Row) }
 				}
 			</p>
 		}
 	</section>
 }
 
+// outageAdvice says what the viewer can do on this page about an outage,
+// by the server's state now.
+func outageAdvice(row ServerRow) string {
+	what, act, then := "Ludock didn’t stop it.", "Start it here", ", or read its logs to see why."
+	switch row.Server.State {
+	case "running":
+		what, act = "It’s running, but its health check hasn’t passed.", ""
+	case "restarting":
+		what, act, then = "It keeps stopping and starting again.", "Stop it here", ", then read its logs to see why."
+		if !row.CanStop {
+			act = ""
+		}
+	case "exited", "created", "dead":
+		if !row.CanStart {
+			act = ""
+		}
+	default:
+		return ""
+	}
+	switch {
+	case act != "" && row.ConsoleLabel != "":
+		return what + " " + act + then
+	case act != "":
+		return what + " " + act + "."
+	case row.ConsoleLabel != "":
+		return what + " Read its logs to see why."
+	}
+	return what
+}
+
 // RecoveryStatus says what automatic restarts last did.
 templ RecoveryStatus(r monitor.Recovery, running bool) {
 	if !running {
-		On while the server runs: it restarts a game that stops answering. A server that exits is left to the restart policy set in the tool that runs it, such as Compose.
+		On while the server runs: it restarts a game that stops answering.
 	} else {
 		switch r.Last {
 			case monitor.RecoveryRestarted:

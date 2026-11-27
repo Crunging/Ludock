@@ -964,8 +964,8 @@ or, if none needs it, copy out what you need and delete it on the host.
 **Outage since** is the stop Docker reports even if Ludock wasn't watching
 then, but the wait before alerting counts from when Ludock noticed. A
 stop through Ludock after a server was reported down doesn't end that outage:
-once the server runs again, you hear that it's back up. A game still starting,
-or whose status check is off or wrong, never counts as not answering. Ludock
+you hear when it's running again. A game still starting, or whose status
+check is off or wrong, never counts as not answering. Ludock
 remembers that a game answered, so one that hangs while Ludock itself restarts
 is still caught; the wait starts again when Ludock is back, unless the alert
 was already sent. A server that keeps restarting is one outage, timed from
