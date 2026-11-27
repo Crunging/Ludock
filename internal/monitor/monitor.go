@@ -810,7 +810,9 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			if d := downs[server.ID]; !silent && !unavailable && d > ended[server.ID] && d < started {
 				since = d
 			}
-			if silent {
+			if unavailable {
+				action = "server.unreachable.alerted"
+			} else if silent {
 				action = "server.silence.alerted"
 			}
 			down = []alert{{"outage:" + server.ID + ":" + strconv.FormatInt(started, 10), message,
@@ -936,10 +938,14 @@ const whileIdle = " AND NOT EXISTS(SELECT 1 FROM operations WHERE operations.ser
 func (s *Service) recovered(ctx context.Context, server identity.Server, container servers.Container, r *row, now int64) (bool, error) {
 	var back []alert
 	if r.notified == 1 {
-		// A game that stopped answering ran all along.
+		// A game that stopped answering ran all along, and a server Docker
+		// couldn't be asked about may have.
 		message, action := server.DisplayName+": the server is running again.", "server.outage.ended"
-		if r.lastState.String == NotAnswering {
+		switch r.lastState.String {
+		case NotAnswering:
 			message, action = server.DisplayName+": the game is answering again.", "server.silence.ended"
+		case DockerUnavailable:
+			message, action = server.DisplayName+": Ludock can reach Docker again, and the server is running.", "server.unreachable.ended"
 		}
 		back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), message,
 			&db.AuditEntry{Action: action, TargetType: "server", TargetID: server.ID, Details: map[string]int64{"downFor": now - s.shownSince(server.ID, r)}}}}

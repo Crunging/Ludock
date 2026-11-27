@@ -155,14 +155,7 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 			}
 			s.Check(ctx, state("running", "starting"), 135_000)
 			s.Check(ctx, state("running", ""), 140_000)
-			var logged []string
-			rows, _ := s.DB.Query("SELECT action, details_json FROM audit_log WHERE target_id=? ORDER BY id", server.ID)
-			for rows.Next() {
-				var action, details string
-				rows.Scan(&action, &details)
-				logged = append(logged, action+" "+details)
-			}
-			rows.Close()
+			logged := audited(s, server.ID)
 			if since := cmp.Or(c.stopped, c.start); len(logged) != len(c.want) || logged[len(logged)-2] != fmt.Sprintf(`server.outage.alerted {"since":%d}`, since) ||
 				logged[len(logged)-1] != fmt.Sprintf(`server.outage.ended {"downFor":%d}`, 140_000-since) {
 				t.Fatal(logged)
@@ -379,7 +372,9 @@ func TestMonitorSuppressionKeepsAnAlertedOutage(t *testing.T) {
 	}
 }
 
-// Docker outage is reported without rebinding.
+// Docker outage is reported without rebinding. Docker answering again with
+// the server running ends it as just that: Ludock reaches Docker again and
+// the server runs, which it may have done all along.
 func TestDockerOutage(t *testing.T) {
 	s, events, server := setup(t)
 	s.Check(ctx, nil, 1000)
@@ -394,6 +389,14 @@ func TestDockerOutage(t *testing.T) {
 	current, _ := s.Store.Get(ctx, server.ID)
 	if current.Status != identity.StatusActive {
 		t.Fatal("binding changed")
+	}
+	s.Check(ctx, state("running", ""), 90_000)
+	if len(events.events) != 2 || events.events[1] != "Minecraft: Ludock can reach Docker again, and the server is running." {
+		t.Fatal(events.events)
+	}
+	logged := audited(s, server.ID)
+	if !slices.Equal(logged, []string{`server.unreachable.alerted {"since":1000}`, `server.unreachable.ended {"downFor":89000}`}) {
+		t.Fatal(logged)
 	}
 }
 
@@ -631,14 +634,7 @@ func TestSilentGameOutage(t *testing.T) {
 		events.events[1] != "Minecraft: the game is answering again." {
 		t.Fatal(events.events)
 	}
-	var logged []string
-	rows, _ := s.DB.Query("SELECT action, details_json FROM audit_log WHERE target_id=? ORDER BY id", server.ID)
-	for rows.Next() {
-		var action, details string
-		rows.Scan(&action, &details)
-		logged = append(logged, action+" "+details)
-	}
-	rows.Close()
+	logged := audited(s, server.ID)
 	if !slices.Equal(logged, []string{`server.silence.alerted {"since":2000}`, `server.silence.ended {"downFor":78000}`}) {
 		t.Fatal(logged)
 	}
@@ -733,4 +729,18 @@ func TestNewServersAreWatched(t *testing.T) {
 	if saved, _ := s.Get(ctx, list[0].ID); saved.Policy.Enabled {
 		t.Fatal("monitoring turned itself back on")
 	}
+}
+
+// audited lists what Ludock logged for Activity about a server, as
+// "action details".
+func audited(s *Service, serverID string) []string {
+	var logged []string
+	rows, _ := s.DB.Query("SELECT action, details_json FROM audit_log WHERE target_id=? ORDER BY id", serverID)
+	for rows.Next() {
+		var action, details string
+		rows.Scan(&action, &details)
+		logged = append(logged, action+" "+details)
+	}
+	rows.Close()
+	return logged
 }

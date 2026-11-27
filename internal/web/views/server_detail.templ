@@ -741,8 +741,12 @@ func outageAdvice(row ServerRow) string {
 		if !row.CanStart {
 			act = ""
 		}
+	case "missing", "ambiguous":
+		return BindingNote(row.Server.State)
+	case "unknown", "":
+		return "Ludock can’t read its state from Docker right now."
 	default:
-		return ""
+		what, act = "Docker shows it as "+strings.ToLower(ServerStatus(row.Server.State, "", nil).Label)+".", ""
 	}
 	// The console can be shared without the logs.
 	logs := row.Server.Can(authz.LogsRead)
