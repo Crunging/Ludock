@@ -1534,10 +1534,10 @@ func (x *extractor) metadata(descriptor fd, uid, gid, mode int64, mtime *float64
 		seconds := math.Floor(*mtime)
 		nanos := int64((*mtime - seconds) * 1e9)
 		times := [2]unix.Timespec{{Sec: int64(seconds), Nsec: nanos}, {Sec: int64(seconds), Nsec: nanos}}
-		// utimensat with a NULL path changes the descriptor's own file.
-		if _, _, errno := unix.Syscall6(unix.SYS_UTIMENSAT, uintptr(descriptor), 0,
-			uintptr(unsafe.Pointer(&times[0])), 0, 0, 0); errno != 0 {
-			return errno
+		// Storage that can't set times at all keeps none to restore, as one
+		// without ACLs keeps no ACLs; one refusing them still fails.
+		if err := setTimes(int(descriptor), &times); err != nil && !errors.Is(err, unix.ENOSYS) && !errors.Is(err, unix.EOPNOTSUPP) {
+			return err
 		}
 	}
 	return nil
@@ -1558,6 +1558,14 @@ const (
 )
 
 var errFull = errors.New("restore reserve reached")
+
+// ExtractStorage is printed, with exit status ExtractStorageStatus, when the
+// destination's storage refuses a write, apart from a full disk or an
+// unsafe or changed folder.
+const (
+	ExtractStorage       = "Restore extraction stopped: the storage refused a write."
+	ExtractStorageStatus = 24
+)
 
 // ExtractCut is printed, with exit status ExtractCutStatus, when the input
 // ends partway through a record or a file's bytes, as when the stream to the
@@ -1587,6 +1595,18 @@ func (x *extractor) room(size, reserve int64) error {
 
 // statfs is replaced in tests.
 var statfs = unix.Fstatfs
+
+// setTimes sets a descriptor's own access and modification times; tests
+// replace it.
+var setTimes = futimens
+
+func futimens(descriptor int, times *[2]unix.Timespec) error {
+	// utimensat with a NULL path changes the descriptor's own file.
+	if _, _, errno := unix.Syscall6(unix.SYS_UTIMENSAT, uintptr(descriptor), 0, uintptr(unsafe.Pointer(&times[0])), 0, 0, 0); errno != 0 {
+		return errno
+	}
+	return nil
+}
 
 // copyChunk bounds how much a file can write between space checks, so other
 // writers to the same filesystem cannot push it far into the reserve.
@@ -1629,6 +1649,11 @@ func extractExit(err error) (int, string) {
 	}
 	if errors.Is(err, errCut) {
 		return ExtractCutStatus, ExtractCut
+	}
+	for _, errno := range []unix.Errno{unix.EIO, unix.EROFS, unix.EPERM, unix.EACCES, unix.ENOSYS, unix.EOPNOTSUPP, unix.EFBIG, unix.ENAMETOOLONG} {
+		if errors.Is(err, errno) {
+			return ExtractStorageStatus, ExtractStorage
+		}
 	}
 	return 1, ExtractFailure
 }

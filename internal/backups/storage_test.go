@@ -304,6 +304,22 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if !apperr.Is(err, "INVALID_BACKUP") || !exited.Load() || code.Load() != helper.ExtractFullStatus {
 		t.Fatal(err, exited.Load(), code.Load())
 	}
+	// Storage that refuses a write is said to, not a changed folder.
+	refusing := ".ludock-restore-5f9619ff-8b86-4011-b42d-00c04fc964ff"
+	if _, err := helpers.Exec(ctx, writer.Container, helper.Command("restore", helper.RestoreRequest{Root: rootPath, Stage: refusing, Operation: "stage"}), nil); err != nil {
+		t.Fatal(err)
+	}
+	engine.RunHelpers(func(_ *fakedocker.Container, _, args []string, stdin *bufio.Reader, _, stderr func([]byte)) (int, bool) {
+		if len(args) == 0 || args[0] != "restore-extract" {
+			return 0, false
+		}
+		io.Copy(io.Discard, stdin)
+		stderr([]byte(helper.ExtractStorage))
+		return helper.ExtractStorageStatus, true
+	})
+	if _, err := helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{Root: roots[0], Path: rootPath}}, refusing, roots, 1<<30, 0, checksum, nil); !apperr.Is(err, "RESTORE_STORAGE_REFUSED") {
+		t.Fatal(err)
+	}
 	engine.RunHelpers(nil)
 	// A check of the requester's access that fails is reported as itself.
 	refused := ".ludock-restore-4f9619ff-8b86-4011-b42d-00c04fc964ff"

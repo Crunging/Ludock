@@ -58,10 +58,16 @@ func (h *fileHelper) selection(root fd, operation string) error {
 	switch operation {
 	case "delete-paths":
 		// Removing a folder can fail after removing some of it.
+		var inUse error
 		for _, item := range items {
-			if err := h.removeEntry(parent, item.name, 0); err != nil {
+			if err := h.removeEntry(parent, item.name, 0); errors.Is(err, errFolderInUse) {
+				inUse = err
+			} else if err != nil {
 				return errPartial
 			}
+		}
+		if inUse != nil {
+			return inUse
 		}
 		return h.json(map[string]bool{"ok": true})
 	case "download-paths":

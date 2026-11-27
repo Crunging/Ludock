@@ -126,6 +126,10 @@ const (
 	// name of a folder it needs, and FileIsFolder one whose name is a folder's.
 	FileNotFolder = 16
 	FileIsFolder  = 17
+	// FileFolderInUse is a delete that removed a folder's contents but not
+	// the folder, which still holds a file something has open: FUSE and NFS
+	// keep such a file under a hidden name until it is closed.
+	FileFolderInUse = 24
 )
 
 type fileHelper struct {
@@ -426,7 +430,7 @@ func (h *fileHelper) removeEntry(parent fd, name string, depth int) error {
 		return errExcluded
 	}
 	if !isDir(info) {
-		return unix.Unlinkat(int(parent), name, 0)
+		return unlinkFile(int(parent), name, 0)
 	}
 	directory, err := h.t.openAt(parent, name, directoryFlags, 0)
 	if err != nil {
@@ -446,13 +450,19 @@ func (h *fileHelper) removeEntry(parent fd, name string, depth int) error {
 	if slices.ContainsFunc(children, validStage) {
 		return errHoldsRestore
 	}
+	// A folder held by a file in use is left, with the rest still removed,
+	// and keeps its own folder from going too.
 	for _, child := range children {
-		if err := h.removeEntry(directory, child, depth+1); err != nil {
+		if err := h.removeEntry(directory, child, depth+1); err != nil && !errors.Is(err, errFolderInUse) {
 			return err
 		}
 	}
 	h.t.close(directory)
-	return unix.Unlinkat(int(parent), name, unix.AT_REMOVEDIR)
+	err = unix.Unlinkat(int(parent), name, unix.AT_REMOVEDIR)
+	if errors.Is(err, unix.ENOTEMPTY) {
+		return errFolderInUse
+	}
+	return err
 }
 
 // unmounted refuses an entry that is, or holds, a separate mount, whether
@@ -2005,6 +2015,8 @@ func fileExit(err error) int {
 		return FileNotFolder
 	case errors.Is(err, errIsFolder):
 		return FileIsFolder
+	case errors.Is(err, errFolderInUse):
+		return FileFolderInUse
 	}
 	return 1
 }
@@ -2015,6 +2027,7 @@ var (
 	errPartial      = errors.New("part of the selection changed")
 	errMounted      = errors.New("the folder is or holds a separate mount")
 	errHoldsRestore = errors.New("the folder holds a restore's stage folder")
+	errFolderInUse  = errors.New("a folder still holds a file in use")
 	errPublished    = errors.New("the upload failed after it took its name")
 	errNotFolder    = errors.New("a file has the name of a folder the upload needs")
 	errIsFolder     = errors.New("a folder has the upload's name")
@@ -2036,10 +2049,12 @@ var (
 	// fchown and fchmod let tests see the order an upload hands over in,
 	// helperUID stand in for a helper that isn't the files' owner, and
 	// fsetxattr fail to keep an ACL.
-	fchown    = unix.Fchown
-	fchmod    = unix.Fchmod
-	helperUID = os.Geteuid
-	fsetxattr = unix.Fsetxattr
+	// unlinkFile lets tests act like storage that keeps a deleted open file.
+	unlinkFile = unix.Unlinkat
+	fchown     = unix.Fchown
+	fchmod     = unix.Fchmod
+	helperUID  = os.Geteuid
+	fsetxattr  = unix.Fsetxattr
 )
 
 // renameNoReplace moves an entry without replacing anything with content at
