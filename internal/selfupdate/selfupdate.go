@@ -639,6 +639,12 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 		failed(errSave)
 		return
 	}
+	// The copy now beside the database is this update's: from here a
+	// put-back restores it, and an ending that keeps nothing removes it.
+	// Until this record was saved, a restart restores nothing and leaves the
+	// copy there, which is safe: the helper hasn't started, so nothing was
+	// swapped.
+	record.Copy = true
 	if err := s.startHelper(ctx, record, own); errors.Is(err, errUncertain) {
 		// The helper may be swapping already; watch, or the Ludock that runs
 		// next, finds out.
@@ -781,6 +787,11 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	// An exited helper's code is the evidence, so it goes only once the
 	// outcome is saved: a restart in between finds it again.
 	settle := func(state, reason string) bool {
+		// A copy this update can't be shown to have written, as one an
+		// earlier update left, is never removed, as it is never restored.
+		if !live && noHelper {
+			record.Copy = copyErr == nil
+		}
 		if !s.settle(ctx, record, state, reason) {
 			return false
 		}

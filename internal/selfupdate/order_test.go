@@ -1,6 +1,7 @@
 package selfupdate_test
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"database/sql"
@@ -71,6 +72,8 @@ type rig struct {
 	restarts int
 	// hidden, set by unreadable, is what Docker won't show.
 	hidden string
+	// stale is a copy an earlier update left, as it was.
+	stale []byte
 	// retries counts the restarts Docker gave a Ludock that refused to start.
 	retries int
 	// done: the case has ended, and boots are the Ludocks still starting.
@@ -691,6 +694,33 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 		}, reboot: true, image: newImage, settler: "ludock-ludock-update-",
 			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
+		{name: "a restart during the pull, with an earlier update's copy still there, restores nothing and leaves that copy", before: func(g *rig, p *process) {
+			// The earlier copy holds older data than the database.
+			p.d.SetSetting(ctx, nil, "probe", "stale")
+			if err := p.d.CopyBeside(ctx, selfupdate.CopyName); err != nil {
+				t.Fatal(err)
+			}
+			p.d.SetSetting(ctx, nil, "probe", "live")
+			g.stale, _ = os.ReadFile(filepath.Join(g.dataDir, selfupdate.CopyName))
+			g.at["pull"] = g.restartOld
+		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
+			if left, err := os.ReadFile(filepath.Join(g.dataDir, selfupdate.CopyName)); err != nil || !bytes.Equal(left, g.stale) {
+				t.Error("the earlier update's copy was changed", err)
+			}
+		}, trace: []string{"pull", "stop old", "start old", "policy old"}, image: oldImage, restarts: 1, copy: true,
+			state: selfupdate.StateFailed, reason: "the update stopped before Ludock was replaced, so nothing was changed", probe: "live"},
+		{name: "a restart just after the copy, before the helper, with an earlier update's copy there, restores this update's own", arrange: func(g *rig) {
+			g.fail["create helper"] = 500
+		}, before: func(g *rig, p *process) {
+			p.d.SetSetting(ctx, nil, "probe", "stale")
+			if err := p.d.CopyBeside(ctx, selfupdate.CopyName); err != nil {
+				t.Fatal(err)
+			}
+			p.d.SetSetting(ctx, nil, "probe", "live")
+		}, duringCopy: func(t *testing.T, g *rig, p *process) {
+			g.restartOld()
+		}, trace: []string{"pull", "create helper", "stop old", "start old", "stop new", "policy old"}, image: oldImage, restarts: 1,
+			state: selfupdate.StateFailed, reason: "the update stopped before Ludock was replaced, so nothing was changed", probe: "live"},
 		{name: "a put-back without the data copy keeps the newer data, and says so", arrange: func(g *rig) {
 			g.fail["start new"] = 500
 			g.at["stop new"] = func() { os.Remove(filepath.Join(g.dataDir, selfupdate.CopyName)) }

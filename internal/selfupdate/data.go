@@ -81,15 +81,17 @@ func decide(ctx context.Context, client *docker.Client, container string, record
 	if record.State != StateUpdating {
 		return false, nil
 	}
+
 	// Docker not answering is waited out as a running helper is; after
 	// that this original doesn't start, and its restart policy retries it.
 	deadline := time.Now().Add(wait)
-	code := -1
+	code, helper := -1, false
 	for {
 		spec, err := client.InspectSpec(ctx, HelperName(record.ID))
 		if docker.IsNotFound(err) {
 			break
 		}
+		helper = true
 		if err == nil && !spec.State.Running && !spec.State.Restarting {
 			if spec.State.Status == "exited" {
 				code = spec.State.ExitCode
@@ -106,6 +108,13 @@ func decide(ctx context.Context, client *docker.Client, container string, record
 		}
 	}
 	if code == ExitUpdated || code == ExitUnchanged {
+		return false, nil
+	}
+	// Only this update's own copy goes back. Its helper, whose name carries
+	// the operation, exists only once the copy was written, and the live
+	// record says so just after; with neither, nothing was swapped, and a
+	// copy there may be an earlier update's.
+	if !helper && !record.Copy {
 		return false, nil
 	}
 	if putBackReason(code) < 0 {
