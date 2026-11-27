@@ -882,7 +882,11 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 			record.Leftover = ""
 		}
 	}
-	log.Info("Ludock's update helper ended", logging.F("exitCode", code))
+	if noHelper {
+		log.Info("Ludock's update left no helper")
+	} else {
+		log.Info("Ludock's update helper ended", logging.F("exitCode", code))
+	}
 	succeeded := ownReplacement && own.Name == "/"+record.Name && docker.IsNotFound(gone)
 	// At most one of the two containers has a restart policy, so a reboot
 	// starts one Ludock. Whichever settles an update the helper didn't
