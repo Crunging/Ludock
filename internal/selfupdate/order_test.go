@@ -532,8 +532,12 @@ func TestSelfUpdateOrder(t *testing.T) {
 			g.onStart = func(c *fakedocker.Container) {
 				if isNew(c) {
 					health(g, c, "starting")
-					g.killHelper()
-					g.unreadable(g.old)
+					// Once the new version runs, as it does in a real update.
+					go func() {
+						g.process(c.ID)
+						g.unreadable(g.old)
+						g.killHelper()
+					}()
 				}
 			}
 		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
@@ -634,6 +638,18 @@ func TestSelfUpdateOrder(t *testing.T) {
 				t.Errorf("the old version's Settings shows %+v", failed)
 			}
 		}, image: newImage, settler: "ludock-ludock-update-", policy: "no", reboot: true,
+			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
+		{name: "the helper said updated but couldn't remove the original, which, started by hand beside the new version, refuses", arrange: func(g *rig) {
+			g.fail["remove old"] = 500
+			g.at["rename new"] = func() { g.client.Start(context.Background(), g.old) }
+		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
+			g.mu.Lock()
+			beside := g.processes[g.old]
+			g.mu.Unlock()
+			if beside != nil {
+				t.Error("the original's Ludock started beside the new version")
+			}
+		}, reboot: true, image: newImage, settler: "ludock-ludock-update-",
 			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
 		{name: "a put-back without the data copy keeps the newer data, and says so", arrange: func(g *rig) {
 			g.fail["start new"] = 500
