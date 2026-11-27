@@ -302,6 +302,8 @@ var auditLabels = map[string]string{
 	"server.added":                       "Added a server",
 	"server.outage.alerted":              "Server down",
 	"server.outage.ended":                "Server running again",
+	"server.silence.alerted":             "Game not answering",
+	"server.silence.ended":               "Game answering again",
 	"server.start":                       "Started the server",
 	"server.stop":                        "Stopped the server",
 	"server.restart":                     "Restarted the server",
@@ -440,17 +442,13 @@ func entryLabel(entry history.AuditEntry) string {
 	if strings.HasPrefix(entry.Action, "ludock.update.") && details != nil {
 		return ludockUpdateLabel(entry.Action, details)
 	}
-	// An outage of a game that stopped answering while its server ran.
-	game, _ := details["game"].(bool)
-	if entry.Action == "server.outage.alerted" && game {
-		return "Game not answering"
-	}
-	if down, _ := details["downFor"].(float64); entry.Action == "server.outage.ended" && down > 0 {
+	// The shown label starts with the action's, which search matches.
+	if down, _ := details["downFor"].(float64); (entry.Action == "server.outage.ended" || entry.Action == "server.silence.ended") && down > 0 {
 		minutes, unit := max(1, int((down+30_000)/60_000)), " minutes"
 		if minutes == 1 {
 			unit = " minute"
 		}
-		if game {
+		if entry.Action == "server.silence.ended" {
 			return "Game answering again after " + strconv.Itoa(minutes) + unit
 		}
 		return "Server running again after " + strconv.Itoa(minutes) + unit + " down"
@@ -462,7 +460,7 @@ func entryLabel(entry history.AuditEntry) string {
 func outageSince(entry history.AuditEntry) int64 {
 	details, _ := entry.Details.(map[string]any)
 	since, _ := details["since"].(float64)
-	if entry.Action != "server.outage.alerted" {
+	if entry.Action != "server.outage.alerted" && entry.Action != "server.silence.alerted" {
 		return 0
 	}
 	return int64(since)

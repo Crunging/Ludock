@@ -805,12 +805,16 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			} else if silent {
 				message = server.DisplayName + ": running, but the game stopped answering."
 			}
-			since := started
-			if r.outage.Valid {
-				since = s.shownSince(server.ID, r)
+			// As the page shows it, from the stop time this check has.
+			since, action := started, "server.outage.alerted"
+			if d := downs[server.ID]; !silent && !unavailable && d > ended[server.ID] && d < started {
+				since = d
+			}
+			if silent {
+				action = "server.silence.alerted"
 			}
 			down = []alert{{"outage:" + server.ID + ":" + strconv.FormatInt(started, 10), message,
-				&db.AuditEntry{Action: "server.outage.alerted", TargetType: "server", TargetID: server.ID, Details: map[string]any{"since": since, "game": silent}}}}
+				&db.AuditEntry{Action: action, TargetType: "server", TargetID: server.ID, Details: map[string]int64{"since": since}}}}
 		}
 		changed := false
 		if !(r.outage.Valid && r.outage.Int64 == started && r.notified == notified && r.lastState.String == lastState) {
@@ -933,12 +937,12 @@ func (s *Service) recovered(ctx context.Context, server identity.Server, contain
 	var back []alert
 	if r.notified == 1 {
 		// A game that stopped answering ran all along.
-		game, message := r.lastState.String == NotAnswering, server.DisplayName+": the server is running again."
-		if game {
-			message = server.DisplayName + ": the game is answering again."
+		message, action := server.DisplayName+": the server is running again.", "server.outage.ended"
+		if r.lastState.String == NotAnswering {
+			message, action = server.DisplayName+": the game is answering again.", "server.silence.ended"
 		}
 		back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), message,
-			&db.AuditEntry{Action: "server.outage.ended", TargetType: "server", TargetID: server.ID, Details: map[string]any{"downFor": now - s.shownSince(server.ID, r), "game": game}}}}
+			&db.AuditEntry{Action: action, TargetType: "server", TargetID: server.ID, Details: map[string]int64{"downFor": now - s.shownSince(server.ID, r)}}}}
 	}
 	changed, err := s.transitionIf(ctx, server.ID, r, back, whileIdle, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
 	if changed {

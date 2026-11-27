@@ -102,4 +102,24 @@ func TestActivitySearchMatchesShownNames(t *testing.T) {
 		strings.Contains(body, "Sign-in failed") {
 		t.Fatal(body)
 	}
+	// Outages Ludock logged are found by what their rows say, a game that
+	// stopped answering apart from a server that was down.
+	for _, entry := range []db.AuditEntry{{Action: "server.outage.alerted", Details: map[string]int64{"since": 1}},
+		{Action: "server.outage.ended", Details: map[string]int64{"downFor": 240_000}},
+		{Action: "server.silence.alerted", Details: map[string]int64{"since": 1}},
+		{Action: "server.silence.ended", Details: map[string]int64{"downFor": 240_000}}} {
+		entry.TargetType, entry.TargetID = "server", p.server
+		if err := p.app.DB.WriteAudit(context.Background(), nil, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for search, rows := range map[string][2]string{"Server down": {"Server down", "Game not answering"},
+		"Server running again": {"Server running again after 4 minutes down", "Game answering again"},
+		"Game not answering":   {"Game not answering", "Server down"},
+		"Game answering again": {"Game answering again after 4 minutes", "Server running again"}} {
+		body := p.do("GET", "/activity?show=everything&action="+url.QueryEscape(search), p.admin, nil, nil).Body.String()
+		if !strings.Contains(body, "<strong>"+rows[0]+"</strong>") || strings.Contains(body, "<strong>"+rows[1]) {
+			t.Error(search, body)
+		}
+	}
 }

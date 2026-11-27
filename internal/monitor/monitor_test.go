@@ -111,11 +111,13 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 		savedAt, quiet int64
 		want           []string
 		start          int64
-		// stopped is when Docker says the container stopped, 0 for unknown.
-		stopped int64
+		// stopped is when Docker says the container stopped, 0 for unknown;
+		// restartAt, the check that a new Ludock process makes first.
+		stopped, restartAt int64
 	}{
 		{name: "no change", want: []string{down, back}, start: 1000},
 		{name: "stopped long before Ludock looked", stopped: 100, want: []string{down, back}, start: 1000},
+		{name: "stopped long before, alerted after Ludock restarts", stopped: 100, restartAt: 61_000, want: []string{down, back}, start: 1000},
 		{name: "disk threshold after the alert", saved: []Policy{testPolicy(func(p *Policy) { p.DiskPercent = 80 })}, savedAt: 61_000,
 			want: []string{down, back}, start: 1000},
 		{name: "longer grace after the alert", saved: []Policy{testPolicy(func(p *Policy) { p.GraceSeconds = 600 })}, savedAt: 61_000,
@@ -131,6 +133,9 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 			s, events, server, configure := setupWith(t, nil)
 			exited := map[string]servers.Container{"mc": {ID: "mc", State: "exited", DownSince: c.stopped}}
 			for _, at := range []int64{1000, 30_000, 61_000, 62_000, 130_000} {
+				if at == c.restartAt {
+					s = &Service{DB: s.DB, Locks: s.Locks, Queue: s.Queue, Store: s.Store}
+				}
 				s.Check(ctx, exited, at)
 				if found, _ := problem(s, server.ID, at); at <= cmp.Or(c.quiet, 30_000) && (found != nil || len(events.events) != 0) {
 					t.Fatal("outage before grace:", found, events.events)
@@ -158,8 +163,8 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 				logged = append(logged, action+" "+details)
 			}
 			rows.Close()
-			if since := cmp.Or(c.stopped, c.start); len(logged) != len(c.want) || logged[len(logged)-2] != fmt.Sprintf(`server.outage.alerted {"game":false,"since":%d}`, since) ||
-				logged[len(logged)-1] != fmt.Sprintf(`server.outage.ended {"downFor":%d,"game":false}`, 140_000-since) {
+			if since := cmp.Or(c.stopped, c.start); len(logged) != len(c.want) || logged[len(logged)-2] != fmt.Sprintf(`server.outage.alerted {"since":%d}`, since) ||
+				logged[len(logged)-1] != fmt.Sprintf(`server.outage.ended {"downFor":%d}`, 140_000-since) {
 				t.Fatal(logged)
 			}
 			s.Check(ctx, state("running", ""), 150_000)
@@ -627,14 +632,14 @@ func TestSilentGameOutage(t *testing.T) {
 		t.Fatal(events.events)
 	}
 	var logged []string
-	rows, _ := s.DB.Query("SELECT details_json FROM audit_log WHERE target_id=? ORDER BY id", server.ID)
+	rows, _ := s.DB.Query("SELECT action, details_json FROM audit_log WHERE target_id=? ORDER BY id", server.ID)
 	for rows.Next() {
-		var details string
-		rows.Scan(&details)
-		logged = append(logged, details)
+		var action, details string
+		rows.Scan(&action, &details)
+		logged = append(logged, action+" "+details)
 	}
 	rows.Close()
-	if !slices.Equal(logged, []string{`{"game":true,"since":2000}`, `{"downFor":78000,"game":true}`}) {
+	if !slices.Equal(logged, []string{`server.silence.alerted {"since":2000}`, `server.silence.ended {"downFor":78000}`}) {
 		t.Fatal(logged)
 	}
 }
