@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/Crunging/Ludock/internal/self"
 	"github.com/Crunging/Ludock/internal/selfupdate"
 	"github.com/Crunging/Ludock/internal/selfupdate/fake"
+	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
 )
 
@@ -75,6 +77,10 @@ type rig struct {
 	// more looks if that isn't 0.
 	hidden    string
 	hiddenFor int
+	// onLook, if set, runs once at the next look Docker is asked for whose
+	// path contains lookAt.
+	onLook func()
+	lookAt string
 	// stale is a copy an earlier update left, as it was.
 	stale []byte
 	// retries counts the restarts Docker gave a Ludock that refused to start.
@@ -90,6 +96,8 @@ type process struct {
 	svc    *selfupdate.Service
 	d      *db.DB
 	cancel context.CancelFunc
+	// up: its start-up recovery has run, which takes any hold on work.
+	up atomic.Bool
 }
 
 func newRig(t *testing.T) *rig {
@@ -141,13 +149,16 @@ func newRig(t *testing.T) *rig {
 
 	engine.Intercept = g.intercept
 	engine.OnStart = func(c *fakedocker.Container) {
+		// Ludock's own health check answers once it serves: until its
+		// start-up check is done, the new version isn't healthy yet. A case
+		// may set its own health instead.
+		if isNew(c) {
+			health(g, c, "booting")
+		}
 		if g.onStart != nil {
 			g.onStart(c)
 		}
 		if c.CreateRequest.Labels["ludock.internal"] == "" && c.Config.Labels["com.docker.compose.service"] == "ludock" {
-			if c.Image == newImage && c.State.Health == nil {
-				health(g, c, "healthy")
-			}
 			// None starts once the case ends; those starting are waited for.
 			g.mu.Lock()
 			if !g.done {
@@ -176,7 +187,7 @@ func newRig(t *testing.T) *rig {
 			running.cancel()
 		}
 	}
-	fake.Run(engine, fake.Options{Poll: 5 * time.Millisecond, HealthWait: 200 * time.Millisecond,
+	fake.Run(engine, fake.Options{Poll: 5 * time.Millisecond, HealthWait: 5 * time.Second,
 		Started: func(cancel context.CancelFunc) {
 			g.mu.Lock()
 			g.kill = cancel
@@ -203,6 +214,17 @@ func (g *rig) unreadableFor(part string, n int) {
 }
 
 func (g *rig) intercept(r *http.Request) int {
+	g.mu.Lock()
+	look := g.onLook
+	if look != nil && r.Method == http.MethodGet && strings.Contains(r.URL.Path, g.lookAt) {
+		g.onLook = nil
+	} else {
+		look = nil
+	}
+	g.mu.Unlock()
+	if look != nil {
+		look()
+	}
 	g.mu.Lock()
 	hidden := g.hidden != "" && r.Method == http.MethodGet && strings.Contains(r.URL.Path, g.hidden)
 	if hidden && g.hiddenFor > 0 {
@@ -317,6 +339,15 @@ func (g *rig) boot(container, image string, run ...string) *process {
 	g.mu.Lock()
 	g.processes[container] = p
 	g.mu.Unlock()
+	// Ludock's own health check answers once it serves, so the helper sees
+	// the new version healthy only after its start-up check is done.
+	if image == newImage {
+		g.engine.Update(container, func(c *fakedocker.Container) {
+			if c.State.Health != nil && c.State.Health.Status == "booting" {
+				c.State.Health = &docker.HealthState{Status: "healthy"}
+			}
+		})
+	}
 	// A run that already ended, before its process was there to die, has none.
 	if info := g.engine.Container(container); len(run) > 0 && (info == nil || !info.State.Running || info.State.StartedAt != run[0]) {
 		held.Close()
@@ -324,6 +355,7 @@ func (g *rig) boot(container, image string, run ...string) *process {
 		return nil
 	}
 	p.svc.Recover(ctx, ctx)
+	p.up.Store(true)
 	return p
 }
 
@@ -342,8 +374,12 @@ func (g *rig) settle(name string) (*process, *docker.ContainerInspect) {
 			g.mu.Lock()
 			p := g.processes[info.ID]
 			g.mu.Unlock()
-			if p != nil && !p.svc.Last(context.Background()).InProgress() && !p.svc.Updating() {
-				return p, info
+			// Settled, and no take-over still holding work back.
+			if p != nil && p.up.Load() && !p.svc.Last(context.Background()).InProgress() && !p.svc.Updating() {
+				if release, err := p.svc.Locks.Acquire([]string{"server:settled"}, nil); err == nil {
+					release()
+					return p, info
+				}
 			}
 		}
 		if time.Now().After(deadline) {
@@ -373,6 +409,10 @@ func (g *rig) migrate() {
 
 func isNew(c *fakedocker.Container) bool {
 	return c.Image == newImage && c.CreateRequest.Labels["ludock.internal"] == ""
+}
+
+func isNewInfo(info *docker.ContainerInspect) bool {
+	return info.Image == newImage && info.Config.Labels["ludock.internal"] == ""
 }
 
 func health(g *rig, c *fakedocker.Container, status string) {
@@ -728,16 +768,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
 		{name: "the helper said updated but couldn't remove the original, which, started by hand beside the new version, refuses", arrange: func(g *rig) {
 			g.fail["remove old"] = 500
-			// Once the new version's Ludock is up, as it is long before the
-			// rename in a real update, and while the helper still runs.
-			g.at["rename new"] = func() {
-				for _, id := range g.engine.SortedIDs() {
-					if info := g.engine.Container(id); info != nil && info.Image == newImage && info.Config.Labels["ludock.internal"] == "" {
-						g.process(id)
-					}
-				}
-				g.client.Start(context.Background(), g.old)
-			}
+			g.at["rename new"] = func() { g.client.Start(context.Background(), g.old) }
 		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
 			g.mu.Lock()
 			beside := g.processes[g.old]
@@ -747,6 +778,115 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 		}, reboot: true, image: newImage, settler: "ludock-ludock-update-",
 			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
+		{name: "the original started by hand as the helper renames, after it said updated, doesn't put back what the new version settled", arrange: func(g *rig) {
+			g.fail["remove old"] = 500
+			// The original looks at the helper while it still runs, and next
+			// once the new version settled the update and removed it.
+			g.at["rename new"] = func() {
+				g.client.Start(context.Background(), g.old)
+				time.Sleep(300 * time.Millisecond)
+			}
+		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
+			time.Sleep(2 * time.Second)
+			g.mu.Lock()
+			beside := g.processes[g.old]
+			g.mu.Unlock()
+			if beside != nil || !g.engine.Container(running.ID).State.Running {
+				t.Error("the original stopped the new version or started beside it")
+			}
+			if record := p.svc.Last(ctx); record.State != selfupdate.StateInterrupted || !record.OnLeftover {
+				t.Errorf("the record became %+v", record)
+			}
+			if _, err := os.Stat(filepath.Join(g.dataDir, selfupdate.CopyName)); err != nil {
+				t.Error("the copy went", err)
+			}
+		}, reboot: true, image: newImage, settler: "ludock-ludock-update-",
+			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
+		{name: "a new version settling just before the original stops it keeps its data", arrange: func(g *rig) {
+			g.onStart = func(c *fakedocker.Container) {
+				if isNew(c) {
+					health(g, c, "starting")
+					// Once the new version's Ludock is up, Docker starts the
+					// original and the helper dies.
+					go func() {
+						g.process(c.ID)
+						g.client.Start(context.Background(), g.old)
+						g.killHelper()
+					}()
+				}
+			}
+			// As the original stops it, the new version has just settled
+			// the update, and may have accepted changes since.
+			g.at["stop new"] = func() {
+				for _, id := range g.engine.SortedIDs() {
+					if info := g.engine.Container(id); info != nil && isNewInfo(info) {
+						// As judge settles it: the policy taken by rule 1,
+						// the record saved, and its alert sent.
+						if settled := g.process(id); settled != nil {
+							g.client.SetRestartPolicy(context.Background(), g.old, json.RawMessage(`{"Name":"no","MaximumRetryCount":0}`))
+							g.client.SetRestartPolicy(context.Background(), id, json.RawMessage(`{"Name":"unless-stopped","MaximumRetryCount":0}`))
+							record := settled.svc.Last(context.Background())
+							record.State, record.Reason, record.FinishedAt = selfupdate.StateInterrupted, "the update stopped partway", time.Now().UnixMilli()
+							record.Leftover, record.OnLeftover = strings.TrimPrefix(info.Name, "/"), true
+							settled.d.SetSetting(context.Background(), nil, "ludock.update", record)
+							g.mu.Lock()
+							g.alerts = append(g.alerts, notify.Results)
+							g.mu.Unlock()
+						}
+					}
+				}
+			}
+		}, reboot: true, image: oldImage, state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true},
+		{name: "a renamed new version settling and taking a change as the original starts keeps the change", arrange: func(g *rig) {
+			g.onStart = func(c *fakedocker.Container) {
+				if isNew(c) {
+					health(g, c, "starting")
+					go func() {
+						settled := g.process(c.ID)
+						// The case plays its settle, so its own background
+						// work stops; its container runs and its lock is
+						// held. Only the original then looks at Docker.
+						settled.cancel()
+						// The owner renamed it, so Docker shows nothing by
+						// its temporary name; the helper dies and Docker
+						// starts the original.
+						g.client.Rename(context.Background(), c.ID, "renamed-ludock")
+						// After the original's last look at the record, as it
+						// checks that its own container is the only one
+						// running, and before it takes the folder, the new
+						// version settles, takes a change, and stops.
+						g.mu.Lock()
+						g.lookAt, g.onLook = g.old, func() {
+							// As judge settles it, taking the policy by rule 1.
+							g.client.SetRestartPolicy(context.Background(), g.old, json.RawMessage(`{"Name":"no","MaximumRetryCount":0}`))
+							g.client.SetRestartPolicy(context.Background(), c.ID, json.RawMessage(`{"Name":"unless-stopped","MaximumRetryCount":0}`))
+							record := settled.svc.Last(context.Background())
+							record.State, record.Reason, record.FinishedAt = selfupdate.StateInterrupted, "the update stopped partway", time.Now().UnixMilli()
+							record.Leftover, record.OnLeftover = "renamed-ludock", true
+							settled.d.SetSetting(context.Background(), nil, "ludock.update", record)
+							settled.d.SetSetting(context.Background(), nil, "probe", "changed")
+							g.client.Stop(context.Background(), c.ID, nil)
+							g.mu.Lock()
+							g.alerts = append(g.alerts, notify.Results)
+							g.mu.Unlock()
+						}
+						g.mu.Unlock()
+						g.client.Start(context.Background(), g.old)
+						g.killHelper()
+					}()
+				}
+			}
+		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
+			// Taking over, the original found it by the name it was left
+			// under, so a reboot starts one Ludock.
+			var policy struct{ Name string }
+			if spec, err := g.client.InspectSpec(ctx, "renamed-ludock"); err == nil {
+				json.Unmarshal(spec.HostConfig["RestartPolicy"], &policy)
+			}
+			if policy.Name != "no" {
+				t.Errorf("the renamed new version keeps restart policy %q", policy.Name)
+			}
+		}, reboot: true, image: oldImage, state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "changed", copy: true},
 		{name: "a restart during the pull, with an earlier update's copy still there, restores nothing and leaves that copy", before: func(g *rig, p *process) {
 			// The earlier copy holds older data than the database.
 			p.d.SetSetting(ctx, nil, "probe", "stale")
@@ -789,7 +929,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 			p.d.SetSetting(ctx, nil, "probe", "live")
 		}, duringCopy: func(t *testing.T, g *rig, p *process) {
 			g.restartOld()
-		}, trace: []string{"pull", "create helper", "stop old", "start old", "stop new", "policy old"}, image: oldImage, restarts: 1,
+		}, trace: []string{"pull", "create helper", "stop old", "start old", "policy old"}, image: oldImage, restarts: 1,
 			state: selfupdate.StateFailed, reason: "the update stopped before Ludock was replaced, so nothing was changed", probe: "live"},
 		{name: "the helper killed during the health check, then the old one started by hand, which takes the owner's policy, and leaves a later change to it", arrange: func(g *rig) {
 			g.onStart = func(c *fakedocker.Container) {
@@ -984,7 +1124,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 			g.client.Start(context.Background(), g.old)
 			return "ludock"
-		}, trace: join(swap, []string{"start old", "stop new", "policy old", "remove helper"}), image: oldImage,
+		}, trace: join(swap, []string{"start old", "policy old", "remove helper"}), image: oldImage,
 			state: selfupdate.StatePutBack, data: selfupdate.DataRestored, reason: "the update was cut off, for example by a restart, before the new version was accepted", probe: "before"},
 		{name: "Docker stops the original but its answer is lost", arrange: func(g *rig) {
 			g.at["stop old"] = func() { g.engine.Exit(g.old, 0) }
@@ -1002,7 +1142,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 			duringCopy: func(t *testing.T, g *rig, p *process) {
 				g.client.Stop(context.Background(), g.old, nil)
 				g.client.Start(context.Background(), g.old)
-			}, trace: []string{"pull", "create helper", "stop old", "start old", "stop new", "policy old"}, image: oldImage,
+			}, trace: []string{"pull", "create helper", "stop old", "start old", "policy old"}, image: oldImage,
 			state: selfupdate.StateFailed, reason: "the update stopped before Ludock was replaced, so nothing was changed", probe: "before"},
 		{name: "the helper killed after it took the original's restart policy, before it stopped it", arrange: func(g *rig) {
 			g.at["stop old"] = g.killHelper
@@ -1149,7 +1289,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 			// One that pulled and ends on the old version leaves Ludock's tag on
 			// it, so docker compose up doesn't start the rejected image.
-			if running.Image == oldImage {
+			if record := after.svc.Last(ctx); running.Image == oldImage && (record.State == selfupdate.StatePutBack || record.State == selfupdate.StateFailed) {
 				if id, _ := g.client.InspectImage(ctx, tag); id != oldImage {
 					t.Errorf("Ludock's tag points at %s", id)
 				}
@@ -1362,6 +1502,95 @@ func TestSelfUpdateGivesUpOnAnUnreadableHelper(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(g.dataDir, selfupdate.CopyName)); started == nil || err != nil {
 		t.Error("the copy went", started == nil, err)
+	}
+}
+
+// A container that took one of an update's names once the update's own went
+// is left exactly as it was, and is never named in Settings: by the take-over
+// and Settings after an update that stopped partway, and by an original that
+// starts after one was cut off, which puts its own data back as if the
+// containers were gone. A name is not an identity.
+func TestSelfUpdateLeavesOthersUnderItsNamesAlone(t *testing.T) {
+	ctx := context.Background()
+	policy := json.RawMessage(`{"Name":"unless-stopped","MaximumRetryCount":0}`)
+	// An unrelated container, exited with code 0 (the helper's "updated")
+	// unless running.
+	unrelated := func(g *rig, name string, running bool) string {
+		id := g.engine.AddContainer(fakedocker.GameOptions{Name: name, Image: "nginx", Running: running})
+		g.engine.Update(id, func(c *fakedocker.Container) {
+			c.HostConfig = map[string]any{"RestartPolicy": map[string]any{"Name": "unless-stopped", "MaximumRetryCount": 0}}
+		})
+		return id
+	}
+	look := func(g *rig, ids []string) []string {
+		var looks []string
+		for _, id := range ids {
+			spec, err := g.client.InspectSpec(ctx, id)
+			if err != nil {
+				looks = append(looks, err.Error())
+				continue
+			}
+			looks = append(looks, fmt.Sprint(spec.Name, spec.State.Status, spec.State.StartedAt, string(spec.HostConfig["RestartPolicy"])))
+		}
+		return looks
+	}
+
+	g := newRig(t)
+	p := g.boot(g.old, oldImage)
+	record := selfupdate.Record{ID: identity.NewUUID(), State: selfupdate.StateInterrupted, Container: g.old, Name: "ludock", Policy: policy,
+		NoPolicy: true, Leftover: "renamed-ludock", StartedAt: time.Now().Add(-time.Hour).UnixMilli(), FinishedAt: time.Now().UnixMilli()}
+	if err := p.d.SetSetting(ctx, nil, "ludock.update", record); err != nil {
+		t.Fatal(err)
+	}
+	others := []string{unrelated(g, servers.ReplacementName("ludock", record.ID), true), unrelated(g, "renamed-ludock", true),
+		unrelated(g, selfupdate.HelperName(record.ID), false)}
+	was := look(g, others)
+	p.svc.Recover(ctx, ctx)
+	for deadline := time.Now().Add(5 * time.Second); p.svc.Updating(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("work is still held back")
+		}
+	}
+	// A helper left by a recorded update goes in the background.
+	time.Sleep(200 * time.Millisecond)
+	if failed := p.svc.Failed(ctx); failed == nil || failed.Leftover != "" {
+		t.Errorf("Settings shows %+v", failed)
+	}
+	if now := look(g, others); !slices.Equal(now, was) {
+		t.Errorf("after the take-over\n got %q\nwant %q", now, was)
+	}
+
+	g = newRig(t)
+	p = g.boot(g.old, oldImage)
+	// Recorded, then copied, then recorded as copied, as an update does.
+	record = selfupdate.Record{ID: identity.NewUUID(), State: selfupdate.StateUpdating, Container: g.old, Name: "ludock", Policy: policy,
+		StartedAt: time.Now().Add(-time.Minute).UnixMilli()}
+	p.d.SetSetting(ctx, nil, "ludock.update", record)
+	if err := p.d.CopyBeside(ctx, selfupdate.CopyName); err != nil {
+		t.Fatal(err)
+	}
+	record.Copy = true
+	p.d.SetSetting(ctx, nil, "ludock.update", record)
+	p.d.SetSetting(ctx, nil, "probe", "after")
+	others = []string{unrelated(g, servers.ReplacementName("ludock", record.ID), true), unrelated(g, selfupdate.HelperName(record.ID), false)}
+	was = look(g, others)
+	g.client.Stop(ctx, g.old, nil)
+	g.client.Start(ctx, g.old)
+	started := g.process(g.old)
+	if started == nil {
+		t.Fatal("the original didn't start")
+	}
+	for deadline := time.Now().Add(5 * time.Second); started.svc.Last(ctx).InProgress() || started.svc.Updating(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the update didn't end")
+		}
+	}
+	var probe string
+	if started.d.Setting(ctx, "probe", &probe); probe != "before" {
+		t.Errorf("the original runs on %q", probe)
+	}
+	if now := look(g, others); !slices.Equal(now, was) {
+		t.Errorf("after the original started\n got %q\nwant %q", now, was)
 	}
 }
 

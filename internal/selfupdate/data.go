@@ -38,16 +38,17 @@ const (
 // "", with the data folder's lock for this Ludock to hold while it runs, and
 // an error when this Ludock must not start: two would serve.
 func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir string, wait time.Duration) (string, io.Closer, error) {
-	restore := false
+	restore, id := false, ""
 	if container != "" {
 		record, ok, err := saved(dataDir)
 		if err != nil {
 			return "", nil, err
 		}
 		if ok {
-			if restore, err = decide(ctx, client, container, record, wait); err != nil {
+			if restore, err = decide(ctx, client, container, dataDir, record, wait); err != nil {
 				return "", nil, err
 			}
+			id = record.ID
 		}
 		// No Ludock opens the data, or puts the copy back, while another
 		// container of an update that didn't finish may serve on it: every
@@ -67,6 +68,19 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 	if err != nil {
 		return "", nil, err
 	}
+	// Held, no other Ludock runs on the folder, and any that settled did so
+	// before it let go: the record read now is the last word, even about a
+	// new container Docker no longer showed by its name.
+	if restore {
+		record, unsettled, err := still(dataDir, id)
+		if err != nil {
+			lock.Close()
+			return "", nil, err
+		}
+		if restore = unsettled; !restore {
+			onNewer(container, record)
+		}
+	}
 	if !restore {
 		return "", lock, nil
 	}
@@ -82,16 +96,19 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 
 // decide reports whether container, starting, puts the update's copy back.
 // It doesn't open or restore anything, so BeforeOpen's check covers it.
-func decide(ctx context.Context, client *docker.Client, container string, record Record, wait time.Duration) (bool, error) {
+//
+// Any conclusion that stops another container or restores the copy is drawn
+// from the record as it is after the last look at the helper, never from one
+// read before a wait: the new version may have settled the update meanwhile
+// and accepted changes since. Ludock removes a helper only once an outcome is
+// saved, or one that never ran, so a helper gone while the record still says
+// updating means the update is unsettled, and its new version has accepted
+// nothing.
+func decide(ctx context.Context, client *docker.Client, container, dataDir string, record Record, wait time.Duration) (bool, error) {
 	if record.Container != container {
 		return false, nil
 	}
-	if record.State == StateInterrupted && record.OnLeftover {
-		log.Warn("Ludock's last update stopped partway with Ludock running in its new container. This is the old container: it starts on the data as the new version left it, once that one has stopped, and Settings says what is left.",
-			logging.F("newContainer", record.Leftover))
-		return false, nil
-	}
-	if record.State != StateUpdating {
+	if onNewer(container, record) || record.State != StateUpdating {
 		return false, nil
 	}
 
@@ -100,7 +117,7 @@ func decide(ctx context.Context, client *docker.Client, container string, record
 	deadline := time.Now().Add(wait)
 	code, helper := -1, false
 	for {
-		spec, err := client.InspectSpec(ctx, HelperName(record.ID))
+		spec, err := helperOf(ctx, client, record.ID)
 		if docker.IsNotFound(err) {
 			break
 		}
@@ -124,6 +141,11 @@ func decide(ctx context.Context, client *docker.Client, container string, record
 	if code == ExitUpdated || code == ExitUnchanged {
 		return false, nil
 	}
+	record, unsettled, err := still(dataDir, record.ID)
+	if err != nil || !unsettled {
+		onNewer(container, record)
+		return false, err
+	}
 	// Only this update's own copy goes back. Its helper, whose name carries
 	// the operation, exists only once the copy was written, and the live
 	// record says so just after; with neither, nothing was swapped, and a
@@ -136,22 +158,49 @@ func decide(ctx context.Context, client *docker.Client, container string, record
 		// the new version wasn't accepted; until the update settles it
 		// accepted no work and no changes, so stopping it and putting the
 		// copy back loses nothing.
-		err := client.Stop(ctx, servers.ReplacementName(record.Name, record.ID), nil)
+		spec, err := madeBy(ctx, client, servers.ReplacementName(record.Name, record.ID), record.ID)
+		if err == nil {
+			err = client.Stop(ctx, spec.ID, nil)
+		}
 		if err != nil && !docker.IsNotFound(err) && docker.StatusCode(err) != 304 {
 			return false, errBeside
+		}
+		// Stopped, it can't settle any more, but may have just before.
+		if record, unsettled, err = still(dataDir, record.ID); err != nil || !unsettled {
+			// Too late: it had settled, and this one starts in its place.
+			onNewer(container, record)
+			return false, err
 		}
 	}
 	return true, nil
 }
 
+// onNewer reports, and logs, that container is the original starting after
+// the new version took over an update that stopped partway.
+func onNewer(container string, record Record) bool {
+	if record.Container != container || record.State != StateInterrupted || !record.OnLeftover {
+		return false
+	}
+	log.Warn("Ludock's last update stopped partway with Ludock running in its new container. This is the old container: it starts on the data as the new version left it, once that one has stopped, and Settings says what is left. If that data is too new for this version, it stops without changing anything: start the new container instead.",
+		logging.F("newContainer", record.Leftover))
+	return true
+}
+
+// still reads the record in dataDir again and reports whether it is update
+// id, still in progress.
+func still(dataDir, id string) (Record, bool, error) {
+	record, ok, err := saved(dataDir)
+	return record, err == nil && ok && record.ID == id && record.State == StateUpdating, err
+}
+
 // alone confirms that no container of record's update but container runs:
 // Docker shows each stopped or gone.
 func alone(ctx context.Context, client *docker.Client, container string, record Record) error {
-	for _, other := range []string{record.Container, servers.ReplacementName(record.Name, record.ID), record.Leftover} {
+	for index, other := range []string{record.Container, servers.ReplacementName(record.Name, record.ID), record.Leftover} {
 		if other == "" {
 			continue
 		}
-		spec, err := client.InspectSpec(ctx, other)
+		spec, err := inspect(ctx, client, other, index == 0, record.ID)
 		switch {
 		case docker.IsNotFound(err):
 		case err != nil:
