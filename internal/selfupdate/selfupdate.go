@@ -1103,7 +1103,12 @@ func (s *Service) takeOver(ctx context.Context, record Record) {
 		return
 	}
 	refused := false
-	for _, other := range []string{record.Container, servers.ReplacementName(record.Name, record.ID)} {
+	// The new container by the name it was left under too, as after a rename.
+	others := []string{record.Container, servers.ReplacementName(record.Name, record.ID)}
+	if record.Leftover != "" && record.Leftover != others[1] {
+		others = append(others, record.Leftover)
+	}
+	for _, other := range others {
 		spec, err := s.Docker.InspectSpec(ctx, other)
 		if docker.IsNotFound(err) || err == nil && spec.ID == own.ID {
 			continue

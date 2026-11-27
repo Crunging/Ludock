@@ -38,7 +38,7 @@ const (
 // "", with the data folder's lock for this Ludock to hold while it runs, and
 // an error when this Ludock must not start: two would serve.
 func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir string, wait time.Duration) (string, io.Closer, error) {
-	restore := false
+	restore, id := false, ""
 	if container != "" {
 		record, ok, err := saved(dataDir)
 		if err != nil {
@@ -48,6 +48,7 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 			if restore, err = decide(ctx, client, container, dataDir, record, wait); err != nil {
 				return "", nil, err
 			}
+			id = record.ID
 		}
 		// No Ludock opens the data, or puts the copy back, while another
 		// container of an update that didn't finish may serve on it: every
@@ -66,6 +67,17 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 	lock, err := db.Lock(dataDir)
 	if err != nil {
 		return "", nil, err
+	}
+	// Held, no other Ludock runs on the folder, and any that settled did so
+	// before it let go: the record read now is the last word, even about a
+	// new container Docker no longer showed by its name.
+	if restore {
+		_, unsettled, err := still(dataDir, id)
+		if err != nil {
+			lock.Close()
+			return "", nil, err
+		}
+		restore = unsettled
 	}
 	if !restore {
 		return "", lock, nil

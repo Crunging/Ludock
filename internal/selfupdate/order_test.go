@@ -75,6 +75,8 @@ type rig struct {
 	// more looks if that isn't 0.
 	hidden    string
 	hiddenFor int
+	// onLook, if set, runs once at the next look Docker is asked for.
+	onLook func(path string)
 	// stale is a copy an earlier update left, as it was.
 	stale []byte
 	// retries counts the restarts Docker gave a Ludock that refused to start.
@@ -206,6 +208,15 @@ func (g *rig) unreadableFor(part string, n int) {
 }
 
 func (g *rig) intercept(r *http.Request) int {
+	g.mu.Lock()
+	look := g.onLook
+	if look != nil && r.Method == http.MethodGet {
+		g.onLook = nil
+	}
+	g.mu.Unlock()
+	if look != nil && r.Method == http.MethodGet {
+		look(r.URL.Path)
+	}
 	g.mu.Lock()
 	hidden := g.hidden != "" && r.Method == http.MethodGet && strings.Contains(r.URL.Path, g.hidden)
 	if hidden && g.hiddenFor > 0 {
@@ -817,6 +828,53 @@ func TestSelfUpdateOrder(t *testing.T) {
 				}
 			}
 		}, reboot: true, image: oldImage, state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true},
+		{name: "a renamed new version settling and taking a change as the original starts keeps the change", arrange: func(g *rig) {
+			g.onStart = func(c *fakedocker.Container) {
+				if isNew(c) {
+					health(g, c, "starting")
+					go func() {
+						settled := g.process(c.ID)
+						// The owner renamed it, so Docker shows nothing by
+						// its temporary name; the helper dies and Docker
+						// starts the original.
+						g.client.Rename(context.Background(), c.ID, "renamed-ludock")
+						g.client.Start(context.Background(), g.old)
+						g.killHelper()
+						// After the original's last look at the record and
+						// before it takes the folder, the new version settles,
+						// takes a change, and stops.
+						g.at["stop new"] = func() {
+							g.mu.Lock()
+							g.onLook = func(string) {
+								// As judge settles it, taking the policy by rule 1.
+								g.client.SetRestartPolicy(context.Background(), g.old, json.RawMessage(`{"Name":"no","MaximumRetryCount":0}`))
+								g.client.SetRestartPolicy(context.Background(), c.ID, json.RawMessage(`{"Name":"unless-stopped","MaximumRetryCount":0}`))
+								record := settled.svc.Last(context.Background())
+								record.State, record.Reason, record.FinishedAt = selfupdate.StateInterrupted, "the update stopped partway", time.Now().UnixMilli()
+								record.Leftover, record.OnLeftover = "renamed-ludock", true
+								settled.d.SetSetting(context.Background(), nil, "ludock.update", record)
+								settled.d.SetSetting(context.Background(), nil, "probe", "changed")
+								g.client.Stop(context.Background(), c.ID, nil)
+								g.mu.Lock()
+								g.alerts = append(g.alerts, notify.Results)
+								g.mu.Unlock()
+							}
+							g.mu.Unlock()
+						}
+					}()
+				}
+			}
+		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
+			// Taking over, the original found it by the name it was left
+			// under, so a reboot starts one Ludock.
+			var policy struct{ Name string }
+			if spec, err := g.client.InspectSpec(ctx, "renamed-ludock"); err == nil {
+				json.Unmarshal(spec.HostConfig["RestartPolicy"], &policy)
+			}
+			if policy.Name != "no" {
+				t.Errorf("the renamed new version keeps restart policy %q", policy.Name)
+			}
+		}, reboot: true, image: oldImage, state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "changed", copy: true},
 		{name: "a restart during the pull, with an earlier update's copy still there, restores nothing and leaves that copy", before: func(g *rig, p *process) {
 			// The earlier copy holds older data than the database.
 			p.d.SetSetting(ctx, nil, "probe", "stale")
