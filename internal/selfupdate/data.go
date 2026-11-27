@@ -72,12 +72,14 @@ func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir s
 	// before it let go: the record read now is the last word, even about a
 	// new container Docker no longer showed by its name.
 	if restore {
-		_, unsettled, err := still(dataDir, id)
+		record, unsettled, err := still(dataDir, id)
 		if err != nil {
 			lock.Close()
 			return "", nil, err
 		}
-		restore = unsettled
+		if restore = unsettled; !restore {
+			onNewer(container, record)
+		}
 	}
 	if !restore {
 		return "", lock, nil
@@ -106,12 +108,7 @@ func decide(ctx context.Context, client *docker.Client, container, dataDir strin
 	if record.Container != container {
 		return false, nil
 	}
-	if record.State == StateInterrupted && record.OnLeftover {
-		log.Warn("Ludock's last update stopped partway with Ludock running in its new container. This is the old container: it starts on the data as the new version left it, once that one has stopped, and Settings says what is left.",
-			logging.F("newContainer", record.Leftover))
-		return false, nil
-	}
-	if record.State != StateUpdating {
+	if onNewer(container, record) || record.State != StateUpdating {
 		return false, nil
 	}
 
@@ -146,6 +143,7 @@ func decide(ctx context.Context, client *docker.Client, container, dataDir strin
 	}
 	record, unsettled, err := still(dataDir, record.ID)
 	if err != nil || !unsettled {
+		onNewer(container, record)
 		return false, err
 	}
 	// Only this update's own copy goes back. Its helper, whose name carries
@@ -165,11 +163,24 @@ func decide(ctx context.Context, client *docker.Client, container, dataDir strin
 			return false, errBeside
 		}
 		// Stopped, it can't settle any more, but may have just before.
-		if _, unsettled, err = still(dataDir, record.ID); err != nil || !unsettled {
+		if record, unsettled, err = still(dataDir, record.ID); err != nil || !unsettled {
+			// Too late: it had settled, and this one starts in its place.
+			onNewer(container, record)
 			return false, err
 		}
 	}
 	return true, nil
+}
+
+// onNewer reports, and logs, that container is the original starting after
+// the new version took over an update that stopped partway.
+func onNewer(container string, record Record) bool {
+	if record.Container != container || record.State != StateInterrupted || !record.OnLeftover {
+		return false
+	}
+	log.Warn("Ludock's last update stopped partway with Ludock running in its new container. This is the old container: it starts on the data as the new version left it, once that one has stopped, and Settings says what is left. If that data is too new for this version, it stops without changing anything: start the new container instead.",
+		logging.F("newContainer", record.Leftover))
+	return true
 }
 
 // still reads the record in dataDir again and reports whether it is update
