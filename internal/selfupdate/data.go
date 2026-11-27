@@ -91,7 +91,8 @@ func decide(ctx context.Context, client *docker.Client, container string, record
 		if docker.IsNotFound(err) {
 			break
 		}
-		helper = true
+		// Only Docker showing it proves this update's copy was written.
+		helper = helper || err == nil
 		if err == nil && !spec.State.Running && !spec.State.Restarting {
 			if spec.State.Status == "exited" {
 				code = spec.State.ExitCode

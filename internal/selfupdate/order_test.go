@@ -70,8 +70,10 @@ type rig struct {
 	alerts []notify.Alert
 	// restarts counts restartOld's restarts.
 	restarts int
-	// hidden, set by unreadable, is what Docker won't show.
-	hidden string
+	// hidden, set by unreadable, is what Docker won't show, for hiddenFor
+	// more looks if that isn't 0.
+	hidden    string
+	hiddenFor int
 	// stale is a copy an earlier update left, as it was.
 	stale []byte
 	// retries counts the restarts Docker gave a Ludock that refused to start.
@@ -181,17 +183,25 @@ var (
 
 // unreadable makes Docker answer 500 to inspecting any container whose
 // reference contains part, until it is called again with "".
-func (g *rig) unreadable(part string) {
+func (g *rig) unreadable(part string) { g.unreadableFor(part, 0) }
+
+// unreadableFor is unreadable for the next n looks only, or for all with 0.
+func (g *rig) unreadableFor(part string, n int) {
 	g.mu.Lock()
-	g.hidden = part
+	g.hidden, g.hiddenFor = part, n
 	g.mu.Unlock()
 }
 
 func (g *rig) intercept(r *http.Request) int {
 	g.mu.Lock()
-	hidden := g.hidden
+	hidden := g.hidden != "" && r.Method == http.MethodGet && strings.Contains(r.URL.Path, g.hidden)
+	if hidden && g.hiddenFor > 0 {
+		if g.hiddenFor--; g.hiddenFor == 0 {
+			g.hidden = ""
+		}
+	}
 	g.mu.Unlock()
-	if hidden != "" && r.Method == http.MethodGet && strings.Contains(r.URL.Path, hidden) {
+	if hidden {
 		return 500
 	}
 	path := r.URL.Path
@@ -709,6 +719,23 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 		}, trace: []string{"pull", "stop old", "start old", "policy old"}, image: oldImage, restarts: 1, copy: true,
 			state: selfupdate.StateFailed, reason: "the update stopped before Ludock was replaced, so nothing was changed", probe: "live"},
+		{name: "a restart during the pull, where Docker first can't show the helper and then shows it missing, leaves an earlier copy", before: func(g *rig, p *process) {
+			p.d.SetSetting(ctx, nil, "probe", "stale")
+			if err := p.d.CopyBeside(ctx, selfupdate.CopyName); err != nil {
+				t.Fatal(err)
+			}
+			p.d.SetSetting(ctx, nil, "probe", "live")
+			g.stale, _ = os.ReadFile(filepath.Join(g.dataDir, selfupdate.CopyName))
+			g.at["pull"] = func() {
+				g.unreadableFor("ludock-self-update-", 1)
+				g.restartOld()
+			}
+		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
+			if left, err := os.ReadFile(filepath.Join(g.dataDir, selfupdate.CopyName)); err != nil || !bytes.Equal(left, g.stale) {
+				t.Error("the earlier update's copy was changed", err)
+			}
+		}, trace: []string{"pull", "stop old", "start old", "policy old"}, image: oldImage, restarts: 1, copy: true,
+			state: selfupdate.StateFailed, reason: "the update stopped before Ludock was replaced, so nothing was changed", probe: "live"},
 		{name: "a restart just after the copy, before the helper, with an earlier update's copy there, restores this update's own", arrange: func(g *rig) {
 			g.fail["create helper"] = 500
 		}, before: func(g *rig, p *process) {
@@ -1168,5 +1195,31 @@ func TestSelfUpdateGivesUpOnAnUnreadableHelper(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(g.dataDir, selfupdate.CopyName)); err != nil {
 		t.Error("the copy went", err)
+	}
+
+	// Nor when the owner recreated Ludock with Compose long after an update
+	// cut off before its copy, and only the helper can't be read: the copy
+	// there may be an earlier update's.
+	g = newRig(t)
+	p = g.boot(g.old, oldImage)
+	record = selfupdate.Record{ID: identity.NewUUID(), State: selfupdate.StateUpdating, Container: g.old, Name: "ludock",
+		StartedAt: time.Now().Add(-time.Hour).UnixMilli()}
+	if err := p.d.SetSetting(ctx, nil, "ludock.update", record); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(g.dataDir, selfupdate.CopyName), []byte("copy"), 0o600)
+	g.engine.RemoveContainer(g.old)
+	recreated := g.engine.AddContainer(fakedocker.GameOptions{Name: "ludock", Image: tag, Env: []string{"LUDOCK_DATA_DIR=" + g.dataDir},
+		Labels: map[string]string{"com.docker.compose.project": "ludock", "com.docker.compose.service": "ludock"}})
+	g.unreadable(selfupdate.HelperName(record.ID))
+	g.client.Start(ctx, recreated)
+	started := g.process(recreated)
+	for deadline := time.Now().Add(5 * time.Second); started != nil && started.svc.Last(ctx).InProgress(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the update didn't end")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(g.dataDir, selfupdate.CopyName)); started == nil || err != nil {
+		t.Error("the copy went", started == nil, err)
 	}
 }

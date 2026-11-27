@@ -770,7 +770,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		return bounded
 	}
 	spec, err := s.Docker.InspectSpec(ctx, HelperName(record.ID))
-	noHelper := docker.IsNotFound(err)
+	noHelper, helperShown := docker.IsNotFound(err), err == nil
 	if !stuck && (err != nil && !docker.IsNotFound(err) || err == nil && (spec.State.Running || spec.State.Restarting)) {
 		return false
 	}
@@ -789,7 +789,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	settle := func(state, reason string) bool {
 		// A copy this update can't be shown to have written, as one an
 		// earlier update left, is never removed, as it is never restored.
-		if !live && noHelper {
+		if !live && !helperShown {
 			record.Copy = copyErr == nil
 		}
 		if !s.settle(ctx, record, state, reason) {
