@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,6 +93,8 @@ type process struct {
 	svc    *selfupdate.Service
 	d      *db.DB
 	cancel context.CancelFunc
+	// up: its start-up recovery has run, which takes any hold on work.
+	up atomic.Bool
 }
 
 func newRig(t *testing.T) *rig {
@@ -347,6 +350,7 @@ func (g *rig) boot(container, image string, run ...string) *process {
 		return nil
 	}
 	p.svc.Recover(ctx, ctx)
+	p.up.Store(true)
 	return p
 }
 
@@ -366,7 +370,7 @@ func (g *rig) settle(name string) (*process, *docker.ContainerInspect) {
 			p := g.processes[info.ID]
 			g.mu.Unlock()
 			// Settled, and no take-over still holding work back.
-			if p != nil && !p.svc.Last(context.Background()).InProgress() && !p.svc.Updating() {
+			if p != nil && p.up.Load() && !p.svc.Last(context.Background()).InProgress() && !p.svc.Updating() {
 				if release, err := p.svc.Locks.Acquire([]string{"server:settled"}, nil); err == nil {
 					release()
 					return p, info
@@ -834,6 +838,10 @@ func TestSelfUpdateOrder(t *testing.T) {
 					health(g, c, "starting")
 					go func() {
 						settled := g.process(c.ID)
+						// The case plays its settle, so its own background
+						// work stops; its container runs and its lock is
+						// held. Only the original then looks at Docker.
+						settled.cancel()
 						// The owner renamed it, so Docker shows nothing by
 						// its temporary name; the helper dies and Docker
 						// starts the original.
