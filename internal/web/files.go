@@ -121,7 +121,7 @@ func (s *Server) filesView(r *http.Request, request *Request) views.FilesView {
 		return f
 	}
 	if !can(view, authz.FilesRead) {
-		f.Error = "You can’t open this server’s files."
+		f.Error, f.Refused = "You can’t open this server’s files. Ask an administrator for access to them.", true
 		return f
 	}
 	f.CanManage, f.Blocked = can(view, authz.FilesWrite), view.BindingStatus != "active"

@@ -473,6 +473,7 @@ templ RestoreForm(b BackupsView) {
 			<input type="hidden" name="bindingRevision" value={ strconv.FormatInt(b.BindingRevision, 10) }/>
 		}
 		<p>This replaces the server’s current game data. Ludock stops the server and takes a safety backup first; if that fails, nothing is replaced.</p>
+		<p>Only need one file or folder? <a class="text-link" href={ detailURL(b.ServerID, "tab=backups&browse="+b.Restore.ID) } { inPage()... }>Browse this backup</a>.</p>
 		if len(b.SetAside) > 0 {
 			<p class="restore-set-aside">The data folder holds copies Ludock set aside earlier: { nameList(b.SetAside) }. They are replaced with everything else, and stay in the safety backup taken before the restore.</p>
 		}
@@ -862,7 +863,7 @@ templ UpdateTab(serverID string, recreate bool) {
 // UpdatePanel reloads, like the Backups tab, when work ends or an earlier
 // restore's undo is blocked or unblocked.
 templ UpdatePanel(u UpdateView) {
-	<div id="update-panel" hx-get={ "/fragments/servers/" + u.ServerID + "/update" + map[bool]string{true: "?recreate=1"}[u.Recreate] } hx-trigger="operation-finished from:document" hx-swap="outerHTML">
+	<div id="update-panel" hx-get={ "/fragments/servers/" + u.ServerID + "/update" + map[bool]string{true: "?recreate=1"}[u.Recreate] } hx-trigger="operation-finished from:document, image-checked from:document" hx-swap="outerHTML">
 		if u.Removed {
 			<p role="status">This server was removed from Ludock, so it can’t be updated.</p>
 		} else if u.Gone {
@@ -895,12 +896,26 @@ templ UpdatePanel(u UpdateView) {
 				<div class="inline-actions">
 					@reloadUpdate(u.ServerID, "Check again")
 				</div>
+			} else if u.upToDate() && !u.Recreate {
+				@ImageCheck(u)
+				// Up to date, there is nothing to do; the form stays at hand for
+				// recreating the server anyway.
+				{{ anyway := u }}
+				{{ anyway.Recreate = true }}
+				<details class="disclosure" id="update-anyway">
+					<summary>Reinstall this version</summary>
+					@UpdateForm(anyway)
+				</details>
 			} else {
 				@ImageCheck(u)
 				@UpdateForm(u)
 			}
 		}
 	</div>
+}
+
+func (u UpdateView) upToDate() bool {
+	return !u.ChecksOff && u.Check != nil && u.Check.State == update.CheckCurrent && !u.Check.Failed
 }
 
 // ImageCheck is what the background check last learned about a newer image.
@@ -927,7 +942,7 @@ templ ImageCheck(u UpdateView) {
 					case check == nil || check.State == update.CheckPending:
 						Ludock hasn’t checked the registry for a newer image yet.
 					case check.State == update.CheckCurrent:
-						This server runs the newest image its tag points to.
+						This server is up to date.
 					case check.State == update.CheckUnknown:
 						Ludock can’t tell which registry version this server’s image came from, so it can’t compare it with the registry.
 					case check.State == update.CheckPlatform:

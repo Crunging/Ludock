@@ -652,6 +652,14 @@ func DestinationURL(d notify.Destination) string {
 
 func (n NotificationDestinationView) failing() bool { return n.Ready() && n.Health.Failing }
 
+// failureReason is why alerts fail, unless a failed test below says it.
+func (n NotificationDestinationView) failureReason() string {
+	if n.Health.Reason == "" || n.Test != nil && n.Test.LastFailure == n.Health.Reason {
+		return ""
+	}
+	return " " + n.Health.Reason
+}
+
 func destinationState(n NotificationDestinationView) (string, string) {
 	switch {
 	case n.failing():
@@ -728,7 +736,7 @@ templ destinationHealth(n NotificationDestinationView) {
 	<div class="notification-destination__health" id={ destinationID(n.Destination, "health") }>
 		if n.failing() {
 			<div class="alert alert--error" role="alert">
-				Alerts aren’t reaching { n.Destination.Label() }. Last tried @Time(n.Health.LastTried, "", "")<span>:</span> { n.Health.Reason } Fix the settings below, then send a test.
+				<p>{ "Alerts aren’t reaching " + n.Destination.Label() + "." + n.failureReason() } Last tried @Time(n.Health.LastTried, "", "")<span>.</span> Fix the settings below, then send a test.</p>
 			</div>
 		}
 	</div>
@@ -869,25 +877,30 @@ templ destinationHealthUpdate(n NotificationDestinationView) {
 
 // secretField is a write-only input: a saved value is never sent back.
 templ secretField(n NotificationDestinationView, name, label, placeholder, help string, maxlength int) {
-	<label>
-		if n.Saved[name] {
-			{ "Replace " + strings.ToLower(label[:1]) + label[1:] }
-		} else {
-			{ label }
-		}
-		<input
-			type="password"
-			name={ name }
-			autocomplete="new-password"
-			autocapitalize="none"
-			spellcheck="false"
-			maxlength={ strconv.Itoa(maxlength) }
-			if help != "" {
-				aria-describedby={ destinationID(n.Destination, name+"-help") }
+	<div class="secret-field">
+		<label>
+			if n.Saved[name] {
+				{ "Replace " + strings.ToLower(label[:1]) + label[1:] }
+			} else {
+				{ label }
 			}
-			placeholder={ map[bool]string{true: "Saved (leave blank to keep it)", false: placeholder}[n.Saved[name]] }
-		/>
-	</label>
+			<input
+				type="password"
+				id={ destinationID(n.Destination, name+"-field") }
+				name={ name }
+				autocomplete="new-password"
+				autocapitalize="none"
+				spellcheck="false"
+				maxlength={ strconv.Itoa(maxlength) }
+				if help != "" {
+					aria-describedby={ destinationID(n.Destination, name+"-help") }
+				}
+				placeholder={ map[bool]string{true: "Saved (leave blank to keep it)", false: placeholder}[n.Saved[name]] }
+			/>
+		</label>
+		// Shows only what is typed: a saved value is never put in the field.
+		<button class="text-link secret-reveal" type="button" data-reveal={ destinationID(n.Destination, name+"-field") } aria-controls={ destinationID(n.Destination, name+"-field") } aria-pressed="false">Show what you typed</button>
+	</div>
 	if help != "" {
 		<p class="muted" id={ destinationID(n.Destination, name+"-help") }>{ help }</p>
 	}

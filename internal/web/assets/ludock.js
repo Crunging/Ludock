@@ -114,6 +114,18 @@
     dialog.showModal();
   });
 
+  // data-reveal shows or hides what is typed into the secret field it names.
+  // A saved secret is never put in the field, so only new text shows.
+  document.addEventListener("click", function (event) {
+    var toggle = event.target.closest && event.target.closest("[data-reveal]");
+    if (!toggle) return;
+    var field = document.getElementById(toggle.getAttribute("data-reveal"));
+    if (!field) return;
+    var show = field.type === "password";
+    field.type = show ? "text" : "password";
+    toggle.setAttribute("aria-pressed", show ? "true" : "false");
+  });
+
   // data-dialog-close closes its native dialog.
   document.addEventListener("click", function (event) {
     var closer = event.target.closest && event.target.closest("[data-dialog-close]");
@@ -298,15 +310,31 @@
   }
 
   // data-confirm-value="name" keeps the form's submit button disabled until
-  // the field matches.
-  function confirmations(root) {
+  // the field matches, and says so once what is typed can't become the name.
+  function confirmations(root, left) {
     (root || document).querySelectorAll("input[data-confirm-value]").forEach(function (input) {
+      var name = input.getAttribute("data-confirm-value");
       var button = input.form && input.form.querySelector("button[type=submit]");
-      if (button) button.disabled = input.value !== input.getAttribute("data-confirm-value");
+      if (button) button.disabled = input.value !== name;
+      var wrong = input.value !== "" && input.value !== name && (input === left || name.indexOf(input.value) !== 0);
+      var note = input.parentElement.querySelector("[data-confirm-mismatch]");
+      if (wrong && !note) {
+        note = document.createElement("small");
+        note.className = "field-error";
+        note.setAttribute("data-confirm-mismatch", "");
+        note.setAttribute("role", "status");
+        note.textContent = "The name must match exactly, including capitals and spaces.";
+        input.after(note);
+      }
+      if (note) note.hidden = !wrong;
+      input.setAttribute("aria-invalid", wrong ? "true" : "false");
     });
   }
   document.addEventListener("input", function (event) {
     if (event.target.matches && event.target.matches("input[data-confirm-value]")) confirmations(event.target.form);
+  });
+  document.addEventListener("change", function (event) {
+    if (event.target.matches && event.target.matches("input[data-confirm-value]")) confirmations(event.target.form, event.target);
   });
 
   // History dates: a datetime-local field (local time) edits the hidden

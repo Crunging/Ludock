@@ -551,6 +551,8 @@ func (s *Server) checkImage(w http.ResponseWriter, r *http.Request, request *Req
 		}
 		u.ChecksOff = !s.App.Checks.Enabled(r.Context())
 	}
+	// The panel follows: up to date, its form folds away.
+	w.Header().Set("HX-Trigger", "image-checked")
 	render(w, r, http.StatusOK, views.ImageCheck(u))
 }
 

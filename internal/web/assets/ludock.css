@@ -360,6 +360,9 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 .connection-notice .alert--error { background: color-mix(in srgb, var(--halt) 15%, var(--raised)); }
 .connection-notice .alert--warning { background: color-mix(in srgb, var(--caution) 20%, var(--raised)); }
 .operation-error { color: var(--halt-text); font-size: 14px; margin-top: 4px; }
+.field-error { display: block; color: var(--halt-text); font-size: 14px; margin-top: 4px; }
+.secret-field { display: grid; gap: 4px; }
+.secret-reveal { justify-self: start; }
 /* Help and empty states are unlit blocks: outlined, like a stopped server's marker. */
 .help-panel, .admin-setup-help, .empty-state {
   border: 2px dashed var(--edge); border-radius: var(--radius-lg);
@@ -699,6 +702,7 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .detail-header__identity .marker { display: none; }
 .detail-actions { display: flex; gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
 .detail-actions__group { display: flex; gap: 6px; }
+.detail-actions__reason { flex-basis: 100%; margin: 0; text-align: right; font-size: 0.85rem; }
 #detail-live > .alert, #detail-live > .section-note { margin-top: 0; margin-bottom: 16px; }
 .detail-operation-notice {
   display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap;
@@ -1282,6 +1286,7 @@ td > .cancel-form { display: block; margin-top: 6px; }
   .server-list__empty > * { grid-column: 1; }
   .detail-header { grid-template-columns: auto 1fr; }
   .detail-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .detail-actions__reason { text-align: left; }
   .detail-header__title .page__title { font-size: 28px; }
   .detail-header > .marker { width: 20px; height: 20px; margin-top: 7px; }
   /* Every tab stays in sight; a row that scrolls hides the ones past it. */
