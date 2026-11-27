@@ -503,7 +503,7 @@ func (s *Service) Start(ctx context.Context, adminID, tokenHash, ip string) erro
 	}
 	record := Record{ID: identity.NewUUID(), State: StateUpdating, ActorID: adminID, From: s.Version,
 		Container: own.ID, Name: strings.TrimPrefix(own.Name, "/"), Previous: own.Image, StartedAt: db.Now(),
-		Policy: ownerPolicy(s.Last(ctx), plan.RestartPolicy())}
+		Policy: ownerPolicy(s.Last(ctx), own, plan.RestartPolicy())}
 	err = s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
 		var current Record
 		if _, err := db.ReadSetting(ctx, tx, recordSetting, &current); err != nil {
@@ -659,10 +659,12 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 }
 
 // ownerPolicy is the restart policy a new update keeps as the owner's: the
-// one an update that stopped partway recorded, which a leftover "no" on this
-// container can't have overwritten, or else the container's own.
-func ownerPolicy(last *Record, current json.RawMessage) json.RawMessage {
-	if last != nil && last.State == StateInterrupted && len(last.Policy) > 0 {
+// one an update that stopped partway recorded, which a leftover "no" on one
+// of its containers can't have overwritten, or else the container's own, as
+// for one Compose made since.
+func ownerPolicy(last *Record, own *docker.ContainerInspect, current json.RawMessage) json.RawMessage {
+	if last != nil && last.State == StateInterrupted && len(last.Policy) > 0 &&
+		(own.ID == last.Container || own.Config.Labels[update.OperationLabel] == last.ID) {
 		return last.Policy
 	}
 	return current
@@ -687,7 +689,7 @@ func (s *Service) startHelper(ctx context.Context, record Record, own *docker.Co
 	var host struct{ GroupAdd, CapAdd []string }
 	json.Unmarshal(encode(spec.HostConfig), &host)
 	body := map[string]any{"Image": own.Image, "Entrypoint": []string{helper.Binary},
-		"Cmd":  []string{"self-update", record.Container, record.Target, record.ID},
+		"Cmd":  []string{"self-update", record.Container, record.Target, record.ID, string(record.Policy)},
 		"Env":  []string{"LUDOCK_DOCKER_SOCKET=" + socket.Destination},
 		"User": config.User, "Labels": launch.HelperLabels(helperKind), "Healthcheck": map[string]any{"Test": []string{"NONE"}},
 		"HostConfig": map[string]any{"NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": []string{"ALL"},
@@ -947,9 +949,13 @@ func (s *Service) settle(ctx context.Context, record Record, state, reason strin
 	// An update that pulled a new image and didn't succeed leaves Ludock's
 	// tag on the image it runs, as before: otherwise any docker compose up
 	// would start the rejected one, with nothing to put it back.
-	if state != StateSucceeded && state != StateCurrent && record.Target != "" && record.Target != record.Previous {
+	// A restart between the pull and the record leaves Target empty, but the
+	// tag may have moved; one the owner moved since, to another image, stays.
+	if state != StateSucceeded && state != StateCurrent {
 		if own, err := s.current(ctx); err == nil && own.Image == record.Previous {
-			record.TagLeft = s.Docker.Tag(ctx, record.Previous, own.Config.Image) != nil
+			if tagged, err := s.Docker.InspectImage(ctx, own.Config.Image); err == nil && tagged != record.Previous && (record.Target == "" || tagged == record.Target) {
+				record.TagLeft = s.Docker.Tag(ctx, record.Previous, own.Config.Image) != nil
+			}
 		}
 	}
 	for {
@@ -1042,8 +1048,14 @@ func (s *Service) Recover(ctx, base context.Context) {
 	s.mu.Unlock()
 	record := s.Last(ctx)
 	if !record.InProgress() {
+		// No update starts while it takes over: one beginning meanwhile
+		// could have its reboot protection undone.
 		if record != nil && record.State == StateInterrupted && len(record.Policy) > 0 {
-			go s.takeOver(base, *record)
+			lift := s.Locks.Hold(errUpdating)
+			go func() {
+				defer lift()
+				s.takeOver(base, *record)
+			}()
 		}
 		// One whose removal failed after its update was recorded goes now.
 		if record != nil && record.ID != "" {
@@ -1083,8 +1095,11 @@ func (s *Service) takeOver(ctx context.Context, record Record) {
 			refused = true
 		}
 	}
-	if ours && !refused {
-		refused = s.Docker.SetRestartPolicy(ctx, own.ID, record.Policy) != nil
+	var policy struct{ Name string }
+	json.Unmarshal(record.Policy, &policy)
+	// The owner's "no" enables nothing, so it is taken whatever the others did.
+	if ours && (!refused || policy.Name == "no") {
+		refused = s.Docker.SetRestartPolicy(ctx, own.ID, record.Policy) != nil || refused
 	}
 	if refused != record.NoPolicy {
 		s.DB.Tx(ctx, func(tx *sql.Tx) error {

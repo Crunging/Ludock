@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,6 +17,8 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/servers"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // How a put-back left the data.
@@ -32,39 +35,49 @@ const (
 // When the helper put this original back, or the update was cut off with no
 // word from it, as by a reboot, it renames the data copy over the database,
 // so the version that wrote the copy restores it. It returns DataRestored or
-// "", and an error when this Ludock must not start: two would serve.
-func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir string, wait time.Duration) (string, error) {
-	if container == "" {
-		return "", nil
-	}
-	record, ok, err := saved(dataDir)
-	if err != nil || !ok {
-		return "", err
-	}
-	restore, err := decide(ctx, client, container, record, wait)
-	if err != nil {
-		return "", err
-	}
-	// No Ludock opens the data, or puts the copy back, while another
-	// container of an update that didn't finish may serve on it: every way
-	// to start passes here, and anything but Docker showing the others
-	// stopped or gone refuses, for Docker to start this one again later.
-	if record.State == StateUpdating || record.State == StateInterrupted {
-		if err := alone(ctx, client, container, record); err != nil {
-			return "", err
+// "", with the data folder's lock for this Ludock to hold while it runs, and
+// an error when this Ludock must not start: two would serve.
+func BeforeOpen(ctx context.Context, client *docker.Client, container, dataDir string, wait time.Duration) (string, io.Closer, error) {
+	restore := false
+	if container != "" {
+		record, ok, err := saved(dataDir)
+		if err != nil {
+			return "", nil, err
+		}
+		if ok {
+			if restore, err = decide(ctx, client, container, record, wait); err != nil {
+				return "", nil, err
+			}
+		}
+		// No Ludock opens the data, or puts the copy back, while another
+		// container of an update that didn't finish may serve on it: every
+		// way to start passes here, and anything but Docker showing the
+		// others stopped or gone refuses, for Docker to start this one again
+		// later.
+		if ok && (record.State == StateUpdating || record.State == StateInterrupted) {
+			if err := alone(ctx, client, container, record); err != nil {
+				return "", nil, err
+			}
 		}
 	}
+	// Nor while any other Ludock runs on the folder, in whatever container:
+	// this one holds it from here. That comes after the decision, which may
+	// stop an update's new container, so the original can still put it back.
+	lock, err := db.Lock(dataDir)
+	if err != nil {
+		return "", nil, err
+	}
 	if !restore {
-		return "", nil
+		return "", lock, nil
 	}
 	if err := putDataBack(dataDir); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			log.Error("Ludock couldn't put back the copy of its data from before the update, so it starts on the newer data")
 		}
-		return "", nil
+		return "", lock, nil
 	}
 	log.Info("Ludock put back the copy of its data from before the update")
-	return DataRestored, nil
+	return DataRestored, lock, nil
 }
 
 // decide reports whether container, starting, puts the update's copy back.
@@ -168,23 +181,43 @@ func saved(dataDir string) (Record, bool, error) {
 		return record, false, err
 	}
 	defer d.Close()
-	var tables int
-	err = d.QueryRow("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'settings'").Scan(&tables)
 	var value []byte
-	if err == nil && tables == 0 {
-		return record, false, nil
-	} else if err == nil {
-		err = d.QueryRow("SELECT value_json FROM settings WHERE key = ?", recordSetting).Scan(&value)
+	// A read can fail for a moment, as while another connection recovers
+	// the WAL; it is tried again before it decides anything.
+	for try := 0; ; try++ {
+		var tables int
+		err = d.QueryRow("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'settings'").Scan(&tables)
+		if err == nil && tables == 0 {
+			return record, false, nil
+		} else if err == nil {
+			err = d.QueryRow("SELECT value_json FROM settings WHERE key = ?", recordSetting).Scan(&value)
+		}
+		if err == nil || errors.Is(err, sql.ErrNoRows) || try == 10 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return record, false, nil
-	case err != nil && db.Inspect(path) != nil:
+	case err != nil && refused(db.Inspect(path)):
 		return record, false, nil
 	case err != nil:
 		return record, false, err
 	}
 	return record, true, json.Unmarshal(value, &record)
+}
+
+// refused reports whether db.Open refuses the database for good, as one a
+// beta or a newer version wrote, or a file that isn't a database: not a busy
+// or locked moment.
+func refused(err error) bool {
+	var failed *sqlite.Error
+	if errors.As(err, &failed) {
+		code := failed.Code() & 0xff
+		return code != sqlite3.SQLITE_BUSY && code != sqlite3.SQLITE_LOCKED
+	}
+	return err != nil && !errors.Is(err, os.ErrNotExist)
 }
 
 // Unfinished is what to add to Ludock's refusal of data a newer version

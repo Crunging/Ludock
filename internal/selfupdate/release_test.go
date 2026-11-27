@@ -80,7 +80,10 @@ func TestReadsSelfUpdatesRecordedBy10(t *testing.T) {
 			unpackData(t, filepath.Join(fixture, "data.tar.gz"), dataDir)
 
 			client := docker.New(engine.Socket)
-			putBack, _ := selfupdate.BeforeOpen(ctx, client, own.ID, dataDir, 2*time.Second)
+			putBack, held, _ := selfupdate.BeforeOpen(ctx, client, own.ID, dataDir, 2*time.Second)
+			if held != nil {
+				t.Cleanup(func() { held.Close() })
+			}
 			d, err := db.Open(filepath.Join(dataDir, "ludock.db"))
 			if err != nil {
 				t.Fatal("open:", err)

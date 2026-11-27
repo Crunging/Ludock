@@ -4,6 +4,7 @@ package fake
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -35,7 +36,7 @@ func Run(engine *fakedocker.Engine, options Options) {
 	}
 	engine.Starts["self-update"] = func(c *fakedocker.Container) {
 		cmd := c.CreateRequest.Cmd
-		if len(cmd) != 4 || cmd[0] != "self-update" {
+		if len(cmd) < 4 || cmd[0] != "self-update" {
 			return
 		}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -44,6 +45,9 @@ func Run(engine *fakedocker.Engine, options Options) {
 		}
 		run := &selfupdate.Helper{Docker: docker.New(engine.Socket), Container: cmd[1], Image: cmd[2], Operation: cmd[3],
 			Poll: options.Poll, HealthWait: options.HealthWait}
+		if len(cmd) > 4 {
+			run.Policy = json.RawMessage(cmd[4])
+		}
 		go func() {
 			code := run.Run(ctx)
 			if ctx.Err() == nil {

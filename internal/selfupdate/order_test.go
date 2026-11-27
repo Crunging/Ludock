@@ -12,6 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -78,6 +79,8 @@ type rig struct {
 	stale []byte
 	// retries counts the restarts Docker gave a Ludock that refused to start.
 	retries int
+	// held is each container's Ludock's lock on the data folder.
+	held map[string]io.Closer
 	// done: the case has ended, and boots are the Ludocks still starting.
 	done  bool
 	boots sync.WaitGroup
@@ -96,7 +99,7 @@ func newRig(t *testing.T) *rig {
 	}
 	t.Cleanup(func() { engine.Close() })
 	g := &rig{t: t, engine: engine, client: docker.New(engine.Socket), dataDir: filepath.Join(t.TempDir(), "data?#1"), fail: map[string]int{},
-		at: map[string]func(){}, processes: map[string]*process{}, killed: make(chan struct{})}
+		at: map[string]func(){}, processes: map[string]*process{}, held: map[string]io.Closer{}, killed: make(chan struct{})}
 	// Named with ? and #, which a file URI must escape.
 	if err := os.Mkdir(g.dataDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -161,7 +164,14 @@ func newRig(t *testing.T) *rig {
 		g.mu.Lock()
 		running := g.processes[c.ID]
 		delete(g.processes, c.ID)
+		held := g.held[c.ID]
+		delete(g.held, c.ID)
 		g.mu.Unlock()
+		// Its lock goes as the process dies, whether or not it had
+		// finished starting.
+		if held != nil {
+			held.Close()
+		}
 		if running != nil {
 			running.cancel()
 		}
@@ -271,18 +281,27 @@ func (g *rig) boot(container, image string, run ...string) *process {
 	}
 	// The helper exits just after it starts the original, which under -race
 	// on a loaded machine can take seconds.
-	putBack, err := selfupdate.BeforeOpen(ctx, g.client, container, g.dataDir, 10*time.Second)
+	putBack, held, err := selfupdate.BeforeOpen(ctx, g.client, container, g.dataDir, 10*time.Second)
 	if err != nil {
 		cancel()
 		g.refused(container)
 		return nil
 	}
+	g.t.Cleanup(func() { held.Close() })
+	g.mu.Lock()
+	g.held[container] = held
+	g.mu.Unlock()
+	if info := g.engine.Container(container); info == nil || !info.State.Running {
+		held.Close()
+	}
 	if ended() {
+		held.Close()
 		cancel()
 		return nil
 	}
 	d, err := db.Open(filepath.Join(g.dataDir, "ludock.db"))
 	if err != nil {
+		held.Close()
 		cancel()
 		return nil
 	}
@@ -300,6 +319,7 @@ func (g *rig) boot(container, image string, run ...string) *process {
 	g.mu.Unlock()
 	// A run that already ended, before its process was there to die, has none.
 	if info := g.engine.Container(container); len(run) > 0 && (info == nil || !info.State.Running || info.State.StartedAt != run[0]) {
+		held.Close()
 		cancel()
 		return nil
 	}
@@ -409,6 +429,28 @@ func TestSelfUpdateOrder(t *testing.T) {
 		then func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect)
 	}{
 		{name: "success", trace: join(swap, []string{"policy old", "policy new", "remove old", "rename new", "remove helper"}),
+			image: newImage, state: selfupdate.StateSucceeded, probe: "after"},
+		{name: "a second Ludock started on the same data folder refuses", trace: join(swap, []string{"policy old", "policy new", "remove old", "rename new", "remove helper"}),
+			then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
+				other := g.engine.AddContainer(fakedocker.GameOptions{Name: "ludock-copy", Image: tag, Env: []string{"LUDOCK_DATA_DIR=" + g.dataDir},
+					Labels: map[string]string{"com.docker.compose.project": "other", "com.docker.compose.service": "ludock"}})
+				g.client.Start(ctx, other)
+				time.Sleep(200 * time.Millisecond)
+				g.mu.Lock()
+				beside := g.processes[other]
+				g.mu.Unlock()
+				if beside != nil {
+					t.Error("a second Ludock started on the same data")
+				}
+			}, image: newImage, state: selfupdate.StateSucceeded, probe: "after"},
+		{name: "an update after one that stopped partway gives the new version the owner's policy, not a leftover no", before: func(g *rig, p *process) {
+			earlier := selfupdate.Record{ID: identity.NewUUID(), State: selfupdate.StateInterrupted, Container: g.old, Name: "ludock",
+				Policy: json.RawMessage(`{"Name":"unless-stopped","MaximumRetryCount":0}`)}
+			if err := p.d.SetSetting(ctx, nil, "ludock.update", earlier); err != nil {
+				t.Fatal(err)
+			}
+			g.client.SetRestartPolicy(ctx, g.old, json.RawMessage(`{"Name":"no","MaximumRetryCount":0}`))
+		}, trace: join([]string{"policy old"}, swap, []string{"policy old", "policy new", "remove old", "rename new", "remove helper"}),
 			image: newImage, state: selfupdate.StateSucceeded, probe: "after"},
 		{name: "the new version reports itself unhealthy, as one that can't use the data does", arrange: func(g *rig) {
 			g.onStart = func(c *fakedocker.Container) {
@@ -1061,7 +1103,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 			}
 			// One that pulled and ends on the old version leaves Ludock's tag on
 			// it, so docker compose up doesn't start the rejected image.
-			if record := after.svc.Last(ctx); running.Image == oldImage && record.Target != "" && record.Target != record.Previous {
+			if running.Image == oldImage {
 				if id, _ := g.client.InspectImage(ctx, tag); id != oldImage {
 					t.Errorf("Ludock's tag points at %s", id)
 				}
@@ -1257,6 +1299,8 @@ func TestSelfUpdateGivesUpOnAnUnreadableHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(g.dataDir, selfupdate.CopyName), []byte("copy"), 0o600)
+	// Removing it, as Compose does, ends the Ludock in it first.
+	g.client.Stop(ctx, g.old, nil)
 	g.engine.RemoveContainer(g.old)
 	recreated := g.engine.AddContainer(fakedocker.GameOptions{Name: "ludock", Image: tag, Env: []string{"LUDOCK_DATA_DIR=" + g.dataDir},
 		Labels: map[string]string{"com.docker.compose.project": "ludock", "com.docker.compose.service": "ludock"}})
@@ -1285,8 +1329,12 @@ func TestBeforeOpenLeavesNewAndRefusedDataToOpen(t *testing.T) {
 			t.Fatal(err)
 		}
 		client := docker.New(filepath.Join(dataDir, "no-docker.sock"))
-		if putBack, err := selfupdate.BeforeOpen(ctx, client, "ludock", dataDir, time.Second); err != nil || putBack != "" {
+		putBack, held, err := selfupdate.BeforeOpen(ctx, client, "ludock", dataDir, time.Second)
+		if err != nil || putBack != "" {
 			t.Errorf("%s: BeforeOpen %q %v", name, putBack, err)
+		}
+		if held != nil {
+			held.Close()
 		}
 		d, err := db.Open(path)
 		if (err == nil) != (name == "empty") {

@@ -76,8 +76,11 @@ type Helper struct {
 	Docker    *docker.Client
 	Container string
 	// Image is the pulled image the new container runs.
-	Image      string
-	Operation  string
+	Image     string
+	Operation string
+	// Policy is the owner's restart policy, as the update recorded it; the
+	// original's own may be a leftover "no".
+	Policy     json.RawMessage
 	HealthWait time.Duration
 	Poll       time.Duration
 }
@@ -90,6 +93,9 @@ func (h *Helper) Run(ctx context.Context) int {
 		return ExitUnchanged
 	}
 	policy := old.HostConfig["RestartPolicy"]
+	if len(h.Policy) > 0 {
+		policy = h.Policy
+	}
 	plan, err := (&update.Service{Docker: h.Docker}).CheckContainer(ctx, old.ID, false)
 	var image *docker.ImageInspect
 	if err == nil {

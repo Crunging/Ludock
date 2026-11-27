@@ -558,7 +558,9 @@ its two containers ever has a restart policy:
   new container, and says the update was cut off. Starting the old container
   by hand does the same. While the helper still runs, the old version waits
   for it, and it never starts beside a new version Docker can't confirm
-  stopped: Docker starts it again a little later.
+  stopped: Docker starts it again a little later. Nor does any Ludock start on a data
+  folder another Ludock runs on, in whatever container: it says so and
+  stops.
 - Once the new version has passed, that is the new container, so Docker
   starts the new version. If the old container is gone, it gives itself
   Ludock's name, and the update has succeeded.

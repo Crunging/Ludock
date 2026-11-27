@@ -21,6 +21,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/logging"
 )
 
 // A saved copy of Ludock's data is a tar archive of exactly the files in the
@@ -38,6 +39,34 @@ type Snapshot struct {
 	*os.File
 	Size     int64
 	Checksum string
+}
+
+var lockLog = logging.New("data")
+
+// ErrInUse refuses a second Ludock on data another one runs on.
+var ErrInUse = apperr.New("DATA_IN_USE", 409, "Another Ludock already runs on this data folder, so this one won’t start beside it.")
+
+// Lock holds the data folder dir for this process alone, until the returned
+// file is closed or the process exits: a second Ludock on the same folder,
+// in any container, gets ErrInUse. The folder, not the database, is locked,
+// since putting a data copy back renames another file over the database.
+// Where the filesystem can't lock, it carries on unlocked.
+func Lock(dir string) (*os.File, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	folder, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	switch err := unix.Flock(int(folder.Fd()), unix.LOCK_EX|unix.LOCK_NB); {
+	case errors.Is(err, unix.EWOULDBLOCK):
+		folder.Close()
+		return nil, ErrInUse
+	case err != nil:
+		lockLog.Warn("Ludock couldn't lock its data folder, so it can't tell whether another Ludock runs on it", logging.F("errno", err.Error()))
+	}
+	return folder, nil
 }
 
 // processIDs are the user and group IDs a save records.
