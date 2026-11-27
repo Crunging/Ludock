@@ -85,6 +85,8 @@ type Record struct {
 	// it left is there any more, with Running the version that runs now.
 	Finished bool   `json:"-"`
 	Running  string `json:"-"`
+	// Unchecked: Docker couldn't say whether the original still exists.
+	Unchecked bool `json:"-"`
 }
 
 func (r *Record) InProgress() bool { return r != nil && r.State == StateUpdating }
@@ -163,6 +165,7 @@ var (
 
 const (
 	reasonUnchanged   = "Docker couldn’t swap in Ludock’s new container, so nothing was changed"
+	reasonCutOff      = "the update was cut off, for example by a restart, before the new version was accepted"
 	reasonNotReplaced = "the update stopped before Ludock was replaced, so nothing was changed"
 	reasonInterrupted = "the update stopped partway"
 )
@@ -217,9 +220,10 @@ func (s *Service) present(ctx context.Context, record *Record) {
 	}
 	// Removing the container this Ludock runs in is advised only while
 	// Docker shows the original, which may hold an anonymous data volume.
+	// Only Docker showing it gone counts; while it can't say, no command.
 	if record.OnLeftover {
 		_, err := s.Docker.InspectSpec(ctx, record.Container)
-		record.OriginalGone = err != nil
+		record.OriginalGone, record.Unchecked = docker.IsNotFound(err), err != nil && !docker.IsNotFound(err)
 	}
 	_, err = os.Lstat(filepath.Join(s.DataDir, CopyName))
 	record.Copy = err == nil
@@ -786,8 +790,22 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		}
 		return false
 	}
-	_, gone := s.Docker.InspectSpec(ctx, record.Container)
+	first, gone := s.Docker.InspectSpec(ctx, record.Container)
 	original, ownReplacement := own.ID == record.Container, own.Config.Labels[update.OperationLabel] == record.ID
+	putBack := putBackReason(code)
+	verdict := code == ExitUpdated || code == ExitUnchanged || putBack >= 0
+	// An original running again with no word from the helper puts the
+	// update back and stops this one first, so it waits.
+	if ownReplacement && !verdict && !stuck && gone == nil && first.State.Running {
+		return false
+	}
+	// One under its temporary name takes Ludock's name once Docker shows its
+	// original gone: the helper removes that only after the new one passed.
+	renamed := ownReplacement && own.Name != "/"+record.Name && docker.IsNotFound(gone) && own.State.Health != nil &&
+		own.State.Health.Status == "healthy" && s.Docker.Rename(call(), own.ID, record.Name) == nil
+	if renamed {
+		own.Name = "/" + record.Name
+	}
 	// Only a container of this update, by its label, is left over.
 	replacement, err := s.Docker.InspectSpec(ctx, servers.ReplacementName(record.Name, record.ID))
 	// Nothing changed only once Docker showed whether one is left.
@@ -807,27 +825,35 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	// goes.
 	started, _ := time.Parse(time.RFC3339Nano, own.State.StartedAt)
 	untouched := original && (started.Before(time.UnixMilli(record.StartedAt)) || noHelper && noReplacement)
-	// So does one after the helper said nothing changed: it never ran.
-	if (untouched || original && code == ExitUnchanged) && record.Leftover != "" && !replacement.State.Running {
+	// An original started again with no word from the helper, as after a
+	// reboot, put the update back as it started: it stopped the new one.
+	cutOff := original && !noHelper && !verdict && !untouched
+	// So does one after the helper said nothing changed, or that was cut
+	// off: it never ran, or no longer does.
+	if (untouched || original && code == ExitUnchanged || cutOff) && record.Leftover != "" && !replacement.State.Running {
 		if err := s.Docker.Remove(call(), replacement.ID, true, true); err == nil || docker.IsNotFound(err) {
 			record.Leftover = ""
 		}
 	}
 	log.Info("Ludock's update helper ended", logging.F("exitCode", code))
-	putBack := putBackReason(code)
 	succeeded := ownReplacement && own.Name == "/"+record.Name && docker.IsNotFound(gone)
-	// Whichever Ludock settles an update that didn't succeed gets the
-	// restart policy Ludock had as it began: the helper gave the original
-	// and the new container none, so a reboot would leave either stopped.
-	if (original || ownReplacement && !succeeded) && len(record.Policy) > 0 && s.Docker.SetRestartPolicy(call(), own.ID, record.Policy) != nil {
-		record.NoPolicy = true
+	// At most one of the two containers has a restart policy, so a reboot
+	// starts one Ludock. Whichever settles an update the helper didn't
+	// finish takes the one Ludock had as it began, the owner's even if
+	// "no", once the other has none; if that fails it takes none.
+	if (original || ownReplacement && (!succeeded || renamed)) && len(record.Policy) > 0 {
+		other := ""
+		if original && record.Leftover != "" {
+			other = record.Leftover
+		} else if ownReplacement && gone == nil {
+			other = record.Container
+		}
+		if other != "" && s.Docker.SetRestartPolicy(call(), other, noRestart) != nil || s.Docker.SetRestartPolicy(call(), own.ID, record.Policy) != nil {
+			record.NoPolicy = true
+		}
 	}
-	switch {
-	case !original && !ownReplacement:
-		// The owner started Ludock from a terminal, on the data as it is.
-		record.Copy = false
-		return settle(StateInterrupted, reasonInterrupted)
-	case original && putBack >= 0:
+	// How a put-back left the data.
+	data := func() {
 		switch {
 		case s.PutBack == DataRestored:
 			record.Data = DataRestored
@@ -845,7 +871,18 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		default:
 			record.Data = DataKept
 		}
+	}
+	switch {
+	case !original && !ownReplacement:
+		// The owner started Ludock from a terminal, on the data as it is.
+		record.Copy = false
+		return settle(StateInterrupted, reasonInterrupted)
+	case original && putBack >= 0:
+		data()
 		return settle(StatePutBack, Reasons[putBack])
+	case cutOff:
+		data()
+		return settle(StatePutBack, reasonCutOff)
 	case original && code == ExitUnchanged && known && record.Leftover == "":
 		record.Copy = false
 		return settle(StateFailed, reasonUnchanged)

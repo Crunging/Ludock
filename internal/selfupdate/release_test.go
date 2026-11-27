@@ -48,9 +48,10 @@ func TestReadsSelfUpdatesRecordedBy10(t *testing.T) {
 		// The original running again on data the new version migrated, its
 		// helper done: the copy from 1.0 is put back.
 		{name: "updating-put-back", state: selfupdate.StatePutBack, data: selfupdate.DataRestored, probe: "before"},
-		// The helper killed mid-swap, and the owner started the original: the
-		// new container it never started is left for the owner to remove.
-		{name: "updating-owner-restarted", state: selfupdate.StateInterrupted, probe: "after", copy: true, leftover: true},
+		// The helper killed mid-swap, and the owner started the original: with
+		// no word from the helper, it puts the update back, data and all, and
+		// removes the new container it never started.
+		{name: "updating-owner-restarted", state: selfupdate.StatePutBack, data: selfupdate.DataRestored, probe: "before"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fixture := filepath.Join("testdata/1.0/self-update", c.name)
@@ -79,7 +80,7 @@ func TestReadsSelfUpdatesRecordedBy10(t *testing.T) {
 			unpackData(t, filepath.Join(fixture, "data.tar.gz"), dataDir)
 
 			client := docker.New(engine.Socket)
-			putBack := selfupdate.BeforeOpen(ctx, client, own.ID, dataDir, 2*time.Second)
+			putBack, _ := selfupdate.BeforeOpen(ctx, client, own.ID, dataDir, 2*time.Second)
 			d, err := db.Open(filepath.Join(dataDir, "ludock.db"))
 			if err != nil {
 				t.Fatal("open:", err)
@@ -106,10 +107,19 @@ func TestReadsSelfUpdatesRecordedBy10(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(dataDir, selfupdate.CopyName)); (err == nil) != c.copy {
 				t.Errorf("data copy left: %v", err == nil)
 			}
-			for _, id := range engine.SortedIDs() {
-				if info := engine.Container(id); info != nil && info.Config.Labels["ludock.internal"] == "self-update" {
-					t.Error("the helper is left")
+			// The helper goes just after the outcome is saved.
+			helper := func() bool {
+				for _, id := range engine.SortedIDs() {
+					if info := engine.Container(id); info != nil && info.Config.Labels["ludock.internal"] == "self-update" {
+						return true
+					}
 				}
+				return false
+			}
+			for deadline := time.Now().Add(5 * time.Second); helper() && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			}
+			if helper() {
+				t.Error("the helper is left")
 			}
 		})
 	}

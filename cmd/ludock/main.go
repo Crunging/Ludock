@@ -98,7 +98,11 @@ func serve() int {
 
 	// An update's helper that put this container back left the data copy
 	// for it to restore before it opens the database.
-	putBack := selfupdate.BeforeOpen(ctx, docker.New(cfg.DockerSocket), cfg.MountID, cfg.DataDir, time.Minute)
+	putBack, err := selfupdate.BeforeOpen(ctx, docker.New(cfg.DockerSocket), cfg.MountID, cfg.DataDir, time.Minute)
+	if err != nil {
+		log.Error(startupError(err, ""))
+		return 1
+	}
 	database, err := db.Open(cfg.DBPath())
 	if apperr.Is(err, "DATABASE_INCOMPATIBLE") {
 		return refuse(ctx, cfg.Listen, startupError(err, "")+selfupdate.Unfinished(cfg.DataDir))

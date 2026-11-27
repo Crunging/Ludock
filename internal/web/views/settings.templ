@@ -346,6 +346,8 @@ templ LudockNotice(check *update.CheckStatus, offer selfupdate.Offer) {
 							if failed.Copy {
 								<p class="muted">The copy of its data from before the update, { selfupdate.CopyName }, is beside its database. The next update replaces it.</p>
 							}
+						} else if failed.State == selfupdate.StateInterrupted && failed.Unchecked {
+							<p>Ludock couldn’t check with Docker just now which containers are left, so it gives no command yet. Reload this page in a moment.</p>
 						} else if failed.State == selfupdate.StateInterrupted {
 							if failed.OnLeftover && failed.OriginalGone {
 								// Removing it could orphan an anonymous volume that holds the data.
