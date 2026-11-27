@@ -556,6 +556,9 @@ func (s *Service) apply(ctx context.Context, alerts []alert, query string, args 
 	})
 	if err == nil && changed {
 		s.alerted(alerts)
+		// An audit entry written in the transaction leaves its pruning
+		// to here.
+		s.DB.PruneAuditIfNeeded(ctx)
 	}
 	return changed && err == nil, err
 }
