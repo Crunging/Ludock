@@ -905,7 +905,16 @@ func endedGuidance(job *ops.Context, state *restoreRecovery, touched bool) strin
 	default:
 		guidance = "Nothing was restored, but the backup’s unpacked copy is still in the folder " + stageName(job) + ". Ludock removes it " + pendingLater + "."
 	}
-	return asideOutcome(job, guidance, touched || movedLive(state))
+	if !touched && !movedLive(state) {
+		return guidance
+	}
+	// Until an undo has run, nothing has gone to the set-aside folder.
+	if state.Status == "rolled_back" || slices.ContainsFunc(state.Roots, func(entry journal) bool {
+		return entry.Phase == "rolling_back" || entry.Phase == "rolled_back"
+	}) {
+		return guidance + " " + asideNote(job)
+	}
+	return guidance + " " + asideNextNote(job)
 }
 
 // movedLive says live data had moved, so an undo may have moved something
