@@ -663,11 +663,20 @@ func (s *Service) run(ctx context.Context, record Record, own *docker.ContainerI
 // of its containers can't have overwritten, or else the container's own, as
 // for one Compose made since.
 func ownerPolicy(last *Record, own *docker.ContainerInspect, current json.RawMessage) json.RawMessage {
-	if last != nil && last.State == StateInterrupted && len(last.Policy) > 0 &&
-		(own.ID == last.Container || own.Config.Labels[update.OperationLabel] == last.ID) {
+	if last != nil && last.State == StateInterrupted && len(last.Policy) > 0 && last.owes(own) {
 		return last.Policy
 	}
 	return current
+}
+
+// owes reports whether own, one of an interrupted update's containers, still
+// waits for the owner's restart policy. The one Ludock runs in holds it once
+// it was put back (OnLeftover says which, NoPolicy whether it was); from then
+// on its policy is the owner's own, to change as they like.
+func (r *Record) owes(own *docker.ContainerInspect) bool {
+	original, replacement := own.ID == r.Container, own.Config.Labels[update.OperationLabel] == r.ID
+	holds := original && !r.OnLeftover || replacement && r.OnLeftover
+	return (original || replacement) && (!holds || r.NoPolicy)
 }
 
 // HelperName names the update's helper.
@@ -1085,6 +1094,10 @@ func (s *Service) takeOver(ctx context.Context, record Record) {
 		return
 	}
 	ours := own.ID == record.Container || own.Config.Labels[update.OperationLabel] == record.ID
+	// One that holds the owner's policy, put back, is left as the owner keeps it.
+	if ours && !record.owes(own) {
+		return
+	}
 	refused := false
 	for _, other := range []string{record.Container, servers.ReplacementName(record.Name, record.ID)} {
 		spec, err := s.Docker.InspectSpec(ctx, other)
@@ -1101,13 +1114,18 @@ func (s *Service) takeOver(ctx context.Context, record Record) {
 	if ours && (!refused || policy.Name == "no") {
 		refused = s.Docker.SetRestartPolicy(ctx, own.ID, record.Policy) != nil || refused
 	}
-	if refused != record.NoPolicy {
+	// Ludock now runs, and holds the policy, in this container.
+	onLeftover := record.OnLeftover
+	if ours {
+		onLeftover = own.ID != record.Container
+	}
+	if refused != record.NoPolicy || onLeftover != record.OnLeftover {
 		s.DB.Tx(ctx, func(tx *sql.Tx) error {
 			var current Record
 			if found, err := db.ReadSetting(ctx, tx, recordSetting, &current); err != nil || !found || current.ID != record.ID {
 				return err
 			}
-			current.NoPolicy = refused
+			current.NoPolicy, current.OnLeftover = refused, onLeftover
 			return s.DB.SetSetting(ctx, tx, recordSetting, current)
 		})
 	}

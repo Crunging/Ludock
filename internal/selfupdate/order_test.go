@@ -444,8 +444,9 @@ func TestSelfUpdateOrder(t *testing.T) {
 				}
 			}, image: newImage, state: selfupdate.StateSucceeded, probe: "after"},
 		{name: "an update after one that stopped partway gives the new version the owner's policy, not a leftover no", before: func(g *rig, p *process) {
+			// One whose take-over couldn't yet put the policy back.
 			earlier := selfupdate.Record{ID: identity.NewUUID(), State: selfupdate.StateInterrupted, Container: g.old, Name: "ludock",
-				Policy: json.RawMessage(`{"Name":"unless-stopped","MaximumRetryCount":0}`)}
+				Policy: json.RawMessage(`{"Name":"unless-stopped","MaximumRetryCount":0}`), NoPolicy: true}
 			if err := p.d.SetSetting(ctx, nil, "ludock.update", earlier); err != nil {
 				t.Fatal(err)
 			}
@@ -790,7 +791,7 @@ func TestSelfUpdateOrder(t *testing.T) {
 			g.restartOld()
 		}, trace: []string{"pull", "create helper", "stop old", "start old", "stop new", "policy old"}, image: oldImage, restarts: 1,
 			state: selfupdate.StateFailed, reason: "the update stopped before Ludock was replaced, so nothing was changed", probe: "live"},
-		{name: "the helper killed during the health check, then the old one started by hand, which takes the owner's policy", arrange: func(g *rig) {
+		{name: "the helper killed during the health check, then the old one started by hand, which takes the owner's policy, and leaves a later change to it", arrange: func(g *rig) {
 			g.onStart = func(c *fakedocker.Container) {
 				if isNew(c) {
 					health(g, c, "starting")
@@ -813,9 +814,54 @@ func TestSelfUpdateOrder(t *testing.T) {
 			if old == nil || policyOf(g.old) != "unless-stopped" || policyOf(running.ID) != "no" {
 				t.Fatalf("the old one has %q and the new one %q", policyOf(g.old), policyOf(running.ID))
 			}
-			// The next update keeps the owner's policy, whatever this
-			// container was left with.
-			g.client.SetRestartPolicy(ctx, g.old, json.RawMessage(`{"Name":"no"}`))
+			// The owner then changes it by hand, as docker update does, and
+			// Ludock, started again, leaves it.
+			g.client.SetRestartPolicy(ctx, g.old, json.RawMessage(`{"Name":"no","MaximumRetryCount":0}`))
+			g.client.Stop(ctx, g.old, nil)
+			g.client.Start(ctx, g.old)
+			if old = g.process(g.old); old == nil {
+				t.Fatal("the old one didn't start again")
+			}
+			time.Sleep(200 * time.Millisecond)
+			if policyOf(g.old) != "no" {
+				t.Errorf("a start changed the owner's policy to %q", policyOf(g.old))
+			}
+			// And the next update keeps it as the owner's.
+			g.engine.RemoveContainer(running.ID)
+			g.mu.Lock()
+			g.fail["pull"] = 500
+			g.mu.Unlock()
+			if err := old.svc.Start(ctx, "admin", g.session, ""); err != nil {
+				t.Fatal(err)
+			}
+			for deadline := time.Now().Add(3 * time.Second); old.svc.Last(ctx).InProgress() && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			}
+			var policy struct{ Name string }
+			json.Unmarshal(old.svc.Last(ctx).Policy, &policy)
+			if policy.Name != "no" {
+				t.Errorf("the next update recorded the owner's policy as %q", policy.Name)
+			}
+		}, reboot: true, image: newImage, settler: "ludock-ludock-update-",
+			state: selfupdate.StateInterrupted, reason: "the update stopped partway", probe: "after", copy: true, onLeftover: true},
+		{name: "the helper killed, then the old one started by hand where Docker won't give it the policy, whose leftover no a new update doesn't take", arrange: func(g *rig) {
+			g.onStart = func(c *fakedocker.Container) {
+				if isNew(c) {
+					health(g, c, "starting")
+					g.killHelper()
+				}
+			}
+		}, then: func(t *testing.T, g *rig, p *process, running *docker.ContainerInspect) {
+			g.client.Stop(ctx, running.ID, nil)
+			g.mu.Lock()
+			g.fail["policy old"] = 500
+			g.mu.Unlock()
+			g.client.Start(ctx, g.old)
+			old := g.process(g.old)
+			for deadline := time.Now().Add(3 * time.Second); old != nil && !old.svc.Last(ctx).NoPolicy && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			}
+			if old == nil || !old.svc.Last(ctx).NoPolicy {
+				t.Fatal("the refused policy wasn't recorded")
+			}
 			g.engine.RemoveContainer(running.ID)
 			g.mu.Lock()
 			g.fail["pull"] = 500
@@ -1214,7 +1260,9 @@ func (g *rig) refused(container string) {
 
 // process waits for the Ludock of container to start, or nil.
 func (g *rig) process(container string) *process {
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+	// As long as a case waits for one to settle, since under -race on one
+	// loaded core a start can take seconds.
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 		g.mu.Lock()
 		p := g.processes[container]
 		g.mu.Unlock()

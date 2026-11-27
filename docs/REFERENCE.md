@@ -583,8 +583,9 @@ Whichever Ludock records how the update ended first sets the other
 container's restart policy to `no`, then gets back the one Ludock had before
 the update, so a reboot starts at most one of them, and with an owner's `no`,
 neither. So does whichever starts after an update that stopped partway,
-however it was started, and a later update keeps that policy as yours. If
-Docker won't, Settings says so.
+however it was started. Until that policy is back, a later update keeps it
+as yours; once it is, it is yours to change, and Ludock leaves it. If Docker
+won't, Settings says so.
 
 An update that downloaded a new image and didn't succeed points Ludock's tag
 back at the image it runs, so a later `docker compose up -d` keeps that
