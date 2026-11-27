@@ -13,7 +13,9 @@ async function menuItem(row, role, name) {
 // Each journey backs up a server of its own; the backup settings they
 // change are shared, so the file runs in order.
 
-test("backing up, downloading, restoring, and deleting a backup", async ({ page, ownServer }) => {
+// Compose made this one, so it is called, and its restore is typed, by its
+// service's name rather than its container's.
+test("backing up, downloading, restoring, and deleting a backup", async ({ page, composeServer: ownServer }) => {
   await openServer(page, ownServer.name);
   await page.locator(".section-tabs").getByRole("link", { name: "Backups" }).click();
   // A server that is ready says nothing about readiness.

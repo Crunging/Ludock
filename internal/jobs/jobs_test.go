@@ -284,6 +284,13 @@ func TestFailedRestoreRollsBack(t *testing.T) {
 	if wrong := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "wrong"}); wrong.Status != ops.Failed {
 		t.Fatal("restore without confirmation ran")
 	}
+	// The page checked a name the server has lost since it was queued.
+	f.mu.Lock()
+	f.failStep = ""
+	f.mu.Unlock()
+	if renamed := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "old name", ConfirmedInput: true}); renamed.Status != ops.Succeeded {
+		t.Fatalf("%+v", renamed)
+	}
 }
 
 // A restore whose staging cleanup fails after the new data is in place

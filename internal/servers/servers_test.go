@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -573,5 +574,75 @@ func TestFileRootsLeaveOutLudocksOwnFolders(t *testing.T) {
 	}
 	if got := inspectTest(t, s, id).Container.FileRoots; !reflect.DeepEqual(got, want) {
 		t.Fatal("inspected", got)
+	}
+}
+
+// A server is called by its ludock.name label, else by the Compose service
+// that made it, numbered for a replica after the first, else by its
+// container name. Where a Compose server's name would be another listed
+// server's too, its project tells them apart, whichever was found first, and
+// its container name where even that is taken. A container discovery turns
+// away tells nothing apart. Work on a server calls it by the name saved for
+// it, and a server Ludock knows keeps its ID when its name changes.
+func TestServerNames(t *testing.T) {
+	compose := func(project, service, number string) map[string]string {
+		return map[string]string{"com.docker.compose.project": project, "com.docker.compose.service": service,
+			"com.docker.compose.container-number": number}
+	}
+	for _, order := range []bool{false, true} {
+		engine, s := setup(t)
+		containers := []struct {
+			name   string
+			labels map[string]string
+			want   string
+		}{
+			{"survival-minecraft-1", compose("survival", "minecraft", "1"), "minecraft (survival)"},
+			{"creative-minecraft-1", compose("creative", "minecraft", "1"), "minecraft (creative)"},
+			{"valheim-valheim-1", compose("valheim", "valheim", "1"), "valheim"},
+			{"valheim-valheim-2", compose("valheim", "valheim", "2"), "valheim 2"},
+			{"lobby", nil, "lobby"},
+			{"hub-server-1", compose("hub", "server", "1"), "server (hub)"},
+			{"server", nil, "server"},
+			{"lab-arena-1", compose("lab", "arena", "1"), "lab-arena-1"},
+			{"arena", nil, "arena"},
+			{"labelled", map[string]string{"ludock.name": "arena (lab)"}, "arena (lab)"},
+			{"named-minecraft-1", map[string]string{"com.docker.compose.project": "named", "com.docker.compose.service": "minecraft",
+				"com.docker.compose.container-number": "1", "ludock.name": "Friends"}, "Friends"},
+		}
+		if order {
+			slices.Reverse(containers)
+		}
+		ids := map[string]string{}
+		for _, c := range containers {
+			ids[c.name] = engine.AddContainer(fakedocker.GameOptions{Name: c.name, Image: "itzg/minecraft-server", Labels: c.labels})
+		}
+		turnedAway := engine.AddContainer(fakedocker.GameOptions{Name: "spare-valheim-1", Image: "itzg/minecraft-server",
+			Labels: compose("spare", "valheim", "1")})
+		engine.Update(turnedAway, func(c *fakedocker.Container) { c.Host.Privileged = true })
+		if _, err := s.RefreshNow(ctx); err != nil {
+			t.Fatal(err)
+		}
+		saved, _ := s.Identity.List(ctx, "")
+		for _, c := range containers {
+			server := saved[slices.IndexFunc(saved, func(server identity.Server) bool { return server.ContainerID == ids[c.name] })]
+			resolved, err := s.ResolveChecked(ctx, server.ID, -1, func(context.Context) error { return nil })
+			if err != nil || server.DisplayName != c.want || resolved.Container.DisplayName != c.want {
+				t.Errorf("%s: saved %q, resolved %+v %v, want %q", c.name, server.DisplayName, resolved, err, c.want)
+			}
+		}
+		if len(saved) != len(containers) {
+			t.Fatal(saved)
+		}
+		engine.Update(ids["named-minecraft-1"], func(c *fakedocker.Container) { delete(c.Config.Labels, "ludock.name") })
+		if _, err := s.RefreshNow(ctx); err != nil {
+			t.Fatal(err)
+		}
+		after, _ := s.Identity.List(ctx, "")
+		renamed := slices.IndexFunc(after, func(server identity.Server) bool { return server.DisplayName == "minecraft (named)" })
+		if len(after) != len(saved) || renamed < 0 || !slices.ContainsFunc(saved, func(server identity.Server) bool {
+			return server.ID == after[renamed].ID && server.DisplayName == "Friends"
+		}) {
+			t.Fatal(saved, after)
+		}
 	}
 }
