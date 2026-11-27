@@ -948,7 +948,7 @@ func (s *Service) recovered(ctx context.Context, server identity.Server, contain
 			message, action = server.DisplayName+": Ludock can reach Docker again, and the server is running.", "server.unreachable.ended"
 		}
 		back = []alert{{"recovery:" + server.ID + ":" + strconv.FormatInt(r.outage.Int64, 10), message,
-			&db.AuditEntry{Action: action, TargetType: "server", TargetID: server.ID, Details: map[string]int64{"downFor": now - s.shownSince(server.ID, r)}}}}
+			&db.AuditEntry{Action: action, TargetType: "server", TargetID: server.ID}}}
 	}
 	changed, err := s.transitionIf(ctx, server.ID, r, back, whileIdle, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
 	if changed {

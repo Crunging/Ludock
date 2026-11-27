@@ -157,7 +157,7 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 			s.Check(ctx, state("running", ""), 140_000)
 			logged := audited(s, server.ID)
 			if since := cmp.Or(c.stopped, c.start); len(logged) != len(c.want) || logged[len(logged)-2] != fmt.Sprintf(`server.outage.alerted {"since":%d}`, since) ||
-				logged[len(logged)-1] != fmt.Sprintf(`server.outage.ended {"downFor":%d}`, 140_000-since) {
+				logged[len(logged)-1] != "server.outage.ended " {
 				t.Fatal(logged)
 			}
 			s.Check(ctx, state("running", ""), 150_000)
@@ -395,7 +395,7 @@ func TestDockerOutage(t *testing.T) {
 		t.Fatal(events.events)
 	}
 	logged := audited(s, server.ID)
-	if !slices.Equal(logged, []string{`server.unreachable.alerted {"since":1000}`, `server.unreachable.ended {"downFor":89000}`}) {
+	if !slices.Equal(logged, []string{`server.unreachable.alerted {"since":1000}`, "server.unreachable.ended "}) {
 		t.Fatal(logged)
 	}
 }
@@ -635,7 +635,7 @@ func TestSilentGameOutage(t *testing.T) {
 		t.Fatal(events.events)
 	}
 	logged := audited(s, server.ID)
-	if !slices.Equal(logged, []string{`server.silence.alerted {"since":2000}`, `server.silence.ended {"downFor":78000}`}) {
+	if !slices.Equal(logged, []string{`server.silence.alerted {"since":2000}`, "server.silence.ended "}) {
 		t.Fatal(logged)
 	}
 }
@@ -732,14 +732,15 @@ func TestNewServersAreWatched(t *testing.T) {
 }
 
 // audited lists what Ludock logged for Activity about a server, as
-// "action details".
+// "action details", details empty when none.
 func audited(s *Service, serverID string) []string {
 	var logged []string
 	rows, _ := s.DB.Query("SELECT action, details_json FROM audit_log WHERE target_id=? ORDER BY id", serverID)
 	for rows.Next() {
-		var action, details string
+		var action string
+		var details sql.NullString
 		rows.Scan(&action, &details)
-		logged = append(logged, action+" "+details)
+		logged = append(logged, action+" "+details.String)
 	}
 	rows.Close()
 	return logged

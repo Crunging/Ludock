@@ -305,7 +305,7 @@ var auditLabels = map[string]string{
 	"server.silence.alerted":             "Game not answering",
 	"server.silence.ended":               "Game answering again",
 	"server.unreachable.alerted":         "Can’t reach Docker",
-	"server.unreachable.ended":           "Docker reachable again",
+	"server.unreachable.ended":           "Docker reachable again; the server is running",
 	"server.start":                       "Started the server",
 	"server.stop":                        "Stopped the server",
 	"server.restart":                     "Restarted the server",
@@ -444,28 +444,11 @@ func entryLabel(entry history.AuditEntry) string {
 	if strings.HasPrefix(entry.Action, "ludock.update.") && details != nil {
 		return ludockUpdateLabel(entry.Action, details)
 	}
-	// The shown label starts with the action's, which search matches.
-	if down, _ := details["downFor"].(float64); slices.Contains(outageEnds, entry.Action) && down > 0 {
-		minutes, unit := max(1, int((down+30_000)/60_000)), " minutes"
-		if minutes == 1 {
-			unit = " minute"
-		}
-		switch entry.Action {
-		case "server.silence.ended":
-			return "Game answering again after " + strconv.Itoa(minutes) + unit
-		case "server.unreachable.ended":
-			return "Docker reachable again after " + strconv.Itoa(minutes) + unit + "; the server is running"
-		}
-		return "Server running again after " + strconv.Itoa(minutes) + unit + " down"
-	}
 	return AuditLabel(entry.Action)
 }
 
-// The actions Ludock logs as an outage is alerted, and as it ends.
-var (
-	outageStarts = []string{"server.outage.alerted", "server.silence.alerted", "server.unreachable.alerted"}
-	outageEnds   = []string{"server.outage.ended", "server.silence.ended", "server.unreachable.ended"}
-)
+// outageStarts are the actions Ludock logs as an outage is alerted.
+var outageStarts = []string{"server.outage.alerted", "server.silence.alerted", "server.unreachable.alerted"}
 
 // outageSince is when the outage an entry announced began, or 0.
 func outageSince(entry history.AuditEntry) int64 {

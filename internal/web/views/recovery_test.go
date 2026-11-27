@@ -73,23 +73,27 @@ func TestOutageAdviceFollowsAccess(t *testing.T) {
 	}
 }
 
-// Monitoring never shows an empty note for an outage, whatever state the
-// server is in and whatever the viewer may do.
+// Monitoring never shows an empty note for an outage, whatever state and
+// health the server is in and whatever the viewer may do. It blames a health
+// check only when Docker reports one that hasn't passed.
 func TestOutageNoteForEveryState(t *testing.T) {
 	for _, state := range []string{"running", "exited", "created", "restarting", "paused", "removing", "dead", "missing", "ambiguous", "unknown", ""} {
-		for _, permissions := range [][]authz.Capability{nil, {authz.ServerStart, authz.ServerStop, authz.LogsRead}} {
-			d := ServerDetail{Row: ServerRow{Server: servers.View{Permissions: permissions, BindingStatus: "active",
-				Container: servers.Container{State: state}}, CanStart: permissions != nil, CanStop: permissions != nil},
-				Availability: &monitor.Availability{Policy: monitor.Policy{Enabled: true},
-					State: monitor.State{OutageStartedAt: 1, Since: 1, Notified: true, LastState: state}}, Now: 1_000_000}
-			var out strings.Builder
-			if err := AvailabilityStatus(d).Render(context.Background(), &out); err != nil {
-				t.Fatal(err)
-			}
-			_, note, _ := strings.Cut(out.String(), `class="section-note">`)
-			note, _, _ = strings.Cut(note, "</p>")
-			if strings.TrimSpace(note) == "" || strings.Contains(note, " as .") {
-				t.Errorf("state %q, permissions %v: note %q", state, permissions, note)
+		for _, health := range []string{"", "starting", "healthy", "unhealthy"} {
+			for _, permissions := range [][]authz.Capability{nil, {authz.ServerStart, authz.ServerStop, authz.LogsRead}} {
+				d := ServerDetail{Row: ServerRow{Server: servers.View{Permissions: permissions, BindingStatus: "active",
+					Container: servers.Container{State: state, Health: health}}, CanStart: permissions != nil, CanStop: permissions != nil},
+					Availability: &monitor.Availability{Policy: monitor.Policy{Enabled: true},
+						State: monitor.State{OutageStartedAt: 1, Since: 1, Notified: true, LastState: state}}, Now: 1_000_000}
+				var out strings.Builder
+				if err := AvailabilityStatus(d).Render(context.Background(), &out); err != nil {
+					t.Fatal(err)
+				}
+				_, note, _ := strings.Cut(out.String(), `class="section-note">`)
+				note, _, _ = strings.Cut(note, "</p>")
+				failing := state == "running" && (health == "starting" || health == "unhealthy")
+				if strings.TrimSpace(note) == "" || strings.Contains(note, " as .") || strings.Contains(note, "health check") != failing {
+					t.Errorf("state %q, health %q, permissions %v: note %q", state, health, permissions, note)
+				}
 			}
 		}
 	}

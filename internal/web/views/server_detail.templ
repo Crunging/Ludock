@@ -731,6 +731,10 @@ func outageAdvice(row ServerRow) string {
 	what, act, then := "Ludock didn’t stop it.", "Start it here", ", or read its logs to see why."
 	switch row.Server.State {
 	case "running":
+		// The outage lasts until a run shows the server stays up.
+		if row.Server.Health != "starting" && row.Server.Health != "unhealthy" {
+			return "It’s running again. Ludock is waiting to see that it stays up."
+		}
 		what, act = "It’s running, but its health check hasn’t passed.", ""
 	case "restarting":
 		what, act, then = "It keeps stopping and starting again.", "Stop it here", ", then read its logs to see why."
