@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -213,11 +214,11 @@ func (s *Service) Failed(ctx context.Context) *Record {
 func (s *Service) present(ctx context.Context, record *Record) {
 	// Nothing is left only once Docker shows this update's new container
 	// gone, whatever was recorded.
-	replacement, err := s.Docker.InspectSpec(ctx, servers.ReplacementName(record.Name, record.ID))
+	replacement, err := madeBy(ctx, s.Docker, servers.ReplacementName(record.Name, record.ID), record.ID)
 	gone := docker.IsNotFound(err)
 	if gone {
 		record.Leftover, record.OnLeftover, record.OriginalGone = "", false, false
-	} else if err == nil && operationOf(replacement) == record.ID {
+	} else if err == nil {
 		record.Leftover = strings.TrimPrefix(replacement.Name, "/")
 	}
 	// Whether Ludock runs in the new container is which container this
@@ -236,7 +237,7 @@ func (s *Service) present(ctx context.Context, record *Record) {
 	}
 	_, err = os.Lstat(filepath.Join(s.DataDir, CopyName))
 	record.Copy = err == nil
-	_, helper := s.Docker.InspectSpec(ctx, HelperName(record.ID))
+	_, helper := helperOf(ctx, s.Docker, record.ID)
 	record.Finished, record.Running = gone && docker.IsNotFound(helper), s.Version
 }
 
@@ -732,11 +733,37 @@ func mounted(own *docker.ContainerInspect, dataDir string) bool {
 	return found != nil && (found.Type == "bind" || found.Type == "volume")
 }
 
-// operationOf is the update a container was created for, from its label.
-func operationOf(spec *docker.ContainerSpec) string {
+// madeBy and helperOf inspect a container by one of update id's names and
+// show it only if that update made it, and any other as gone: a name is not
+// an identity, and a container that took one is never touched.
+func madeBy(ctx context.Context, client *docker.Client, name, id string) (*docker.ContainerSpec, error) {
+	return made(ctx, client, name, update.OperationLabel, id)
+}
+
+func helperOf(ctx context.Context, client *docker.Client, id string) (*docker.ContainerSpec, error) {
+	return made(ctx, client, HelperName(id), launch.InternalLabel, helperKind)
+}
+
+func made(ctx context.Context, client *docker.Client, name, label, value string) (*docker.ContainerSpec, error) {
+	spec, err := client.InspectSpec(ctx, name)
+	if err != nil {
+		return nil, err
+	}
 	var config struct{ Labels map[string]string }
 	json.Unmarshal(encode(spec.Config), &config)
-	return config.Labels[update.OperationLabel]
+	if config.Labels[label] != value {
+		return nil, &docker.APIError{Status: http.StatusNotFound}
+	}
+	return spec, nil
+}
+
+// inspect is madeBy, except for the original, which the record names by its
+// ID.
+func inspect(ctx context.Context, client *docker.Client, name string, original bool, id string) (*docker.ContainerSpec, error) {
+	if original {
+		return client.InspectSpec(ctx, name)
+	}
+	return madeBy(ctx, client, name, id)
 }
 
 // errUncertain: Docker didn't answer whether it started the helper.
@@ -792,7 +819,7 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		context.AfterFunc(bounded, cancel)
 		return bounded
 	}
-	spec, err := s.Docker.InspectSpec(ctx, HelperName(record.ID))
+	spec, err := helperOf(ctx, s.Docker, record.ID)
 	noHelper, helperShown := docker.IsNotFound(err), err == nil
 	if !stuck && (err != nil && !docker.IsNotFound(err) || err == nil && (spec.State.Running || spec.State.Restarting)) {
 		return false
@@ -854,11 +881,12 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		own.Name = "/" + record.Name
 	}
 	// Only a container of this update, by its label, is left over.
-	replacement, err := s.Docker.InspectSpec(ctx, servers.ReplacementName(record.Name, record.ID))
+	replacement, err := madeBy(ctx, s.Docker, servers.ReplacementName(record.Name, record.ID), record.ID)
 	// Nothing changed only once Docker showed whether one is left.
 	known, noReplacement := err == nil || docker.IsNotFound(err), docker.IsNotFound(err)
-	if err == nil && replacement.ID != own.ID && operationOf(replacement) == record.ID {
-		record.Leftover = strings.TrimPrefix(replacement.Name, "/")
+	leftover := ""
+	if err == nil && replacement.ID != own.ID {
+		leftover, record.Leftover = replacement.ID, strings.TrimPrefix(replacement.Name, "/")
 	}
 	// This Ludock may be that container, not yet under Ludock's name; its
 	// removal is advised only with the original shown to exist, since it
@@ -877,9 +905,9 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 	cutOff := original && !verdict && !untouched
 	// So does one after the helper said nothing changed, or that was cut
 	// off: it never ran, or no longer does.
-	if (untouched || original && code == ExitUnchanged || cutOff) && record.Leftover != "" && !replacement.State.Running {
-		if err := s.Docker.Remove(call(), replacement.ID, true, true); err == nil || docker.IsNotFound(err) {
-			record.Leftover = ""
+	if (untouched || original && code == ExitUnchanged || cutOff) && leftover != "" && !replacement.State.Running {
+		if err := s.Docker.Remove(call(), leftover, true, true); err == nil || docker.IsNotFound(err) {
+			leftover, record.Leftover = "", ""
 		}
 	}
 	if noHelper {
@@ -897,8 +925,8 @@ func (s *Service) judge(ctx context.Context, record Record) bool {
 		var policy struct{ Name string }
 		json.Unmarshal(record.Policy, &policy)
 		other := ""
-		if original && record.Leftover != "" {
-			other = record.Leftover
+		if original && leftover != "" {
+			other = leftover
 		} else if ownReplacement && gone == nil {
 			other = record.Container
 		}
@@ -1073,7 +1101,7 @@ func (s *Service) Recover(ctx, base context.Context) {
 		// One whose removal failed after its update was recorded goes now.
 		if record != nil && record.ID != "" {
 			go func() {
-				if spec, err := s.Docker.InspectSpec(base, HelperName(record.ID)); err == nil && spec.State.Status == "exited" {
+				if spec, err := helperOf(base, s.Docker, record.ID); err == nil && spec.State.Status == "exited" {
 					s.Docker.Remove(base, spec.ID, false, true)
 				}
 			}()
@@ -1108,8 +1136,8 @@ func (s *Service) takeOver(ctx context.Context, record Record) {
 	if record.Leftover != "" && record.Leftover != others[1] {
 		others = append(others, record.Leftover)
 	}
-	for _, other := range others {
-		spec, err := s.Docker.InspectSpec(ctx, other)
+	for index, other := range others {
+		spec, err := inspect(ctx, s.Docker, other, index == 0, record.ID)
 		if docker.IsNotFound(err) || err == nil && spec.ID == own.ID {
 			continue
 		}

@@ -117,7 +117,7 @@ func decide(ctx context.Context, client *docker.Client, container, dataDir strin
 	deadline := time.Now().Add(wait)
 	code, helper := -1, false
 	for {
-		spec, err := client.InspectSpec(ctx, HelperName(record.ID))
+		spec, err := helperOf(ctx, client, record.ID)
 		if docker.IsNotFound(err) {
 			break
 		}
@@ -158,7 +158,10 @@ func decide(ctx context.Context, client *docker.Client, container, dataDir strin
 		// the new version wasn't accepted; until the update settles it
 		// accepted no work and no changes, so stopping it and putting the
 		// copy back loses nothing.
-		err := client.Stop(ctx, servers.ReplacementName(record.Name, record.ID), nil)
+		spec, err := madeBy(ctx, client, servers.ReplacementName(record.Name, record.ID), record.ID)
+		if err == nil {
+			err = client.Stop(ctx, spec.ID, nil)
+		}
 		if err != nil && !docker.IsNotFound(err) && docker.StatusCode(err) != 304 {
 			return false, errBeside
 		}
@@ -193,11 +196,11 @@ func still(dataDir, id string) (Record, bool, error) {
 // alone confirms that no container of record's update but container runs:
 // Docker shows each stopped or gone.
 func alone(ctx context.Context, client *docker.Client, container string, record Record) error {
-	for _, other := range []string{record.Container, servers.ReplacementName(record.Name, record.ID), record.Leftover} {
+	for index, other := range []string{record.Container, servers.ReplacementName(record.Name, record.ID), record.Leftover} {
 		if other == "" {
 			continue
 		}
-		spec, err := client.InspectSpec(ctx, other)
+		spec, err := inspect(ctx, client, other, index == 0, record.ID)
 		switch {
 		case docker.IsNotFound(err):
 		case err != nil:
