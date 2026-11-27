@@ -443,6 +443,9 @@ test("keeping a second copy of every backup and restoring from it", async ({ pag
   // The restore's safety backup, lost from both folders, can only be removed.
   const safety = page.locator("#backup-list tbody tr", { hasText: "Taken before a restore" });
   const safetyId = (await safety.getByRole("link", { name: "Download", includeHidden: true }).getAttribute("href")).split("/")[4];
+  // Its second copy is written after the restore ends, so it may not be
+  // there yet; removed before that, it would come back.
+  await expect.poll(() => existsSync(join(copyFolder, `${safetyId}.tar`))).toBe(true);
   for (const folder of [backupFolder, copyFolder]) rmSync(join(folder, `${safetyId}.tar`), { force: true });
   await page.reload();
   await expect(safety).toContainText("Its archive is missing or damaged in the backup folder, so it can’t be restored");
