@@ -976,10 +976,18 @@ func (r *Runner) Start(ctx context.Context, recovered func()) error {
 		r.mu.Unlock()
 		return err
 	}
+	// Stop may have run while interrupted work was reconciled: it has
+	// already waited for a loop that hadn't begun, so none begins now.
+	r.mu.Lock()
+	if !r.enabled {
+		r.mu.Unlock()
+		return nil
+	}
+	r.loop.Add(1)
+	r.mu.Unlock()
 	if recovered != nil {
 		recovered()
 	}
-	r.loop.Add(1)
 	go func() {
 		defer r.loop.Done()
 		for {
