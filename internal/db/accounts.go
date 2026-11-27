@@ -693,8 +693,9 @@ var (
 )
 
 // CreateFirstUser inserts the initial administrator only while no account
-// exists, so concurrent setup requests create at most one.
-func (d *DB) CreateFirstUser(ctx context.Context, user UserRecord, audit AuditEntry, session SessionInput) error {
+// exists, so concurrent setup requests create at most one. authorize runs in
+// the same transaction, so setup is decided as the account is created.
+func (d *DB) CreateFirstUser(ctx context.Context, user UserRecord, audit AuditEntry, session SessionInput, authorize func() error) error {
 	return d.Tx(ctx, func(tx *sql.Tx) error {
 		var count int
 		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
@@ -702,6 +703,9 @@ func (d *DB) CreateFirstUser(ctx context.Context, user UserRecord, audit AuditEn
 		}
 		if count > 0 {
 			return ErrSetupComplete
+		}
+		if err := authorize(); err != nil {
+			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO users
       (id, username, password_hash, role, disabled, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)`,

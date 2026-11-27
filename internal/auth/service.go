@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -129,16 +130,27 @@ func (s *Service) SetupState(ctx context.Context) (SetupState, error) {
 	if err != nil {
 		return SetupState{}, err
 	}
-	return SetupState{Required: required}, nil
+	needed, set := s.SetupCode()
+	return SetupState{Required: required, CodeNeeded: needed, CodeSet: set}, nil
 }
 
-// LogSetupInstructions prints a generated setup code to the console once.
-func (s *Service) LogSetupInstructions(ctx context.Context, console func(string)) {
+// SetupCode says whether setup needs the code now, and whether the owner set
+// it with LUDOCK_SETUP_CODE.
+func (s *Service) SetupCode() (needed, set bool) {
+	return s.Setup.codeNeeded(s.Now()), s.Setup.configured
+}
+
+// OpenSetup starts the time setup needs no code, if no administrator exists
+// yet, and prints how to set up Ludock at address and the code for after.
+func (s *Service) OpenSetup(ctx context.Context, address string, console func(string)) {
 	if required, err := s.SetupRequired(ctx); err != nil || !required {
 		return
 	}
+	s.Setup.open(s.Now())
 	if code := s.Setup.TakeGeneratedCode(); code != "" {
-		console("Ludock initial setup code: " + code + "\nEnter this one-time code on the setup page to create the first administrator.\n")
+		minutes := strconv.Itoa(int(SetupOpenFor.Minutes()))
+		console("Setup is open at " + address + " for " + minutes + " minutes: create the first administrator there.\n" +
+			"After that, setup asks for this code: " + code + "\n")
 	}
 	log.Info("Initial administrator setup is available")
 }
@@ -171,8 +183,9 @@ func (s *Service) createSession(ctx context.Context, user db.SessionUser, client
 }
 
 // CompleteSetup creates the first administrator. Code authorization runs
-// before validation or password hashing; missing and incorrect codes get the
-// same response and count against the source.
+// before validation or password hashing, and again inside the transaction
+// that creates the account; missing and incorrect codes count against the
+// source.
 func (s *Service) CompleteSetup(ctx context.Context, username, password, code string, client Client) (*Principal, error) {
 	required, err := s.SetupRequired(ctx)
 	if err != nil {
@@ -189,7 +202,7 @@ func (s *Service) CompleteSetup(ctx context.Context, username, password, code st
 		}
 		return nil, busy(0)
 	}
-	if err := s.Setup.assertAuthorized(required, code); err != nil {
+	if err := s.Setup.assertAuthorized(required, code, s.Now()); err != nil {
 		if apperr.Is(err, "SETUP_AUTHORIZATION_REQUIRED") {
 			if _, recordErr := s.DB.RecordLoginFailure(ctx, sourceKey, s.Now(), loginWindowMs, setupSourceMax, 0); recordErr != nil {
 				return nil, recordErr
@@ -201,7 +214,7 @@ func (s *Service) CompleteSetup(ctx context.Context, username, password, code st
 		return nil, err
 	}
 	username, validUsername := ValidUsername(username)
-	if !validUsername || !ValidPassword(password) || textutil.Length(code) < SetupCodeMin || textutil.Length(code) > SetupCodeMax {
+	if !validUsername || !ValidPassword(password) {
 		return nil, apperr.New("INVALID_REQUEST", 400,
 			"Username must be 3-32 letters, numbers, dots, underscores, or hyphens; password must be at least 15 characters.")
 	}
@@ -217,21 +230,12 @@ func (s *Service) CompleteSetup(ctx context.Context, username, password, code st
 	if err != nil {
 		return nil, err
 	}
-	if required, err = s.SetupRequired(ctx); err != nil {
-		return nil, err
-	}
-	if err := s.Setup.assertAuthorized(required, code); err != nil {
-		if apperr.Is(err, "SETUP_AUTHORIZATION_REQUIRED") {
-			return nil, errSetupComplete
-		}
-		return nil, err
-	}
 	user := db.SessionUser{ID: identity.NewUUID(), Username: username, Role: db.RoleAdmin}
 	session, token := s.sessionInput(user.ID, client)
 	err = s.DB.CreateFirstUser(ctx, db.UserRecord{User: db.User{ID: user.ID, Username: user.Username, Role: user.Role,
 		CreatedAt: s.Now()}, PasswordHash: passwordHash},
 		db.AuditEntry{UserID: user.ID, Action: "auth.setup.completed", TargetType: "user", TargetID: user.ID, IPAddress: client.IP},
-		session)
+		session, func() error { return s.Setup.assertAuthorized(true, code, s.Now()) })
 	if errors.Is(err, db.ErrSetupComplete) {
 		return nil, errSetupComplete
 	}

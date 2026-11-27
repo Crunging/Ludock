@@ -80,8 +80,10 @@ function start(command, args, env, log, file) {
 // starts. Each worker gets its own stack; a journey that needs a fresh
 // install starts another with freshStack. port 0 has the system choose one.
 // With found, the folder dir/found stands in for one mounted at
-// /backups-copy.
-async function startStack(bin, dir, port, { found = false, children = [] } = {}) {
+// /backups-copy. With open, Ludock has no setup code of its own and no
+// administrator yet: the journey creates it on the setup page and saves its
+// session where env.LUDOCK_E2E_ADMIN_STATE says.
+async function startStack(bin, dir, port, { found = false, open = false, children = [] } = {}) {
   const dockerDir = join(dir, "docker");
   // Backups go to the first root; the backups journey chooses the second
   // for second copies.
@@ -97,7 +99,7 @@ async function startStack(bin, dir, port, { found = false, children = [] } = {})
       LUDOCK_LISTEN: `127.0.0.1:${listen}`,
       LUDOCK_DATA_DIR: join(dir, "data"),
       LUDOCK_DOCKER_SOCKET: socket,
-      LUDOCK_SETUP_CODE: setupCode,
+      ...(open ? {} : { LUDOCK_SETUP_CODE: setupCode }),
       LUDOCK_SELF_CONTAINER: "ludock-dev",
       // Outside the fake container it stands for, Ludock proves it by its data.
       LUDOCK_DEV_SELF_PROOF: "1",
@@ -127,6 +129,8 @@ async function startStack(bin, dir, port, { found = false, children = [] } = {})
     running = await launch(running.port);
   };
 
+  const state = join(dir, "admin.json");
+  if (open) return { children, restart, env: { LUDOCK_E2E_URL: baseURL, LUDOCK_E2E_ADMIN_STATE: state, LUDOCK_E2E_DIR: dir } };
   const form = (values) => ({ method: "POST", redirect: "manual", body: new URLSearchParams(values),
     headers: { "Content-Type": "application/x-www-form-urlencoded" } });
   const setupResponse = await fetch(`${baseURL}/setup`, form({ bootstrapCode: setupCode, username: admin.username,
@@ -135,7 +139,6 @@ async function startStack(bin, dir, port, { found = false, children = [] } = {})
   const cookie = setupResponse.headers.getSetCookie().find((value) => value.startsWith("ludock_session="));
   if (!cookie) throw new Error("Setup returned no session");
   const token = cookie.split(";")[0].split("=")[1];
-  const state = join(dir, "admin.json");
   writeFileSync(state, JSON.stringify({ cookies: [{ name: "ludock_session", value: token, domain: "127.0.0.1", path: "/",
     expires: -1, httpOnly: true, secure: false, sameSite: "Strict" }], origins: [] }));
   return { children, restart, env: { LUDOCK_E2E_URL: baseURL, LUDOCK_E2E_ADMIN_STATE: state, LUDOCK_E2E_DIR: dir } };

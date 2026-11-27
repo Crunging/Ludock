@@ -15,6 +15,10 @@ builds and aren't supported.
 - **The Docker socket is control of the host.** Anyone who controls Ludock can
   control every container and the host itself, even with the socket mounted
   read-only. Run one Ludock per trusted Docker host, on a trusted network.
+- **First setup:** for 10 minutes after it starts, a Ludock with no
+  administrator lets anyone who can reach it create one; after that it needs
+  the setup code from its log. Create your account right away, or set
+  `LUDOCK_SETUP_CODE` before starting a Ludock others can reach.
 - **Remote access:** reach Ludock from elsewhere only through an HTTPS reverse
   proxy, and trust only that proxy's own address in **Settings → Advanced →
   Reverse proxy**: a trusted address can claim to be any visitor. See

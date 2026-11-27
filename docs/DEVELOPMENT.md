@@ -8,7 +8,8 @@ Install the Go version in [`go.mod`](../go.mod), then run:
 scripts/dev.sh
 ```
 
-Open <http://127.0.0.1:3000> and use the setup code printed in the output.
+Open <http://127.0.0.1:3000> within 10 minutes and create an administrator;
+after that, setup asks for the code printed in the output.
 The script builds Ludock and `cmd/fakedocker`, an in-memory Docker Engine API,
 and keeps their data in `data/dev/`. The fake daemon starts a running Minecraft
 server, stopped Valheim, Palworld, and Enshrouded servers, and containers

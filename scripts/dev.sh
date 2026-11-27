@@ -18,5 +18,5 @@ export LUDOCK_DOCKER_SOCKET="$dir/docker/docker.sock"
 export LUDOCK_SELF_CONTAINER=ludock-dev
 export LUDOCK_BACKUP_ROOTS="$dir/backups"
 export LUDOCK_HELPER_IMAGE="ghcr.io/crunging/ludock@sha256:$(printf 'ab%.0s' {1..32})"
-echo "Ludock: http://$LUDOCK_LISTEN (setup code below on first start)"
+echo "Ludock: http://$LUDOCK_LISTEN (set up within 10 minutes, or with the code below)"
 "$dir/bin/ludock" serve

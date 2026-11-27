@@ -5,15 +5,30 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { test, expect, createUser, signIn, shareServer } from "./fixtures.mjs";
+import { test, expect, admin, createUser, signIn, shareServer } from "./fixtures.mjs";
 import { freshStack } from "../setup.mjs";
 
 // Other files leave their worker's install set up, so these journeys start
-// an install of their own, just past creating the first administrator, with
-// a folder mounted for second copies of backups.
+// an install of their own, with a folder mounted for second copies of
+// backups. Its first administrator is created on the setup page here, so a
+// retried journey still finds one.
 let stack;
-test.beforeAll(async ({}, info) => {
-  stack = await freshStack(info.parallelIndex, { found: true });
+test.beforeAll(async ({ browser }, info) => {
+  stack = await freshStack(info.parallelIndex, { found: true, open: true });
+  const context = await browser.newContext({ baseURL: stack.env.LUDOCK_E2E_URL });
+  const page = await context.newPage();
+  // A new install opens on setup, which needs no code from the log yet.
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Set up Ludock" })).toBeVisible();
+  await expect(page.getByText("For the first 10 minutes after Ludock starts, anyone who can open this page can set it up.")).toBeVisible();
+  await expect(page.getByLabel("Setup code")).toHaveCount(0);
+  await page.getByLabel("Username").fill(admin.username);
+  await page.getByLabel("Password", { exact: true }).fill(admin.password);
+  await page.getByLabel("Confirm password").fill(admin.password);
+  await page.getByRole("button", { name: "Create administrator" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Servers" })).toBeVisible();
+  await context.storageState({ path: stack.env.LUDOCK_E2E_ADMIN_STATE });
+  await context.close();
 });
 test.afterAll(async () => {
   await stack?.stop();
